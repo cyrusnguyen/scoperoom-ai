@@ -1,5 +1,5 @@
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../../prisma/generated/client.ts";
 
 export async function createDatabase(connectionString = process.env.DATABASE_URL, expectedEnvironmentId = process.env.SCOPEROOM_ENVIRONMENT_ID) {
   if (!connectionString) throw new Error("DATABASE_URL is required for database access.");

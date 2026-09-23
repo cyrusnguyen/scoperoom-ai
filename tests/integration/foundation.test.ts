@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { Prisma } from "@prisma/client";
+import { Prisma } from "../../prisma/generated/client.ts";
 import { Client } from "pg";
 import { createDatabase } from "../../src/server/db.ts";
 
@@ -14,8 +14,11 @@ const expected = process.env.SCOPEROOM_ENVIRONMENT_ID;
 
 function postgresCode(error: unknown) {
   if (typeof error !== "object" || error === null) return undefined;
-  const candidate = error as { code?: string; meta?: { code?: string } };
-  return candidate.meta?.code ?? candidate.code;
+  const candidate = error as {
+    code?: string;
+    meta?: { code?: string; driverAdapterError?: { cause?: { code?: string } } };
+  };
+  return candidate.meta?.driverAdapterError?.cause?.code ?? candidate.meta?.code ?? candidate.code;
 }
 
 function rejectsPostgres(code: string) {
