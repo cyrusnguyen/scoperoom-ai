@@ -1,0 +1,28 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("MIGRATION_DATABASE_URL")
+  schemas  = ["app"]
+}
+
+model EnvironmentIdentity {
+  id            Int      @id
+  environmentId String   @map("environment_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@schema("app")
+  @@map("environment_identity")
+}
+
+model TransactionFixture {
+  id        String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  namespace String @db.Text
+  code      String @db.Text
+
+  @@unique([namespace, code])
+  @@schema("app")
+  @@map("transaction_fixture")
+}

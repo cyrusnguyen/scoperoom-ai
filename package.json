@@ -2,25 +2,44 @@
   "name": "scoperoom-ai",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.28.2",
+  "engines": {
+    "node": "22.20.0",
+    "pnpm": "10.28.2"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "node scripts/check-boundaries.mjs && eslint",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "node --experimental-default-type=module --experimental-strip-types --test tests/*.test.ts",
+    "db:guard": "node --env-file-if-exists=.env.local scripts/db/guard.mjs",
+    "db:bootstrap": "node --env-file-if-exists=.env.local scripts/db/bootstrap.mjs",
+    "db:migrate": "node --env-file-if-exists=.env.local scripts/db/migrate.mjs",
+    "db:reset": "node --env-file-if-exists=.env.local scripts/db/reset.mjs",
+    "db:generate": "prisma generate",
+    "test:integration": "node --env-file-if-exists=.env.local --experimental-default-type=module --experimental-strip-types --test tests/integration/*.test.ts",
+    "test:e2e:chromium": "playwright test --project=chromium"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "6.19.1",
+    "@prisma/client": "6.19.1",
     "next": "^16.3.5",
+    "pg": "8.16.3",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.3.3",
+    "@playwright/test": "1.63.0",
     "@types/node": "^20",
+    "@types/pg": "8.15.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
-    "tailwindcss": "^4.3.3",
+    "prisma": "6.19.1",
+    "supabase": "2.81.1",
     "typescript": "^5"
   }
 }
