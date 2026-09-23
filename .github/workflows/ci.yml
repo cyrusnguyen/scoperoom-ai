@@ -18,6 +18,7 @@ jobs:
         with:
           node-version: 22.20.0
       - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm db:generate
       - run: corepack pnpm lint
       - run: corepack pnpm typecheck
       - run: corepack pnpm test:unit
@@ -32,6 +33,7 @@ jobs:
         with:
           node-version: 22.20.0
       - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm db:generate
       - run: bash scripts/ci/start-local-supabase.sh
       - run: bash scripts/ci/export-local-db-env.sh
       - run: corepack pnpm db:bootstrap
