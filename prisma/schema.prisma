@@ -1,10 +1,12 @@
 generator client {
-  provider = "prisma-client-js"
+  provider            = "prisma-client"
+  output              = "./generated"
+  moduleFormat        = "esm"
+  importFileExtension = "ts"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("MIGRATION_DATABASE_URL")
   schemas  = ["app"]
 }
 
@@ -13,8 +15,8 @@ model EnvironmentIdentity {
   environmentId String   @map("environment_id") @db.Uuid
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  @@schema("app")
   @@map("environment_identity")
+  @@schema("app")
 }
 
 model TransactionFixture {
@@ -23,6 +25,6 @@ model TransactionFixture {
   code      String @db.Text
 
   @@unique([namespace, code])
-  @@schema("app")
   @@map("transaction_fixture")
+  @@schema("app")
 }

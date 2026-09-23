@@ -20,6 +20,11 @@ test("foundation modules are available to plain Node", async () => {
   assert.equal(await moduleLoads("../src/server/logger.ts"), true);
 });
 
+test("generated Prisma client loads in plain Node", async () => {
+  const generated = await import("../prisma/generated/client.ts");
+  assert.equal(typeof generated.PrismaClient, "function");
+});
+
 test("health reports only process and API identity", async () => {
   const route = await import("../src/app/api/health/route.ts");
   const response = await route.GET();
