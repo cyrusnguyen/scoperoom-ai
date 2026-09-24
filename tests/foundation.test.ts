@@ -148,7 +148,7 @@ test("boundary checker covers relative, aliases, re-exports, dynamic imports and
 });
 test("Node startup validation rejects missing production origin before serving", () => {
   const run = (appEnv: string, appUrl?: string) => spawnSync(process.execPath, [
-    "--experimental-default-type=module", "--experimental-strip-types", "--input-type=module",
+    "--experimental-strip-types", "--input-type=module",
     "-e", "import('./src/instrumentation.ts').then(m => m.register())",
   ], {
     cwd: process.cwd(),

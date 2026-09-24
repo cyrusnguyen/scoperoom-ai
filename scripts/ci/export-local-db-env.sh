@@ -2,8 +2,13 @@
 set -euo pipefail
 
 : "${GITHUB_ENV:?GitHub Actions provides GITHUB_ENV for CI-only local database settings.}"
-command_json="$(docker inspect --format '{{json .Config.Cmd}}' supabase_pooler_scoperoom-ai)"
-tenant="$(node -e 'let source="";process.stdin.on("data",chunk=>source+=chunk).on("end",()=>{const command=JSON.parse(source).join("\n");const match=command.match(/"external_id"\s*=>\s*"([a-zA-Z0-9_-]+)"/);if(!match)process.exit(1);process.stdout.write(match[1])})' <<<"$command_json")"
+pooler="supabase_pooler_scoperoom-ai"
+if docker exec "$pooler" test -f /app/pooler_tenant.exs; then
+  tenant_source="$(docker exec "$pooler" cat /app/pooler_tenant.exs)"
+else
+  tenant_source="$(docker inspect --format '{{json .Config.Cmd}}' "$pooler" | node -e 'const source=require("node:fs").readFileSync(0,"utf8");process.stdout.write(JSON.parse(source).join("\n"))')"
+fi
+tenant="$(node -e 'const source=require("node:fs").readFileSync(0,"utf8");const match=source.match(/"external_id"\s*=>\s*"([a-zA-Z0-9_-]+)"/);if(!match)process.exit(1);process.stdout.write(match[1])' <<<"$tenant_source")"
 [[ "$tenant" =~ ^[a-zA-Z0-9_-]+$ ]]
 
 cat >>"$GITHUB_ENV" <<EOF

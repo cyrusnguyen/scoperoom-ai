@@ -1,7 +1,7 @@
 import "./blank-workspace.css";
 
-// Stage 02 is a visual shell. Project data and editing controls arrive with their first backend consumer.
-export default function BlankWorkspace() {
+// Project data and editing controls arrive with their first backend consumer.
+export default function BlankWorkspace({ signOut }: { signOut: () => Promise<void> }) {
   return (
     <>
       <a className="skip-link" href="#main-content">
@@ -18,6 +18,7 @@ export default function BlankWorkspace() {
           </div>
           <span className="workspace-title">Blank workspace</span>
           <span className="preview-label">UI preview</span>
+          <form action={signOut}><button className="signout-button" type="submit">Sign out</button></form>
         </header>
 
         <main id="main-content" tabIndex={-1} className="workspace-main">

@@ -10,6 +10,7 @@
 
 # next.js
 /.next/
+/.next-e2e/
 /out/
 
 # production
@@ -39,3 +40,6 @@ next-env.d.ts
 .claude
 .agents
 /prisma/generated/
+
+/test-results/
+/.tmp/

@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const port = 3100;
+// Keep test Auth traffic away from the normal developer app on port 3100.
+const port = 3101;
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,
@@ -11,7 +12,8 @@ export default defineConfig({
   webServer: process.platform === "win32" ? undefined : {
     command: `node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port ${port}`,
     url: `http://127.0.0.1:${port}`,
-    reuseExistingServer: !process.env.CI,
+    env: { SCOPEROOM_E2E: "1", NEXT_PUBLIC_APP_URL: `http://127.0.0.1:${port}` },
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });
