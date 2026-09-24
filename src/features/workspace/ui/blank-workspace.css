@@ -31,6 +31,17 @@
 .brand-mark span:nth-child(2) { background: var(--accent); }
 .workspace-title { padding-left: 20px; border-left: 1px solid var(--border); color: var(--foreground-muted); }
 .preview-label { margin-left: auto; color: var(--foreground-subtle); white-space: nowrap; }
+.signout-button {
+  padding: 7px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.signout-button:hover { border-color: var(--accent); color: var(--accent); }
 
 .workspace-main {
   display: grid;

@@ -2,44 +2,48 @@
   "name": "scoperoom-ai",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "pnpm@10.28.2",
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
   "engines": {
-    "node": "22.20.0",
-    "pnpm": "10.28.2"
+    "node": "^24.21.0",
+    "pnpm": "10.34.5"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1 --port 3100",
     "build": "next build",
     "start": "next start",
     "lint": "node scripts/check-boundaries.mjs && eslint",
     "typecheck": "tsc --noEmit",
-    "test:unit": "node --experimental-default-type=module --experimental-strip-types --test tests/*.test.ts",
+    "test:unit": "node --experimental-strip-types --test tests/*.test.ts",
     "db:guard": "node --env-file-if-exists=.env.local scripts/db/guard.mjs",
     "db:bootstrap": "node --env-file-if-exists=.env.local scripts/db/bootstrap.mjs",
     "db:migrate": "node --env-file-if-exists=.env.local scripts/db/migrate.mjs",
     "db:reset": "node --env-file-if-exists=.env.local scripts/db/reset.mjs",
     "db:generate": "prisma generate",
-    "test:integration": "node --env-file-if-exists=.env.local --experimental-default-type=module --experimental-strip-types --test tests/integration/*.test.ts",
+    "test:integration": "node --env-file-if-exists=.env.local --experimental-strip-types --test tests/integration/*.test.ts",
     "test:e2e:chromium": "playwright test --project=chromium"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
-    "next": "^16.3.5",
-    "pg": "8.16.3",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.117.1",
+    "next": "16.3.6",
+    "pg": "8.23.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "server-only": "0.0.1"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
-    "@types/node": "^20",
-    "@types/pg": "8.15.5",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.3.5",
+    "@types/node": "24.13.6",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.6",
     "prisma": "7.10.0",
-    "supabase": "2.81.1",
-    "typescript": "^5"
+    "supabase": "2.117.0",
+    "typescript": "6.0.3"
   }
 }
