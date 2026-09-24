@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // Keep test Auth traffic away from the normal developer app on port 3100.
-const port = 3101;
+const port = Number(process.env.PLAYWRIGHT_PORT ?? 3101);
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,

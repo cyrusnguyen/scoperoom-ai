@@ -21,7 +21,7 @@ test("workspace APIs deny direct anonymous requests", async ({ request }) => {
 
 test("workspace creation rejects an anonymous POST", async ({ request }) => {
   const response = await request.post("/api/workspaces", {
-    headers: { Origin: "http://127.0.0.1:3101", "Idempotency-Key": "a".repeat(16) },
+    headers: { Origin: process.env.NEXT_PUBLIC_APP_URL ?? "http://127.0.0.1:3101", "Idempotency-Key": "a".repeat(16) },
     data: { name: "Denied workspace" },
   });
   expect(response.status()).toBe(401);
@@ -152,7 +152,7 @@ test.describe("workspace admission", () => {
     await page.getByRole("button", { name: "Create workspace" }).click();
     await page.getByLabel("Workspace name").fill("Browser workspace");
     await page.getByRole("button", { name: "Create workspace" }).last().click();
-    await expect(page.getByText("Browser workspace", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Browser workspace" })).toBeVisible();
     await expect(page.getByRole("status")).toContainText("Workspace created");
     await expect(page.getByText("1 of 1 owned workspaces")).toBeVisible();
     await expect(page.getByText("Your workspace limit has been reached.")).toBeVisible();
