@@ -51,6 +51,7 @@ jobs:
         with:
           node-version: 24.21.0
       - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm db:generate
       - run: corepack pnpm exec playwright install --with-deps chromium
       - run: bash scripts/ci/start-local-supabase.sh
       - run: bash scripts/ci/export-local-auth-env.sh

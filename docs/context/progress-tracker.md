@@ -1,12 +1,12 @@
 # Progress tracker
 
-Last updated: 2026-09-24. Stage 01 and the PR #4 access checkpoint are complete. The first Stage 02 workspace-admission slice is implemented in `feat/stage-02-workspace` and awaits user approval for a PR.
+Last updated: 2026-09-25. Stage 01 and PR #4 are complete. The first Stage 02 workspace-admission slice is open as PR #5 on `feat/workspace-admission`; its Chromium CI repair is in progress.
 
 ## Current scope
 
 This Stage 02 slice covers verified-user workspace listing and operator-entitled creation with a persisted owner membership and scoped retry receipt. Project creation, invitations, role controls, archive/restore, and Google SSO belong to later reviewed slices. Atlas Outline remains a visual reference and was not copied or changed.
 
-## Stage 02 workspace admission - awaiting PR approval
+## Stage 02 workspace admission - PR #5
 
 - A confirmed Supabase Auth subject resolves to an application profile. PostgreSQL stores operator-granted pilot entitlement, workspace, active owner membership, and a USER-scoped creation receipt. The web runtime can read but cannot change entitlement. Creation locks the profile and entitlement, enforces the owned-workspace quota in one transaction, and checks active ownership before receipt replay. A deferred database trigger rejects any second OWNER.
 - No-store `/api/me` and `/api/workspaces` reads and a bounded same-origin create endpoint use verified server identity. The blank-canvas shell displays real memberships and owned quota. The create form keeps the same name and key after an uncertain response; a failed refresh hides stale workspace data. Project details remain empty until project data exists.
@@ -17,7 +17,7 @@ This Stage 02 slice covers verified-user workspace listing and operator-entitled
 - A confirmed local preview account with one unspent workspace allowance was created for user testing. The Stage 02 app is running at `http://127.0.0.1:3101` against this isolated stack. Browser sign-in, visible create control, zero owned workspaces, and sign-out passed. Its credentials are stored only in ignored `.tmp/stage02-local/preview-credentials.json`; they are not the hosted account.
 - Final UI checkpoint: the production build, import boundaries, ESLint, TypeScript, and full Chromium suite (17/17) passed. The browser regression checks panel corner geometry, label spacing, keyboard focus, 390px overflow, sessionStorage reload persistence, and no panel preference cookies. Independent UI review found no concrete regression. One focused run timed out waiting for the dev page load event; it passed on rerun, and the test now waits for DOM content. The final full suite passed.
 - Latest refactor verification: the installed React type warning is resolved. Import boundaries, ESLint, TypeScript, the production build, and the final full Chromium suite (17/17) passed. A prior full run hung during a dev-page reload because a Next dev CSS request stayed pending despite a 200 document response; the CSS asset later served normally. Removing a redundant home-page request from that browser test reduced the setup, and the focused and final full runs passed. The independent review found no concrete issue with the submit type or feature-local preference helper.
-- The final independent review found no remaining concrete issue. Next: request user approval to create this PR. Start the next Stage 02 slice only after its PR is created.
+- The final independent review found no remaining concrete issue. The user opened PR #5. Its first CI run passed static/unit/build and database integration; Chromium failed because the clean job had not run Prisma client generation. The Chromium job now runs `corepack pnpm db:generate` after install. The step-order check and local Prisma generation under Node 24.21.0 passed; the GitHub rerun remains to be checked after push. The next Stage 02 slice remains separate.
 
 ## Previous access checkpoint
 
