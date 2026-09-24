@@ -1,10 +1,10 @@
 # Progress tracker
 
-Last updated: 2026-09-25. Stage 01 and PR #4 are complete. Stage 02 workspace admission was merged in PR #5. The project shell slice is verified locally on `feat/project-shell` and awaits approval to open its PR.
+Last updated: 2026-09-25. Stage 01 and PR #4 are complete. Stage 02 workspace admission was merged in PR #5. The project shell slice is open for review in PR #6 on `feat/project-shell`.
 
 ## Current scope
 
-Stage 02 is proceeding in small reviewed slices. Workspace admission is merged; the next slice adds real project creation, an empty saved draft, and an authorized project shell. Invitations, project membership and roles, archive/restore, and hosted Auth checks remain for later PRs. Atlas Outline remains a visual reference and was not copied or changed.
+Stage 02 is proceeding in small reviewed slices. Workspace admission is merged; the current slice adds real project creation, an empty saved draft, and an authorized project shell. Invitations, project membership and roles, archive/restore, and hosted Auth checks remain for later PRs. Atlas Outline remains a visual reference and was not copied or changed.
 
 ## Stage 02 workspace admission - PR #5 (merged)
 
@@ -19,13 +19,13 @@ Stage 02 is proceeding in small reviewed slices. Workspace admission is merged; 
 - Latest refactor verification: the installed React type warning is resolved. Import boundaries, ESLint, TypeScript, the production build, and the final full Chromium suite (17/17) passed. A prior full run hung during a dev-page reload because a Next dev CSS request stayed pending despite a 200 document response; the CSS asset later served normally. Removing a redundant home-page request from that browser test reduced the setup, and the focused and final full runs passed. The independent review found no concrete issue with the submit type or feature-local preference helper.
 - PR #5 was merged after its Chromium job generated the Prisma client and review fixes preserved the failed-refresh error alongside creation confirmation. Its final CI checks passed. The Prisma schema matches the migration update actions, timestamps, and receipt constraint name.
 
-## Stage 02 project shell - `feat/project-shell` (PR approval pending)
+## Stage 02 project shell - PR #6 (under review)
 
 - A verified, entitled owner can create and reopen a project in an active owned workspace. One transaction saves the project, schema-v3 empty semantic draft, schema-v1 empty layout, current-draft pointer, creation audit event, and WORKSPACE-scoped retry receipt. Current ownership is checked before receipt replay; new creation checks the active entitlement. A basic workspace member cannot read or create the owner's project.
 - No-store project create, workspace project-list, and project bootstrap routes use verified Supabase identity. The existing shell lists projects, creates a named project, opens its saved empty draft, and clears unavailable details. The list ignores late responses from a previously selected workspace. An uncertain create retry stays bound to its original workspace. Atlas Outline supplied visual reference only.
 - The new project/draft/audit migration was replayed on a guarded disposable local Supabase database on port 56322; the existing preview stacks were untouched. A regression first exposed that a current-draft delete cascaded into deleting its project, then passed after the pointer became a deferred NO ACTION foreign key. Prisma validation and client generation passed. The schema rejects missing current drafts and duplicate editable drafts.
 - Under Node 24.21.0, import boundaries/ESLint, TypeScript, 19/19 unit tests, 18/18 database integration tests, 23/23 Chromium tests, and the Next production build passed after review fixes. Browser coverage includes real API privacy and idempotency, create/open/reload, denied details, 390px layout, late list responses, uncertain retry, and the earlier access/workspace flows. Independent review findings were fixed in this branch.
-- This is a local, unpushed review checkpoint; hosted migration and deployment are unverified. Project editing, invitations, project roles, archive/restore, and hosted Auth checks remain outside this slice. Next action: request approval to open the project shell PR, then review its CI before starting the next Stage 02 slice.
+- PR #6 is open and under review; hosted migration and deployment are unverified. Project editing, invitations, project roles, archive/restore, and hosted Auth checks remain outside this slice. Next action: address PR #6 review findings and verify its CI before starting the next Stage 02 slice.
 
 ## Previous access checkpoint
 
