@@ -53,6 +53,12 @@ test("signup and pending verification handle direct visits and email changes", a
   await expect(codeInput).toHaveValue("1234");
   await codeInput.fill("123456");
   await expect(page.locator(".verification-digit")).toHaveText(["1", "2", "3", "4", "5", "6"]);
+  await codeInput.fill("");
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.evaluate(() => navigator.clipboard.writeText(" 123456"));
+  await codeInput.focus();
+  await codeInput.press("ControlOrMeta+V");
+  await expect(codeInput).toHaveValue("123456");
   await codeInput.press("Backspace");
   await expect(codeInput).toHaveValue("12345");
   await expect(page.getByText("pending@example.test")).toBeVisible();

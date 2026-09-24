@@ -28,7 +28,6 @@ export default function VerificationCodeInput() {
           value={code}
           onChange={updateCode}
           required
-          maxLength={CODE_LENGTH}
         />
         <div className="verification-digits" aria-hidden="true">
           {Array.from({ length: CODE_LENGTH }, (_, index) => (
