@@ -43,6 +43,7 @@ function inspectLocalContainer(projectId, dbPort) {
     }
   });
   if (!loopbackPort || !loopbackNetwork) throw new Error("Database guard rejected a non-loopback local Supabase database binding.");
+  return selectedDocker;
 }
 
 function targetInput() {
@@ -127,8 +128,25 @@ async function provisionRuntimeRoles() {
   }
 }
 
+async function provisionMigrationAuthReference() {
+  const { connectionString } = targetInput();
+  const { projectId, dbPort } = localConfig();
+  const docker = inspectLocalContainer(projectId, dbPort);
+  // Supabase owns auth.users; local postgres cannot delegate this grant.
+  execFileSync(docker, ["exec", `supabase_db_${projectId}`, "psql", "-U", "supabase_admin", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "GRANT USAGE ON SCHEMA auth TO app_migrator; GRANT REFERENCES (id) ON auth.users TO app_migrator;"]);
+  const client = new Client({ connectionString });
+  await client.connect();
+  try {
+    const { rows: [access] } = await client.query("select has_schema_privilege('app_migrator', 'auth', 'USAGE') as schema_usage, has_column_privilege('app_migrator', 'auth.users', 'id', 'REFERENCES') as user_reference");
+    if (!access.schema_usage || !access.user_reference) throw new Error("Migration role cannot reference the managed Auth user key.");
+  } finally {
+    await client.end();
+  }
+}
+
 const mode = process.argv.includes("--initial") ? "initial" : process.argv.includes("--bind") ? "bind" : "bound";
 if (process.argv.includes("--provision-runtime")) await provisionRuntimeRoles();
+else if (process.argv.includes("--provision-migration-auth-reference")) await provisionMigrationAuthReference();
 else if (process.argv.includes("--migration")) await verifyMigrationTarget();
 else await verifyTarget(mode);
 console.log("target=verified-local");
