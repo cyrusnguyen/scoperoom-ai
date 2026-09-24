@@ -28,3 +28,107 @@ model TransactionFixture {
   @@map("transaction_fixture")
   @@schema("app")
 }
+
+enum WorkspaceStatus {
+  ACTIVE
+  SUSPENDED
+  @@map("workspace_status")
+  @@schema("app")
+}
+
+enum WorkspaceMemberRole {
+  OWNER
+  MEMBER
+  @@map("workspace_member_role")
+  @@schema("app")
+}
+
+enum MutationScopeKind {
+  USER
+  WORKSPACE
+  PROJECT
+  @@map("mutation_scope_kind")
+  @@schema("app")
+}
+
+model UserProfile {
+  id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  authUserId      String?               @unique @map("auth_user_id") @db.Uuid
+  displayName     String                @map("display_name") @db.Text
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  entitlement     PilotEntitlement?
+  ownedWorkspaces Workspace[]           @relation("workspace_owner")
+  memberships     WorkspaceMembership[]
+  receipts        MutationReceipt[]
+
+  @@map("user_profile")
+  @@schema("app")
+}
+
+model PilotEntitlement {
+  id                String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  profileId         String      @unique @map("profile_id") @db.Uuid
+  maxWorkspaces     Int         @default(1) @map("max_workspaces")
+  active            Boolean     @default(true)
+  grantedByOperator String      @map("granted_by_operator") @db.Uuid
+  grantedAt         DateTime    @default(now()) @map("granted_at") @db.Timestamptz(6)
+  expiresAt         DateTime?   @map("expires_at") @db.Timestamptz(6)
+  revokedAt         DateTime?   @map("revoked_at") @db.Timestamptz(6)
+  profile           UserProfile @relation(fields: [profileId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("pilot_entitlement")
+  @@schema("app")
+}
+
+model Workspace {
+  id          String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId     String                @map("owner_id") @db.Uuid
+  name        String                @db.Text
+  status      WorkspaceStatus       @default(ACTIVE)
+  version     Int                   @default(1)
+  createdAt   DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  owner       UserProfile           @relation("workspace_owner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  memberships WorkspaceMembership[]
+
+  @@index([ownerId])
+  @@map("workspace")
+  @@schema("app")
+}
+
+model WorkspaceMembership {
+  workspaceId String              @map("workspace_id") @db.Uuid
+  profileId   String              @map("profile_id") @db.Uuid
+  role        WorkspaceMemberRole @default(MEMBER)
+  active      Boolean             @default(true)
+  version     Int                 @default(1)
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  profile     UserProfile         @relation(fields: [profileId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([workspaceId, profileId])
+  @@index([profileId, active])
+  @@map("workspace_membership")
+  @@schema("app")
+}
+
+model MutationReceipt {
+  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorId     String            @map("actor_id") @db.Uuid
+  scopeKind   MutationScopeKind @map("scope_kind")
+  scopeId     String            @map("scope_id") @db.Uuid
+  key         String            @db.Text
+  operation   String            @db.Text
+  requestHash String            @map("request_hash") @db.Char(64)
+  result      Json
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt   DateTime          @map("expires_at") @db.Timestamptz(6)
+  actor       UserProfile       @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([actorId, scopeKind, scopeId, key], map: "mutation_receipt_scope_key")
+  @@index([expiresAt])
+  @@map("mutation_receipt")
+  @@schema("app")
+}

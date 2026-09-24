@@ -10,6 +10,11 @@ function run(command, args) {
 run(node, ["scripts/db/guard.mjs", "--initial"]);
 run(node, ["scripts/db/guard.mjs", "--provision-runtime"]);
 run(node, ["scripts/db/guard.mjs", "--migration"]);
+run(node, ["scripts/db/guard.mjs", "--provision-migration-auth-reference"]);
+// A fresh private app installation keeps Prisma migration history in app.
+const migrationUrl = new URL(process.env.MIGRATION_DATABASE_URL);
+migrationUrl.searchParams.set("schema", "app");
+process.env.MIGRATION_DATABASE_URL = migrationUrl.toString();
 run(corepack, ["pnpm", "exec", "prisma", "migrate", "deploy"]);
 run(node, ["scripts/db/guard.mjs", "--bind"]);
 run(node, ["scripts/db/guard.mjs"]);
