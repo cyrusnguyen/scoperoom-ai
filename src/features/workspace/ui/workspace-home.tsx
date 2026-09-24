@@ -101,9 +101,11 @@ export default function BlankWorkspace({ signOut }: { signOut: () => Promise<voi
       }
       setHome(await result.json() as WorkspaceHome);
       if (clearMessage) setMessage("");
+      return true;
     } catch (error) {
       setHome(null);
       setMessage(error instanceof Error ? error.message : "Workspace access is unavailable.");
+      return false;
     }
   }, []);
 
@@ -134,8 +136,9 @@ export default function BlankWorkspace({ signOut }: { signOut: () => Promise<voi
       setName("");
       setKey("");
       setFormOpen(false);
-      await refresh(false);
-      setMessage(created.replayed ? "Workspace already created." : "Workspace created.");
+      const refreshed = await refresh(false);
+      const confirmation = created.replayed ? "Workspace already created." : "Workspace created.";
+      setMessage((current) => refreshed ? confirmation : `${confirmation} ${current}`);
     } catch {
       setMessage("We could not confirm workspace creation. Your name is ready to retry.");
       setUncertain(true);

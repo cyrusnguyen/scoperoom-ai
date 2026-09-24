@@ -1,6 +1,6 @@
 # Progress tracker
 
-Last updated: 2026-09-25. Stage 01 and PR #4 are complete. The first Stage 02 workspace-admission slice is open as PR #5 on `feat/workspace-admission`; its Chromium CI repair is in progress.
+Last updated: 2026-09-25. Stage 01 and PR #4 are complete. The first Stage 02 workspace-admission slice is under review in PR #5 on `feat/workspace-admission`.
 
 ## Current scope
 
@@ -17,7 +17,7 @@ This Stage 02 slice covers verified-user workspace listing and operator-entitled
 - A confirmed local preview account with one unspent workspace allowance was created for user testing. The Stage 02 app is running at `http://127.0.0.1:3101` against this isolated stack. Browser sign-in, visible create control, zero owned workspaces, and sign-out passed. Its credentials are stored only in ignored `.tmp/stage02-local/preview-credentials.json`; they are not the hosted account.
 - Final UI checkpoint: the production build, import boundaries, ESLint, TypeScript, and full Chromium suite (17/17) passed. The browser regression checks panel corner geometry, label spacing, keyboard focus, 390px overflow, sessionStorage reload persistence, and no panel preference cookies. Independent UI review found no concrete regression. One focused run timed out waiting for the dev page load event; it passed on rerun, and the test now waits for DOM content. The final full suite passed.
 - Latest refactor verification: the installed React type warning is resolved. Import boundaries, ESLint, TypeScript, the production build, and the final full Chromium suite (17/17) passed. A prior full run hung during a dev-page reload because a Next dev CSS request stayed pending despite a 200 document response; the CSS asset later served normally. Removing a redundant home-page request from that browser test reduced the setup, and the focused and final full runs passed. The independent review found no concrete issue with the submit type or feature-local preference helper.
-- The final independent review found no remaining concrete issue. The user opened PR #5. Its first CI run passed static/unit/build and database integration; Chromium failed because the clean job had not run Prisma client generation. The Chromium job now runs `corepack pnpm db:generate` after install. The step-order check and local Prisma generation under Node 24.21.0 passed; the GitHub rerun remains to be checked after push. The next Stage 02 slice remains separate.
+- PR #5 is under review. Its first CI run passed static/unit/build and database integration; Chromium failed because the clean job had not run Prisma client generation. The workflow now runs `corepack pnpm db:generate` after install, and the rerun passed all three jobs. Review follow-up identified a creation confirmation masking a failed refresh; a browser regression reproduced it and passed after the UI fix. The Prisma schema now matches the migration for five update actions, three updated-at defaults, and the receipt constraint name; schema validation, Prisma client generation, lint, typecheck, the production build, and 8/8 workspace Chromium tests passed locally. Next action: push the review fixes, verify the new PR checks, and complete review of PR #5 before starting another Stage 02 slice.
 
 ## Previous access checkpoint
 
@@ -48,4 +48,4 @@ The user-reported Gmail address was already confirmed in hosted `auth.users` bef
 
 ## Remaining deployment check
 
-ScopeRoom has not been deployed to Vercel. Supabase's hosted Site URL is still localhost, so a production redirect cannot be verified yet. At deployment, set the exact HTTPS production origin in Supabase Site URL and allow `<production-origin>/login`; set matching Vercel public environment variables, then repeat a fresh delivered-email signup and redirect test. The updated GitHub workflow also awaits a PR run. Project data and roles belong to a later authorized stage.
+ScopeRoom has not been deployed to Vercel. Supabase's hosted Site URL is still localhost, so a production redirect cannot be verified yet. At deployment, set the exact HTTPS production origin in Supabase Site URL and allow `<production-origin>/login`; set matching Vercel public environment variables, then repeat a fresh delivered-email signup and redirect test. PR #5 is under review; verify its checks after each pushed review fix. Project data and roles belong to a later authorized stage.

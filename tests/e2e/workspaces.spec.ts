@@ -162,6 +162,21 @@ test.describe("workspace admission", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
 
+  test("a failed refresh after creation shows both the confirmation and the read error", async ({ page }) => {
+    await grantOneWorkspace();
+    await page.getByRole("button", { name: "Refresh workspaces" }).click();
+    await page.getByRole("button", { name: "Create workspace" }).click();
+    await page.getByLabel("Workspace name").fill("Created before refresh failed");
+    await page.route("**/api/workspaces", (route) => {
+      if (route.request().method() === "GET") {
+        return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { message: "Workspace access is unavailable." } }) });
+      }
+      return route.continue();
+    });
+    await page.getByRole("button", { name: "Create workspace" }).last().click();
+    await expect(page.getByRole("status")).toContainText("Workspace created. Workspace access is unavailable.");
+    await expect(page.getByRole("list", { name: "Your workspaces" })).toHaveCount(0);
+  });
   test("failed refresh hides stale workspace data and recovers", async ({ page }) => {
     await grantOneWorkspace();
     await page.getByRole("button", { name: "Refresh workspaces" }).click();

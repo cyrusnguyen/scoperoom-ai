@@ -56,7 +56,7 @@ model UserProfile {
   authUserId      String?               @unique @map("auth_user_id") @db.Uuid
   displayName     String                @map("display_name") @db.Text
   createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedAt       DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   entitlement     PilotEntitlement?
   ownedWorkspaces Workspace[]           @relation("workspace_owner")
   memberships     WorkspaceMembership[]
@@ -75,7 +75,7 @@ model PilotEntitlement {
   grantedAt         DateTime    @default(now()) @map("granted_at") @db.Timestamptz(6)
   expiresAt         DateTime?   @map("expires_at") @db.Timestamptz(6)
   revokedAt         DateTime?   @map("revoked_at") @db.Timestamptz(6)
-  profile           UserProfile @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  profile           UserProfile @relation(fields: [profileId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@map("pilot_entitlement")
   @@schema("app")
@@ -88,8 +88,8 @@ model Workspace {
   status      WorkspaceStatus       @default(ACTIVE)
   version     Int                   @default(1)
   createdAt   DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
-  owner       UserProfile           @relation("workspace_owner", fields: [ownerId], references: [id], onDelete: Restrict)
+  updatedAt   DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  owner       UserProfile           @relation("workspace_owner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   memberships WorkspaceMembership[]
 
   @@index([ownerId])
@@ -104,9 +104,9 @@ model WorkspaceMembership {
   active      Boolean             @default(true)
   version     Int                 @default(1)
   createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
-  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  profile     UserProfile         @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  updatedAt   DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  profile     UserProfile         @relation(fields: [profileId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@id([workspaceId, profileId])
   @@index([profileId, active])
@@ -125,9 +125,9 @@ model MutationReceipt {
   result      Json
   createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
   expiresAt   DateTime          @map("expires_at") @db.Timestamptz(6)
-  actor       UserProfile       @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  actor       UserProfile       @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
-  @@unique([actorId, scopeKind, scopeId, key])
+  @@unique([actorId, scopeKind, scopeId, key], map: "mutation_receipt_scope_key")
   @@index([expiresAt])
   @@map("mutation_receipt")
   @@schema("app")
