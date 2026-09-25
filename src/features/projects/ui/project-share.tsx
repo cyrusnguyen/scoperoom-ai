@@ -13,7 +13,7 @@ async function errorMessage(response: Response, fallback: string) {
 
 function roleLabel(role: Role) { return role[0] + role.slice(1).toLowerCase(); }
 
-export default function ProjectShare({ projectId, role, openRequest = false, showTrigger = true }: { projectId: string; role: Role; openRequest?: boolean; showTrigger?: boolean }) {
+export default function ProjectShare({ projectId, role, openRequest = 0, showTrigger = true, embedded = false }: { projectId: string; role: Role; openRequest?: number; showTrigger?: boolean; embedded?: boolean }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<Invitation["role"]>("EDITOR");
@@ -26,6 +26,7 @@ export default function ProjectShare({ projectId, role, openRequest = false, sho
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const emailRef = useRef<HTMLInputElement>(null);
+  const visible = embedded || open;
 
   const refresh = useCallback(async (clearMessage = true) => {
     try {
@@ -46,12 +47,12 @@ export default function ProjectShare({ projectId, role, openRequest = false, sho
 
   useEffect(() => { if (openRequest) { const timer = window.setTimeout(() => setOpen(true), 0); return () => window.clearTimeout(timer); } }, [openRequest]);
   useEffect(() => {
-    if (!open || role !== "OWNER") return;
+    if (!visible || role !== "OWNER") return;
     const timer = window.setTimeout(() => { void refresh(); }, 0);
     return () => window.clearTimeout(timer);
-  }, [open, refresh, role]);
+  }, [visible, refresh, role]);
 
-  useEffect(() => { if (open) { const timer = window.setTimeout(() => emailRef.current?.focus(), 0); return () => window.clearTimeout(timer); } }, [open]);
+  useEffect(() => { if (visible && (open || openRequest)) { const timer = window.setTimeout(() => emailRef.current?.focus(), 0); return () => window.clearTimeout(timer); } }, [visible, open, openRequest]);
 
   if (role !== "OWNER") return null;
 
@@ -127,9 +128,10 @@ export default function ProjectShare({ projectId, role, openRequest = false, sho
   const pending = invitations?.filter((invitation) => invitation.status === "PENDING") ?? [];
   return (
     <section className="share-project" aria-labelledby="share-title">
-      {showTrigger && <button className="context-share-button" type="button" aria-expanded={open} aria-controls="share-panel" onClick={() => setOpen((value) => !value)}>Share project</button>}
-      {open && <div id="share-panel" className="share-panel">
+      {showTrigger && !embedded && <button className="context-share-button" type="button" aria-expanded={open} aria-controls="share-panel" onClick={() => setOpen((value) => !value)}>Share project</button>}
+      {visible && <div id="share-panel" className="share-panel">
         <h3 id="share-title">Share this project</h3>
+        {!embedded && <button className="context-action" type="button" onClick={() => setOpen(false)}>Close sharing</button>}
         <p className="share-notice">Editors can edit this whole project. Invitation links are one-time and expire after seven days.</p>
         <form className="share-form" onSubmit={issue}>
           <label htmlFor="invite-email">Verified email</label>
@@ -140,26 +142,26 @@ export default function ProjectShare({ projectId, role, openRequest = false, sho
           </select>
           <div className="share-actions">
             <button className="context-share-button" type="submit" disabled={issuing}>{issuing ? "Creating..." : uncertain ? "Retry invitation" : "Create invitation"}</button>
-            {(uncertain || issued) && <button className="text-button" type="button" disabled={issuing} onClick={() => { setIssued(null); setKey(""); setUncertain(false); setMessage(""); }}>Cancel</button>}
+            {(uncertain || issued) && <button className="context-action" type="button" disabled={issuing} onClick={() => { setIssued(null); setKey(""); setUncertain(false); setMessage(""); }}>Cancel</button>}
           </div>
         </form>
         {issued?.url && <div className="invite-link">
           <label htmlFor="invite-link">One-time invitation link</label>
           <input id="invite-link" value={issued.url} readOnly onFocus={(event) => event.currentTarget.select()} aria-describedby="invite-link-help" />
-          <button className="text-button" type="button" onClick={() => void copy()}>Copy link</button>
+          <button className="utility-button" type="button" onClick={() => void copy()}>Copy link</button>
           <p id="invite-link-help">Select this link to copy it manually if needed. It is not shown again after reload.</p>
         </div>}
         {issued?.linkUnavailable && <div className="invite-recovery">
           <p>Revoke this invitation before creating a replacement. The original link cannot be recovered.</p>
-          <button className="text-button" type="button" onClick={() => void revoke(issued)} disabled={revoking === issued.id}>Revoke and reissue</button>
+          <button className="utility-button danger-action" type="button" onClick={() => void revoke(issued)} disabled={revoking === issued.id}>Revoke and reissue</button>
         </div>}
         <p className="share-message" role="status" aria-live="polite">{message}</p>
         <div className="pending-invitations">
-          <div className="workspace-list-heading"><h4>Pending invitations</h4><button className="text-button" type="button" onClick={() => void refresh()} disabled={Boolean(revoking)}>Refresh</button></div>
+          <div className="workspace-list-heading"><h4>Pending invitations</h4><button className="utility-button" type="button" onClick={() => void refresh()} disabled={Boolean(revoking)}>Refresh</button></div>
           {invitations === null ? <p>{refreshFailed ? "Invitation details could not be refreshed. Use Refresh to retry." : "Loading invitation details..."}</p> : pending.length ? <ul>
             {pending.map((invitation) => <li key={invitation.id}>
               <span><strong>{invitation.verifiedEmail}</strong><small>{roleLabel(invitation.role)} - expires {new Date(invitation.expiresAt).toLocaleDateString()}</small></span>
-              <button className="text-button" type="button" onClick={() => void revoke(invitation)} disabled={revoking === invitation.id}>{revoking === invitation.id ? "Revoking..." : "Revoke"}</button>
+              <button className="utility-button danger-action" type="button" onClick={() => void revoke(invitation)} disabled={revoking === invitation.id}>{revoking === invitation.id ? "Revoking..." : "Revoke"}</button>
             </li>)}
           </ul> : <p>No pending invitations.</p>}
         </div>

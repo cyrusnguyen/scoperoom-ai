@@ -42,10 +42,12 @@ test.describe("project management", () => {
   test("an owner changes a member role, chooses an approver, and archives the project", async ({ page }) => {
     let status = { status: "ACTIVE", version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null as string | null };
     const member = { profileId: "44444444-4444-4444-8444-444444444444", displayName: "Casey Collaborator", role: "VIEWER", version: 1, designatedApprover: false };
+    const otherWorkspace = { ...workspace, id: "55555555-5555-4555-8555-555555555555", name: "Other workspace", canManage: false };
     let removed = false;
     const response = () => ({ project: status, members: removed ? [] : [member] });
-    await page.route("**/api/workspaces", async (route) => route.request().method() === "GET" ? route.fulfill({ contentType: "application/json", body: JSON.stringify({ displayName: "Management Test", canCreate: false, maxWorkspaces: 1, ownedCount: 1, workspaces: [workspace] }) }) : route.continue());
+    await page.route("**/api/workspaces", async (route) => route.request().method() === "GET" ? route.fulfill({ contentType: "application/json", body: JSON.stringify({ displayName: "Management Test", canCreate: false, maxWorkspaces: 1, ownedCount: 1, workspaces: [workspace, otherWorkspace] }) }) : route.continue());
     await page.route(`**/api/workspaces/${workspace.id}/projects`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ workspace: { id: workspace.id, name: workspace.name, canCreateProject: true }, projects: [project] }) }));
+    await page.route(`**/api/workspaces/${otherWorkspace.id}/projects`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ workspace: { id: otherWorkspace.id, name: otherWorkspace.name, canCreateProject: false }, projects: [] }) }));
     await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: { ...project, role: "OWNER" }, draft: { id: project.currentDraftId, schemaVersion: 3, documentRevision: 1, layoutRevision: 1 } }) }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(status) }));
     await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
@@ -90,15 +92,27 @@ test.describe("project management", () => {
     await page.goto(`/app/projects/${project.id}`);
     const context = page.getByRole("complementary", { name: "Project details" });
     await context.getByRole("button", { name: "Hide right sidebar" }).click();
-    const toolbar = page.locator(".canvas-toolbar");
-    await toolbar.getByRole("button", { name: "Share project" }).click();
+    await page.getByRole("button", { name: "Share", exact: true }).click();
     await expect(context).toBeVisible();
     await expect(page.getByLabel("Verified email")).toBeVisible();
-    await context.getByRole("button", { name: "Rename project" }).click();
+    await context.getByRole("tab", { name: "Details", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Edit project name" })).toBeVisible();
+    await page.getByRole("button", { name: "Edit project name" }).click();
     await expect(page.getByLabel("Project name")).toBeFocused();
+    const refresh = page.getByRole("button", { name: "Refresh", exact: true });
+    const statusRefresh = page.waitForResponse(`**/api/projects/${project.id}/status`);
+    await refresh.click();
+    await statusRefresh;
+    await expect(refresh).toBeFocused();
+    await page.getByLabel("Project name").fill("Discarded management project");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByLabel("Project name")).toHaveCount(0);
+    await expect(context.getByRole("tabpanel", { name: "Details" }).getByText("Management project", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Edit project name" }).click();
     await page.getByLabel("Project name").fill("Renamed management project");
     await page.getByRole("button", { name: "Save name" }).click();
     await expect(page.locator(".workspace-header").getByText("Renamed management project", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Project name")).toHaveCount(0);
     await expect(page.getByText("Casey Collaborator", { exact: true })).toBeVisible();
     await page.getByLabel("Role for Casey Collaborator").selectOption("EDITOR");
     await expect(page.getByRole("region", { name: "Project management" }).getByRole("status")).toContainText("Member role updated.");
@@ -125,12 +139,6 @@ test.describe("project management", () => {
     await page.route(`**/api/workspaces/${workspace.id}/projects`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ workspace: { id: workspace.id, name: workspace.name, canCreateProject: false }, projects: [project] }) }));
     await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: { ...project, role: "VIEWER" }, draft: { id: project.currentDraftId, schemaVersion: 3, documentRevision: 1, layoutRevision: 1 } }) }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(status) }));
-    await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
-      const body = route.request().postDataJSON() as { name: string; expectedSettingsVersion: number };
-      expect(body.expectedSettingsVersion).toBe(status.settingsVersion);
-      status = { ...status, settingsVersion: status.settingsVersion + 1 };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...status, name: body.name, replayed: false }) });
-    });
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: status, members: [{ profileId: "44444444-4444-4444-8444-444444444444", displayName: "Owner", role: "OWNER", version: 1, designatedApprover: false }] }) }));
 
     await page.goto(`/app/projects/${project.id}`);
