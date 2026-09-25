@@ -16,7 +16,10 @@ export function projectFailure(error: unknown) {
     NOT_AUTHORIZED: ["NOT_AUTHORIZED", "Project creation is not available for this workspace.", 403],
     NOT_FOUND: ["NOT_FOUND", "Project is unavailable.", 404],
     KEY_REUSED: ["KEY_REUSED", "This create request conflicts with an earlier request.", 409],
-    INVALID_INPUT: ["INVALID_INPUT", "Enter a valid project name and try again.", 400],
+    INVALID_INPUT: ["INVALID_INPUT", "Enter valid project details and try again.", 400],
+    CONFLICT: ["CONFLICT", "That invitation is no longer pending.", 409],
+    COLLABORATOR_LIMIT: ["COLLABORATOR_LIMIT", "This project has reached its collaborator limit.", 409],
+    INVITATION_LIMIT: ["INVITATION_LIMIT", "This project already has the maximum number of pending invitations.", 409],
     UNAVAILABLE: ["UNAVAILABLE", "Project access is unavailable.", 503],
   } as const;
   const [code, message, status] = errors[error.code];

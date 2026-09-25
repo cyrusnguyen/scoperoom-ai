@@ -1,4 +1,4 @@
-export const projectErrorCodes = ["NOT_ENTITLED", "NOT_AUTHORIZED", "NOT_FOUND", "KEY_REUSED", "INVALID_INPUT", "UNAVAILABLE"] as const;
+export const projectErrorCodes = ["NOT_ENTITLED", "NOT_AUTHORIZED", "NOT_FOUND", "KEY_REUSED", "INVALID_INPUT", "CONFLICT", "COLLABORATOR_LIMIT", "INVITATION_LIMIT", "UNAVAILABLE"] as const;
 
 export type ProjectErrorCode = (typeof projectErrorCodes)[number];
 
@@ -20,13 +20,15 @@ export type CreatedProject = {
   replayed: boolean;
 };
 
+export type ProjectAccessRole = "OWNER" | "EDITOR" | "REVIEWER" | "VIEWER";
+
 export type WorkspaceProjects = {
   workspace: { id: string; name: string; canCreateProject: boolean };
-  projects: Array<{ id: string; name: string; status: string; currentDraftId: string; createdAt: string }>;
+  projects: Array<{ id: string; name: string; status: string; currentDraftId: string; createdAt: string; role: ProjectAccessRole }>;
 };
 
 export type ProjectBootstrap = {
-  project: { id: string; workspaceId: string; name: string; status: string; role: "OWNER" };
+  project: { id: string; workspaceId: string; name: string; status: string; role: ProjectAccessRole };
   draft: { id: string; schemaVersion: 3; documentRevision: number; layoutRevision: number; documentJson: unknown; layoutJson: unknown };
 };
 

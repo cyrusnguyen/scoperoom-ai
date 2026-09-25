@@ -76,7 +76,7 @@ test.describe("local Supabase Auth", () => {
 
   test.beforeAll(async () => {
     const url = new URL(authUrl!);
-    if (url.hostname !== "127.0.0.1" || !["54321", "55321", "56321"].includes(url.port)) {
+    if (url.hostname !== "127.0.0.1" || !["54321", "55321", "56321", "57321"].includes(url.port)) {
       throw new Error("Auth browser tests require a local Supabase URL.");
     }
     admin = createClient(authUrl!, secretKey!, { auth: { autoRefreshToken: false, persistSession: false } });

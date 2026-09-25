@@ -4,12 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { SubmitEvent } from "react";
 import { useRouter } from "next/navigation";
 import { rememberPanel, restorePanel } from "./panel-preferences";
+import ProjectShare from "@/features/projects/ui/project-share";
 
 type Workspace = { id: string; name: string; createdAt: string };
 type WorkspaceHome = { displayName: string; canCreate: boolean; maxWorkspaces: number; ownedCount: number; workspaces: Workspace[] };
 type ProjectSummary = { id: string; name: string; status: string; currentDraftId: string; createdAt: string };
 type ProjectList = { workspace: { id: string; name: string; canCreateProject: boolean }; projects: ProjectSummary[] };
-type ProjectBootstrap = { project: { id: string; workspaceId: string; name: string; status: string; role: "OWNER" }; draft: { id: string; schemaVersion: 3; documentRevision: number; layoutRevision: number } };
+type ProjectBootstrap = { project: { id: string; workspaceId: string; name: string; status: string; role: "OWNER" | "EDITOR" | "REVIEWER" | "VIEWER" }; draft: { id: string; schemaVersion: 3; documentRevision: number; layoutRevision: number } };
 type ApiError = { error?: { message?: string } };
 
 async function errorMessage(response: Response, fallback: string) {
@@ -307,10 +308,11 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
                 <h3>{project.project.name}</h3>
                 <p>This project has an empty draft ready for a later editing stage.</p>
                 <dl className="context-facts">
-                  <div><dt>Role</dt><dd>Owner</dd></div>
+                  <div><dt>Role</dt><dd>{project.project.role[0] + project.project.role.slice(1).toLowerCase()}</dd></div>
                   <div><dt>Draft</dt><dd>Empty draft</dd></div>
                   <div><dt>Revision</dt><dd>{project.draft.documentRevision}</dd></div>
                 </dl>
+                <ProjectShare key={project.project.id} projectId={project.project.id} role={project.project.role} />
               </> : <>
                 <div className="context-icon" aria-hidden="true">&#9633;</div>
                 <h3>{projectUnavailable ? "Project details are unavailable." : "No project is connected yet."}</h3>
