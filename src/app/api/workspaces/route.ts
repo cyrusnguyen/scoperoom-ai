@@ -22,6 +22,8 @@ function workspaceError(error: unknown) {
     LIMIT_REACHED: ["LIMIT_REACHED", "Your workspace limit has been reached.", 409],
     KEY_REUSED: ["KEY_REUSED", "This create request conflicts with an earlier request.", 409],
     INVALID_INPUT: ["INVALID_INPUT", "Enter a valid workspace name and try again.", 400],
+    NOT_FOUND: ["NOT_FOUND", "Workspace is unavailable.", 404],
+    CONFLICT: ["CONFLICT", "Workspace changed. Refresh and try again.", 409],
     UNAVAILABLE: ["UNAVAILABLE", "Workspace access is unavailable.", 503],
   } as const;
   const [code, message, status] = errors[error.code];

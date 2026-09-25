@@ -12,7 +12,7 @@ test.skip(!authUrl || !secretKey || !databaseUrl, "Requires isolated local Supab
 
 test("project APIs require an authenticated identity", async ({ request }) => {
   const id = randomUUID();
-  for (const path of [`/api/workspaces/${id}/projects`, `/api/projects/${id}/bootstrap`]) {
+  for (const path of [`/api/workspaces/${id}/projects`, `/api/projects/${id}/bootstrap`, `/api/projects/${id}/status`, `/api/projects/${id}/members`]) {
     const response = await request.get(path);
     expect(response.status()).toBe(401);
     expect(response.headers()["cache-control"]).toContain("no-store");
@@ -72,6 +72,26 @@ test("a project can be created once and remains private to its owner", async ({ 
     expect(body.project.name).toBe(input.name);
     expect(body.draft).toMatchObject({ documentRevision: 1, layoutRevision: 1 });
 
+    const statusResponse = await page.request.get(`/api/projects/${created.id}/status`);
+    expect(statusResponse.status()).toBe(200);
+    const currentStatus = await statusResponse.json() as { version: number; settingsVersion: number };
+    const settingsResponse = await page.request.patch(`/api/projects/${created.id}/settings`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { name: "Renamed private project", expectedSettingsVersion: currentStatus.settingsVersion } });
+    expect(settingsResponse.status()).toBe(200);
+    expect((await settingsResponse.json() as { name: string }).name).toBe("Renamed private project");
+    const archiveResponse = await page.request.post(`/api/projects/${created.id}/archive`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedProjectVersion: currentStatus.version, reason: "Local route check" } });
+    expect(archiveResponse.status()).toBe(200);
+    const archivedProject = await archiveResponse.json() as { status: string; version: number };
+    expect(archivedProject.status).toBe("ARCHIVED");
+    const archivedWorkspaceResponse = await page.request.post(`/api/workspaces/${workspaceId}/archive`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedVersion: 1 } });
+    expect(archivedWorkspaceResponse.status()).toBe(200);
+    const archivedWorkspace = await archivedWorkspaceResponse.json() as { status: string; version: number };
+    expect(archivedWorkspace.status).toBe("ARCHIVED");
+    expect((await page.request.get(`/api/projects/${created.id}/bootstrap`)).status()).toBe(200);
+    const restoredWorkspace = await page.request.post(`/api/workspaces/${workspaceId}/restore`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedVersion: archivedWorkspace.version } });
+    expect(restoredWorkspace.status()).toBe(200);
+    const restoredProject = await page.request.post(`/api/projects/${created.id}/restore`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedProjectVersion: archivedProject.version } });
+    expect(restoredProject.status()).toBe(200);
+    expect((await restoredProject.json() as { status: string }).status).toBe("ACTIVE");
     otherContext = await browser.newContext({ baseURL: appUrl });
     const otherPage = await otherContext.newPage();
     await signIn(otherPage);

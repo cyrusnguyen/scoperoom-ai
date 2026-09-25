@@ -31,6 +31,7 @@ model TransactionFixture {
 
 enum WorkspaceStatus {
   ACTIVE
+  ARCHIVED
   SUSPENDED
 
   @@map("workspace_status")
@@ -81,20 +82,21 @@ enum ProjectMemberRole {
 }
 
 model UserProfile {
-  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  authUserId          String?               @unique @map("auth_user_id") @db.Uuid
-  displayName         String                @map("display_name") @db.Text
-  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  entitlement         PilotEntitlement?
-  ownedWorkspaces     Workspace[]           @relation("workspace_owner")
-  memberships         WorkspaceMembership[]
-  projectMemberships  ProjectMembership[]
-  receipts            MutationReceipt[]
-  drafts              ScopeDraft[]
-  auditEvents         AuditEvent[]          @relation("audit_actor")
-  invitationsSent     Invitation[]          @relation("invitation_inviter")
-  invitationsAccepted Invitation[]          @relation("invitation_acceptor")
+  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  authUserId            String?               @unique @map("auth_user_id") @db.Uuid
+  displayName           String                @map("display_name") @db.Text
+  createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  entitlement           PilotEntitlement?
+  ownedWorkspaces       Workspace[]           @relation("workspace_owner")
+  memberships           WorkspaceMembership[]
+  projectMemberships    ProjectMembership[]
+  receipts              MutationReceipt[]
+  drafts                ScopeDraft[]
+  auditEvents           AuditEvent[]          @relation("audit_actor")
+  invitationsSent       Invitation[]          @relation("invitation_inviter")
+  invitationsAccepted   Invitation[]          @relation("invitation_acceptor")
+  designatedApproverFor Project[]             @relation("project_designated_approver")
 
   @@map("user_profile")
   @@schema("app")
@@ -169,23 +171,27 @@ model MutationReceipt {
 }
 
 model Project {
-  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId       String              @map("workspace_id") @db.Uuid
-  name              String              @db.Text
-  status            ProjectStatus       @default(ACTIVE)
-  version           Int                 @default(1)
-  membershipVersion Int                 @default(1) @map("membership_version")
-  currentDraftId    String?             @map("current_draft_id") @db.Uuid
-  realtimeEpoch     String              @default(dbgenerated("gen_random_uuid()")) @map("realtime_epoch") @db.Uuid
-  eventSequence     BigInt              @default(0) @map("event_sequence") @db.BigInt
-  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  workspace         Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  drafts            ScopeDraft[]        @relation("project_drafts")
-  currentDraft      ScopeDraft?         @relation("project_current_draft", fields: [id, currentDraftId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction)
-  auditEvents       AuditEvent[]
-  memberships       ProjectMembership[]
-  invitations       Invitation[]
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId           String              @map("workspace_id") @db.Uuid
+  name                  String              @db.Text
+  status                ProjectStatus       @default(ACTIVE)
+  version               Int                 @default(1)
+  settingsVersion       Int                 @default(1) @map("settings_version")
+  approvalPolicyVersion Int                 @default(1) @map("approval_policy_version")
+  membershipVersion     Int                 @default(1) @map("membership_version")
+  designatedApproverId  String?             @map("designated_approver_id") @db.Uuid
+  currentDraftId        String?             @map("current_draft_id") @db.Uuid
+  realtimeEpoch         String              @default(dbgenerated("gen_random_uuid()")) @map("realtime_epoch") @db.Uuid
+  eventSequence         BigInt              @default(0) @map("event_sequence") @db.BigInt
+  createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace             Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  designatedApprover    UserProfile?        @relation("project_designated_approver", fields: [designatedApproverId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  drafts                ScopeDraft[]        @relation("project_drafts")
+  currentDraft          ScopeDraft?         @relation("project_current_draft", fields: [id, currentDraftId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction)
+  auditEvents           AuditEvent[]
+  memberships           ProjectMembership[]
+  invitations           Invitation[]
 
   @@unique([workspaceId, id])
   @@unique([id, currentDraftId])

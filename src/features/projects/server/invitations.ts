@@ -19,6 +19,8 @@ type LockedProject = {
   id: string;
   workspaceId: string;
   eventSequence: bigint;
+  status: "ACTIVE" | "ARCHIVED";
+  workspaceStatus: "ACTIVE" | "ARCHIVED";
   role: "OWNER" | ProjectMemberRole | null;
 };
 
@@ -104,14 +106,14 @@ async function lockProject(transaction: Prisma.TransactionClient, profileId: str
   await transaction.$queryRaw(update
     ? Prisma.sql`SELECT app.lock_workspace_for_project_creation(${location.workspaceId}::uuid)::text AS locked`
     : Prisma.sql`SELECT app.lock_workspace_for_project_read(${location.workspaceId}::uuid)::text AS locked`);
-  const workspace = await transaction.workspace.findFirst({ where: { id: location.workspaceId, status: "ACTIVE" }, select: { id: true } });
+  const workspace = await transaction.workspace.findFirst({ where: { id: location.workspaceId, status: { in: ["ACTIVE", "ARCHIVED"] } }, select: { id: true, status: true } });
   if (!workspace) throw new ProjectError("NOT_FOUND");
   const projects = update
-    ? await transaction.$queryRaw<{ id: string; workspace_id: string; event_sequence: bigint }[]>(Prisma.sql`
-      SELECT id, workspace_id, event_sequence FROM app.project WHERE id = ${projectId}::uuid AND workspace_id = ${location.workspaceId}::uuid AND status = 'ACTIVE'::app.project_status FOR UPDATE
+    ? await transaction.$queryRaw<{ id: string; workspace_id: string; event_sequence: bigint; status: string }[]>(Prisma.sql`
+      SELECT id, workspace_id, event_sequence, status::text FROM app.project WHERE id = ${projectId}::uuid AND workspace_id = ${location.workspaceId}::uuid AND status IN ('ACTIVE'::app.project_status, 'ARCHIVED'::app.project_status) FOR UPDATE
     `)
-    : await transaction.$queryRaw<{ id: string; workspace_id: string; event_sequence: bigint }[]>(Prisma.sql`
-      SELECT id, workspace_id, event_sequence FROM app.project WHERE id = ${projectId}::uuid AND workspace_id = ${location.workspaceId}::uuid AND status = 'ACTIVE'::app.project_status FOR SHARE
+    : await transaction.$queryRaw<{ id: string; workspace_id: string; event_sequence: bigint; status: string }[]>(Prisma.sql`
+      SELECT id, workspace_id, event_sequence, status::text FROM app.project WHERE id = ${projectId}::uuid AND workspace_id = ${location.workspaceId}::uuid AND status IN ('ACTIVE'::app.project_status, 'ARCHIVED'::app.project_status) FOR SHARE
     `);
   const project = projects[0];
   if (!project) throw new ProjectError("NOT_FOUND");
@@ -131,7 +133,12 @@ async function lockProject(transaction: Prisma.TransactionClient, profileId: str
     WHERE project.id = ${projectId}::uuid
   `);
   const role = access[0]?.role;
-  return { id: project.id, workspaceId: project.workspace_id, eventSequence: project.event_sequence, role: role === "OWNER" || role === "EDITOR" || role === "REVIEWER" || role === "VIEWER" ? role : null };
+  if (project.status !== "ACTIVE" && project.status !== "ARCHIVED") throw new ProjectError("NOT_FOUND");
+  return { id: project.id, workspaceId: project.workspace_id, eventSequence: project.event_sequence, status: project.status, workspaceStatus: workspace.status === "ACTIVE" ? "ACTIVE" : "ARCHIVED", role: role === "OWNER" || role === "EDITOR" || role === "REVIEWER" || role === "VIEWER" ? role : null };
+}
+
+function requireActive(project: LockedProject) {
+  if (project.status !== "ACTIVE" || project.workspaceStatus !== "ACTIVE") throw new ProjectError("CONFLICT");
 }
 
 async function lockProfile(transaction: Prisma.TransactionClient, profileId: string, authUserId: string) {
@@ -184,6 +191,7 @@ export async function issueInvitation(identity: InvitationIdentity, projectId: s
         if (!result) throw new ProjectError("UNAVAILABLE");
         return { ...result, url: undefined, linkUnavailable: true, replayed: true };
       }
+      requireActive(project);
       const pending = await transaction.invitation.count({ where: { projectId: project.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } } });
       if (pending >= 50) throw new ProjectError("INVITATION_LIMIT");
       const expiresAt = new Date(Date.now() + INVITATION_LIFETIME_MS);
@@ -295,6 +303,7 @@ export async function acceptInvitation(identity: InvitationIdentity, input: unkn
         });
         return { ...result, replayed: true };
       }
+      if (project.status !== "ACTIVE" || project.workspaceStatus !== "ACTIVE") throw new ProjectError("NOT_FOUND");
       if (current.expiresAt <= new Date() || project.role) throw new ProjectError("NOT_FOUND");
       const activeCollaborators = await transaction.projectMembership.count({ where: { projectId: project.id, active: true } });
       if (activeCollaborators + 1 >= 10) throw new ProjectError("COLLABORATOR_LIMIT");

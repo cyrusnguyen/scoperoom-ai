@@ -1,4 +1,4 @@
-export const workspaceErrorCodes = ["NOT_ENTITLED", "LIMIT_REACHED", "KEY_REUSED", "INVALID_INPUT", "UNAVAILABLE"] as const;
+export const workspaceErrorCodes = ["NOT_ENTITLED", "LIMIT_REACHED", "KEY_REUSED", "INVALID_INPUT", "NOT_FOUND", "CONFLICT", "UNAVAILABLE"] as const;
 
 export type WorkspaceErrorCode = (typeof workspaceErrorCodes)[number];
 
@@ -16,6 +16,9 @@ export type WorkspaceSummary = {
   id: string;
   name: string;
   createdAt: string;
+  status: "ACTIVE" | "ARCHIVED";
+  version: number;
+  canManage: boolean;
 };
 
 export type WorkspaceHome = {
@@ -45,4 +48,14 @@ export function validateWorkspaceCreateInput(input: CreateWorkspaceInput): Creat
   if (input.key.length < 16 || input.key.length > 128) invalidInput();
 
   return { name, key: input.key };
+}
+
+export type WorkspaceLifecycleInput = { workspaceId: string; expectedVersion: number; key: string };
+export type WorkspaceLifecycleResult = { id: string; status: "ACTIVE" | "ARCHIVED"; version: number; replayed: boolean };
+
+export function validateWorkspaceLifecycleInput(input: WorkspaceLifecycleInput): WorkspaceLifecycleInput {
+  if (typeof input?.workspaceId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.workspaceId) ||
+      !Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 1 ||
+      typeof input.key !== "string" || !/^[\x21-\x7e]{16,128}$/.test(input.key)) invalidInput();
+  return input;
 }

@@ -67,8 +67,8 @@ export async function getWorkspaceProjects(identity: ProjectIdentity, workspaceI
   return withDatabase(async (database) => {
     const profile = await profileFor(database, identity);
     const workspace = await database.workspace.findFirst({
-      where: { id: workspaceId, status: "ACTIVE", memberships: { some: { profileId: profile.id, active: true } } },
-      select: { id: true, name: true, ownerId: true },
+      where: { id: workspaceId, status: { in: ["ACTIVE", "ARCHIVED"] }, memberships: { some: { profileId: profile.id, active: true } } },
+      select: { id: true, name: true, ownerId: true, status: true },
     });
     if (!workspace) throw new ProjectError("NOT_FOUND");
     const owner = workspace.ownerId === profile.id && Boolean(await database.workspaceMembership.findFirst({
@@ -81,13 +81,13 @@ export async function getWorkspaceProjects(identity: ProjectIdentity, workspaceI
           CASE WHEN ${owner}::boolean THEN 'OWNER' ELSE membership.role::text END AS role
         FROM app.project project
         LEFT JOIN app.project_membership membership ON membership.project_id = project.id AND membership.profile_id = ${profile.id}::uuid AND membership.active
-        WHERE project.workspace_id = ${workspace.id}::uuid AND project.status = 'ACTIVE'::app.project_status
+        WHERE project.workspace_id = ${workspace.id}::uuid AND project.status IN ('ACTIVE'::app.project_status, 'ARCHIVED'::app.project_status)
           AND (${owner}::boolean OR membership.profile_id IS NOT NULL)
         ORDER BY project.created_at ASC, project.id ASC
       `),
     ]);
     return {
-      workspace: { id: workspace.id, name: workspace.name, canCreateProject: owner && entitlementActive(entitlement) },
+      workspace: { id: workspace.id, name: workspace.name, canCreateProject: workspace.status === "ACTIVE" && owner && entitlementActive(entitlement) },
       projects: projects.filter((project) => project.current_draft_id !== null).map((project) => ({
         id: project.id, name: project.name, status: project.status, currentDraftId: project.current_draft_id!, createdAt: project.created_at.toISOString(), role: project.role as ProjectAccessRole,
       })),
@@ -113,12 +113,12 @@ export async function getProjectBootstrap(identity: ProjectIdentity, projectId: 
           WHERE membership.project_id = project.id AND membership.profile_id = ${profile.id}::uuid AND membership.active
         ) END AS role
         FROM app.workspace workspace JOIN app.project project ON project.workspace_id = workspace.id
-        WHERE project.id = ${projectId}::uuid AND workspace.status = 'ACTIVE'::app.workspace_status AND project.status = 'ACTIVE'::app.project_status
+        WHERE project.id = ${projectId}::uuid AND workspace.status IN ('ACTIVE'::app.workspace_status, 'ARCHIVED'::app.workspace_status) AND project.status IN ('ACTIVE'::app.project_status, 'ARCHIVED'::app.project_status)
         FOR SHARE OF project
       `);
       const role = rows[0]?.role;
       if (role !== "OWNER" && role !== "EDITOR" && role !== "REVIEWER" && role !== "VIEWER") return null;
-      const found = await transaction.project.findFirst({ where: { id: projectId, status: "ACTIVE" }, include: { currentDraft: true } });
+      const found = await transaction.project.findFirst({ where: { id: projectId, status: { in: ["ACTIVE", "ARCHIVED"] } }, include: { currentDraft: true } });
       return found ? { ...found, accessRole: role as ProjectAccessRole } : null;
     });
     if (!project || !project.currentDraft || project.currentDraft.status !== "EDITABLE") throw new ProjectError("NOT_FOUND");
