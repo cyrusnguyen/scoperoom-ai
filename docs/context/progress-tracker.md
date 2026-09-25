@@ -1,19 +1,19 @@
 # Progress tracker
 
-Last updated: 2026-09-25. Stage 01 and PR #4 are complete. Stage 02 workspace admission, project shell, invitations, management APIs, and lifecycle UI were merged through PR #9. The separate Stage 02 UI usability follow-up is verified locally and ready for its own PR.
+Last updated: 2026-09-25. Stage 01 and PR #4 are complete. Stage 02 workspace admission, project shell, invitations, management APIs, and lifecycle UI were merged through PR #9. The separate Stage 02 UI usability follow-up is verified locally and open in PR #10.
 
 ## Current scope
 
 The UI follow-up repairs workspace/project navigation, hierarchy, loading, context tabs, action styling, and quota recovery on the merged PR #9 base. It includes the invitation sign-in continuation error fix exposed by UI verification. It contains no Stage 3 graph code, schema, or migrations. Atlas Outline remains a visual reference and was not changed. Hosted invitation delivery and acceptance remain unverified; deployment is unverified.
 
-## Stage 02 UI usability follow-up (verified locally; PR pending)
+## Stage 02 UI usability follow-up - PR #10 (open)
 
 - Branch `feat/ui-shell-usability` starts from merged PR #9 (`0930e18`). The first UI-only repair commit was cherry-picked from the Stage 3 working branch; the Stage 3 backend branch was restored to its verified checkpoint. Both worktrees remain preserved. Local plans under `docs/superpowers/` are excluded.
 - The left sidebar now shows selected projects beneath their workspace, with a current-project state, icon-only refresh controls, responsive resizing, and legible archived rows. Project selection and creation update browser history within the mounted shell; Back/Forward, parent-workspace navigation, delayed responses, and loading indicators are covered in Chromium. Successful rename and lifecycle changes update the left list and header without a reload.
 - The right sidebar separates Details and Share into tabs. Owner Share is a compact header button immediately before Sign out; project-name editing is an explicit Details action. Share state refreshes on tab activation, nonowners see an explanation, and archive/restore disables stale edit controls. Quota conflicts open a focused dialog even if the follow-up workspace refresh fails. Invitation sign-in error URLs preserve a validated continuation.
 - Independent review found and fixed stale project/list request races, same-project retry failure, stale lifecycle labels, an empty nonowner Share tab, a long-title overflow at 760px, and workspace list recovery after failed refresh. Loaded 1440px and 390px desktop/mobile captures were inspected. No Stage 3 UI or graph data was added.
 - Verification on the isolated local Supabase stack (API 58321, DB 58322) and browser app 3101: import boundaries/ESLint, TypeScript, 25/25 unit tests, 36/36 guarded database integration tests, 41/41 Chromium tests, and the Next production build passed. The invitation suite uses a 90-second case budget because fixture teardown at the previous 30-second deadline raced its multi-step Auth/database flow. No hosted deployment claim is made.
-- Next action: open the separate UI-only PR and wait for user approval before progressing to the next Stage 3 sub-stage.
+- Next action: review PR #10 and wait for user approval before progressing to the next Stage 3 sub-stage.
 
 ## Stage 02 workspace admission - PR #5 (merged)
 
