@@ -5,8 +5,9 @@ import type { SubmitEvent } from "react";
 import { useRouter } from "next/navigation";
 import { rememberPanel, restorePanel } from "./panel-preferences";
 import ProjectShare from "@/features/projects/ui/project-share";
+import ProjectManagement from "@/features/projects/ui/project-management";
 
-type Workspace = { id: string; name: string; createdAt: string };
+type Workspace = { id: string; name: string; createdAt: string; status: "ACTIVE" | "ARCHIVED"; version: number; canManage: boolean };
 type WorkspaceHome = { displayName: string; canCreate: boolean; maxWorkspaces: number; ownedCount: number; workspaces: Workspace[] };
 type ProjectSummary = { id: string; name: string; status: string; currentDraftId: string; createdAt: string };
 type ProjectList = { workspace: { id: string; name: string; canCreateProject: boolean }; projects: ProjectSummary[] };
@@ -42,6 +43,9 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
   const [projectUncertain, setProjectUncertain] = useState(false);
   const [project, setProject] = useState<ProjectBootstrap | null>(null);
   const [projectUnavailable, setProjectUnavailable] = useState(false);
+  const [workspaceBusy, setWorkspaceBusy] = useState<string | null>(null);
+  const [workspaceRetry, setWorkspaceRetry] = useState<{ workspace: Workspace; action: "archive" | "restore"; key: string } | null>(null);
+  const [workspaceConfirm, setWorkspaceConfirm] = useState<Workspace | null>(null);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [panelsReady, setPanelsReady] = useState(false);
@@ -185,9 +189,27 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
     } catch { setProjectMessage("We could not confirm project creation. Your name is ready to retry."); setProjectUncertain(true); } finally { setProjectCreating(false); }
   };
 
+  const transitionWorkspace = async (workspace: Workspace, action: "archive" | "restore", requestKey = crypto.randomUUID()) => {
+    setWorkspaceBusy(workspace.id);
+    setWorkspaceRetry(null);
+    try {
+      const result = await fetch(`/api/workspaces/${workspace.id}/${action}`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": requestKey }, body: JSON.stringify({ expectedVersion: workspace.version }) });
+      if (!result.ok) {
+        setMessage(await errorMessage(result, "Workspace changes are unavailable."));
+        if (result.status >= 500) setWorkspaceRetry({ workspace, action, key: requestKey });
+        return;
+      }
+      const refreshed = await refresh(false);
+      const confirmation = action === "archive" ? "Workspace archived." : "Workspace restored.";
+      setMessage((current) => refreshed ? confirmation : `${confirmation} ${current}`);
+    } catch {
+      setWorkspaceRetry({ workspace, action, key: requestKey });
+      setMessage("We could not confirm that workspace change. Retry uses the same request.");
+    } finally { setWorkspaceBusy(null); }
+  };
   const selectedWorkspace = home?.workspaces.find((workspace) => workspace.id === selectedWorkspaceId);
   const atLimit = Boolean(home && home.maxWorkspaces > 0 && home.ownedCount >= home.maxWorkspaces);
-  const canCreateProject = Boolean(projectList?.workspace.canCreateProject);
+  const canCreateProject = Boolean(projectList?.workspace.canCreateProject && selectedWorkspace?.status === "ACTIVE");
 
   return (
     <>
@@ -248,10 +270,11 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
               <p className="workspace-greeting">Your available workspaces appear here.</p>
               {home?.workspaces.length ? (
                 <ul className="workspace-list" aria-label="Your workspaces">
-                  {home.workspaces.map((workspace) => <li key={workspace.id}><button className="workspace-row" type="button" aria-pressed={workspace.id === selectedWorkspaceId} onClick={() => selectWorkspace(workspace.id)} disabled={projectUncertain}>{workspace.name}</button></li>)}
+                  {home.workspaces.map((workspace) => <li key={workspace.id}><div className="workspace-row-wrap"><button className="workspace-row" type="button" aria-pressed={workspace.id === selectedWorkspaceId} onClick={() => selectWorkspace(workspace.id)} disabled={projectUncertain}><span>{workspace.name}</span>{workspace.status === "ARCHIVED" && <span className="lifecycle-badge lifecycle-archived">Archived</span>}</button>{workspace.canManage && <button className="text-button workspace-lifecycle" type="button" aria-label={`${workspace.status === "ARCHIVED" ? "Restore" : "Archive"} workspace ${workspace.name}`} disabled={workspaceBusy === workspace.id || workspaceRetry?.workspace.id === workspace.id} onClick={() => workspace.status === "ARCHIVED" ? void transitionWorkspace(workspace, "restore") : setWorkspaceConfirm(workspace)}>{workspaceBusy === workspace.id ? "Saving..." : workspace.status === "ARCHIVED" ? "Restore workspace" : "Archive workspace"}</button>}</div></li>)}
                 </ul>
               ) : home && <p className="workspace-empty">No workspaces yet.</p>}
-              {home && <p className="workspace-capacity">{home.ownedCount} of {home.maxWorkspaces} owned workspaces</p>}
+              {workspaceConfirm && <div className="workspace-confirm"><p>Archiving this workspace frees a workspace place and makes its projects read-only.</p><button className="text-button" type="button" onClick={() => { const target = workspaceConfirm; setWorkspaceConfirm(null); void transitionWorkspace(target, "archive"); }} disabled={workspaceBusy === workspaceConfirm.id}>Confirm archive workspace</button><button className="text-button" type="button" onClick={() => setWorkspaceConfirm(null)} disabled={workspaceBusy === workspaceConfirm.id}>Cancel</button></div>}
+              {home && <p className="workspace-capacity">{home.ownedCount} of {home.maxWorkspaces} workspace {home.maxWorkspaces === 1 ? "place" : "places"} used</p>}
               {home?.canCreate && !formOpen && <button className="create-button" type="button" onClick={() => setFormOpen(true)}>Create workspace</button>}
               {home && formOpen && (home.canCreate || uncertain) && (
                 <form className="workspace-form" onSubmit={submit}>
@@ -266,6 +289,7 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
               {home && !home.canCreate && !atLimit && <p className="workspace-empty">Workspace creation is not available for this account.</p>}
               {atLimit && <p className="workspace-empty">Your workspace limit has been reached.</p>}
               <p className="workspace-message" role="status" aria-live="polite">{message}</p>
+              {workspaceRetry && <button className="text-button" type="button" onClick={() => void transitionWorkspace(workspaceRetry.workspace, workspaceRetry.action, workspaceRetry.key)} disabled={workspaceBusy === workspaceRetry.workspace.id}>Retry workspace change</button>}
 
               {selectedWorkspace && (
                 <section className="project-section" aria-labelledby="projects-title">
@@ -306,13 +330,14 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
               {project ? <>
                 <div className="context-icon" aria-hidden="true">&#9633;</div>
                 <h3>{project.project.name}</h3>
-                <p>This project has an empty draft ready for a later editing stage.</p>
+                <p>{project.project.status === "ARCHIVED" ? "This project is archived and remains available for reading." : "This project has an empty draft ready for a later editing stage."}</p>
                 <dl className="context-facts">
                   <div><dt>Role</dt><dd>{project.project.role[0] + project.project.role.slice(1).toLowerCase()}</dd></div>
                   <div><dt>Draft</dt><dd>Empty draft</dd></div>
                   <div><dt>Revision</dt><dd>{project.draft.documentRevision}</dd></div>
                 </dl>
-                <ProjectShare key={project.project.id} projectId={project.project.id} role={project.project.role} />
+                {project.project.status === "ACTIVE" && selectedWorkspace?.status !== "ARCHIVED" && <ProjectShare key={`share-${project.project.id}`} projectId={project.project.id} role={project.project.role} />}
+                <ProjectManagement key={`management-${project.project.id}`} projectId={project.project.id} role={project.project.role} projectName={project.project.name} projectStatus={project.project.status as "ACTIVE" | "ARCHIVED"} workspaceArchived={selectedWorkspace?.status === "ARCHIVED"} onProjectChange={(next) => setProject((current) => current && current.project.id === project.project.id ? { ...current, project: { ...current.project, ...next } } : current)} />
               </> : <>
                 <div className="context-icon" aria-hidden="true">&#9633;</div>
                 <h3>{projectUnavailable ? "Project details are unavailable." : "No project is connected yet."}</h3>
