@@ -152,9 +152,9 @@ test.describe("workspace admission", () => {
     await page.getByRole("button", { name: "Create workspace" }).click();
     await page.getByLabel("Workspace name").fill("Browser workspace");
     await page.getByRole("button", { name: "Create workspace" }).last().click();
-    await expect(page.getByRole("button", { name: "Browser workspace" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Browser workspace", exact: true })).toBeVisible();
     await expect(page.getByRole("status")).toContainText("Workspace created");
-    await expect(page.getByText("1 of 1 owned workspaces")).toBeVisible();
+    await expect(page.getByText("1 of 1 workspace place used")).toBeVisible();
     await expect(page.getByText("Your workspace limit has been reached.")).toBeVisible();
 
     await page.setViewportSize({ width: 390, height: 844 });

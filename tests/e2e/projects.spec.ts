@@ -7,8 +7,8 @@ const authUrl = process.env.E2E_SUPABASE_URL;
 const secretKey = process.env.E2E_SUPABASE_SECRET_KEY;
 const databaseUrl = process.env.E2E_DATABASE_URL ?? process.env.MIGRATION_DATABASE_URL;
 const password = `Project-${randomUUID()}-Pass!`;
-const workspace = { id: "11111111-1111-4111-8111-111111111111", name: "Browser workspace", createdAt: "2026-09-25T00:00:00.000Z" };
-const secondWorkspace = { id: "44444444-4444-4444-8444-444444444444", name: "Second workspace", createdAt: "2026-09-25T00:00:00.000Z" };
+const workspace = { id: "11111111-1111-4111-8111-111111111111", name: "Browser workspace", createdAt: "2026-09-25T00:00:00.000Z", status: "ACTIVE", version: 1, canManage: true };
+const secondWorkspace = { id: "44444444-4444-4444-8444-444444444444", name: "Second workspace", createdAt: "2026-09-25T00:00:00.000Z", status: "ACTIVE", version: 1, canManage: true };
 const project = { id: "22222222-2222-4222-8222-222222222222", workspaceId: workspace.id, name: "Browser project", status: "ACTIVE", currentDraftId: "33333333-3333-4333-8333-333333333333", createdAt: "2026-09-25T00:00:00.000Z" };
 
 test.describe("project shell", () => {
@@ -68,7 +68,7 @@ test.describe("project shell", () => {
     });
 
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: "Browser workspace" }).focus();
+    await page.getByRole("button", { name: "Browser workspace", exact: true }).focus();
     await page.keyboard.press("Enter");
     await page.getByRole("button", { name: "Create project" }).click();
     await page.getByLabel("Project name").fill(project.name);
@@ -108,8 +108,8 @@ test.describe("project shell", () => {
     });
 
     await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.getByRole("button", { name: "Browser workspace" })).toBeVisible();
-    await page.getByRole("button", { name: "Second workspace" }).click();
+    await expect(page.getByRole("button", { name: "Browser workspace", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Second workspace", exact: true }).click();
     await expect(page.getByText("Second project", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create project" })).toHaveCount(0);
 
@@ -143,7 +143,7 @@ test.describe("project shell", () => {
     await page.getByLabel("Project name").fill("Retry target");
     await page.getByRole("button", { name: "Create project" }).last().click();
     await expect(page.getByRole("button", { name: "Retry project creation" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Second workspace" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Second workspace", exact: true })).toBeDisabled();
 
     await page.unroute("**/api/projects", dropCreate);
     await page.route("**/api/projects", async (route) => {
