@@ -13,7 +13,7 @@ async function errorMessage(response: Response, fallback: string) {
 
 function roleLabel(role: Role) { return role[0] + role.slice(1).toLowerCase(); }
 
-export default function ProjectShare({ projectId, role, openRequest = 0, showTrigger = true, embedded = false }: { projectId: string; role: Role; openRequest?: number; showTrigger?: boolean; embedded?: boolean }) {
+export default function ProjectShare({ projectId, role, openRequest = 0, showTrigger = true, embedded = false, active = true }: { projectId: string; role: Role; openRequest?: number; showTrigger?: boolean; embedded?: boolean; active?: boolean }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<Invitation["role"]>("EDITOR");
@@ -47,10 +47,10 @@ export default function ProjectShare({ projectId, role, openRequest = 0, showTri
 
   useEffect(() => { if (openRequest) { const timer = window.setTimeout(() => setOpen(true), 0); return () => window.clearTimeout(timer); } }, [openRequest]);
   useEffect(() => {
-    if (!visible || role !== "OWNER") return;
+    if (!visible || !active || role !== "OWNER") return;
     const timer = window.setTimeout(() => { void refresh(); }, 0);
     return () => window.clearTimeout(timer);
-  }, [visible, refresh, role]);
+  }, [visible, active, refresh, role]);
 
   useEffect(() => { if (visible && (open || openRequest)) { const timer = window.setTimeout(() => emailRef.current?.focus(), 0); return () => window.clearTimeout(timer); } }, [visible, open, openRequest]);
 

@@ -55,13 +55,14 @@ export default function ProjectManagement({ projectId, role, projectName, projec
       const nextStatus = await statusResponse.json() as Status;
       const nextMembers = await membersResponse.json() as { members: Member[] };
       setStatus(nextStatus); setMembers(nextMembers.members); setApprover(nextStatus.designatedApproverId);
+      if (nextStatus.status === "ARCHIVED" || nextStatus.workspaceStatus === "ARCHIVED") { setEditingName(false); setName(projectName); }
       if (clearMessage) setMessage("");
       return true;
     } catch (error) {
       setStatus(null); setMembers(null); setMessage(error instanceof Error ? error.message : "Project management is unavailable.");
       return false;
     }
-  }, [projectId]);
+  }, [projectId, projectName]);
 
   useEffect(() => { if (openRequest) { const timer = window.setTimeout(() => { setOpen(true); setEditingName(true); }, 0); return () => window.clearTimeout(timer); } }, [openRequest]);
   useEffect(() => {
@@ -81,6 +82,7 @@ export default function ProjectManagement({ projectId, role, projectName, projec
       }
       const result = await response.json() as Status & { name?: string };
       setStatus((current) => current ? { ...current, ...result } : result);
+      if (result.status === "ARCHIVED") { setEditingName(false); setName(projectName); }
       if (result.name) { setName(result.name); onProjectChange({ name: result.name }); }
       if (result.status === "ACTIVE" || result.status === "ARCHIVED") onProjectChange({ status: result.status });
       retryRef.current = null;
@@ -132,7 +134,7 @@ export default function ProjectManagement({ projectId, role, projectName, projec
       {!status || !members ? <p>{message || "Loading project management..."}</p> : <>
         <span className={`lifecycle-badge lifecycle-${status.status.toLowerCase()}`}>{status.status === "ARCHIVED" ? "Archived" : "Active"}</span>
         {workspaceReadOnly ? <p className="management-notice">This workspace is archived. Project controls are read-only until the workspace is restored.</p> : archived && <p className="management-notice">This project is archived. Settings and role increases are unavailable; the owner can reduce or remove member access.</p>}
-        <div className="project-name-settings"><span className="project-name-label">Project name</span>{editingName ? <form className="share-form" onSubmit={saveName}><label className="sr-only" htmlFor="project-settings-name">Project name</label><input ref={nameRef} id="project-settings-name" aria-label="Project name" value={name} onChange={(event) => setName(event.target.value)} disabled={busy} required maxLength={120} /><div className="share-actions"><button className="context-share-button" type="submit" disabled={busy || !name.trim() || name.trim() === projectName}>Save name</button><button className="context-action" type="button" onClick={() => { setName(projectName); setEditingName(false); }} disabled={busy}>Cancel</button></div></form> : <div className="project-name-summary"><p className="project-name-value">{name}</p>{owner && !readOnly && <button className="context-action" type="button" onClick={() => setEditingName(true)}>Edit project name</button>}</div>}</div>
+        <div className="project-name-settings"><span className="project-name-label">Project name</span>{editingName && owner && !readOnly ? <form className="share-form" onSubmit={saveName}><label className="sr-only" htmlFor="project-settings-name">Project name</label><input ref={nameRef} id="project-settings-name" aria-label="Project name" value={name} onChange={(event) => setName(event.target.value)} disabled={busy} required maxLength={120} /><div className="share-actions"><button className="context-share-button" type="submit" disabled={busy || !name.trim() || name.trim() === projectName}>Save name</button><button className="context-action" type="button" onClick={() => { setName(projectName); setEditingName(false); }} disabled={busy}>Cancel</button></div></form> : <div className="project-name-summary"><p className="project-name-value">{name}</p>{owner && !readOnly && <button className="context-action" type="button" onClick={() => setEditingName(true)}>Edit project name</button>}</div>}</div>
         <div className="management-members"><h4>Project members <span>{members.length}</span></h4><ul>{members.map((member) => <li key={member.profileId}>
           <span><strong>{member.displayName}</strong><small>{member.designatedApprover ? "Designated approver" : roleLabel(member.role)}</small></span>
           {owner && member.role !== "OWNER" && !workspaceReadOnly ? <span className="member-actions"><select aria-label={`Role for ${member.displayName}`} value={member.role} onChange={(event) => { const nextRole = event.target.value as Exclude<Role, "OWNER">; if (rank[nextRole] < rank[member.role as Exclude<Role, "OWNER">]) setPendingRole({ member, role: nextRole }); else applyRole(member, nextRole); }} disabled={busy}>{(["EDITOR", "REVIEWER", "VIEWER"] as const).filter((value) => !archived || rank[value] <= rank[member.role as Exclude<Role, "OWNER">]).map((value) => <option key={value} value={value}>{roleLabel(value)}</option>)}</select><button className="utility-button danger-action" type="button" onClick={() => setRemovePending(member)} disabled={busy}>Remove</button></span> : <span className="member-role">{roleLabel(member.role)}</span>}

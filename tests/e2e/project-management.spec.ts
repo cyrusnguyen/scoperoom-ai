@@ -44,10 +44,12 @@ test.describe("project management", () => {
     const member = { profileId: "44444444-4444-4444-8444-444444444444", displayName: "Casey Collaborator", role: "VIEWER", version: 1, designatedApprover: false };
     const otherWorkspace = { ...workspace, id: "55555555-5555-4555-8555-555555555555", name: "Other workspace", canManage: false };
     let removed = false;
+    let showPendingInvite = false;
     const response = () => ({ project: status, members: removed ? [] : [member] });
     await page.route("**/api/workspaces", async (route) => route.request().method() === "GET" ? route.fulfill({ contentType: "application/json", body: JSON.stringify({ displayName: "Management Test", canCreate: false, maxWorkspaces: 1, ownedCount: 1, workspaces: [workspace, otherWorkspace] }) }) : route.continue());
     await page.route(`**/api/workspaces/${workspace.id}/projects`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ workspace: { id: workspace.id, name: workspace.name, canCreateProject: true }, projects: [project] }) }));
     await page.route(`**/api/workspaces/${otherWorkspace.id}/projects`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ workspace: { id: otherWorkspace.id, name: otherWorkspace.name, canCreateProject: false }, projects: [] }) }));
+    await page.route(`**/api/projects/${project.id}/invitations`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ invitations: showPendingInvite ? [{ id: "66666666-6666-4666-8666-666666666666", verifiedEmail: "pending@example.test", role: "VIEWER", expiresAt: "2026-10-01T00:00:00.000Z", status: "PENDING", version: 1 }] : [] }) }));
     await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: { ...project, role: "OWNER" }, draft: { id: project.currentDraftId, schemaVersion: 3, documentRevision: 1, layoutRevision: 1 } }) }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(status) }));
     await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
@@ -95,6 +97,11 @@ test.describe("project management", () => {
     await page.getByRole("button", { name: "Share", exact: true }).click();
     await expect(context).toBeVisible();
     await expect(page.getByLabel("Verified email")).toBeVisible();
+    await expect(context.getByText("No pending invitations.")).toBeVisible();
+    await context.getByRole("tab", { name: "Details", exact: true }).click();
+    showPendingInvite = true;
+    await context.getByRole("tab", { name: "Share", exact: true }).click();
+    await expect(context.getByText("pending@example.test")).toBeVisible();
     await context.getByRole("tab", { name: "Details", exact: true }).click();
     await expect(page.getByRole("button", { name: "Edit project name" })).toBeVisible();
     await page.getByRole("button", { name: "Edit project name" }).click();
@@ -119,11 +126,16 @@ test.describe("project management", () => {
     await page.getByLabel("Designated approver").selectOption(member.profileId);
     await page.getByRole("button", { name: "Save approver" }).click();
     await expect(page.getByRole("region", { name: "Project management" }).getByRole("status")).toContainText("Approver updated.");
+    await page.getByRole("button", { name: "Edit project name" }).click();
+    await page.getByLabel("Project name").fill("Unsaved name");
     await page.getByRole("button", { name: "Archive project" }).click();
     await page.getByLabel("Archive reason").fill("Finished pilot work");
     await page.getByRole("button", { name: "Confirm archive" }).click();
     await expect(page.getByText("Archived", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Restore project" })).toBeVisible();
+    await expect(page.getByLabel("Project name")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Save name" })).toHaveCount(0);
+    await expect(page.getByRole("tabpanel", { name: "Details" }).getByText("Renamed management project", { exact: true })).toBeVisible();
     await page.getByLabel("Role for Casey Collaborator").selectOption("REVIEWER");
     await expect(page.getByRole("button", { name: "Confirm role change" })).toBeVisible();
     await page.getByRole("button", { name: "Confirm role change" }).click();
@@ -142,9 +154,9 @@ test.describe("project management", () => {
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: status, members: [{ profileId: "44444444-4444-4444-8444-444444444444", displayName: "Owner", role: "OWNER", version: 1, designatedApprover: false }] }) }));
 
     await page.goto(`/app/projects/${project.id}`);
-    await page.getByRole("button", { name: "Manage project" }).click();
+    await page.getByRole("tab", { name: "Details" }).click();
     await expect(page.getByRole("region", { name: "Project management" }).getByText("Owner", { exact: true }).first()).toBeVisible();
-    await expect(page.getByLabel("Project name")).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Edit project name" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Archive project" })).toHaveCount(0);
   });
 });
