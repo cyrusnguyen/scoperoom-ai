@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { Client } from "pg";
 import { createClient } from "@supabase/supabase-js";
-import { WorkspaceError, createWorkspace, getWorkspaceHome } from "../../src/features/workspaces/server/workspaces.ts";
+import { WorkspaceError, archiveWorkspace, createWorkspace, getWorkspaceHome, restoreWorkspace } from "../../src/features/workspaces/server/workspaces.ts";
+import { createProject } from "../../src/features/projects/server/projects.ts";
+import { issueInvitation, listProjectInvitations } from "../../src/features/projects/server/invitations.ts";
 
 const authUrl = process.env.E2E_SUPABASE_URL;
 const secretKey = process.env.E2E_SUPABASE_SECRET_KEY;
@@ -119,7 +121,6 @@ test("separate Auth identities resolve to separate profiles", { skip: !canRun },
   });
 });
 
-
 test("replay requires the current active workspace and owner membership", { skip: !canRun }, async () => {
   await withFixture(async ({ identity, grant, database }) => {
     const user = await identity();
@@ -206,3 +207,89 @@ test("operator revocation holds creation behind the entitlement lock", { skip: !
   });
 });
 
+test("archiving a workspace frees its active quota slot and restore respects the quota", { skip: !canRun }, async () => {
+  await withFixture(async ({ identity, grant, database }) => {
+    const owner = await identity("Archive owner");
+    await grant(owner.authUserId);
+    const first = await createWorkspace(owner, { name: "First", key: randomUUID() });
+    const project = await createProject(owner, { workspaceId: first.id, name: "Retained project", key: randomUUID() });
+    const { rows: [beforeEpoch] } = await database.query<{ realtime_epoch: string }>("select realtime_epoch from app.project where id = $1", [project.id]);
+    await issueInvitation({ ...owner, verifiedEmail: "owner@example.test" }, project.id, { verifiedEmail: `pending-${randomUUID()}@example.test`, role: "VIEWER", key: randomUUID() });
+    assert.equal((await listProjectInvitations(owner, project.id)).invitations.length, 1);
+    const before = await getWorkspaceHome(owner);
+    const initial = before.workspaces.find((workspace) => workspace.id === first.id);
+    assert.equal(initial?.status, "ACTIVE");
+    assert.equal(before.ownedCount, 1);
+
+    const archived = await archiveWorkspace(owner, { workspaceId: first.id, expectedVersion: initial.version, key: randomUUID() });
+    assert.equal(archived.status, "ARCHIVED");
+    const { rows: [archivedEpoch] } = await database.query<{ realtime_epoch: string }>("select realtime_epoch from app.project where id = $1", [project.id]);
+    assert.notEqual(archivedEpoch.realtime_epoch, beforeEpoch.realtime_epoch);
+    assert.equal((await listProjectInvitations(owner, project.id)).invitations.length, 0);
+    const afterArchive = await getWorkspaceHome(owner);
+    assert.equal(afterArchive.ownedCount, 0);
+    assert.equal(afterArchive.canCreate, true);
+    assert.equal(afterArchive.workspaces.find((workspace) => workspace.id === first.id)?.status, "ARCHIVED");
+
+    const second = await createWorkspace(owner, { name: "Second", key: randomUUID() });
+    await assert.rejects(restoreWorkspace(owner, { workspaceId: first.id, expectedVersion: archived.version, key: randomUUID() }), (error: unknown) => error instanceof WorkspaceError && error.code === "LIMIT_REACHED");
+    const secondVersion = (await getWorkspaceHome(owner)).workspaces.find((workspace) => workspace.id === second.id)?.version;
+    assert.ok(secondVersion);
+    await archiveWorkspace(owner, { workspaceId: second.id, expectedVersion: secondVersion, key: randomUUID() });
+    const restored = await restoreWorkspace(owner, { workspaceId: first.id, expectedVersion: archived.version, key: randomUUID() });
+    assert.equal(restored.status, "ACTIVE");
+    const { rows: [restoredEpoch] } = await database.query<{ realtime_epoch: string }>("select realtime_epoch from app.project where id = $1", [project.id]);
+    assert.notEqual(restoredEpoch.realtime_epoch, archivedEpoch.realtime_epoch);
+    assert.equal((await getWorkspaceHome(owner)).ownedCount, 1);
+    assert.equal((await listProjectInvitations(owner, project.id)).invitations.length, 0);
+  });
+});
+
+test("workspace archive is owner-only and a matching retry does not advance its version", { skip: !canRun }, async () => {
+  await withFixture(async ({ identity, grant, database }) => {
+    const owner = await identity("Archive owner");
+    const member = await identity("Member");
+    await grant(owner.authUserId);
+    const created = await createWorkspace(owner, { name: "Shared", key: randomUUID() });
+    const { rows: [memberProfile] } = await database.query<{ id: string }>("select id from app.user_profile where auth_user_id = $1", [member.authUserId]);
+    await database.query("insert into app.workspace_membership (workspace_id, profile_id, role) values ($1, $2, 'MEMBER')", [created.id, memberProfile.id]);
+    const expectedVersion = (await getWorkspaceHome(owner)).workspaces.find((workspace) => workspace.id === created.id)?.version;
+    assert.ok(expectedVersion);
+    const key = randomUUID();
+    await assert.rejects(archiveWorkspace(member, { workspaceId: created.id, expectedVersion, key: randomUUID() }), (error: unknown) => error instanceof WorkspaceError && error.code === "NOT_FOUND");
+    const archived = await archiveWorkspace(owner, { workspaceId: created.id, expectedVersion, key });
+    assert.equal(archived.replayed, false);
+    assert.deepEqual(await archiveWorkspace(owner, { workspaceId: created.id, expectedVersion, key }), { ...archived, replayed: true });
+    await assert.rejects(archiveWorkspace(owner, { workspaceId: created.id, expectedVersion, key: randomUUID() }), (error: unknown) => error instanceof WorkspaceError && error.code === "CONFLICT");
+  });
+});
+test("restore and create serialize against one active workspace slot", { skip: !canRun }, async () => {
+  await withFixture(async ({ identity, grant }) => {
+    const owner = await identity("Concurrent owner");
+    await grant(owner.authUserId);
+    const old = await createWorkspace(owner, { name: "Old", key: randomUUID() });
+    const version = (await getWorkspaceHome(owner)).workspaces.find((workspace) => workspace.id === old.id)?.version;
+    assert.ok(version);
+    const archived = await archiveWorkspace(owner, { workspaceId: old.id, expectedVersion: version, key: randomUUID() });
+    const outcomes = await Promise.allSettled([
+      restoreWorkspace(owner, { workspaceId: old.id, expectedVersion: archived.version, key: randomUUID() }),
+      createWorkspace(owner, { name: "New", key: randomUUID() }),
+    ]);
+    assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+    assert.equal(outcomes.filter((outcome) => outcome.status === "rejected" && outcome.reason instanceof WorkspaceError && outcome.reason.code === "LIMIT_REACHED").length, 1);
+    assert.equal((await getWorkspaceHome(owner)).ownedCount, 1);
+  });
+});
+
+test("operator suspension still consumes the owned workspace quota", { skip: !canRun }, async () => {
+  await withFixture(async ({ identity, grant, database }) => {
+    const owner = await identity("Suspended owner");
+    await grant(owner.authUserId);
+    const created = await createWorkspace(owner, { name: "Suspended", key: randomUUID() });
+    await database.query("update app.workspace set status = 'SUSPENDED' where id = $1", [created.id]);
+    const home = await getWorkspaceHome(owner);
+    assert.equal(home.ownedCount, 1);
+    assert.equal(home.canCreate, false);
+    await assert.rejects(createWorkspace(owner, { name: "Extra", key: randomUUID() }), (error: unknown) => error instanceof WorkspaceError && error.code === "LIMIT_REACHED");
+  });
+});

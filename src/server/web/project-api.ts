@@ -17,7 +17,7 @@ export function projectFailure(error: unknown) {
     NOT_FOUND: ["NOT_FOUND", "Project is unavailable.", 404],
     KEY_REUSED: ["KEY_REUSED", "This request conflicts with an earlier request.", 409],
     INVALID_INPUT: ["INVALID_INPUT", "Enter valid project details and try again.", 400],
-    CONFLICT: ["CONFLICT", "That invitation is no longer pending.", 409],
+    CONFLICT: ["CONFLICT", "That project update conflicts with current data.", 409],
     COLLABORATOR_LIMIT: ["COLLABORATOR_LIMIT", "This project has reached its collaborator limit.", 409],
     INVITATION_LIMIT: ["INVITATION_LIMIT", "This project already has the maximum number of pending invitations.", 409],
     UNAVAILABLE: ["UNAVAILABLE", "Project access is unavailable.", 503],
