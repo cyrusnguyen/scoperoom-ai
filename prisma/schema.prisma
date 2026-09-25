@@ -50,6 +50,20 @@ enum MutationScopeKind {
   @@map("mutation_scope_kind")
   @@schema("app")
 }
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+  DELETING
+  @@map("project_status")
+  @@schema("app")
+}
+
+enum ScopeDraftStatus {
+  EDITABLE
+  ARCHIVED
+  @@map("scope_draft_status")
+  @@schema("app")
+}
 
 model UserProfile {
   id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -61,6 +75,8 @@ model UserProfile {
   ownedWorkspaces Workspace[]           @relation("workspace_owner")
   memberships     WorkspaceMembership[]
   receipts        MutationReceipt[]
+  drafts          ScopeDraft[]
+  auditEvents     AuditEvent[]          @relation("audit_actor")
 
   @@map("user_profile")
   @@schema("app")
@@ -91,6 +107,7 @@ model Workspace {
   updatedAt   DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   owner       UserProfile           @relation("workspace_owner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   memberships WorkspaceMembership[]
+  projects    Project[]
 
   @@index([ownerId])
   @@map("workspace")
@@ -130,5 +147,69 @@ model MutationReceipt {
   @@unique([actorId, scopeKind, scopeId, key], map: "mutation_receipt_scope_key")
   @@index([expiresAt])
   @@map("mutation_receipt")
+  @@schema("app")
+}
+
+model Project {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId    String        @map("workspace_id") @db.Uuid
+  name           String        @db.Text
+  status         ProjectStatus @default(ACTIVE)
+  version        Int           @default(1)
+  currentDraftId String?       @map("current_draft_id") @db.Uuid
+  realtimeEpoch  String        @default(dbgenerated("gen_random_uuid()")) @map("realtime_epoch") @db.Uuid
+  eventSequence  BigInt        @default(0) @map("event_sequence") @db.BigInt
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace      Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  drafts         ScopeDraft[]  @relation("project_drafts")
+  currentDraft   ScopeDraft?   @relation("project_current_draft", fields: [id, currentDraftId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction)
+  auditEvents    AuditEvent[]
+
+  @@unique([workspaceId, id])
+  @@unique([id, currentDraftId])
+  @@index([workspaceId, status, createdAt, id])
+  @@map("project")
+  @@schema("app")
+}
+
+model ScopeDraft {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId        String           @map("project_id") @db.Uuid
+  createdBy        String           @map("created_by") @db.Uuid
+  documentRevision Int              @default(1) @map("document_revision")
+  layoutRevision   Int              @default(1) @map("layout_revision")
+  schemaVersion    Int              @default(3) @map("schema_version")
+  documentJson     Json             @map("document_json")
+  layoutJson       Json             @map("layout_json")
+  status           ScopeDraftStatus @default(EDITABLE)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  project          Project          @relation("project_drafts", fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  creator          UserProfile      @relation(fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  currentFor       Project?         @relation("project_current_draft")
+
+  @@unique([projectId, id])
+  @@map("scope_draft")
+  @@schema("app")
+}
+
+model AuditEvent {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId     String       @map("project_id") @db.Uuid
+  workspaceId   String       @map("workspace_id") @db.Uuid
+  sequence      BigInt       @db.BigInt
+  actorId       String?      @map("actor_id") @db.Uuid
+  serviceAction String?      @map("service_action") @db.Text
+  action        String       @db.Text
+  entityRefs    Json         @map("entity_refs")
+  metadata      Json
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  project       Project      @relation(fields: [workspaceId, projectId], references: [workspaceId, id], onDelete: Cascade, onUpdate: NoAction)
+  actor         UserProfile? @relation("audit_actor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([projectId, sequence])
+  @@index([projectId, createdAt, id])
+  @@map("audit_event")
   @@schema("app")
 }

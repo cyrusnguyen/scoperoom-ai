@@ -214,3 +214,25 @@
 .workspace-form input { width: 100%; padding: 9px 10px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--surface-muted); color: var(--foreground); font: inherit; }
 .workspace-form-actions { display: flex; align-items: center; gap: 13px; }
 .workspace-form-actions .create-button { width: auto; margin-top: 4px; }
+.workspace-row,
+.project-row {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.workspace-list li { padding: 0; }
+.workspace-row { padding: 11px 0; }
+.workspace-row[aria-pressed="true"] { color: var(--accent); font-weight: 700; }
+.workspace-row:hover, .project-row:hover { color: var(--accent); }
+.workspace-row:focus-visible, .project-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; border-radius: 4px; }
+.project-section { margin-top: 30px; padding-top: 23px; border-top: 1px solid var(--border); }
+.project-list { margin: 15px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
+.project-list li { border-bottom: 1px solid var(--border); }
+.project-row { display: grid; gap: 2px; padding: 10px 0; }
+.project-row strong { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.project-row span { color: var(--foreground-subtle); font-size: 11px; }
