@@ -101,7 +101,9 @@ async function profileFor(database: PrismaClient, identity: ProjectIdentity) {
 async function lockProject(transaction: Prisma.TransactionClient, profileId: string, projectId: string, update: boolean): Promise<LockedProject> {
   const location = await transaction.project.findUnique({ where: { id: projectId }, select: { workspaceId: true } });
   if (!location) throw new ProjectError("NOT_FOUND");
-  await transaction.$queryRaw(Prisma.sql`SELECT app.lock_workspace_for_project_creation(${location.workspaceId}::uuid)::text AS locked`);
+  await transaction.$queryRaw(update
+    ? Prisma.sql`SELECT app.lock_workspace_for_project_creation(${location.workspaceId}::uuid)::text AS locked`
+    : Prisma.sql`SELECT app.lock_workspace_for_project_read(${location.workspaceId}::uuid)::text AS locked`);
   const workspace = await transaction.workspace.findFirst({ where: { id: location.workspaceId, status: "ACTIVE" }, select: { id: true } });
   if (!workspace) throw new ProjectError("NOT_FOUND");
   const projects = update

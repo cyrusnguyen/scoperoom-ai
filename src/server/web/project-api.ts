@@ -15,7 +15,7 @@ export function projectFailure(error: unknown) {
     NOT_ENTITLED: ["NOT_ENTITLED", "Project creation is not available for this account.", 403],
     NOT_AUTHORIZED: ["NOT_AUTHORIZED", "Project creation is not available for this workspace.", 403],
     NOT_FOUND: ["NOT_FOUND", "Project is unavailable.", 404],
-    KEY_REUSED: ["KEY_REUSED", "This create request conflicts with an earlier request.", 409],
+    KEY_REUSED: ["KEY_REUSED", "This request conflicts with an earlier request.", 409],
     INVALID_INPUT: ["INVALID_INPUT", "Enter valid project details and try again.", 400],
     CONFLICT: ["CONFLICT", "That invitation is no longer pending.", 409],
     COLLABORATOR_LIMIT: ["COLLABORATOR_LIMIT", "This project has reached its collaborator limit.", 409],

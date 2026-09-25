@@ -192,3 +192,25 @@ test("accepted members can recover their established invitation after its expiry
     assert.deepEqual(await acceptInvitation(target, { token, key: randomUUID() }), { projectId, workspaceId, role: "EDITOR", replayed: true });
   });
 });
+test("project bootstrap and invitation index use compatible workspace read locks", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user();
+    const { workspaceId, projectId } = await project(owner);
+    await database.query("begin");
+    let reads: Promise<unknown> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await database.query("select id from app.workspace where id = $1 for share", [workspaceId]);
+      reads = Promise.all([getProjectBootstrap(owner, projectId), listProjectInvitations(owner, projectId)]);
+      const completed = await Promise.race([
+        reads.then(() => true),
+        new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 1500); }),
+      ]);
+      assert.equal(completed, true, "read paths should not wait for an exclusive workspace lock");
+    } finally {
+      if (timer) clearTimeout(timer);
+      await database.query("rollback");
+      await reads?.catch(() => undefined);
+    }
+  });
+});

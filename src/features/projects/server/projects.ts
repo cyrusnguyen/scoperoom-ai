@@ -102,7 +102,7 @@ export async function getProjectBootstrap(identity: ProjectIdentity, projectId: 
     const project = await database.$transaction(async (transaction) => {
       const location = await transaction.project.findUnique({ where: { id: projectId }, select: { workspaceId: true } });
       if (!location) return null;
-      await transaction.$queryRaw(Prisma.sql`SELECT app.lock_workspace_for_project_creation(${location.workspaceId}::uuid)::text AS locked`);
+      await transaction.$queryRaw(Prisma.sql`SELECT app.lock_workspace_for_project_read(${location.workspaceId}::uuid)::text AS locked`);
       const rows = await transaction.$queryRaw<{ role: string | null }[]>(Prisma.sql`
         SELECT CASE WHEN workspace.owner_id = ${profile.id}::uuid AND EXISTS (
           SELECT 1 FROM app.workspace_membership membership
