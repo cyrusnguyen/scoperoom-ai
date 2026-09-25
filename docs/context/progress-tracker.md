@@ -1,10 +1,19 @@
 # Progress tracker
 
-Last updated: 2026-09-25. Stage 01 and PR #4 are complete. Stage 02 workspace admission, project shell, invitations, and management APIs were merged in PR #5, PR #6, PR #7, and PR #8. The final project and workspace lifecycle UI is open in PR #9 for review.
+Last updated: 2026-09-25. Stage 01 and PR #4 are complete. Stage 02 workspace admission, project shell, invitations, management APIs, and lifecycle UI were merged through PR #9. The separate Stage 02 UI usability follow-up is verified locally and ready for its own PR.
 
 ## Current scope
 
-Stage 02 final UI work adds project management and recoverable project and workspace archive/restore controls on the merged PR #8 base. Atlas Outline remains a visual reference and was not copied or changed. Hosted invitation delivery and acceptance were excluded at the user's request; deployment remains unverified.
+The UI follow-up repairs workspace/project navigation, hierarchy, loading, context tabs, action styling, and quota recovery on the merged PR #9 base. It includes the invitation sign-in continuation error fix exposed by UI verification. It contains no Stage 3 graph code, schema, or migrations. Atlas Outline remains a visual reference and was not changed. Hosted invitation delivery and acceptance remain unverified; deployment is unverified.
+
+## Stage 02 UI usability follow-up (verified locally; PR pending)
+
+- Branch `feat/ui-shell-usability` starts from merged PR #9 (`0930e18`). The first UI-only repair commit was cherry-picked from the Stage 3 working branch; the Stage 3 backend branch was restored to its verified checkpoint. Both worktrees remain preserved. Local plans under `docs/superpowers/` are excluded.
+- The left sidebar now shows selected projects beneath their workspace, with a current-project state, icon-only refresh controls, responsive resizing, and legible archived rows. Project selection and creation update browser history within the mounted shell; Back/Forward, parent-workspace navigation, delayed responses, and loading indicators are covered in Chromium. Successful rename and lifecycle changes update the left list and header without a reload.
+- The right sidebar separates Details and Share into tabs. Owner Share is a compact header button immediately before Sign out; project-name editing is an explicit Details action. Share state refreshes on tab activation, nonowners see an explanation, and archive/restore disables stale edit controls. Quota conflicts open a focused dialog even if the follow-up workspace refresh fails. Invitation sign-in error URLs preserve a validated continuation.
+- Independent review found and fixed stale project/list request races, same-project retry failure, stale lifecycle labels, an empty nonowner Share tab, a long-title overflow at 760px, and workspace list recovery after failed refresh. Loaded 1440px and 390px desktop/mobile captures were inspected. No Stage 3 UI or graph data was added.
+- Verification on the isolated local Supabase stack (API 58321, DB 58322) and browser app 3101: import boundaries/ESLint, TypeScript, 25/25 unit tests, 36/36 guarded database integration tests, 41/41 Chromium tests, and the Next production build passed. The invitation suite uses a 90-second case budget because fixture teardown at the previous 30-second deadline raced its multi-step Auth/database flow. No hosted deployment claim is made.
+- Next action: open the separate UI-only PR and wait for user approval before progressing to the next Stage 3 sub-stage.
 
 ## Stage 02 workspace admission - PR #5 (merged)
 
@@ -36,7 +45,7 @@ Stage 02 final UI work adds project management and recoverable project and works
 - A guarded disposable Supabase stack on loopback ports 57321/57322 applied the invitation schema and the new shared-read-lock migration; a guarded repeat migration found no pending work. The initial PR checkpoint passed 23/23 unit, 27/27 database integration, and 30/30 Chromium tests. After the review fixes, import boundaries/ESLint, TypeScript, 23/23 unit tests, 28/28 database integration tests, 10/10 affected Chromium tests, and the Next production build passed on Node 24.21.0. The new regression failed under the old exclusive read lock and passed with the shared lock.
 - PR #7 was merged before the final Stage 02 checkpoint. Its shared read lock and operation-neutral error wording remain in the merged base. Hosted migration, deployment, and hosted invitation Auth behavior remain unverified.
 
-## Stage 02 final UI slice - PR #9 (under review)
+## Stage 02 final UI slice - PR #9 (merged)
 
 - Built on merged PR #8. The schema, service, API, and focused tests were committed as 1b278c0 and merged from PR #8. PR #9 adds the project and workspace lifecycle UI, browser coverage, and this tracker update. The docs/superpowers folder is excluded. The Atlas Outline worktree was only a visual reference and was not changed.
 - The new project-management migration adds ARCHIVED workspace status, independent project settings and approval-policy versions, a designated-approver foreign key, and column-scoped app_web update grants. A guarded isolated Supabase stack on loopback ports 57321/57322 applied all six migrations; replay found no pending migrations. Prisma schema validation and client generation passed.
@@ -44,7 +53,7 @@ Stage 02 final UI work adds project management and recoverable project and works
 - Workspace owners can archive and restore a workspace. Archived workspaces remain visible and readable to admitted members, revoke pending invitations, block project writes, and release an owned workspace quota place. Restore checks entitlement and an available place under the same lock order as creation. Operator-suspended workspaces still consume quota. The shell exposes project management and workspace lifecycle controls with confirmation, authoritative refresh, and same-key retry after uncertain responses.
 - Independent review found and fixed a real archived-project UI gap: the owner could not downgrade or remove members despite the server contract allowing it. Browser and database regressions now cover those actions and promotion denial. An initial full Chromium run found three older test fixtures/selectors incompatible with the new workspace summary and Archive control; those fixtures were corrected, the affected browser suites passed 11/11, and the final complete suite passed.
 - The exact backend-only PR #8 commit passed import boundaries/ESLint, TypeScript, 25/25 unit tests, 36/36 guarded database integration tests, 30/30 Chromium tests, and the Next production build; its static/build, database, and Chromium CI jobs passed before merge. On this separate UI branch, import boundaries/ESLint, TypeScript, 25/25 unit tests, 36/36 guarded database integration tests, 33/33 Chromium tests, and the Next production build passed. PR #9 static/build, database integration, and Chromium CI jobs also passed. Local verification ran on Node 22.20.0 with pnpm 10.34.5; the repo pins Node 24.21.0.
-- The user chose local evidence only. Hosted invitation delivery/acceptance, hosted migration for this slice, Vercel deployment, and production redirects were not verified. Next action: review PR #9 before proceeding beyond Stage 02.
+- The user chose local evidence only. Hosted invitation delivery/acceptance, hosted migration for this slice, Vercel deployment, and production redirects were not verified. PR #9 merged; the separate UI usability follow-up above is the current work.
 
 ## Previous access checkpoint
 
@@ -75,4 +84,4 @@ The user-reported Gmail address was already confirmed in hosted `auth.users` bef
 
 ## Remaining deployment check
 
-ScopeRoom has not been deployed to Vercel. Supabase's hosted Site URL is still localhost, so a production redirect cannot be verified yet. At deployment, set the exact HTTPS production origin in Supabase Site URL and allow `<production-origin>/login`; set matching Vercel public environment variables, then repeat a fresh delivered-email signup and redirect test. PR #5, PR #6, and PR #7 are merged. PR #8 merged the schema and API slice; the final UI slice is open in PR #9.
+ScopeRoom has not been deployed to Vercel. Supabase's hosted Site URL is still localhost, so a production redirect cannot be verified yet. At deployment, set the exact HTTPS production origin in Supabase Site URL and allow `<production-origin>/login`; set matching Vercel public environment variables, then repeat a fresh delivered-email signup and redirect test. PR #5, PR #6, and PR #7 are merged. PR #8 merged the schema and API slice, and PR #9 merged its UI slice.

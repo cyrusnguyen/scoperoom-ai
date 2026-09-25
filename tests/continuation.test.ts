@@ -8,6 +8,7 @@ const token = "a".repeat(43);
 test("only an exact 32-byte base64url invitation path is retained through authentication", () => {
   assert.equal(safeInviteContinuation(`/invite/${token}`), `/invite/${token}`);
   assert.equal(continuationQuery(`/invite/${token}`), `?continue=%2Finvite%2F${token}`);
+  assert.equal(continuationQuery(`/invite/${token}`, "&"), `&continue=%2Finvite%2F${token}`);
 });
 
 test("continuation rejects external, nested, short, and query-bearing values", () => {

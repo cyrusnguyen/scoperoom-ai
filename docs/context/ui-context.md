@@ -4,7 +4,7 @@ The selected Atlas Outline design remains preserved in `.worktrees/atlas-outline
 
 ## Composition
 
-Use one workspace: compact top navigation, AI conversation on the left, canvas/list or focused content in the center, and one shared contextual right panel. The panel shows project details when appropriate and switches to node/edge/scope/source/review context. It remains collapsible; there is no second permanent inspector or chat panel.
+Use one workspace: compact top navigation, workspace/project hierarchy on the left, canvas/list or focused content in the center, and one shared collapsible right panel. The right panel separates project Details and Share into tabs; a future AI conversation belongs in a third tab when that feature exists. The same panel can switch to node/edge/scope/source/review context. There is no second permanent inspector or chat rail.
 
 Use the reference tokens and components when their features become functional. Add accessible controls and states with their first consumer. Correct concrete contrast, keyboard and layout issues in the active UI. [UI foundations](../../.codex/docs/implementation/v1.5/ui/00-interface-foundations.md) owns the component inventory and responsive checks.
 

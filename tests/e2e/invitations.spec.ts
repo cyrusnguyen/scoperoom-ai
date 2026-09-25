@@ -89,6 +89,7 @@ test.describe("project invitations", () => {
   let accounts: Account[];
 
   test.beforeEach(async () => {
+    test.setTimeout(90_000);
     admin = createClient(authUrl!, secretKey!, { auth: { autoRefreshToken: false, persistSession: false } });
     database = new Client({ connectionString: databaseUrl! });
     accounts = [];

@@ -24,8 +24,8 @@ export async function signIn(formData: FormData) {
   const email = emailField(formData);
   const password = formData.get("password");
   const continuation = safeInviteContinuation(formData.get("continue"));
-  if (!email || typeof password !== "string" || !password || password.length > 1024) redirect(`/login?error=invalid${continuationQuery(continuation)}`);
-  if (!authConfig()) redirect(`/login?error=unavailable${continuationQuery(continuation)}`);
+  if (!email || typeof password !== "string" || !password || password.length > 1024) redirect(`/login?error=invalid${continuationQuery(continuation, "&")}`);
+  if (!authConfig()) redirect(`/login?error=unavailable${continuationQuery(continuation, "&")}`);
 
   const result = await createAuthHandler(await createAuthClient()).signIn(email, password);
   if (!result.ok) {
@@ -33,7 +33,7 @@ export async function signIn(formData: FormData) {
       await setPendingEmail(email);
       redirect(verifyPath("status=pending", continuation));
     }
-    redirect(`/login?error=${result.reason}${continuationQuery(continuation)}`);
+    redirect(`/login?error=${result.reason}${continuationQuery(continuation, "&")}`);
   }
   await clearPendingEmail();
   redirect(continuation ?? "/");
@@ -47,12 +47,12 @@ export async function signUp(formData: FormData) {
   const confirmation = formData.get("confirmPassword");
   const continuation = safeInviteContinuation(formData.get("continue"));
   if (!name || name.length > 80 || !email || typeof password !== "string" || password.length < 8 || password.length > 1024 || password !== confirmation) {
-    redirect(`/signup?error=invalid${continuationQuery(continuation)}`);
+    redirect(`/signup?error=invalid${continuationQuery(continuation, "&")}`);
   }
-  if (!authConfig()) redirect(`/signup?error=unavailable${continuationQuery(continuation)}`);
+  if (!authConfig()) redirect(`/signup?error=unavailable${continuationQuery(continuation, "&")}`);
 
   const result = await createAuthHandler(await createAuthClient()).signUp({ email, password, name, emailRedirectTo: confirmationRedirectUrl() });
-  if (!result.ok) redirect(`/signup?error=${result.reason}${continuationQuery(continuation)}`);
+  if (!result.ok) redirect(`/signup?error=${result.reason}${continuationQuery(continuation, "&")}`);
   await setPendingEmail(email);
   await markCodeSent(email);
   redirect(verifyPath("status=sent", continuation));

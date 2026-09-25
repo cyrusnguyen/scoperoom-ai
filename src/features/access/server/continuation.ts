@@ -8,7 +8,7 @@ export function safeInviteContinuation(value: unknown): string | null {
   return match && inviteToken.test(match[1]) ? value : null;
 }
 
-export function continuationQuery(value: unknown): string {
+export function continuationQuery(value: unknown, separator: "?" | "&" = "?"): string {
   const continuation = safeInviteContinuation(value);
-  return continuation ? `?continue=${encodeURIComponent(continuation)}` : "";
+  return continuation ? `${separator}continue=${encodeURIComponent(continuation)}` : "";
 }

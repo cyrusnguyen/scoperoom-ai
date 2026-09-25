@@ -153,7 +153,7 @@ test.describe("workspace admission", () => {
     await page.getByLabel("Workspace name").fill("Browser workspace");
     await page.getByRole("button", { name: "Create workspace" }).last().click();
     await expect(page.getByRole("button", { name: "Browser workspace", exact: true })).toBeVisible();
-    await expect(page.getByRole("status")).toContainText("Workspace created");
+    await expect(page.locator("#workspace-sidebar > .panel-body > .workspace-message")).toContainText("Workspace created");
     await expect(page.getByText("1 of 1 workspace place used")).toBeVisible();
     await expect(page.getByText("Your workspace limit has been reached.")).toBeVisible();
 
@@ -174,7 +174,7 @@ test.describe("workspace admission", () => {
       return route.continue();
     });
     await page.getByRole("button", { name: "Create workspace" }).last().click();
-    await expect(page.getByRole("status")).toContainText("Workspace created. Workspace access is unavailable.");
+    await expect(page.locator("#workspace-sidebar > .panel-body > .workspace-message")).toContainText("Workspace created. Workspace access is unavailable.");
     await expect(page.getByRole("list", { name: "Your workspaces" })).toHaveCount(0);
   });
   test("failed refresh hides stale workspace data and recovers", async ({ page }) => {
@@ -185,7 +185,7 @@ test.describe("workspace admission", () => {
     await page.route("**/api/workspaces", unavailable);
     await page.getByRole("button", { name: "Refresh workspaces" }).click();
     await expect(page.getByRole("button", { name: "Create workspace" })).toHaveCount(0);
-    await expect(page.getByRole("status")).toContainText("Workspace access is unavailable.");
+    await expect(page.locator("#workspace-sidebar > .panel-body > .workspace-message")).toContainText("Workspace access is unavailable.");
     await page.unroute("**/api/workspaces", unavailable);
     await page.getByRole("button", { name: "Refresh workspaces" }).click();
     await expect(page.getByRole("button", { name: "Create workspace" })).toBeVisible();
@@ -210,12 +210,12 @@ test.describe("workspace admission", () => {
     await page.getByRole("button", { name: "Create workspace" }).last().click();
     await expect(page.getByLabel("Workspace name")).toHaveValue("Retry workspace");
     await expect(page.getByLabel("Workspace name")).toBeDisabled();
-    await expect(page.getByRole("status")).toContainText("We could not confirm workspace creation");
+    await expect(page.locator("#workspace-sidebar > .panel-body > .workspace-message")).toContainText("We could not confirm workspace creation");
     await page.unroute("**/api/workspaces", dropResponse);
     await page.getByRole("button", { name: "Retry workspace creation" }).click();
     await expect.poll(() => keys.length).toBe(2);
     expect(keys[1]).toBe(keys[0]);
-    await expect(page.getByRole("status")).toContainText("Workspace already created.");
+    await expect(page.locator("#workspace-sidebar > .panel-body > .workspace-message")).toContainText("Workspace already created.");
     await expect(page.getByRole("list", { name: "Your workspaces" }).getByRole("listitem")).toHaveCount(1);
   });
 });

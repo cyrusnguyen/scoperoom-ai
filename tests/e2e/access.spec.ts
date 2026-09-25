@@ -76,7 +76,7 @@ test.describe("local Supabase Auth", () => {
 
   test.beforeAll(async () => {
     const url = new URL(authUrl!);
-    if (url.hostname !== "127.0.0.1" || !["54321", "55321", "56321", "57321"].includes(url.port)) {
+    if (url.hostname !== "127.0.0.1" || !["54321", "55321", "56321", "57321", "58321"].includes(url.port)) {
       throw new Error("Auth browser tests require a local Supabase URL.");
     }
     admin = createClient(authUrl!, secretKey!, { auth: { autoRefreshToken: false, persistSession: false } });
@@ -214,11 +214,13 @@ test.describe("local Supabase Auth", () => {
   });
 
   test("invalid credentials stay on login with a generic error", async ({ page }) => {
-    await page.goto("/login");
+    const invitePath = `/invite/${"a".repeat(43)}`;
+    await page.goto(`/login?continue=${encodeURIComponent(invitePath)}`);
     await page.getByLabel("Email address").fill(email);
     await page.getByLabel("Password").fill("wrong-password");
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page).toHaveURL(/\/login\?error=invalid$/);
+    await expect(page).toHaveURL(/\/login\?error=invalid&continue=/);
+    expect(new URL(page.url()).searchParams.get("continue")).toBe(invitePath);
     await expect(page.locator(".login-error")).toContainText("We could not sign you in");
     await page.goto("/");
     await expect(page).toHaveURL(/\/login$/);
