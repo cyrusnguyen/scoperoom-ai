@@ -69,8 +69,11 @@ test.describe("workspace archive", () => {
     expect(archiveKeys).toHaveLength(2);
     expect(archiveKeys[1]).toBe(archiveKeys[0]);
     await expect(page.getByText("Archived", { exact: true })).toBeVisible();
-    await page.setViewportSize({ width: 1100, height: 900 });
+    await page.setViewportSize({ width: 1440, height: 900 });
     const archivedRow = page.locator(".workspace-row-wrap");
+    const archivedName = archivedRow.locator(".workspace-row > span:first-child");
+    expect((await archivedName.boundingBox())!.width).toBeGreaterThan(100);
+    await page.setViewportSize({ width: 1100, height: 900 });
     const archivedSelect = archivedRow.locator(".workspace-row");
     const restore = archivedRow.getByRole("button", { name: "Restore workspace Archive workspace" });
     const archivedBadge = archivedRow.getByText("Archived", { exact: true });
@@ -89,6 +92,27 @@ test.describe("workspace archive", () => {
     await expect(page.getByText("Workspace restored.")).toBeVisible();
   });
 
+  test("a restore blocked by the workspace limit opens a focused explanation", async ({ page }) => {
+    const archived = { id: workspaceId, name: "Archived limit workspace", createdAt: "2026-09-25T00:00:00.000Z", status: "ARCHIVED", version: 4, canManage: true };
+    await page.route("**/api/workspaces", async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ displayName: "Workspace Archive", canCreate: false, maxWorkspaces: 1, ownedCount: 1, workspaces: [archived] }) });
+    });
+    await page.route(`**/api/workspaces/${workspaceId}/projects`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ workspace: { id: workspaceId, name: archived.name, canCreateProject: false }, projects: [] }) }));
+    await page.route(`**/api/workspaces/${workspaceId}/restore`, (route) => route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { code: "LIMIT_REACHED", message: "Your active workspace limit has been reached." } }) }));
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const restore = page.getByRole("button", { name: "Restore workspace Archived limit workspace" });
+    await restore.click();
+    const dialog = page.getByRole("dialog", { name: "Workspace limit reached" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("Archive or restore one of your active workspaces before trying again.");
+    await expect(page.getByText("Your active workspace limit has been reached.")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(restore).toBeFocused();
+  });
+
   test("desktop sidebar widths can be changed with accessible separators and persist for this tab", async ({ page }) => {
     await page.setViewportSize({ width: 1500, height: 900 });
     const left = page.getByRole("complementary", { name: "Your starting point" });
@@ -98,6 +122,10 @@ test.describe("workspace archive", () => {
 
     await expect(leftResize).toBeVisible();
     await expect(rightResize).toBeVisible();
+    await page.evaluate(() => { sessionStorage.removeItem("scoperoom_left_width"); sessionStorage.removeItem("scoperoom_right_width"); });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect.poll(async () => (await left.boundingBox())!.width).toBe(270);
+    await expect.poll(async () => (await right.boundingBox())!.width).toBe(290);
     const beforeLeft = (await left.boundingBox())!.width;
     const beforeRight = (await right.boundingBox())!.width;
     await leftResize.focus();

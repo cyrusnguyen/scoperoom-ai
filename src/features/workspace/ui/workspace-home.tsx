@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent, SubmitEvent } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { rememberPanel, rememberPanelWidth, restorePanel, restorePanelWidth } from "./panel-preferences";
 import ProjectShare from "@/features/projects/ui/project-share";
 import ProjectManagement from "@/features/projects/ui/project-management";
@@ -12,7 +12,7 @@ type WorkspaceHome = { displayName: string; canCreate: boolean; maxWorkspaces: n
 type ProjectSummary = { id: string; name: string; status: string; currentDraftId: string; createdAt: string };
 type ProjectList = { workspace: { id: string; name: string; canCreateProject: boolean }; projects: ProjectSummary[] };
 type ProjectBootstrap = { project: { id: string; workspaceId: string; name: string; status: string; role: "OWNER" | "EDITOR" | "REVIEWER" | "VIEWER" }; draft: { id: string; schemaVersion: 3; documentRevision: number; layoutRevision: number } };
-type ApiError = { error?: { message?: string } };
+type ApiError = { error?: { code?: string; message?: string } };
 
 async function errorMessage(response: Response, fallback: string) {
   try { return (await response.json() as ApiError).error?.message || fallback; } catch { return fallback; }
@@ -22,15 +22,17 @@ function PanelIcon({ side }: { side: "left" | "right" }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><path d={side === "left" ? "M8 3v18" : "M16 3v18"} /></svg>;
 }
 function CloseIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>; }
+function RefreshIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.8-4L3 10" /><path d="M3 4v6h6" /><path d="M4 13a8 8 0 0 0 14.8 4L21 14" /><path d="M21 20v-6h-6" /></svg>; }
 
 const panelLimits = { left: [260, 420], right: [280, 440] } as const;
 function panelWidth(side: "left" | "right", value: number, other: number, otherOpen: boolean) {
   const [minimum, maximum] = panelLimits[side];
-  return Math.round(Math.min(maximum, Math.max(minimum, Math.min(window.innerWidth - other - 488 - (otherOpen ? 8 : 0), value))));
+  return Math.round(Math.min(maximum, Math.max(minimum, Math.min(window.innerWidth - 488 - (otherOpen ? other + 8 : 0), value))));
 }
 
 export default function WorkspaceHome({ signOut, projectId }: { signOut: () => Promise<void>; projectId?: string }) {
-  const router = useRouter();
+  const pathname = usePathname();
+  const routeProjectId = /^\/app\/projects\/([^/]+)$/.exec(pathname ?? "")?.[1] ?? projectId;
   const [home, setHome] = useState<WorkspaceHome | null>(null);
 
   const [message, setMessage] = useState("Loading workspaces...");
@@ -53,17 +55,22 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
   const [workspaceBusy, setWorkspaceBusy] = useState<string | null>(null);
   const [workspaceRetry, setWorkspaceRetry] = useState<{ workspace: Workspace; action: "archive" | "restore"; key: string } | null>(null);
   const [workspaceConfirm, setWorkspaceConfirm] = useState<Workspace | null>(null);
+  const [quotaDialogOpen, setQuotaDialogOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [panelsReady, setPanelsReady] = useState(false);
+  const [contextTab, setContextTab] = useState<"details" | "share">("details");
   const selectedWorkspaceIdRef = useRef<string | null>(null);
+  const activeProjectRoute = useRef(projectId);
   const leftCloseRef = useRef<HTMLButtonElement>(null);
   const leftShowRef = useRef<HTMLButtonElement>(null);
+  const quotaDialogRef = useRef<HTMLDialogElement>(null);
+  const quotaWorkspaceRef = useRef<string | null>(null);
   const rightCloseRef = useRef<HTMLButtonElement>(null);
   const [leftWidth, setLeftWidth] = useState(270);
   const [rightWidth, setRightWidth] = useState(290);
-  const [shareProjectId, setShareProjectId] = useState<string | null>(null);
-  const [renameProjectId, setRenameProjectId] = useState<string | null>(null);
+  const [shareRequest, setShareRequest] = useState<{ projectId: string; token: number } | null>(null);
+  const [renameRequest, setRenameRequest] = useState<{ projectId: string; token: number } | null>(null);
   const rightShowRef = useRef<HTMLButtonElement>(null);
   const leftWasOpen = useRef(true);
   const rightWasOpen = useRef(true);
@@ -78,6 +85,14 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
   const selectWorkspace = (workspaceId: string) => {
     if (projectUncertain || selectedWorkspaceIdRef.current === workspaceId) return;
     setCurrentWorkspace(workspaceId);
+    setShareRequest(null);
+    setRenameRequest(null);
+    if (activeProjectRoute.current) {
+      activeProjectRoute.current = undefined;
+      setProject(null);
+      setProjectUnavailable(false);
+      window.history.pushState(null, "", "/");
+    }
     setProjectFormOpen(false);
     setProjectWorkspaceId(null);
   };
@@ -86,6 +101,12 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
     setProjectUncertain(false);
     setProjectKey("");
     setProjectWorkspaceId(null);
+  };  const openProject = (id: string) => {
+    if (activeProjectRoute.current === id) return;
+    activeProjectRoute.current = id;
+    setProject(null);
+    setProjectUnavailable(false);
+    window.history.pushState(null, "", `/app/projects/${id}`);
   };
 
   useEffect(() => {
@@ -99,6 +120,13 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
   }, []);
   useEffect(() => { if (panelsReady && leftWasOpen.current !== leftOpen) { (leftOpen ? leftCloseRef : leftShowRef).current?.focus(); leftWasOpen.current = leftOpen; } }, [leftOpen, panelsReady]);
   useEffect(() => { if (panelsReady && rightWasOpen.current !== rightOpen) { (rightOpen ? rightCloseRef : rightShowRef).current?.focus(); rightWasOpen.current = rightOpen; } }, [rightOpen, panelsReady]);
+  useEffect(() => {
+    const dialog = quotaDialogRef.current;
+    if (!dialog) return;
+    if (quotaDialogOpen && !dialog.open) dialog.showModal();
+    if (!quotaDialogOpen && dialog.open) dialog.close();
+  }, [quotaDialogOpen]);
+
   useEffect(() => {
     const clampWidths = () => {
       if (window.innerWidth <= 1050) return;
@@ -179,8 +207,10 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
       const result = await fetch(`/api/projects/${id}/bootstrap`, { cache: "no-store" });
       if (!result.ok) throw new Error("Project details are unavailable.");
       const nextProject = await result.json() as ProjectBootstrap;
+      if (activeProjectRoute.current !== id) return false;
       setProject(nextProject); setProjectUnavailable(false); setCurrentWorkspace(nextProject.project.workspaceId); setProjectMessage(""); return true;
     } catch {
+      if (activeProjectRoute.current !== id) return false;
       setProject(null); setProjectUnavailable(true); setProjectMessage("Project details are unavailable."); return false;
     }
   }, []);
@@ -192,10 +222,13 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
     return () => window.clearTimeout(timer);
   }, [refreshProjects, selectedWorkspaceId]);
   useEffect(() => {
-    const timer = window.setTimeout(() => { if (projectId) void refreshBootstrap(projectId); else setProject(null); }, 0);
+    activeProjectRoute.current = routeProjectId;
+    const timer = window.setTimeout(() => {
+      setShareRequest(null); setRenameRequest(null);
+      if (routeProjectId) void refreshBootstrap(routeProjectId); else { setProject(null); setProjectUnavailable(false); }
+    }, 0);
     return () => window.clearTimeout(timer);
-  }, [projectId, refreshBootstrap]);
-
+  }, [refreshBootstrap, routeProjectId]);
   const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault(); const requestKey = key || crypto.randomUUID();
     setKey(requestKey); setCreating(true); setUncertain(false);
@@ -220,7 +253,8 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
       const result = await fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": requestKey }, body: JSON.stringify({ workspaceId: targetWorkspaceId, name: projectName }) });
       if (!result.ok) { setProjectMessage(await errorMessage(result, "Project creation is unavailable.")); setProjectUncertain(result.status >= 500); if (result.status < 500) setProjectKey(""); return; }
       const created = await result.json() as { id: string };
-      router.push(`/app/projects/${created.id}`);
+      setProjectName(""); setProjectKey(""); setProjectFormOpen(false); setProjectWorkspaceId(null);
+      openProject(created.id);
     } catch { setProjectMessage("We could not confirm project creation. Your name is ready to retry."); setProjectUncertain(true); } finally { setProjectCreating(false); }
   };
 
@@ -230,7 +264,17 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
     try {
       const result = await fetch(`/api/workspaces/${workspace.id}/${action}`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": requestKey }, body: JSON.stringify({ expectedVersion: workspace.version }) });
       if (!result.ok) {
-        setMessage(await errorMessage(result, "Workspace changes are unavailable."));
+        let problem: ApiError = {};
+        try { problem = await result.json() as ApiError; } catch { /* Use the lifecycle fallback below. */ }
+        const problemMessage = problem.error?.message || "Workspace changes are unavailable.";
+        if (action === "restore" && result.status === 409 && problem.error?.code === "LIMIT_REACHED") {
+          quotaWorkspaceRef.current = workspace.id;
+          const refreshed = await refresh(false);
+          if (refreshed) { setMessage(""); setQuotaDialogOpen(true); }
+          else setMessage((current) => current ? `${problemMessage} ${current}` : problemMessage);
+          return;
+        }
+        setMessage(problemMessage);
         if (result.status >= 500) setWorkspaceRetry({ workspace, action, key: requestKey });
         return;
       }
@@ -245,9 +289,10 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
   const selectedWorkspace = home?.workspaces.find((workspace) => workspace.id === selectedWorkspaceId);
   const atLimit = Boolean(home && home.maxWorkspaces > 0 && home.ownedCount >= home.maxWorkspaces);
   const canCreateProject = Boolean(projectList?.workspace.canCreateProject && selectedWorkspace?.status === "ACTIVE");
-  const canEditProject = project?.project.role === "OWNER" && project.project.status === "ACTIVE" && selectedWorkspace?.status !== "ARCHIVED";
-  const projectActionReason = project?.project.status === "ARCHIVED" ? "This project is archived, so sharing and renaming are unavailable." : selectedWorkspace?.status === "ARCHIVED" ? "This workspace is archived, so sharing and renaming are unavailable until it is restored." : "Only a project owner can share or rename this project.";
-  const openProjectAction = (action: "share" | "rename") => { if (!project) return; setRightPanel(true); if (action === "share") setShareProjectId(project.project.id); else setRenameProjectId(project.project.id); };
+  const projectWorkspace = home?.workspaces.find((workspace) => workspace.id === project?.project.workspaceId);
+  const canEditProject = project?.project.role === "OWNER" && project.project.status === "ACTIVE" && projectWorkspace?.status === "ACTIVE";
+  const projectActionReason = project?.project.status === "ARCHIVED" ? "This project is archived, so sharing and renaming are unavailable." : projectWorkspace?.status === "ARCHIVED" ? "This workspace is archived, so sharing and renaming are unavailable until it is restored." : "Only a project owner can share or rename this project.";
+  const openProjectAction = (action: "share" | "rename") => { if (!project) return; setRightPanel(true); setContextTab(action === "share" ? "share" : "details"); if (action === "share") setShareRequest((current) => ({ projectId: project.project.id, token: (current?.token ?? 0) + 1 })); else setRenameRequest((current) => ({ projectId: project.project.id, token: (current?.token ?? 0) + 1 })); };
 
   return (
     <>
@@ -260,6 +305,7 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
           </div>
           <span className="workspace-title">{project?.project.name ?? "Blank workspace"}</span>
           <span className="preview-label">UI preview</span>
+          {canEditProject && <button className="header-share-button" type="button" onClick={() => openProjectAction("share")}>Share</button>}
           <form action={signOut}><button className="signout-button" type="submit">Sign out</button></form>
         </header>
 
@@ -304,12 +350,12 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
             <div className="panel-body">
               <div className="workspace-list-heading">
                 <h3>Workspaces</h3>
-                <button className="utility-button" type="button" onClick={() => void refresh()} disabled={creating}>Refresh workspaces</button>
+                <button className="utility-button icon-button" type="button" aria-label="Refresh workspaces" title="Refresh workspaces" onClick={() => void refresh()} disabled={creating}><RefreshIcon /></button>
               </div>
               <p className="workspace-greeting">Your available workspaces appear here.</p>
               {home?.workspaces.length ? (
                 <ul className="workspace-list" aria-label="Your workspaces">
-                  {home.workspaces.map((workspace) => <li key={workspace.id}><div className="workspace-row-wrap"><button className="workspace-row" type="button" aria-pressed={workspace.id === selectedWorkspaceId} onClick={() => selectWorkspace(workspace.id)} disabled={projectUncertain}><span title={workspace.name}>{workspace.name}</span>{workspace.status === "ARCHIVED" && <span className="lifecycle-badge lifecycle-archived">Archived</span>}</button>{workspace.canManage && <div className="workspace-actions"><button className="utility-button workspace-lifecycle" type="button" aria-label={`${workspace.status === "ARCHIVED" ? "Restore" : "Archive"} workspace ${workspace.name}`} disabled={workspaceBusy === workspace.id || workspaceRetry?.workspace.id === workspace.id} onClick={() => workspace.status === "ARCHIVED" ? void transitionWorkspace(workspace, "restore") : setWorkspaceConfirm(workspace)}>{workspaceBusy === workspace.id ? "Saving..." : workspace.status === "ARCHIVED" ? "Restore workspace" : "Archive workspace"}</button></div>}</div></li>)}
+                  {home.workspaces.map((workspace) => <li key={workspace.id}><div className="workspace-row-wrap"><button className="workspace-row" type="button" aria-pressed={workspace.id === selectedWorkspaceId} onClick={() => selectWorkspace(workspace.id)} disabled={projectUncertain}><span title={workspace.name}>{workspace.name}</span>{workspace.status === "ARCHIVED" && <span className="lifecycle-badge lifecycle-archived">Archived</span>}</button>{workspace.canManage && <div className="workspace-actions"><button className="utility-button workspace-lifecycle" type="button" aria-label={`${workspace.status === "ARCHIVED" ? "Restore" : "Archive"} workspace ${workspace.name}`} data-workspace-id={workspace.id} disabled={workspaceBusy === workspace.id || workspaceRetry?.workspace.id === workspace.id} onClick={() => workspace.status === "ARCHIVED" ? void transitionWorkspace(workspace, "restore") : setWorkspaceConfirm(workspace)}>{workspaceBusy === workspace.id ? "Saving..." : workspace.status === "ARCHIVED" ? "Restore workspace" : "Archive workspace"}</button></div>}</div></li>)}
                 </ul>
               ) : home && <p className="workspace-empty">No workspaces yet.</p>}
               {workspaceConfirm && <div className="workspace-confirm"><p>Archiving this workspace frees a workspace place and makes its projects read-only.</p><button className="text-button" type="button" onClick={() => { const target = workspaceConfirm; setWorkspaceConfirm(null); void transitionWorkspace(target, "archive"); }} disabled={workspaceBusy === workspaceConfirm.id}>Confirm archive workspace</button><button className="text-button" type="button" onClick={() => setWorkspaceConfirm(null)} disabled={workspaceBusy === workspaceConfirm.id}>Cancel</button></div>}
@@ -334,11 +380,11 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
                 <section className="project-section" aria-labelledby="projects-title">
                   <div className="workspace-list-heading">
                     <h3 id="projects-title">Projects</h3>
-                    <button className="utility-button" type="button" onClick={() => void refreshProjects(selectedWorkspace.id)} disabled={projectCreating}>Refresh projects</button>
+                    <button className="utility-button icon-button" type="button" aria-label="Refresh projects" title="Refresh projects" onClick={() => void refreshProjects(selectedWorkspace.id)} disabled={projectCreating}><RefreshIcon /></button>
                   </div>
                   {projectList?.projects.length ? (
                     <ul className="project-list" aria-label={`${projectList.workspace.name} projects`}>
-                      {projectList.projects.map((item) => <li key={item.id}><button className="project-row" type="button" onClick={() => router.push(`/app/projects/${item.id}`)}><strong>{item.name}</strong><span>{item.status === "ACTIVE" ? "Empty draft" : item.status}</span></button></li>)}
+                      {projectList.projects.map((item) => <li key={item.id}><button className="project-row" type="button" onClick={() => openProject(item.id)}><strong>{item.name}</strong><span>{item.status === "ACTIVE" ? "Empty draft" : item.status}</span></button></li>)}
                     </ul>
                   ) : projectList && <p className="workspace-empty">No projects yet.</p>}
                   {canCreateProject && !projectFormOpen && <button className="create-button" type="button" onClick={() => { setProjectWorkspaceId(selectedWorkspace.id); setProjectFormOpen(true); }}>Create project</button>}
@@ -377,9 +423,16 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
                   <div><dt>Draft</dt><dd>Empty draft</dd></div>
                   <div><dt>Revision</dt><dd>{project.draft.documentRevision}</dd></div>
                 </dl>
-                {canEditProject ? <div className="context-actions"><button className="context-action" type="button" onClick={() => openProjectAction("share")}>Share project</button><button className="context-action" type="button" onClick={() => openProjectAction("rename")}>Rename project</button></div> : <p className="context-action-note">{projectActionReason}</p>}
-                {project.project.status === "ACTIVE" && selectedWorkspace?.status !== "ARCHIVED" && <ProjectShare key={`share-${project.project.id}`} projectId={project.project.id} role={project.project.role} openRequest={shareProjectId === project.project.id} showTrigger={false} />}
-                <ProjectManagement key={`management-${project.project.id}`} projectId={project.project.id} role={project.project.role} projectName={project.project.name} projectStatus={project.project.status as "ACTIVE" | "ARCHIVED"} workspaceArchived={selectedWorkspace?.status === "ARCHIVED"} openRequest={renameProjectId === project.project.id} onProjectChange={(next) => setProject((current) => current && current.project.id === project.project.id ? { ...current, project: { ...current.project, ...next } } : current)} />
+                <div className="context-tabs" role="tablist" aria-label="Project context">
+                  <button id="project-details-tab" className="context-tab" role="tab" type="button" aria-selected={contextTab === "details"} aria-controls="project-details-panel" tabIndex={contextTab === "details" ? 0 : -1} onClick={() => setContextTab("details")} onKeyDown={(event) => { if (event.key === "ArrowRight") { event.preventDefault(); setContextTab("share"); } }}>Details</button>
+                  <button id="project-share-tab" className="context-tab" role="tab" type="button" aria-selected={contextTab === "share"} aria-controls="project-share-panel" tabIndex={contextTab === "share" ? 0 : -1} onClick={() => setContextTab("share")} onKeyDown={(event) => { if (event.key === "ArrowLeft") { event.preventDefault(); setContextTab("details"); } }}>Share</button>
+                </div>
+                <div id="project-details-panel" role="tabpanel" aria-labelledby="project-details-tab" hidden={contextTab !== "details"}>
+                  <ProjectManagement key={`management-${project.project.id}`} embedded projectId={project.project.id} role={project.project.role} projectName={project.project.name} projectStatus={project.project.status as "ACTIVE" | "ARCHIVED"} workspaceArchived={projectWorkspace?.status === "ARCHIVED"} openRequest={renameRequest?.projectId === project.project.id ? renameRequest.token : 0} onProjectChange={(next) => { setProject((current) => current && current.project.id === project.project.id ? { ...current, project: { ...current.project, ...next } } : current); if (next.name) setProjectList((current) => current ? { ...current, projects: current.projects.map((item) => item.id === project.project.id ? { ...item, name: next.name! } : item) } : current); }} />
+                </div>
+                <div id="project-share-panel" role="tabpanel" aria-labelledby="project-share-tab" hidden={contextTab !== "share"}>
+                  {project.project.status === "ACTIVE" && projectWorkspace?.status === "ACTIVE" ? <ProjectShare key={`share-${project.project.id}`} embedded projectId={project.project.id} role={project.project.role} openRequest={shareRequest?.projectId === project.project.id ? shareRequest.token : 0} showTrigger={false} /> : <p className="context-action-note">{projectActionReason}</p>}
+                </div>
               </> : <>
                 <div className="context-icon" aria-hidden="true">&#9633;</div>
                 <h3>{projectUnavailable ? "Project details are unavailable." : "No project is connected yet."}</h3>
@@ -394,6 +447,11 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
           </aside>
         </main>
       </div>
+      <dialog ref={quotaDialogRef} className="workspace-limit-dialog" aria-labelledby="workspace-limit-title" onCancel={() => { const id = quotaWorkspaceRef.current; if (id) window.setTimeout(() => document.querySelector<HTMLButtonElement>(`[data-workspace-id="${id}"]`)?.focus(), 0); }} onClose={() => { setQuotaDialogOpen(false); const id = quotaWorkspaceRef.current; if (id) window.setTimeout(() => document.querySelector<HTMLButtonElement>(`[data-workspace-id="${id}"]`)?.focus(), 0); }}>
+        <h2 id="workspace-limit-title">Workspace limit reached</h2>
+        <p>Archive or restore one of your active workspaces before trying again.</p>
+        <form method="dialog"><button className="context-action" type="submit">Close</button></form>
+      </dialog>
     </>
   );
 }

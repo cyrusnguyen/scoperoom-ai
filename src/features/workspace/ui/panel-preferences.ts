@@ -29,7 +29,9 @@ export function rememberPanelWidth(side: PanelSide, width: number) {
 
 export function restorePanelWidth(side: PanelSide, fallback: number) {
   try {
-    const width = Number(sessionStorage.getItem(panelWidthKey(side)));
-    return Number.isFinite(width) ? width : fallback;
+    const saved = sessionStorage.getItem(panelWidthKey(side));
+    if (saved === null) return fallback;
+    const width = Number(saved);
+    return Number.isFinite(width) && width > 0 ? width : fallback;
   } catch { return fallback; }
 }
