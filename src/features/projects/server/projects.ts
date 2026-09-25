@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Prisma, type PrismaClient } from "../../../../prisma/generated/client.ts";
 import { resolveProfile } from "../../access/server/profile.ts";
 import { createDatabase } from "../../../server/db.ts";
-import type { CreatedProject, CreateProjectInput, ProjectBootstrap, ProjectErrorCode, ProjectIdentity, WorkspaceProjects } from "../contracts/project.ts";
+import type { CreatedProject, CreateProjectInput, ProjectAccessRole, ProjectBootstrap, ProjectErrorCode, ProjectIdentity, WorkspaceProjects } from "../contracts/project.ts";
 import { uuid, validateProjectCreateInput } from "../contracts/project.ts";
 
 const OPERATION = "CREATE_PROJECT_V1";
@@ -71,19 +71,25 @@ export async function getWorkspaceProjects(identity: ProjectIdentity, workspaceI
       select: { id: true, name: true, ownerId: true },
     });
     if (!workspace) throw new ProjectError("NOT_FOUND");
-    const owner = workspace.ownerId === profile.id;
+    const owner = workspace.ownerId === profile.id && Boolean(await database.workspaceMembership.findFirst({
+      where: { workspaceId: workspace.id, profileId: profile.id, role: "OWNER", active: true }, select: { profileId: true },
+    }));
     const [entitlement, projects] = await Promise.all([
       owner ? database.pilotEntitlement.findUnique({ where: { profileId: profile.id } }) : Promise.resolve(null),
-      owner ? database.project.findMany({
-        where: { workspaceId, status: "ACTIVE" },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        select: { id: true, name: true, status: true, currentDraftId: true, createdAt: true },
-      }) : Promise.resolve([]),
+      database.$queryRaw<{ id: string; name: string; status: string; current_draft_id: string | null; created_at: Date; role: string }[]>(Prisma.sql`
+        SELECT project.id, project.name, project.status::text, project.current_draft_id, project.created_at,
+          CASE WHEN ${owner}::boolean THEN 'OWNER' ELSE membership.role::text END AS role
+        FROM app.project project
+        LEFT JOIN app.project_membership membership ON membership.project_id = project.id AND membership.profile_id = ${profile.id}::uuid AND membership.active
+        WHERE project.workspace_id = ${workspace.id}::uuid AND project.status = 'ACTIVE'::app.project_status
+          AND (${owner}::boolean OR membership.profile_id IS NOT NULL)
+        ORDER BY project.created_at ASC, project.id ASC
+      `),
     ]);
     return {
       workspace: { id: workspace.id, name: workspace.name, canCreateProject: owner && entitlementActive(entitlement) },
-      projects: projects.filter((project) => project.currentDraftId !== null).map((project) => ({
-        id: project.id, name: project.name, status: project.status, currentDraftId: project.currentDraftId!, createdAt: project.createdAt.toISOString(),
+      projects: projects.filter((project) => project.current_draft_id !== null).map((project) => ({
+        id: project.id, name: project.name, status: project.status, currentDraftId: project.current_draft_id!, createdAt: project.created_at.toISOString(), role: project.role as ProjectAccessRole,
       })),
     };
   });
@@ -93,19 +99,36 @@ export async function getProjectBootstrap(identity: ProjectIdentity, projectId: 
   if (!uuid.test(projectId)) throw new ProjectError("NOT_FOUND");
   return withDatabase(async (database) => {
     const profile = await profileFor(database, identity);
-    const project = await database.project.findFirst({
-      where: { id: projectId, status: "ACTIVE", workspace: { status: "ACTIVE", ownerId: profile.id, memberships: { some: { profileId: profile.id, role: "OWNER", active: true } } } },
-      include: { currentDraft: true },
+    const project = await database.$transaction(async (transaction) => {
+      const location = await transaction.project.findUnique({ where: { id: projectId }, select: { workspaceId: true } });
+      if (!location) return null;
+      await transaction.$queryRaw(Prisma.sql`SELECT app.lock_workspace_for_project_read(${location.workspaceId}::uuid)::text AS locked`);
+      const rows = await transaction.$queryRaw<{ role: string | null }[]>(Prisma.sql`
+        SELECT CASE WHEN workspace.owner_id = ${profile.id}::uuid AND EXISTS (
+          SELECT 1 FROM app.workspace_membership membership
+          WHERE membership.workspace_id = workspace.id AND membership.profile_id = ${profile.id}::uuid
+            AND membership.role = 'OWNER'::app.workspace_member_role AND membership.active
+        ) THEN 'OWNER' ELSE (
+          SELECT membership.role::text FROM app.project_membership membership
+          WHERE membership.project_id = project.id AND membership.profile_id = ${profile.id}::uuid AND membership.active
+        ) END AS role
+        FROM app.workspace workspace JOIN app.project project ON project.workspace_id = workspace.id
+        WHERE project.id = ${projectId}::uuid AND workspace.status = 'ACTIVE'::app.workspace_status AND project.status = 'ACTIVE'::app.project_status
+        FOR SHARE OF project
+      `);
+      const role = rows[0]?.role;
+      if (role !== "OWNER" && role !== "EDITOR" && role !== "REVIEWER" && role !== "VIEWER") return null;
+      const found = await transaction.project.findFirst({ where: { id: projectId, status: "ACTIVE" }, include: { currentDraft: true } });
+      return found ? { ...found, accessRole: role as ProjectAccessRole } : null;
     });
     if (!project || !project.currentDraft || project.currentDraft.status !== "EDITABLE") throw new ProjectError("NOT_FOUND");
     const draft = project.currentDraft;
     return {
-      project: { id: project.id, workspaceId: project.workspaceId, name: project.name, status: project.status, role: "OWNER" },
+      project: { id: project.id, workspaceId: project.workspaceId, name: project.name, status: project.status, role: project.accessRole },
       draft: { id: draft.id, schemaVersion: 3, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, documentJson: draft.documentJson, layoutJson: draft.layoutJson },
     };
   });
 }
-
 export async function createProject(identity: ProjectIdentity, input: CreateProjectInput): Promise<CreatedProject> {
   let validated: CreateProjectInput;
   try {

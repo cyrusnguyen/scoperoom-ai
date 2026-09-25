@@ -6,10 +6,10 @@ export async function verifiedIdentity() {
   if (!authConfig()) return null;
   const supabase = await createAuthClient();
   const { data: { user }, error } = await supabase.auth.getUser();
-  if (error || !user || !user.email_confirmed_at || user.is_anonymous) return null;
+  if (error || !user || !user.email_confirmed_at || user.is_anonymous || typeof user.email !== "string") return null;
   const rawName = user.user_metadata.full_name;
   const name = typeof rawName === "string" ? rawName.trim().replace(/\s+/g, " ") : "";
-  return { authUserId: user.id, displayName: name && name.length <= 80 ? name : "there" };
+  return { authUserId: user.id, displayName: name && name.length <= 80 ? name : "there", verifiedEmail: user.email.normalize("NFC").trim().toLowerCase() };
 }
 
 export async function boundedJsonBody(request: Request, limit = 4_096): Promise<unknown | null> {

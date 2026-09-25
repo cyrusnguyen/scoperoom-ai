@@ -236,3 +236,24 @@
 .project-row { display: grid; gap: 2px; padding: 10px 0; }
 .project-row strong { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .project-row span { color: var(--foreground-subtle); font-size: 11px; }
+
+.share-project { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+.context-share-button { width: 100%; padding: 9px 11px; border: 1px solid var(--accent); border-radius: 5px; background: transparent; color: var(--accent); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.context-share-button:hover { background: #c4ad771c; }
+.context-share-button:disabled { cursor: not-allowed; opacity: .65; }
+.share-panel { display: grid; gap: 12px; margin-top: 18px; }
+.share-panel h3, .pending-invitations h4 { margin: 0; font-size: 14px; }
+.share-notice, .share-message, .invite-link p, .invite-recovery p, .pending-invitations p { margin: 0; color: var(--foreground-muted); font-size: 12px; line-height: 1.55; }
+.share-form { display: grid; gap: 7px; }
+.share-form label, .invite-link label { color: var(--foreground-muted); font-size: 12px; }
+.share-form input, .share-form select, .invite-link input { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--surface-muted); color: var(--foreground); font: inherit; }
+.share-actions { display: flex; align-items: center; gap: 13px; }
+.share-actions .context-share-button { width: auto; }
+.invite-link, .invite-recovery { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-muted); }
+.invite-link input { font-size: 11px; }
+.pending-invitations { display: grid; gap: 10px; padding-top: 8px; }
+.pending-invitations ul { display: grid; gap: 0; margin: 0; padding: 0; border-top: 1px solid var(--border); list-style: none; }
+.pending-invitations li { display: flex; align-items: start; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.pending-invitations span { display: grid; min-width: 0; gap: 2px; }
+.pending-invitations strong { overflow-wrap: anywhere; font-size: 12px; }
+.pending-invitations small { color: var(--foreground-subtle); font-size: 11px; }
