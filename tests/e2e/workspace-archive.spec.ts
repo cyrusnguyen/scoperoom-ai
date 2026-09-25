@@ -60,6 +60,7 @@ test.describe("workspace archive", () => {
       await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...workspace, replayed: false }) });
     });
 
+
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "Archive workspace Archive workspace" }).click();
     await page.getByRole("button", { name: "Confirm archive workspace" }).click();
@@ -68,8 +69,56 @@ test.describe("workspace archive", () => {
     expect(archiveKeys).toHaveLength(2);
     expect(archiveKeys[1]).toBe(archiveKeys[0]);
     await expect(page.getByText("Archived", { exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 1100, height: 900 });
+    const archivedRow = page.locator(".workspace-row-wrap");
+    const archivedSelect = archivedRow.locator(".workspace-row");
+    const restore = archivedRow.getByRole("button", { name: "Restore workspace Archive workspace" });
+    const archivedBadge = archivedRow.getByText("Archived", { exact: true });
+    await expect(archivedBadge).toBeVisible();
+    await expect(restore).toBeVisible();
+    expect((await restore.boundingBox())!.y).toBeGreaterThan((await archivedSelect.boundingBox())!.y);
+    expect(await archivedBadge.evaluate((element) => getComputedStyle(element).whiteSpace)).toBe("nowrap");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(archivedBadge).toBeVisible();
+    await expect(restore).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await page.setViewportSize({ width: 1280, height: 900 });
     await expect(page.getByRole("button", { name: "Restore workspace Archive workspace" })).toBeVisible();
     await page.getByRole("button", { name: "Restore workspace Archive workspace" }).click();
     await expect(page.getByText("Workspace restored.")).toBeVisible();
   });
+
+  test("desktop sidebar widths can be changed with accessible separators and persist for this tab", async ({ page }) => {
+    await page.setViewportSize({ width: 1500, height: 900 });
+    const left = page.getByRole("complementary", { name: "Your starting point" });
+    const right = page.getByRole("complementary", { name: "Project details" });
+    const leftResize = page.getByRole("separator", { name: "Resize workspace sidebar" });
+    const rightResize = page.getByRole("separator", { name: "Resize project details sidebar" });
+
+    await expect(leftResize).toBeVisible();
+    await expect(rightResize).toBeVisible();
+    const beforeLeft = (await left.boundingBox())!.width;
+    const beforeRight = (await right.boundingBox())!.width;
+    await leftResize.focus();
+    await page.keyboard.press("ArrowRight");
+    await rightResize.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(async () => (await left.boundingBox())!.width).toBeGreaterThan(beforeLeft);
+    await expect.poll(async () => (await right.boundingBox())!.width).toBeGreaterThan(beforeRight);
+    await page.setViewportSize({ width: 1100, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await page.setViewportSize({ width: 1500, height: 900 });
+    await right.getByRole("button", { name: "Hide right sidebar" }).click();
+    await leftResize.focus();
+    await page.keyboard.press("End");
+    await expect.poll(async () => (await left.boundingBox())!.width).toBe(420);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await page.locator(".canvas-toolbar").getByRole("button", { name: "Show right sidebar" }).click();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    expect((await left.boundingBox())!.width).toBeGreaterThan(beforeLeft);
+    expect((await right.boundingBox())!.width).toBeGreaterThan(beforeRight);
+});
 });

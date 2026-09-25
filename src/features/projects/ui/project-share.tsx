@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type SubmitEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type SubmitEvent } from "react";
 
 type Role = "OWNER" | "EDITOR" | "REVIEWER" | "VIEWER";
 type Invitation = { id: string; verifiedEmail: string; role: Exclude<Role, "OWNER">; expiresAt: string; status: string; version: number };
@@ -13,7 +13,7 @@ async function errorMessage(response: Response, fallback: string) {
 
 function roleLabel(role: Role) { return role[0] + role.slice(1).toLowerCase(); }
 
-export default function ProjectShare({ projectId, role }: { projectId: string; role: Role }) {
+export default function ProjectShare({ projectId, role, openRequest = false, showTrigger = true }: { projectId: string; role: Role; openRequest?: boolean; showTrigger?: boolean }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<Invitation["role"]>("EDITOR");
@@ -25,6 +25,7 @@ export default function ProjectShare({ projectId, role }: { projectId: string; r
   const [invitations, setInvitations] = useState<Invitation[] | null>(null);
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async (clearMessage = true) => {
     try {
@@ -43,11 +44,14 @@ export default function ProjectShare({ projectId, role }: { projectId: string; r
     }
   }, [projectId]);
 
+  useEffect(() => { if (openRequest) { const timer = window.setTimeout(() => setOpen(true), 0); return () => window.clearTimeout(timer); } }, [openRequest]);
   useEffect(() => {
     if (!open || role !== "OWNER") return;
     const timer = window.setTimeout(() => { void refresh(); }, 0);
     return () => window.clearTimeout(timer);
   }, [open, refresh, role]);
+
+  useEffect(() => { if (open) { const timer = window.setTimeout(() => emailRef.current?.focus(), 0); return () => window.clearTimeout(timer); } }, [open]);
 
   if (role !== "OWNER") return null;
 
@@ -123,13 +127,13 @@ export default function ProjectShare({ projectId, role }: { projectId: string; r
   const pending = invitations?.filter((invitation) => invitation.status === "PENDING") ?? [];
   return (
     <section className="share-project" aria-labelledby="share-title">
-      <button className="context-share-button" type="button" aria-expanded={open} aria-controls="share-panel" onClick={() => setOpen((value) => !value)}>Share project</button>
+      {showTrigger && <button className="context-share-button" type="button" aria-expanded={open} aria-controls="share-panel" onClick={() => setOpen((value) => !value)}>Share project</button>}
       {open && <div id="share-panel" className="share-panel">
         <h3 id="share-title">Share this project</h3>
         <p className="share-notice">Editors can edit this whole project. Invitation links are one-time and expire after seven days.</p>
         <form className="share-form" onSubmit={issue}>
           <label htmlFor="invite-email">Verified email</label>
-          <input id="invite-email" name="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} disabled={issuing || uncertain} autoComplete="email" required maxLength={254} />
+          <input ref={emailRef} id="invite-email" name="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} disabled={issuing || uncertain} autoComplete="email" required maxLength={254} />
           <label htmlFor="invite-role">Project role</label>
           <select id="invite-role" value={inviteRole} onChange={(event) => setInviteRole(event.target.value as Invitation["role"])} disabled={issuing || uncertain}>
             {(["EDITOR", "REVIEWER", "VIEWER"] as const).map((value) => <option key={value} value={value}>{roleLabel(value)}</option>)}

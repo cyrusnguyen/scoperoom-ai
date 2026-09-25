@@ -1,5 +1,7 @@
 type PanelSide = "left" | "right";
 
+const panelWidthKey = (side: PanelSide) => `scoperoom_${side}_width`;
+
 const panelKey = (side: PanelSide) => `scoperoom_${side}_open`;
 
 export function rememberPanel(side: PanelSide, open: boolean) {
@@ -19,4 +21,15 @@ export function restorePanel(side: PanelSide) {
   }
   document.cookie = `${key}=; Path=/; Max-Age=0; SameSite=Lax`;
   return stored !== "0";
+}
+
+export function rememberPanelWidth(side: PanelSide, width: number) {
+  try { sessionStorage.setItem(panelWidthKey(side), String(width)); } catch { /* The controls still work if storage is unavailable. */ }
+}
+
+export function restorePanelWidth(side: PanelSide, fallback: number) {
+  try {
+    const width = Number(sessionStorage.getItem(panelWidthKey(side)));
+    return Number.isFinite(width) ? width : fallback;
+  } catch { return fallback; }
 }
