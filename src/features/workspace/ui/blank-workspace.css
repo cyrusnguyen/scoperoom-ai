@@ -233,7 +233,7 @@
 .workspace-row:hover, .project-row:hover { color: var(--accent); }
 .workspace-row:focus-visible, .project-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; border-radius: 4px; }
 .project-section { margin-top: 30px; padding-top: 23px; border-top: 1px solid var(--border); }
-.project-list { margin: 15px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
+.project-list { margin: 10px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
 .project-list li { border-bottom: 1px solid var(--border); }
 .project-row { display: grid; gap: 2px; padding: 10px 0; }
 .project-row strong { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
@@ -338,3 +338,10 @@
 .workspace-limit-dialog form { display: flex; justify-content: flex-end; }
 .icon-button { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; }
 .icon-button svg { width: 15px; height: 15px; }
+
+.loading-spinner { display: inline-block; width: 11px; height: 11px; margin-left: 6px; border: 2px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: shell-spin .7s linear infinite; vertical-align: -1px; }
+@keyframes shell-spin { to { transform: rotate(360deg); } }
+.project-section { position: relative; margin: 8px 10px 12px; padding: 0 0 0 12px; border-top: 0; border-left: 1px solid var(--border); }
+.project-row { position: relative; padding-left: 10px; }
+.project-row[aria-current="page"] { color: var(--accent); background: #c4ad771c; box-shadow: inset 2px 0 var(--accent); }
+.project-branch { display: inline-block; margin-right: 7px; color: var(--foreground-subtle); }
