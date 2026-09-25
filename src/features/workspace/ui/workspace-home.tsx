@@ -65,6 +65,8 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
   const [contextTab, setContextTab] = useState<"details" | "share">("details");
   const selectedWorkspaceIdRef = useRef<string | null>(null);
   const activeProjectRoute = useRef(projectId);
+  const projectListRequest = useRef(0);
+  const projectBootstrapRequest = useRef(0);
   const leftCloseRef = useRef<HTMLButtonElement>(null);
   const leftShowRef = useRef<HTMLButtonElement>(null);
   const quotaDialogRef = useRef<HTMLDialogElement>(null);
@@ -83,6 +85,7 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
   const setRightPanel = (open: boolean) => { rememberPanel("right", open); setRightOpen(open); };
   const setCurrentWorkspace = (workspaceId: string | null) => {
     selectedWorkspaceIdRef.current = workspaceId;
+    projectListRequest.current += 1;
     setSelectedWorkspaceId(workspaceId);
     setProjectList(null);
     setProjectMessage("");
@@ -95,6 +98,7 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
     setRenameRequest(null);
     if (activeProjectRoute.current) {
       activeProjectRoute.current = undefined;
+      projectBootstrapRequest.current += 1;
       setProject(null);
       setProjectUnavailable(false);
       window.history.pushState(null, "", "/");
@@ -110,6 +114,7 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
   };  const openProject = (id: string) => {
     if (activeProjectRoute.current === id) return;
     activeProjectRoute.current = id;
+    projectBootstrapRequest.current += 1;
     setProject(null);
     setProjectUnavailable(false);
     setProjectLoading(true);
@@ -174,10 +179,12 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
         : nextHome.workspaces[0]?.id ?? null;
       setHome(nextHome);
       if (nextWorkspaceId !== currentWorkspaceId) setCurrentWorkspace(nextWorkspaceId);
+      else setSelectedWorkspaceId(nextWorkspaceId);
       if (clearMessage) setMessage("");
       return true;
     } catch (error) {
-      setHome(null); setProjectList(null); setProject(null); setProjectUnavailable(Boolean(activeProjectRoute.current));
+      projectListRequest.current += 1;
+      setSelectedWorkspaceId(null); setHome(null); setProjectList(null); setProject(null); setProjectUnavailable(Boolean(activeProjectRoute.current));
       setMessage(error instanceof Error ? error.message : "Workspace access is unavailable.");
       return false;
     } finally {
@@ -186,7 +193,8 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
   }, []);
 
   const refreshProjects = useCallback(async (workspaceId: string) => {
-    const selected = () => selectedWorkspaceIdRef.current === workspaceId;
+    const request = selectedWorkspaceIdRef.current === workspaceId ? ++projectListRequest.current : 0;
+    const selected = () => request !== 0 && selectedWorkspaceIdRef.current === workspaceId && projectListRequest.current === request;
     if (selected()) setProjectsLoading(true);
     try {
       const result = await fetch(`/api/workspaces/${workspaceId}/projects`, { cache: "no-store" });
@@ -216,18 +224,19 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
   }, []);
 
   const refreshBootstrap = useCallback(async (id: string) => {
+    const request = ++projectBootstrapRequest.current;
     setProjectLoading(true);
     try {
       const result = await fetch(`/api/projects/${id}/bootstrap`, { cache: "no-store" });
       if (!result.ok) throw new Error("Project details are unavailable.");
       const nextProject = await result.json() as ProjectBootstrap;
-      if (activeProjectRoute.current !== id) return false;
+      if (activeProjectRoute.current !== id || projectBootstrapRequest.current !== request) return false;
       setProject(nextProject); setProjectUnavailable(false); if (selectedWorkspaceIdRef.current !== nextProject.project.workspaceId) setCurrentWorkspace(nextProject.project.workspaceId); setProjectMessage(""); return true;
     } catch {
-      if (activeProjectRoute.current !== id) return false;
+      if (activeProjectRoute.current !== id || projectBootstrapRequest.current !== request) return false;
       setProject(null); setProjectUnavailable(true); setProjectMessage("Project details are unavailable."); return false;
     } finally {
-      if (activeProjectRoute.current === id) setProjectLoading(false);
+      if (activeProjectRoute.current === id && projectBootstrapRequest.current === request) setProjectLoading(false);
     }
   }, []);
 
@@ -239,6 +248,7 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
   }, [refreshProjects, selectedWorkspaceId]);
   useEffect(() => {
     activeProjectRoute.current = routeProjectId;
+    projectBootstrapRequest.current += 1;
     const timer = window.setTimeout(() => {
       setShareRequest(null); setRenameRequest(null); setContextTab("details");
       if (routeProjectId) void refreshBootstrap(routeProjectId); else { setProject(null); setProjectUnavailable(false); setProjectLoading(false); }
@@ -287,8 +297,7 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
         if (action === "restore" && result.status === 409 && problem.error?.code === "LIMIT_REACHED") {
           quotaWorkspaceRef.current = workspace.id;
           const refreshed = await refresh(false);
-          if (refreshed) { setMessage(""); setQuotaDialogOpen(true); }
-          else setMessage((current) => current ? `${problemMessage} ${current}` : problemMessage);
+          if (refreshed) setMessage(""); setQuotaDialogOpen(true);
           return;
         }
         setMessage(problemMessage);
@@ -324,7 +333,7 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
             <span className="brand-mark" aria-hidden="true"><span /><span /><span /><span /></span>
             <span>ScopeRoom<span className="brand-suffix"> / Studio</span></span>
           </div>
-          <span className="workspace-title">{project?.project.name ?? "Blank workspace"}</span>
+          <span className="workspace-title" title={project?.project.name ?? "Blank workspace"}>{project?.project.name ?? "Blank workspace"}</span>
           <span className="preview-label">UI preview</span>
           {canEditProject && <button className="header-share-button" type="button" onClick={() => openProjectAction("share")}>Share</button>}
           <form action={signOut}><button className="signout-button" type="submit">Sign out</button></form>
@@ -390,7 +399,7 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
                         </div>
                         {projectsLoading && <span className="loading-status" role="status" aria-label="Loading projects"><span className="loading-spinner" aria-hidden="true" />Loading projects</span>}{projectList?.projects.length ? (
                           <ul className="project-list" aria-label={`${projectList.workspace.name} projects`}>
-                            {projectList.projects.map((item) => <li key={item.id}><button className="project-row" type="button" aria-current={item.id === routeProjectId ? "page" : undefined} onClick={() => openProject(item.id)}><strong>{item.name}</strong><span>{item.status === "ACTIVE" ? "Empty draft" : item.status}</span></button></li>)}
+                            {projectList.projects.map((item) => <li key={item.id}><button className="project-row" type="button" aria-current={item.id === routeProjectId ? "page" : undefined} onClick={() => { if (activeProjectRoute.current === item.id && projectUnavailable && !projectLoading) void refreshBootstrap(item.id); else openProject(item.id); }}><strong>{item.name}</strong><span>{item.status === "ACTIVE" ? "Empty draft" : item.status}</span></button></li>)}
                           </ul>
                         ) : projectList && <p className="workspace-empty">No projects yet.</p>}
                         {canCreateProject && !projectFormOpen && <button className="create-button" type="button" onClick={() => { setProjectWorkspaceId(workspace.id); setProjectFormOpen(true); }}>Create project</button>}
@@ -455,15 +464,16 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
                   <button ref={shareTabRef} id="project-share-tab" className="context-tab" role="tab" type="button" aria-selected={contextTab === "share"} aria-controls="project-share-panel" tabIndex={contextTab === "share" ? 0 : -1} onClick={() => selectContextTab("share")} onKeyDown={(event) => { if (event.key === "ArrowLeft" || event.key === "Home") { event.preventDefault(); selectContextTab("details", true); } }}>Share</button>
                 </div>
                 <div id="project-details-panel" role="tabpanel" aria-labelledby="project-details-tab" hidden={contextTab !== "details"}>
-                  <ProjectManagement key={`management-${project.project.id}`} embedded projectId={project.project.id} role={project.project.role} projectName={project.project.name} projectStatus={project.project.status as "ACTIVE" | "ARCHIVED"} workspaceArchived={projectWorkspace?.status === "ARCHIVED"} openRequest={renameRequest?.projectId === project.project.id ? renameRequest.token : 0} onProjectChange={(next) => { setProject((current) => current && current.project.id === project.project.id ? { ...current, project: { ...current.project, ...next } } : current); if (next.name) setProjectList((current) => current ? { ...current, projects: current.projects.map((item) => item.id === project.project.id ? { ...item, name: next.name! } : item) } : current); }} />
+                  <ProjectManagement key={`management-${project.project.id}`} embedded projectId={project.project.id} role={project.project.role} projectName={project.project.name} projectStatus={project.project.status as "ACTIVE" | "ARCHIVED"} workspaceArchived={projectWorkspace?.status === "ARCHIVED"} openRequest={renameRequest?.projectId === project.project.id ? renameRequest.token : 0} onProjectChange={(next) => { setProject((current) => current && current.project.id === project.project.id ? { ...current, project: { ...current.project, ...next } } : current); if (next.name || next.status) setProjectList((current) => current ? { ...current, projects: current.projects.map((item) => item.id === project.project.id ? { ...item, ...next } : item) } : current); }} />
                 </div>
                 <div id="project-share-panel" role="tabpanel" aria-labelledby="project-share-tab" hidden={contextTab !== "share"}>
-                  {project.project.status === "ACTIVE" && projectWorkspace?.status === "ACTIVE" ? <ProjectShare key={`share-${project.project.id}`} embedded active={contextTab === "share"} projectId={project.project.id} role={project.project.role} openRequest={shareRequest?.projectId === project.project.id ? shareRequest.token : 0} showTrigger={false} /> : <p className="context-action-note">{projectActionReason}</p>}
+                  {project.project.status === "ACTIVE" && projectWorkspace?.status === "ACTIVE" && project.project.role === "OWNER" ? <ProjectShare key={`share-${project.project.id}`} embedded active={contextTab === "share"} projectId={project.project.id} role={project.project.role} openRequest={shareRequest?.projectId === project.project.id ? shareRequest.token : 0} showTrigger={false} /> : <p className="context-action-note">{projectActionReason}</p>}
                 </div>
               </> : <>
                 <div className="context-icon" aria-hidden="true">&#9633;</div>
                 <h3>{projectLoading ? "Loading project…" : projectUnavailable ? "Project details are unavailable." : "No project is connected yet."}</h3>
-                <p>{projectLoading ? "Project details are loading." : projectUnavailable ? "Return to a workspace to open an available project." : "Project details, selected items, and review context will appear here as those features are added."}</p>
+                <p>{projectLoading ? "Project details are loading." : projectUnavailable ? "Try loading this project again, or return to a workspace to open another project." : "Project details, selected items, and review context will appear here as those features are added."}</p>
+                {projectUnavailable && routeProjectId && <button className="context-action" type="button" onClick={() => void refreshBootstrap(routeProjectId)}>Retry project details</button>}
                 <dl className="context-facts">
                   <div><dt>Canvas</dt><dd>Empty</dd></div>
                   <div><dt>Project</dt><dd>Not connected</dd></div>
@@ -474,9 +484,9 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
           </aside>
         </main>
       </div>
-      <dialog ref={quotaDialogRef} className="workspace-limit-dialog" aria-labelledby="workspace-limit-title" onCancel={() => { const id = quotaWorkspaceRef.current; if (id) window.setTimeout(() => document.querySelector<HTMLButtonElement>(`[data-workspace-id="${id}"]`)?.focus(), 0); }} onClose={() => { setQuotaDialogOpen(false); const id = quotaWorkspaceRef.current; if (id) window.setTimeout(() => document.querySelector<HTMLButtonElement>(`[data-workspace-id="${id}"]`)?.focus(), 0); }}>
+      <dialog ref={quotaDialogRef} className="workspace-limit-dialog" aria-labelledby="workspace-limit-title" onClose={() => { setQuotaDialogOpen(false); const id = quotaWorkspaceRef.current; window.setTimeout(() => (id && document.querySelector<HTMLButtonElement>('[data-workspace-id="' + id + '"]') || document.querySelector<HTMLButtonElement>('[aria-label="Refresh workspaces"]'))?.focus(), 0); }}>
         <h2 id="workspace-limit-title">Workspace limit reached</h2>
-        <p>Archive or restore one of your active workspaces before trying again.</p>
+        <p>Archive an active workspace, then try restoring this one again.</p>
         <form method="dialog"><button className="context-action" type="submit">Close</button></form>
       </dialog>
     </>

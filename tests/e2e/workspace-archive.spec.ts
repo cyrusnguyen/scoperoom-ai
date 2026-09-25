@@ -106,7 +106,7 @@ test.describe("workspace archive", () => {
     await restore.click();
     const dialog = page.getByRole("dialog", { name: "Workspace limit reached" });
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("Archive or restore one of your active workspaces before trying again.");
+    await expect(dialog).toContainText("Archive an active workspace, then try restoring this one again.");
     await expect(page.getByText("Your active workspace limit has been reached.")).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
@@ -149,4 +149,30 @@ test.describe("workspace archive", () => {
     expect((await left.boundingBox())!.width).toBeGreaterThan(beforeLeft);
     expect((await right.boundingBox())!.width).toBeGreaterThan(beforeRight);
 });
+
+  test("shows the quota dialog when its follow-up workspace refresh fails", async ({ page }) => {
+    const archived = { id: workspaceId, name: "Archived limit workspace", createdAt: "2026-09-25T00:00:00.000Z", status: "ARCHIVED", version: 4, canManage: true };
+    let workspaceReads = 0;
+    await page.route("**/api/workspaces", (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      workspaceReads += 1;
+      return workspaceReads === 2
+        ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { message: "Could not refresh workspaces." } }) })
+        : route.fulfill({ contentType: "application/json", body: JSON.stringify({ displayName: "Workspace Archive", canCreate: false, maxWorkspaces: 1, ownedCount: 1, workspaces: [archived] }) });
+    });
+    await page.route("**/api/workspaces/" + workspaceId + "/projects", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ workspace: { id: workspaceId, name: archived.name, canCreateProject: false }, projects: [] }) }));
+    await page.route("**/api/workspaces/" + workspaceId + "/restore", (route) => route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { code: "LIMIT_REACHED", message: "Your active workspace limit has been reached." } }) }));
+    await page.goto("/");
+    const restore = page.getByRole("button", { name: "Restore workspace Archived limit workspace" });
+    await restore.click();
+    const dialog = page.getByRole("dialog", { name: "Workspace limit reached" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("Archive an active workspace, then try restoring this one again.");
+    await expect(page.getByText("Could not refresh workspaces.")).toBeVisible();
+    await expect(page.getByText("Your active workspace limit has been reached.")).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(page.getByRole("button", { name: "Refresh workspaces" })).toBeFocused();
+    await page.getByRole("button", { name: "Refresh workspaces" }).click();
+    await expect(page.getByText("No projects yet.")).toBeVisible();
+  });
 });

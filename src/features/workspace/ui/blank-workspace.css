@@ -29,7 +29,7 @@
 }
 .brand-mark span { border: 1.5px solid var(--accent); border-radius: 2px; }
 .brand-mark span:nth-child(2) { background: var(--accent); }
-.workspace-title { padding-left: 20px; border-left: 1px solid var(--border); color: var(--foreground-muted); }
+.workspace-title { flex: 0 1 auto; min-width: 0; overflow: hidden; padding-left: 20px; border-left: 1px solid var(--border); color: var(--foreground-muted); text-overflow: ellipsis; white-space: nowrap; }
 .preview-label { margin-left: auto; color: var(--foreground-subtle); white-space: nowrap; }
 .signout-button {
   padding: 7px 11px;
@@ -104,8 +104,8 @@
   font-size: 12px;
 }
 .canvas-toolbar-start, .canvas-toolbar-end { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.canvas-breadcrumb { display: flex; align-items: center; gap: 9px; color: var(--foreground-subtle); }
-.canvas-breadcrumb strong { color: var(--foreground); font-size: 13px; font-weight: 500; }
+.canvas-breadcrumb { display: flex; align-items: center; gap: 9px; min-width: 0; overflow: hidden; color: var(--foreground-subtle); white-space: nowrap; }
+.canvas-breadcrumb strong { min-width: 0; overflow: hidden; color: var(--foreground); font-size: 13px; font-weight: 500; text-overflow: ellipsis; }
 .canvas-view-label { display: flex; align-items: center; gap: 7px; color: var(--foreground-muted); white-space: nowrap; }
 .view-dot { width: 7px; height: 7px; border: 1px solid var(--accent); border-radius: 50%; }
 .canvas-stage {
@@ -345,3 +345,4 @@
 .project-row { position: relative; padding-left: 10px; }
 .project-row[aria-current="page"] { color: var(--accent); background: #c4ad771c; box-shadow: inset 2px 0 var(--accent); }
 .project-branch { display: inline-block; margin-right: 7px; color: var(--foreground-subtle); }
+.context-body h3 { overflow-wrap: anywhere; }
