@@ -149,7 +149,7 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
     </div>}
     {issued?.linkUnavailable && <div className="inline-note">
       <p>Revoke this invitation before creating a replacement. The original link cannot be recovered.</p>
-      <div className="view-actions"><button type="button" className="button small" onClick={() => void revoke(issued)} disabled={revoking === issued.id}>Revoke and reissue</button></div>
+      <div className="view-actions"><button type="button" className="button small" onClick={() => void revoke(issued)} disabled={revoking === issued.id}>{revokeKeys[issued.id] && revoking !== issued.id ? "Retry revoke and reissue" : "Revoke and reissue"}</button></div>
     </div>}
     <p className="muted" role={messageError ? "alert" : "status"} aria-live="polite">{message}</p>
     <div className="section-heading">

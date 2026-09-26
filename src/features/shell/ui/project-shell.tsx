@@ -183,9 +183,11 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     }
     await loadLists();
   }
-  function closeDialog() {
-    // A cancelled lifecycle change (e.g. after a CONFLICT) or an uncertain create may still have changed the lists.
+  function closeDialog(targetId?: string) {
+    // A cancelled lifecycle change (e.g. after a CONFLICT) or an uncertain create may still have changed the lists,
+    // and the open project's status (drafts are left alone).
     setDialog(null);
+    if (targetId && targetId === projectId) void loadProject(targetId);
     void loadLists();
   }
   function projectChanged() {
@@ -235,12 +237,12 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
       <form action={signOut}><button type="submit">Sign out</button></form>
     </footer>
     {children}
-    {dialog?.kind === "create" && <NewProjectDialog onClose={closeDialog} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}
+    {dialog?.kind === "create" && <NewProjectDialog onClose={() => closeDialog()} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}
     {switchTarget && <Dialog title={`Unsaved changes in ${bootstrap?.project.name ?? "this project"}`} onClose={() => setDialog(null)} footer={<>
       <CancelFocus label="Stay" onClick={() => setDialog(null)} />
       <button type="button" className="button danger" onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
     </>}><p>{dirtyCount(store, projectId)} unsaved field(s).</p></Dialog>}
     {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project}
-      onClose={closeDialog} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}
+      onClose={() => closeDialog(lifecycleDialog.project.id)} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}
   </div>;
 }

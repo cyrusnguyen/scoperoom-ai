@@ -107,18 +107,40 @@ test.describe("project details", () => {
     await expect(archivedNote).not.toHaveRole("alert");
     expect(await archivedNote.evaluate((element) => getComputedStyle(element).fontSize)).toBe("12px");
 
-    await panel.getByLabel("Role for Casey Collaborator").selectOption("REVIEWER");
+    // A reduction names its effect first; initial focus is the safe Cancel, and both buttons are described by the note.
+    const roleSelect = panel.getByLabel("Role for Casey Collaborator");
+    const changeText = "Changing Casey Collaborator to Reviewer reduces their project access.";
+    const noteCancel = panel.getByRole("group", { name: "Confirm access change" }).getByRole("button", { name: "Cancel" });
     const confirmChange = panel.getByRole("button", { name: "Confirm role change" });
-    await expect(confirmChange).toBeFocused();
-    await expect(confirmChange).toHaveAccessibleDescription("Changing Casey Collaborator to Reviewer reduces their project access.");
-    await page.keyboard.press("Enter");
-    await expect(panel.getByLabel("Role for Casey Collaborator").locator("option[value=EDITOR]")).toHaveCount(0);
-    await panel.getByRole("button", { name: "Remove Casey Collaborator" }).click();
+    await roleSelect.selectOption("REVIEWER");
+    await expect(panel.getByText(changeText)).toBeVisible();
+    await expect(noteCancel).toBeFocused();
+    await expect(noteCancel).toHaveAccessibleDescription(changeText);
+    await expect(confirmChange).toHaveAccessibleDescription(changeText);
+    expect(await panel.locator(".inline-note").evaluate((element) => getComputedStyle(element).fontSize)).toBe("12px");
+    await page.keyboard.press("Enter"); // Enter on the initial focus cancels
+    await expect(confirmChange).toHaveCount(0);
+    await expect(roleSelect).toBeFocused();
+    await expect(roleSelect).toHaveValue("EDITOR");
+    await roleSelect.selectOption("REVIEWER");
+    await confirmChange.click();
+    await expect(roleSelect.locator("option[value=EDITOR]")).toHaveCount(0);
+    await expect(roleSelect).toBeFocused();
+
+    const removeButton = panel.getByRole("button", { name: "Remove Casey Collaborator" });
+    const removeText = /^Removing Casey Collaborator revokes their project access\. They are the designated approver/;
     const confirmRemoval = panel.getByRole("button", { name: "Confirm removal" });
-    await expect(confirmRemoval).toBeFocused();
-    await expect(confirmRemoval).toHaveAccessibleDescription(/^Removing Casey Collaborator revokes their project access\. They are the designated approver/);
+    await removeButton.click();
+    await expect(panel.getByText(removeText)).toBeVisible();
+    await expect(noteCancel).toBeFocused();
+    await expect(noteCancel).toHaveAccessibleDescription(removeText);
+    await expect(confirmRemoval).toHaveAccessibleDescription(removeText);
+    await noteCancel.click();
+    await expect(removeButton).toBeFocused();
+    await removeButton.click();
     await confirmRemoval.click();
     await expect(panel.getByText("Casey Collaborator", { exact: true })).toHaveCount(0);
+    await expect(panel.locator("#details-members")).toBeFocused();
   });
 
   test("a non-owner reads the project and its members, with Leave instead of management controls", async ({ page }) => {
@@ -203,13 +225,14 @@ test.describe("project details", () => {
     let status = { ...baseStatus };
     let savedName = project.name;
     const keys: string[] = [];
+    const member = { profileId: "44444444-4444-4444-8444-444444444444", displayName: "Casey Collaborator", role: "EDITOR", version: 1, designatedApprover: false };
     await mockOwnerLists(page);
     await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { project: { ...project, name: savedName, status: "ACTIVE", role: "OWNER" }, draft } }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
-    await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner] } }));
+    await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner, member] } }));
     await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
       keys.push(route.request().headers()["idempotency-key"]!);
-      if (keys.length === 1) return route.abort("failed");
+      if (keys.length <= 2) return route.abort("failed");
       // Another tab renamed the project in the meantime.
       savedName = "Renamed elsewhere";
       status = { ...status, settingsVersion: status.settingsVersion + 1 };
@@ -227,10 +250,20 @@ test.describe("project details", () => {
     await expect(nameField).toBeDisabled();
     await expect(panel.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
     await expect(panel.getByLabel("Designated approver")).toBeDisabled();
-    await expect(panel.getByRole("button", { name: "Retry change" })).toBeEnabled();
+    // A member change would clear the pending retry's key, so member controls wait too.
+    await expect(panel.getByLabel("Role for Casey Collaborator")).toBeDisabled();
+    await expect(panel.getByRole("button", { name: "Remove Casey Collaborator" })).toBeDisabled();
+    const retryChange = panel.getByRole("button", { name: "Retry change" });
+    await expect(retryChange).toBeEnabled();
+    // Retry reuses the key; still uncertain, so focus comes back to Retry change rather than <body>.
+    await retryChange.click();
+    await expect(retryChange).toBeFocused();
+    expect(keys[1]).toBe(keys[0]);
     await panel.getByRole("button", { name: "Discard change" }).click();
     await expect(nameField).toBeEnabled();
+    await expect(nameField).toBeFocused();
     await expect(nameField).toHaveValue(project.name);
+    await expect(panel.getByLabel("Role for Casey Collaborator")).toBeEnabled();
     await expect(panel.getByRole("button", { name: "Retry change" })).toHaveCount(0);
 
     await nameField.fill("Second attempt");
@@ -238,7 +271,7 @@ test.describe("project details", () => {
     await expect(panel.getByRole("alert")).toHaveText("That change conflicts with current data. Refresh and try again.");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Renamed elsewhere");
     await expect(nameField).toHaveValue("Second attempt");
-    expect(keys).toHaveLength(2);
+    expect(keys).toHaveLength(3);
   });
 
   test("an unsaved edit does not linger as dirty after the project is archived", async ({ page }) => {

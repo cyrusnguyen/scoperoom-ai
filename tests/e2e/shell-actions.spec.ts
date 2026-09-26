@@ -179,6 +179,7 @@ test.describe("shell actions", () => {
     const dialog = page.getByRole("dialog", { name: "Archive Alpha plan?" });
     await expect(dialog.getByRole("alert")).toHaveText("Project access is unavailable. Try again.");
     await dialog.getByRole("button", { name: "Retry" }).click();
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused(); // the Retry button is gone; focus stays in the dialog
     await expect(dialog.getByRole("alert")).toHaveText("This project is already archived.");
     await expect(dialog.getByRole("button", { name: "Retry" })).toHaveCount(0);
     await dialog.getByLabel("Reason").fill("Pilot finished");
@@ -190,6 +191,32 @@ test.describe("shell actions", () => {
     await expect(trigger).toBeFocused();
     await expect.poll(() => listReads).toBeGreaterThan(readsBeforeClose);
     expect(archives).toBe(0);
+  });
+
+  test("closing a lifecycle dialog for the open project re-reads that project", async ({ page }) => {
+    await signIn(page, admin, users, "Actions Test");
+    let archivedElsewhere = false;
+    let bootstrapReads = 0;
+    await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: group([item(ids.alpha, "Alpha plan")]), shared: group(), archived: group(), capacity: capacity(1, 10) } }));
+    await page.route("**/api/invitations", (route) => route.fulfill({ json: noInvites }));
+    await page.route(`**/api/projects/${ids.alpha}/bootstrap`, (route) => {
+      bootstrapReads += 1;
+      return route.fulfill({ json: { project: { id: ids.alpha, name: "Alpha plan", status: archivedElsewhere ? "ARCHIVED" : "ACTIVE", role: "OWNER", ownerId: ids.alpha }, draft: { id: "55555555-5555-4555-8555-555555555555", schemaVersion: 3, documentRevision: 1, layoutRevision: 1, documentJson: {}, layoutJson: {} } } });
+    });
+    // Another tab archived the open project after it loaded here.
+    await page.route(`**/api/projects/${ids.alpha}/status`, (route) => { archivedElsewhere = true; return route.fulfill({ json: status(2, "ARCHIVED") }); });
+    await page.goto(`/app/projects/${ids.alpha}`);
+    await expect(page.getByRole("heading", { level: 1, name: "Alpha plan" })).toBeVisible();
+    await expect(page.getByText("Archived · read-only")).toHaveCount(0);
+    const readsBeforeDialog = bootstrapReads;
+    await sidebar(page).getByRole("button", { name: "Actions for Alpha plan" }).click();
+    await page.getByRole("menuitem", { name: "Archive…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Archive Alpha plan?" });
+    await expect(dialog.getByRole("alert")).toHaveText("This project is already archived.");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByText("Archived · read-only")).toBeVisible();
+    expect(bootstrapReads).toBeGreaterThan(readsBeforeDialog);
   });
 
   test("a session that ends when an archive is confirmed sends the browser to sign-in", async ({ page, context }) => {

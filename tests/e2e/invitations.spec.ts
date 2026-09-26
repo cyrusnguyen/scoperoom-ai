@@ -201,26 +201,67 @@ test.describe("project invitations", () => {
     await expect(panel.getByText(fixture.invitee.email, { exact: true })).toBeVisible();
 
     const keys: string[] = [];
-    let listReads = 0;
-    await page.route(`**/api/projects/${fixture.projectId}/invitations`, async (route) => { if (route.request().method() === "GET") listReads += 1; await route.continue(); });
+    let holdRefresh = false;
+    let releaseRefresh = () => {};
+    const refreshHeld = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    await page.route(`**/api/projects/${fixture.projectId}/invitations`, async (route) => {
+      if (route.request().method() === "GET" && holdRefresh) await refreshHeld;
+      await route.continue();
+    });
     await page.route(`**/api/projects/${fixture.projectId}/invitations/*/revoke`, async (route) => {
       keys.push(route.request().headers()["idempotency-key"]!);
       if (keys.length === 1) return route.abort("failed");
-      if (keys.length === 2) return route.fulfill({ status: 409, json: { error: { code: "CONFLICT", message: "That change conflicts with current data. Refresh and try again.", requestId: "00000000-0000-4000-8000-000000000000", retryable: false } } });
+      if (keys.length === 2) {
+        holdRefresh = true;
+        return route.fulfill({ status: 409, json: { error: { code: "CONFLICT", message: "That change conflicts with current data. Refresh and try again.", requestId: "00000000-0000-4000-8000-000000000000", retryable: false } } });
+      }
       await route.continue();
     });
     await panel.getByRole("button", { name: "Revoke", exact: true }).click();
     await expect(panel.getByRole("alert")).toHaveText("We could not confirm that invitation was revoked. Retry uses the same request.");
-    const readsBeforeConflict = listReads;
     await panel.getByRole("button", { name: "Retry revoke", exact: true }).click();
     await expect(panel.getByRole("alert")).toHaveText("That change conflicts with current data. Refresh and try again.");
+    // The list re-read is held: the row's button stays disabled until it settles.
+    await expect(panel.getByRole("button", { name: "Revoking...", exact: true })).toBeDisabled();
+    holdRefresh = false;
+    releaseRefresh();
     await expect(panel.getByRole("button", { name: "Revoke", exact: true })).toBeEnabled();
-    expect(listReads).toBeGreaterThan(readsBeforeConflict);
     expect(keys[1]).toBe(keys[0]);
     await panel.getByRole("button", { name: "Revoke", exact: true }).click();
     await expect(panel.getByText("Invitation revoked. You can create a replacement invitation.")).toBeVisible();
     expect(keys).toHaveLength(3);
     expect(keys[2]).not.toBe(keys[0]);
+  });
+  test("Revoke and reissue reads Retry after an uncertain revoke and reuses its key", async ({ page }) => {
+    const fixture = await createFixture(page, database, admin, users);
+    await page.goto(`/app/projects/${fixture.projectId}`);
+    await openShare(page);
+    const panel = page.locator("#right-panel");
+    // The first issue commits on the server but its response is lost; the retry replays it without the one-time link.
+    let posts = 0;
+    await page.route(`**/api/projects/${fixture.projectId}/invitations`, async (route) => {
+      if (route.request().method() === "POST" && (posts += 1) === 1) { await route.fetch(); return route.abort("failed"); }
+      await route.continue();
+    });
+    await panel.getByLabel("Verified email").fill(fixture.invitee.email);
+    await panel.getByRole("button", { name: "Create invitation" }).click();
+    await panel.getByRole("button", { name: "Retry invitation" }).click();
+    const reissue = panel.getByRole("button", { name: "Revoke and reissue", exact: true });
+    await expect(reissue).toBeVisible();
+
+    const keys: string[] = [];
+    await page.route(`**/api/projects/${fixture.projectId}/invitations/*/revoke`, async (route) => {
+      keys.push(route.request().headers()["idempotency-key"]!);
+      if (keys.length === 1) return route.abort("failed");
+      await route.continue();
+    });
+    await reissue.click();
+    await expect(panel.getByRole("alert")).toHaveText("We could not confirm that invitation was revoked. Retry uses the same request.");
+    await panel.getByRole("button", { name: "Retry revoke and reissue", exact: true }).click();
+    await expect(panel.getByText("Invitation revoked. You can create a replacement invitation.")).toBeVisible();
+    await expect(panel.getByRole("button", { name: /reissue/ })).toHaveCount(0);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
   });
   test("an expired access session refreshes on an invitation route before acceptance", async ({ page }) => {
     test.setTimeout(60_000);

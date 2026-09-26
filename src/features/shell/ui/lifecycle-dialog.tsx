@@ -37,7 +37,13 @@ export default function LifecycleDialog({ kind, project, onClose, onDone }: { ki
     if (result.data.status !== (kind === "archive" ? "ACTIVE" : "ARCHIVED")) { setError(result.data.status === "ARCHIVED" ? "This project is already archived." : "This project is already active."); return; }
     setVersion(result.data.version);
   }, [project.id, kind]);
-  const retryPreview = () => { setReadFailed(false); setError(""); void preview(); };
+  const retryPreview = () => {
+    // This button unmounts now: keep focus inside the modal on its safe choice.
+    document.getElementById("lifecycle-cancel")?.focus();
+    setReadFailed(false);
+    setError("");
+    void preview();
+  };
 
   useEffect(() => {
     if (!needsVersion) return;
@@ -65,7 +71,7 @@ export default function LifecycleDialog({ kind, project, onClose, onDone }: { ki
 
   const ready = !needsVersion || version !== null;
   return <Dialog title={`${verb} ${project.name}?`} onClose={onClose} footer={<>
-    {kind === "archive" ? <button type="button" className="button quiet" onClick={onClose}>Cancel</button> : <CancelFocus label="Cancel" onClick={onClose} />}
+    {kind === "archive" ? <button id="lifecycle-cancel" type="button" className="button quiet" onClick={onClose}>Cancel</button> : <CancelFocus id="lifecycle-cancel" label="Cancel" onClick={onClose} />}
     <button type="submit" form="lifecycle-form" className={`button ${tone}`} disabled={busy || !ready || (kind === "archive" && !reason.trim())}>{busy ? "Working…" : uncertain ? "Retry" : verb}</button>
   </>}>
     <form id="lifecycle-form" onSubmit={submit}>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type SubmitEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type SubmitEvent } from "react";
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import { MAX_COLLABORATORS, projectMemberRoles, type ProjectMemberRole } from "../contracts/invitation";
 import type { ProjectAccessRole, ProjectBootstrap, ProjectStatusView } from "../contracts/project";
@@ -8,7 +8,8 @@ import { roleLabel } from "./format";
 import ProjectShare from "./project-share";
 
 type Member = { profileId: string; displayName: string; role: ProjectAccessRole; version: number; designatedApprover: boolean };
-type Mutation = { url: string; method?: "PATCH" | "DELETE"; body: Record<string, unknown>; confirmation: string; clears?: string };
+/** `focus` is the id of the control that takes focus once the change settles (the button that started it may be gone). */
+type Mutation = { url: string; method?: "PATCH" | "DELETE"; body: Record<string, unknown>; confirmation: string; clears?: string; focus: string };
 type Confirming = { member: Member; role?: ProjectMemberRole };
 
 const rank: Record<ProjectMemberRole, number> = { VIEWER: 1, REVIEWER: 2, EDITOR: 3 };
@@ -34,6 +35,16 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
   const [busy, setBusy] = useState(false);
   const [retry, setRetry] = useState<{ mutation: Mutation; key: string } | null>(null);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
+  const focusAfter = useRef<string | null>(null);
+
+  useEffect(() => {
+    // After each render: once the pending target is enabled again, focus it. An uncertain result focuses Retry change instead.
+    if (!focusAfter.current || busy) return;
+    const element = document.getElementById(retry ? "details-retry" : focusAfter.current) as HTMLButtonElement | null;
+    if (!element || element.disabled) return;
+    focusAfter.current = null;
+    element.focus();
+  });
 
   const load = useCallback(async (signal?: AbortSignal) => {
     const [nextStatus, nextMembers] = await Promise.all([
@@ -57,6 +68,7 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
   }, [load, project.status]); // an archive or restore reloads the versions this tab writes with
 
   const mutate = async (mutation: Mutation, key = crypto.randomUUID()) => {
+    focusAfter.current = mutation.focus;
     setBusy(true);
     setRetry(null);
     setMessage("");
@@ -89,7 +101,9 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
 
   // An uncertain change may still commit: drop its key and re-read what is saved.
   const discardRetry = () => {
-    if (retry?.mutation.clears) setDraft(retry.mutation.clears, undefined);
+    if (!retry) return;
+    if (retry.mutation.clears) setDraft(retry.mutation.clears, undefined);
+    focusAfter.current = retry.mutation.focus;
     setRetry(null);
     setMessage("");
     setMessageError(false);
@@ -104,18 +118,22 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
 
   const saveName = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (status) void mutate({ url: `/api/projects/${project.id}/settings`, body: { name, expectedSettingsVersion: status.settingsVersion }, confirmation: "Project name updated.", clears: "name" });
+    if (status) void mutate({ url: `/api/projects/${project.id}/settings`, body: { name, expectedSettingsVersion: status.settingsVersion }, confirmation: "Project name updated.", clears: "name", focus: "project-settings-name" });
   };
   const saveApprover = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (status) void mutate({ url: `/api/projects/${project.id}/approval-policy`, body: { designatedApproverId: approver || null, expectedApprovalPolicyVersion: status.approvalPolicyVersion }, confirmation: "Approver updated.", clears: "approver" });
+    if (status) void mutate({ url: `/api/projects/${project.id}/approval-policy`, body: { designatedApproverId: approver || null, expectedApprovalPolicyVersion: status.approvalPolicyVersion }, confirmation: "Approver updated.", clears: "approver", focus: "designated-approver" });
   };
-  const changeRole = (member: Member, role: ProjectMemberRole) => void mutate({ url: `/api/projects/${project.id}/members/${member.profileId}`, body: { role, expectedMemberVersion: member.version }, confirmation: "Member role updated." });
-  const removeMember = (member: Member) => void mutate({ url: `/api/projects/${project.id}/members/${member.profileId}`, method: "DELETE", body: { expectedMemberVersion: member.version }, confirmation: "Member removed." });
+  const changeRole = (member: Member, role: ProjectMemberRole) => void mutate({ url: `/api/projects/${project.id}/members/${member.profileId}`, body: { role, expectedMemberVersion: member.version }, confirmation: "Member role updated.", focus: `role-${member.profileId}` });
+  const removeMember = (member: Member) => void mutate({ url: `/api/projects/${project.id}/members/${member.profileId}`, method: "DELETE", body: { expectedMemberVersion: member.version }, confirmation: "Member removed.", focus: "details-members" });
   // A reduction names its effect before confirmation (UI01); an increase applies directly.
   const pickRole = (member: Member, role: ProjectMemberRole) => {
     if (rank[role] < rank[member.role as ProjectMemberRole]) setConfirming({ member, role });
     else changeRole(member, role);
+  };
+  const cancelConfirm = () => {
+    if (confirming) focusAfter.current = confirming.role ? `role-${confirming.member.profileId}` : `remove-${confirming.member.profileId}`;
+    setConfirming(null);
   };
   const confirm = () => {
     if (!confirming) return;
@@ -145,7 +163,7 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
         <div><dt>Draft</dt><dd>Empty draft · revision {draft.documentRevision}</dd></div>
       </dl>
       {retry && <div className="view-actions">
-        <button type="button" className="button small" disabled={busy} onClick={() => void mutate(retry.mutation, retry.key)}>Retry change</button>
+        <button id="details-retry" type="button" className="button small" disabled={busy} onClick={() => void mutate(retry.mutation, retry.key)}>Retry change</button>
         <button type="button" className="button quiet small" disabled={busy} onClick={discardRetry}>Discard change</button>
       </div>}
       <p className="muted" role={messageError ? "alert" : "status"} aria-live="polite">{message}</p>
@@ -156,23 +174,23 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
         <p className="muted" role={loadError ? "alert" : undefined}>{loadError || "Loading details…"}</p>
         {loadError && <button type="button" className="button small" onClick={() => void load()}>Retry</button>}
       </> : <>
-        <h3 id="details-members">Members <span className="muted">{members.length} of {MAX_COLLABORATORS}</span></h3>
+        <h3 id="details-members" tabIndex={-1}>Members <span className="muted">{members.length} of {MAX_COLLABORATORS}</span></h3>
         {owner && !active && <p className="muted">Settings and role increases are unavailable; the owner can reduce or remove member access.</p>}
         <ul className="item-list">{members.map((member) => <li key={member.profileId} className="member-row">
           <div><strong>{member.displayName}</strong><small>{member.role === "OWNER" ? "Owner" : `${roleLabel(member.role)}${member.designatedApprover ? " · Designated approver" : ""}`}</small></div>
           {owner && member.role !== "OWNER" && <>
             <label className="sr-only" htmlFor={`role-${member.profileId}`}>{`Role for ${member.displayName}`}</label>
-            <select id={`role-${member.profileId}`} value={member.role} disabled={busy} onChange={(event) => pickRole(member, event.target.value as ProjectMemberRole)}>
+            <select id={`role-${member.profileId}`} value={member.role} disabled={busy || Boolean(retry)} onChange={(event) => pickRole(member, event.target.value as ProjectMemberRole)}>
               {projectMemberRoles.filter((role) => active || rank[role] <= rank[member.role as ProjectMemberRole]).map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
             </select>
-            <button type="button" className="button quiet small" disabled={busy} aria-label={`Remove ${member.displayName}`} onClick={() => setConfirming({ member })}>Remove</button>
+            <button id={`remove-${member.profileId}`} type="button" className="button quiet small" disabled={busy || Boolean(retry)} aria-label={`Remove ${member.displayName}`} onClick={() => setConfirming({ member })}>Remove</button>
           </>}
         </li>)}</ul>
         {confirming && <div key={`${confirming.member.profileId}-${confirming.role ?? "remove"}`} className="inline-note" role="group" aria-label="Confirm access change">
           <p id="access-change-note">{confirmText}</p>
           <div className="view-actions">
-            <button type="button" className="button danger small" disabled={busy} onClick={confirm} autoFocus aria-describedby="access-change-note">{confirming.role ? "Confirm role change" : "Confirm removal"}</button>
-            <button type="button" className="button quiet small" onClick={() => setConfirming(null)}>Cancel</button>
+            <button type="button" className="button danger small" disabled={busy} onClick={confirm} aria-describedby="access-change-note">{confirming.role ? "Confirm role change" : "Confirm removal"}</button>
+            <button type="button" className="button quiet small" onClick={cancelConfirm} autoFocus aria-describedby="access-change-note">Cancel</button>
           </div>
         </div>}
       </>}
