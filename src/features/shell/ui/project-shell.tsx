@@ -166,7 +166,11 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (kind === "leave") {
       setStore((previous) => dropProject(previous, target.id));
       if (target.id === projectId) navigate(null);
-    } else if (target.id === projectId) void loadProject(target.id);
+    } else {
+      // An archived project hides its name/invite/approver fields, so a draft left behind would stay dirty forever.
+      if (kind === "archive") setStore((previous) => discardDrafts(previous, target.id));
+      if (target.id === projectId) void loadProject(target.id);
+    }
     await loadLists();
   }
   function projectChanged() {

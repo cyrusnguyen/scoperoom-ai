@@ -18,6 +18,7 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
   const [issuing, setIssuing] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageError, setMessageError] = useState(false);
   const [issued, setIssued] = useState<Issue | null>(null);
   const [invitations, setInvitations] = useState<Invitation[] | null>(null);
   const [refreshFailed, setRefreshFailed] = useState(false);
@@ -27,10 +28,10 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
     const result = await apiRead<{ invitations: Invitation[] }>(`/api/projects/${projectId}/invitations`, signal);
     if (signal?.aborted) return false;
     if (sessionEnded(result)) return false;
-    if (!result.ok) { setInvitations(null); setRefreshFailed(true); setMessage(result.message); return false; }
+    if (!result.ok) { setInvitations(null); setRefreshFailed(true); setMessage(result.message); setMessageError(true); return false; }
     setInvitations(result.data.invitations);
     setRefreshFailed(false);
-    if (clearMessage) setMessage("");
+    if (clearMessage) { setMessage(""); setMessageError(false); }
     return true;
   }, [projectId]);
 
@@ -47,12 +48,14 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
     setIssuing(true);
     setUncertain(false);
     setMessage("");
+    setMessageError(false);
     const result = await apiMutate<Issue>(`/api/projects/${projectId}/invitations`, requestKey, { verifiedEmail: email, role: inviteRole });
     setIssuing(false);
     if (sessionEnded(result)) return;
     if (!result.ok) {
       setUncertain(result.uncertain);
       setMessage(result.status === 0 ? "We could not confirm invitation creation. Retry uses the same invitation request." : result.message);
+      setMessageError(true);
       if (!result.uncertain) setKey("");
       return;
     }
@@ -63,6 +66,7 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
     const confirmation = next.linkUnavailable ? "The invitation was already created, but its one-time link is no longer available." : next.replayed ? "This invitation was already created." : "Invitation created.";
     // Confirm with the link, so a Copy result reported during the list refresh is not overwritten.
     setMessage(confirmation);
+    setMessageError(false);
     if (!await refresh(false)) setMessage((current) => `${confirmation} ${current}`);
   };
 
@@ -79,14 +83,16 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
   const revoke = async (invitation: Invitation) => {
     setRevoking(invitation.id);
     setMessage("");
+    setMessageError(false);
     const result = await apiMutate(`/api/projects/${projectId}/invitations/${invitation.id}/revoke`, crypto.randomUUID(), { expectedVersion: invitation.version });
     setRevoking(null);
     if (sessionEnded(result)) return;
-    if (!result.ok) { setMessage(result.status === 0 ? "We could not confirm that invitation was revoked. Refresh before trying again." : result.message); return; }
+    if (!result.ok) { setMessage(result.status === 0 ? "We could not confirm that invitation was revoked. Refresh before trying again." : result.message); setMessageError(true); return; }
     setIssued((current) => current?.id === invitation.id ? null : current);
     const confirmation = "Invitation revoked. You can create a replacement invitation.";
     const refreshed = await refresh(false);
     setMessage((current) => refreshed ? confirmation : `${confirmation} ${current}`);
+    setMessageError(!refreshed);
   };
 
   const pending = invitations?.filter((invitation) => invitation.status === "PENDING") ?? [];
@@ -119,7 +125,7 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
       <p>Revoke this invitation before creating a replacement. The original link cannot be recovered.</p>
       <div className="view-actions"><button type="button" className="button small" onClick={() => void revoke(issued)} disabled={revoking === issued.id}>Revoke and reissue</button></div>
     </div>}
-    <p className="muted" role="status" aria-live="polite">{message}</p>
+    <p className="muted" role={messageError ? "alert" : "status"} aria-live="polite">{message}</p>
     <div className="section-heading">
       <h4>Pending invitations</h4>
       <button type="button" className="button quiet small" onClick={() => void refresh()} disabled={Boolean(revoking)}>Refresh</button>

@@ -30,6 +30,7 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
   const [members, setMembers] = useState<Member[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [message, setMessage] = useState("");
+  const [messageError, setMessageError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [retry, setRetry] = useState<{ mutation: Mutation; key: string } | null>(null);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
@@ -59,17 +60,29 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
     setBusy(true);
     setRetry(null);
     setMessage("");
+    setMessageError(false);
     const result = await apiMutate(mutation.url, key, mutation.body, mutation.method ?? "PATCH");
-    setBusy(false);
-    if (sessionEnded(result)) return;
+    if (sessionEnded(result)) { setBusy(false); return; }
     if (!result.ok) {
-      if (result.uncertain) { setRetry({ mutation, key }); setMessage("We could not confirm that change. Retry uses the same request."); }
-      else { setMessage(result.message); if (result.code === "CONFLICT") void load(); }
+      if (result.uncertain) {
+        setBusy(false);
+        setRetry({ mutation, key });
+        setMessage("We could not confirm that change. Retry uses the same request.");
+        setMessageError(true);
+        return;
+      }
+      setMessage(result.message);
+      setMessageError(true);
+      // A conflict re-reads the versions before the button re-enables, so a fast retry can't reuse a stale one.
+      if (result.code === "CONFLICT") await load();
+      setBusy(false);
       return;
     }
+    setBusy(false);
     if (mutation.clears) setDraft(mutation.clears, undefined);
     const refreshed = await load();
     setMessage(refreshed ? mutation.confirmation : `${mutation.confirmation} Details could not be refreshed.`);
+    setMessageError(!refreshed);
     onChanged();
   };
 
@@ -121,12 +134,12 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
         <div><dt>Draft</dt><dd>Empty draft · revision {draft.documentRevision}</dd></div>
       </dl>
       {retry && <button type="button" className="button small" disabled={busy} onClick={() => void mutate(retry.mutation, retry.key)}>Retry change</button>}
-      <p className="muted" role="status" aria-live="polite">{message}</p>
+      <p className="muted" role={messageError ? "alert" : "status"} aria-live="polite">{message}</p>
     </section>
     <section className="detail-section" aria-labelledby="details-members">
       {!members ? <>
         <h3 id="details-members">Members</h3>
-        <p className="muted">{loadError || "Loading details…"}</p>
+        <p className="muted" role={loadError ? "alert" : undefined}>{loadError || "Loading details…"}</p>
         {loadError && <button type="button" className="button small" onClick={() => void load()}>Retry</button>}
       </> : <>
         <h3 id="details-members">Members <span className="muted">{members.length} of {MAX_COLLABORATORS}</span></h3>

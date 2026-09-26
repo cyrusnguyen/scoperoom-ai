@@ -133,10 +133,15 @@ test.describe("project details", () => {
   });
 
   test("unsaved Details edits survive panel close, tab changes and history, and a sidebar switch asks first", async ({ page }) => {
+    let status = { ...baseStatus };
     await mockOwnerLists(page);
     await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { project: { ...project, status: "ACTIVE", role: "OWNER" }, draft } }));
-    await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: baseStatus }));
-    await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: baseStatus, members: [owner] } }));
+    await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
+    await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner] } }));
+    await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
+      status = { ...status, settingsVersion: status.settingsVersion + 1 };
+      await route.fulfill({ json: { ...status, replayed: false } });
+    });
     const nav = page.locator("#projects-nav");
     const panel = page.locator("#right-panel");
     const nameField = panel.getByLabel("Project name");
@@ -145,6 +150,13 @@ test.describe("project details", () => {
     await nav.getByRole("button", { name: project.name, exact: true }).click();
     await page.getByRole("button", { name: "Inspect" }).click();
     expect(await warnsBeforeUnload(page)).toBe(false);
+    await nameField.fill("Renamed once");
+    expect(await warnsBeforeUnload(page)).toBe(true);
+    // A successful save clears the draft: the leave-page warning stops (Review Focus 2).
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(panel.getByText("Project name updated.")).toBeVisible();
+    expect(await warnsBeforeUnload(page)).toBe(false);
+
     await nameField.fill("Renamed project");
     expect(await warnsBeforeUnload(page)).toBe(true);
     await panel.getByRole("button", { name: "Close panel" }).click();
@@ -174,5 +186,37 @@ test.describe("project details", () => {
     expect(await warnsBeforeUnload(page)).toBe(false);
     await page.goBack();
     await expect(nameField).toHaveValue(project.name);
+  });
+
+  test("an unsaved edit does not linger as dirty after the project is archived", async ({ page }) => {
+    let status = { ...baseStatus };
+    await mockOwnerLists(page);
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { project: { ...project, status: status.status, role: "OWNER" }, draft } }));
+    await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
+    await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner] } }));
+    await page.route(`**/api/projects/${project.id}/archive`, async (route) => {
+      status = { ...status, status: "ARCHIVED", version: status.version + 1 };
+      await route.fulfill({ json: { ...status, replayed: false } });
+    });
+    const nav = page.locator("#projects-nav");
+    const panel = page.locator("#right-panel");
+
+    await page.goto(`/app/projects/${project.id}`);
+    await page.getByRole("button", { name: "Inspect" }).click();
+    await panel.getByLabel("Project name").fill("Renamed before archive");
+    expect(await warnsBeforeUnload(page)).toBe(true);
+
+    await panel.getByRole("button", { name: "Archive project…" }).click();
+    const archiveDialog = page.getByRole("dialog", { name: `Archive ${project.name}?` });
+    await archiveDialog.getByLabel("Reason").fill("Finished pilot work");
+    await archiveDialog.getByRole("button", { name: "Archive" }).click();
+    await expect(archiveDialog).toHaveCount(0);
+    await expect(page.getByText("Archived · read-only")).toBeVisible();
+
+    // The renamed field is now hidden (archived projects are read-only), so its draft must not stay dirty.
+    await nav.getByRole("button", { name: other.name, exact: true }).click();
+    await expect(page.getByRole("dialog", { name: `Unsaved changes in ${project.name}` })).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`/app/projects/${other.id}$`));
+    expect(await warnsBeforeUnload(page)).toBe(false);
   });
 });
