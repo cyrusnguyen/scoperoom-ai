@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { flushSync } from "react-dom";
 import { apiRead, sessionEnded } from "@/client/api";
 import type { MyInvitation } from "@/features/projects/contracts/invitation";
 import type { CreatedProject, ProjectBootstrap, ProjectLists } from "@/features/projects/contracts/project";
@@ -143,7 +144,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   function navigate(id: string | null) {
     if (dock.left === "overlay") setPrefs((previous) => ({ ...previous, leftOpen: false }));
     if (projectId && dock.right === "overlay") setStore((previous) => setRightOpen(previous, projectId, false));
-    setFocusTarget(id);
+    setFocusTarget(id ?? ""); // "" focuses the "No project open" heading
     // A pending transition hides the previous project's controls (e.g. Inspect) immediately: the target
     // route re-runs a server auth check (force-dynamic), so useParams only catches up once that resolves.
     startNavigation(() => router.push(id ? `/app/projects/${id}` : "/app"));
@@ -161,17 +162,31 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     navigate(project.id);
   }
   async function finishLifecycle(kind: LifecycleKind, target: Target) {
-    setDialog(null);
+    // Close now, not at the next render, so the dialog has handed focus back before it moves on below.
+    flushSync(() => setDialog(null));
     notify(`${doneVerb[kind]} ${target.name}.`);
+    const leavingOpen = kind === "leave" && target.id === projectId;
     if (kind === "leave") {
       setStore((previous) => dropProject(previous, target.id));
-      if (target.id === projectId) navigate(null);
+      if (leavingOpen) navigate(null);
     } else {
       // An archived project hides its name/invite/approver fields, so a draft left behind would stay dirty forever.
       if (kind === "archive") setStore((previous) => discardDrafts(previous, target.id));
       if (target.id === projectId) void loadProject(target.id);
     }
+    // Every lifecycle change removes its opener (the row, "Archive project…", the banner's Restore), so focus a stable
+    // place instead of <body>: an open overlay's selected tab, else the editor heading. Leaving the open project
+    // focuses "No project open" once it renders.
+    if (!leavingOpen) {
+      const overlay = document.querySelector<HTMLElement>('[aria-modal="true"]:not([hidden])');
+      (overlay ? overlay.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') : document.querySelector<HTMLElement>("#editor-main h1"))?.focus();
+    }
     await loadLists();
+  }
+  function closeDialog() {
+    // A cancelled lifecycle change (e.g. after a CONFLICT) or an uncertain create may still have changed the lists.
+    setDialog(null);
+    void loadLists();
   }
   function projectChanged() {
     if (projectId) void loadProject(projectId);
@@ -184,7 +199,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
 
   const editor = navigating ? <div className="empty-state" aria-busy="true"><p>Loading project…</p></div>
     : !projectId
-    ? <NoProjectOpen sidebarClosed={sidebarClosed} capacity={capacity} hasInvites={Boolean(invites?.items.length)} onShowProjects={() => showProjects()} onCreate={() => setDialog({ kind: "create" })} onViewInvites={() => showProjects("invites")} />
+    ? <NoProjectOpen autoFocus={focusTarget === ""} sidebarClosed={sidebarClosed} capacity={capacity} hasInvites={Boolean(invites?.items.length)} onShowProjects={() => showProjects()} onCreate={() => setDialog({ kind: "create" })} onViewInvites={() => showProjects("invites")} />
     : !current ? <div className="empty-state" aria-busy="true"><p>Loading project…</p></div>
     : bootstrap ? <ProjectEditor key={projectId} bootstrap={bootstrap} autoFocus={focusTarget === projectId} sidebarClosed={sidebarClosed} onShowProjects={() => showProjects()}
         panelOpen={dock.right !== "closed"} onTogglePanel={() => setPanel(dock.right === "closed")}
@@ -220,12 +235,12 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
       <form action={signOut}><button type="submit">Sign out</button></form>
     </footer>
     {children}
-    {dialog?.kind === "create" && <NewProjectDialog onClose={() => setDialog(null)} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}
+    {dialog?.kind === "create" && <NewProjectDialog onClose={closeDialog} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}
     {switchTarget && <Dialog title={`Unsaved changes in ${bootstrap?.project.name ?? "this project"}`} onClose={() => setDialog(null)} footer={<>
       <CancelFocus label="Stay" onClick={() => setDialog(null)} />
       <button type="button" className="button danger" onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
     </>}><p>{dirtyCount(store, projectId)} unsaved field(s).</p></Dialog>}
     {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project}
-      onClose={() => setDialog(null)} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}
+      onClose={closeDialog} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}
   </div>;
 }

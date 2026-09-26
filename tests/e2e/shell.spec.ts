@@ -79,7 +79,7 @@ test.describe("project shell", () => {
     await expect(nav.getByText("Priya Nair · Editor")).toBeVisible();
     await expect(nav.getByText("Showing the first 100. Use Filter to narrow.")).toBeVisible();
     await page.keyboard.press("End");
-    await expect(nav.getByRole("tab", { name: "Invitations, 0 pending" })).toHaveAttribute("aria-selected", "true");
+    await expect(nav.getByRole("tab", { name: "Invites, 0 pending" })).toHaveAttribute("aria-selected", "true");
     await expect(nav.getByText("No pending invitations.")).toBeVisible();
     await page.keyboard.press("Home");
     await expect(owned).toHaveAttribute("aria-selected", "true");
@@ -97,8 +97,9 @@ test.describe("project shell", () => {
     await expect(nav.getByText("Creating projects isn’t enabled for this account.")).toBeVisible();
     await expect(page.getByRole("button", { name: "New project" })).toHaveCount(0);
     await expect(page.getByRole("heading", { level: 1, name: "No project open" })).toBeVisible();
+    await expect(page.getByText("Choose a project.", { exact: true })).toBeVisible(); // no creation invite without entitlement
     await page.getByRole("button", { name: "View invitations" }).click();
-    await expect(nav.getByRole("tab", { name: "Invitations, 1 pending" })).toHaveAttribute("aria-selected", "true");
+    await expect(nav.getByRole("tab", { name: "Invites, 1 pending" })).toHaveAttribute("aria-selected", "true");
     await expect(nav.getByText(/From Priya Nair · Editor · Expires/)).toBeVisible();
 
     lists = { ...defaultLists, capacity: capacity(10, 10) };
@@ -106,6 +107,7 @@ test.describe("project shell", () => {
     await expect(nav.getByRole("button", { name: "New project" })).toBeDisabled();
     await expect(nav.getByText("10 of 10 active · archive one to add another")).toBeVisible();
     await expect(page.getByRole("main").getByRole("button", { name: "New project" })).toHaveCount(0);
+    await expect(page.getByText("Choose a project or create one.")).toBeVisible();
   });
 
   test("docking keeps the editor at least min(W, 560) wide and closed panels reserve no width", async ({ page }) => {
@@ -238,6 +240,7 @@ test.describe("project shell", () => {
     await page.getByRole("button", { name: "Show projects" }).click();
     await expect(sidebar(page).getByRole("button", { name: longName, exact: true })).toBeVisible();
     expect(await pageFits(page)).toBe(true);
+    expect((await sidebar(page).getByLabel("Filter owned projects").boundingBox())!.height).toBeGreaterThanOrEqual(44);
   });
 
   test("a delayed manual reload of a closed project never clobbers the next open one", async ({ page }) => {

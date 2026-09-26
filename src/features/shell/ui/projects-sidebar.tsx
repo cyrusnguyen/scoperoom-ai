@@ -19,7 +19,7 @@ const tabCopy: Record<ListTab, { label: string; name: string; empty: string }> =
   owned: { label: "Owned", name: "Owned projects", empty: "No projects yet." },
   shared: { label: "Shared", name: "Shared with me", empty: "Nothing shared with you." },
   archived: { label: "Archived", name: "Archived projects", empty: "No archived projects." },
-  invites: { label: "Invites", name: "Invitations", empty: "No pending invitations." },
+  invites: { label: "Invites", name: "Invites", empty: "No pending invitations." },
 };
 
 export default function ProjectsSidebar({ lists, invites, state, onRetry, tab, onTabChange, openProjectId, onOpenProject, hidden, overlay, onHide, onNewProject, onAction, onInviteSettled }: {
@@ -46,7 +46,7 @@ export default function ProjectsSidebar({ lists, invites, state, onRetry, tab, o
     </header>
     <div className="projects-tabs" role="tablist" aria-label="Project lists">
       {LIST_TABS.map((id, index) => <button key={id} type="button" role="tab" id={`tab-${id}`} aria-controls="projects-list" aria-selected={tab === id} tabIndex={tab === id ? 0 : -1} data-active={tab === id}
-        aria-label={id === "invites" ? `Invitations, ${pending} pending` : tabCopy[id].name} onClick={() => changeTab(id)} onKeyDown={(event) => tabListKeyDown(event, LIST_TABS, index, changeTab)}>
+        aria-label={id === "invites" ? `Invites, ${pending} pending` : tabCopy[id].name} onClick={() => changeTab(id)} onKeyDown={(event) => tabListKeyDown(event, LIST_TABS, index, changeTab)}>
         {tabCopy[id].label}{id === "invites" && pending > 0 && <span className="badge" aria-hidden="true">{pending}</span>}
       </button>)}
     </div>

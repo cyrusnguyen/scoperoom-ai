@@ -69,6 +69,8 @@ test.describe("shell actions", () => {
     await expect(archive).toHaveCount(0);
     await expect(notice(page)).toHaveText("Archived Alpha plan.");
     await expect(nav.getByRole("button", { name: "Alpha plan", exact: true })).toHaveCount(0);
+    // The row that opened the dialog is gone, so focus lands on the stable heading rather than <body>.
+    await expect(page.getByRole("heading", { level: 1, name: "No project open" })).toBeFocused();
 
     await nav.getByRole("tab", { name: "Archived projects" }).click();
     maxOwned = 1;
@@ -89,6 +91,31 @@ test.describe("shell actions", () => {
     await expect(notice(page)).toHaveText("Restored Alpha plan.");
     await nav.getByRole("tab", { name: "Owned projects" }).click();
     await expect(nav.getByRole("button", { name: "Alpha plan", exact: true })).toBeVisible();
+  });
+
+  test("archiving from the sidebar overlay at 390 px keeps focus inside the overlay", async ({ page }) => {
+    await signIn(page, admin, users, "Actions Test");
+    await page.setViewportSize({ width: 390, height: 844 });
+    let archived = false;
+    await page.route("**/api/projects", (route) => route.fulfill({ json: archived
+      ? { owned: group([item(ids.beta, "Beta notes")]), shared: group(), archived: group([item(ids.alpha, "Alpha plan", "ARCHIVED")]), capacity: capacity(1, 10) }
+      : { owned: group([item(ids.alpha, "Alpha plan"), item(ids.beta, "Beta notes")]), shared: group(), archived: group(), capacity: capacity(2, 10) } }));
+    await page.route("**/api/invitations", (route) => route.fulfill({ json: noInvites }));
+    await page.route(`**/api/projects/${ids.alpha}/status`, (route) => route.fulfill({ json: status(1) }));
+    await page.route(`**/api/projects/${ids.alpha}/archive`, (route) => { archived = true; return route.fulfill({ json: { ...status(2, "ARCHIVED"), replayed: false } }); });
+    await page.goto("/app");
+    await page.getByRole("button", { name: "Show projects" }).click();
+    const nav = sidebar(page);
+    await expect(nav).toHaveAttribute("aria-modal", "true");
+    await nav.getByRole("button", { name: "Actions for Alpha plan" }).click();
+    await nav.getByRole("menuitem", { name: "Archive…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Archive Alpha plan?" });
+    await dialog.getByLabel("Reason").fill("Pilot finished");
+    await dialog.getByRole("button", { name: "Archive" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(nav.getByRole("button", { name: "Alpha plan", exact: true })).toHaveCount(0);
+    // The heading behind the scrim is not reachable; the overlay's selected tab is.
+    await expect(nav.getByRole("tab", { name: "Owned projects" })).toBeFocused();
   });
 
   test("a session that ends while the archive dialog reads its preview sends the browser to sign-in", async ({ page, context }) => {
@@ -133,6 +160,54 @@ test.describe("shell actions", () => {
     expect(sent).toEqual([1, 4]);
   });
 
+  test("an archive whose project already changed says so, sends nothing, and Cancel re-reads the lists and returns focus", async ({ page }) => {
+    await signIn(page, admin, users, "Actions Test");
+    let listReads = 0;
+    let statusReads = 0;
+    let archives = 0;
+    await page.route("**/api/projects", (route) => { listReads += 1; return route.fulfill({ json: { owned: group([item(ids.alpha, "Alpha plan")]), shared: group(), archived: group(), capacity: capacity(1, 10) } }); });
+    await page.route("**/api/invitations", (route) => route.fulfill({ json: noInvites }));
+    // The first read fails; the retried read finds the project already archived (another tab, or a lost earlier response).
+    await page.route(`**/api/projects/${ids.alpha}/status`, (route) => (statusReads += 1) === 1
+      ? route.fulfill({ status: 503, json: envelope("UNAVAILABLE", "Project access is unavailable. Try again.") })
+      : route.fulfill({ json: status(2, "ARCHIVED") }));
+    await page.route(`**/api/projects/${ids.alpha}/archive`, (route) => { archives += 1; return route.fulfill({ status: 409, json: envelope("CONFLICT", "That change conflicts with current data. Refresh and try again.") }); });
+    await page.goto("/app");
+    const trigger = sidebar(page).getByRole("button", { name: "Actions for Alpha plan" });
+    await trigger.click();
+    await page.getByRole("menuitem", { name: "Archive…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Archive Alpha plan?" });
+    await expect(dialog.getByRole("alert")).toHaveText("Project access is unavailable. Try again.");
+    await dialog.getByRole("button", { name: "Retry" }).click();
+    await expect(dialog.getByRole("alert")).toHaveText("This project is already archived.");
+    await expect(dialog.getByRole("button", { name: "Retry" })).toHaveCount(0);
+    await dialog.getByLabel("Reason").fill("Pilot finished");
+    await expect(dialog.getByRole("button", { name: "Archive" })).toBeDisabled();
+    await dialog.getByLabel("Reason").press("Enter");
+    const readsBeforeClose = listReads;
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await expect.poll(() => listReads).toBeGreaterThan(readsBeforeClose);
+    expect(archives).toBe(0);
+  });
+
+  test("a session that ends when an archive is confirmed sends the browser to sign-in", async ({ page, context }) => {
+    await signIn(page, admin, users, "Actions Test");
+    await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: group([item(ids.alpha, "Alpha plan")]), shared: group(), archived: group(), capacity: capacity(1, 10) } }));
+    await page.route("**/api/invitations", (route) => route.fulfill({ json: noInvites }));
+    await page.route(`**/api/projects/${ids.alpha}/status`, (route) => route.fulfill({ json: status(1) }));
+    await page.route(`**/api/projects/${ids.alpha}/archive`, (route) => route.fulfill({ status: 401, json: envelope("UNAUTHENTICATED", "Sign in to continue.") }));
+    await page.goto("/app");
+    await sidebar(page).getByRole("button", { name: "Actions for Alpha plan" }).click();
+    await page.getByRole("menuitem", { name: "Archive…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Archive Alpha plan?" });
+    await dialog.getByLabel("Reason").fill("Pilot finished");
+    await context.clearCookies(); // otherwise a signed-in /login sends the browser straight back to /app
+    await dialog.getByRole("button", { name: "Archive" }).click();
+    await expect(page).toHaveURL(/\/login$/);
+  });
+
   test("accepting an invitation reports a full project inline and drops one that is gone", async ({ page }) => {
     await signIn(page, admin, users, "Actions Test");
     const full = { id: "66666666-6666-4666-8666-666666666666", projectName: "Delta field app", inviterName: "Mei Tan", role: "VIEWER", expiresAt: new Date(Date.now() + 20 * 3_600_000).toISOString() };
@@ -148,14 +223,14 @@ test.describe("shell actions", () => {
     });
     await page.goto("/app");
     const nav = sidebar(page);
-    await nav.getByRole("tab", { name: "Invitations, 2 pending" }).click();
+    await nav.getByRole("tab", { name: "Invites, 2 pending" }).click();
     await expect(nav.getByText("Expires today")).toBeVisible();
     await nav.getByRole("button", { name: "Accept Delta field app" }).click();
     await expect(nav.getByRole("alert")).toHaveText("This project is full (10 collaborators including the owner).");
     await nav.getByRole("button", { name: "Accept Old kiosk" }).click();
     await expect(notice(page)).toHaveText("This invitation is no longer available.");
     await expect(nav.getByText("Old kiosk")).toHaveCount(0);
-    await expect(nav.getByRole("tab", { name: "Invitations, 1 pending" })).toHaveAttribute("aria-selected", "true");
+    await expect(nav.getByRole("tab", { name: "Invites, 1 pending" })).toHaveAttribute("aria-selected", "true");
     await expect(page).toHaveURL(/\/app$/);
   });
 
@@ -173,11 +248,11 @@ test.describe("shell actions", () => {
 
       await memberPage.reload();
       const nav = sidebar(memberPage);
-      await nav.getByRole("tab", { name: "Invitations, 1 pending" }).click();
+      await nav.getByRole("tab", { name: "Invites, 1 pending" }).click();
       await expect(nav.getByText(/From Shell Owner · Reviewer · Expires/)).toBeVisible();
       await nav.getByRole("button", { name: "Accept Shared shell project" }).click();
       await expect(notice(memberPage)).toHaveText("Joined Shared shell project as Reviewer.");
-      await expect(nav.getByRole("tab", { name: "Invitations, 0 pending" })).toHaveAttribute("aria-selected", "true");
+      await expect(nav.getByRole("tab", { name: "Invites, 0 pending" })).toHaveAttribute("aria-selected", "true");
       await expect(memberPage).toHaveURL(/\/app$/);
       await nav.getByRole("tab", { name: "Shared with me" }).click();
       await nav.getByRole("button", { name: /^Shared shell project/ }).click();
@@ -198,7 +273,7 @@ test.describe("shell actions", () => {
       await dialog.getByRole("button", { name: "Leave", exact: true }).click();
       await expect(notice(memberPage)).toHaveText("Left Shared shell project.");
       await expect(memberPage).toHaveURL(/\/app$/);
-      await expect(memberPage.getByRole("heading", { level: 1, name: "No project open" })).toBeVisible();
+      await expect(memberPage.getByRole("heading", { level: 1, name: "No project open" })).toBeFocused();
       await expect(nav.getByText("No archived projects.")).toBeVisible();
       expect((await memberPage.request.get(`/api/projects/${projectId}/bootstrap`)).status()).toBe(404);
     } finally {

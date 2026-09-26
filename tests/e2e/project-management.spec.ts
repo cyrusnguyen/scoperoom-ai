@@ -98,16 +98,26 @@ test.describe("project details", () => {
     await dialog.getByRole("button", { name: "Archive" }).click();
     await expect(dialog).toHaveCount(0);
     await expect(page.getByText("Archived · read-only")).toBeVisible();
+    // "Archive project…" is gone, so focus lands on the editor heading rather than <body>.
+    await expect(page.getByRole("heading", { level: 1, name: project.name })).toBeFocused();
     await expect(page.getByRole("button", { name: "Restore…" })).toBeEnabled();
     await expect(panel.getByRole("button", { name: "Save approver" })).toHaveCount(0);
+    const archivedNote = panel.getByText("Settings and role increases are unavailable; the owner can reduce or remove member access.");
+    await expect(archivedNote).toBeVisible();
+    await expect(archivedNote).not.toHaveRole("alert");
+    expect(await archivedNote.evaluate((element) => getComputedStyle(element).fontSize)).toBe("12px");
 
     await panel.getByLabel("Role for Casey Collaborator").selectOption("REVIEWER");
-    await expect(panel.getByText("Changing Casey Collaborator to Reviewer reduces their project access.")).toBeVisible();
-    await panel.getByRole("button", { name: "Confirm role change" }).click();
+    const confirmChange = panel.getByRole("button", { name: "Confirm role change" });
+    await expect(confirmChange).toBeFocused();
+    await expect(confirmChange).toHaveAccessibleDescription("Changing Casey Collaborator to Reviewer reduces their project access.");
+    await page.keyboard.press("Enter");
     await expect(panel.getByLabel("Role for Casey Collaborator").locator("option[value=EDITOR]")).toHaveCount(0);
     await panel.getByRole("button", { name: "Remove Casey Collaborator" }).click();
-    await expect(panel.getByText(/Removing Casey Collaborator revokes their project access\. They are the designated approver/)).toBeVisible();
-    await panel.getByRole("button", { name: "Confirm removal" }).click();
+    const confirmRemoval = panel.getByRole("button", { name: "Confirm removal" });
+    await expect(confirmRemoval).toBeFocused();
+    await expect(confirmRemoval).toHaveAccessibleDescription(/^Removing Casey Collaborator revokes their project access\. They are the designated approver/);
+    await confirmRemoval.click();
     await expect(panel.getByText("Casey Collaborator", { exact: true })).toHaveCount(0);
   });
 
@@ -177,6 +187,7 @@ test.describe("project details", () => {
     await expect(guard.getByRole("button", { name: "Stay" })).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(guard).toHaveCount(0);
+    await expect(nav.getByRole("button", { name: other.name, exact: true })).toBeFocused(); // closing returns focus to the opener
     await expect(page).toHaveURL(new RegExp(`/app/projects/${project.id}$`));
     await expect(nameField).toHaveValue("Renamed project");
 
@@ -186,6 +197,48 @@ test.describe("project details", () => {
     expect(await warnsBeforeUnload(page)).toBe(false);
     await page.goBack();
     await expect(nameField).toHaveValue(project.name);
+  });
+
+  test("an uncertain Details save locks the forms until Retry or Discard, and a conflict re-reads the saved name", async ({ page }) => {
+    let status = { ...baseStatus };
+    let savedName = project.name;
+    const keys: string[] = [];
+    await mockOwnerLists(page);
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { project: { ...project, name: savedName, status: "ACTIVE", role: "OWNER" }, draft } }));
+    await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
+    await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner] } }));
+    await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
+      keys.push(route.request().headers()["idempotency-key"]!);
+      if (keys.length === 1) return route.abort("failed");
+      // Another tab renamed the project in the meantime.
+      savedName = "Renamed elsewhere";
+      status = { ...status, settingsVersion: status.settingsVersion + 1 };
+      await route.fulfill({ status: 409, json: { error: { code: "CONFLICT", message: "That change conflicts with current data. Refresh and try again.", requestId: "00000000-0000-4000-8000-000000000000", retryable: false } } });
+    });
+    const panel = page.locator("#right-panel");
+    const nameField = panel.getByLabel("Project name");
+
+    await page.goto(`/app/projects/${project.id}`);
+    await page.getByRole("button", { name: "Inspect" }).click();
+    await nameField.fill("First attempt");
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(panel.getByRole("alert")).toHaveText("We could not confirm that change. Retry uses the same request.");
+    // Only Retry change or Discard change remain, so retrying the old body can't silently drop a newer edit.
+    await expect(nameField).toBeDisabled();
+    await expect(panel.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await expect(panel.getByLabel("Designated approver")).toBeDisabled();
+    await expect(panel.getByRole("button", { name: "Retry change" })).toBeEnabled();
+    await panel.getByRole("button", { name: "Discard change" }).click();
+    await expect(nameField).toBeEnabled();
+    await expect(nameField).toHaveValue(project.name);
+    await expect(panel.getByRole("button", { name: "Retry change" })).toHaveCount(0);
+
+    await nameField.fill("Second attempt");
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(panel.getByRole("alert")).toHaveText("That change conflicts with current data. Refresh and try again.");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Renamed elsewhere");
+    await expect(nameField).toHaveValue("Second attempt");
+    expect(keys).toHaveLength(2);
   });
 
   test("an unsaved edit does not linger as dirty after the project is archived", async ({ page }) => {

@@ -41,12 +41,15 @@ export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onS
   </div>;
 }
 
-export function NoProjectOpen({ sidebarClosed, capacity, hasInvites, onShowProjects, onCreate, onViewInvites }: {
-  sidebarClosed: boolean; capacity: ProjectCapacity | null; hasInvites: boolean; onShowProjects: () => void; onCreate: () => void; onViewInvites: () => void;
+export function NoProjectOpen({ autoFocus, sidebarClosed, capacity, hasInvites, onShowProjects, onCreate, onViewInvites }: {
+  autoFocus: boolean; sidebarClosed: boolean; capacity: ProjectCapacity | null; hasInvites: boolean; onShowProjects: () => void; onCreate: () => void; onViewInvites: () => void;
 }) {
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { if (autoFocus) titleRef.current?.focus(); }, [autoFocus]);
   return <div className="empty-state">
-    <h1 tabIndex={-1}>No project open</h1>
-    <p>Choose a project or create one.</p>
+    <h1 ref={titleRef} tabIndex={-1}>No project open</h1>
+    {/* Empty states name an authorized next action only (UI00). */}
+    <p>{capacity?.entitled ? "Choose a project or create one." : "Choose a project."}</p>
     <div className="view-actions">
       {sidebarClosed && <button type="button" className="button" onClick={onShowProjects} aria-label="Show projects" aria-expanded={false} aria-controls="projects-nav">Show projects</button>}
       {capacity?.canCreate && <button type="button" className="button primary" onClick={onCreate}>New project</button>}

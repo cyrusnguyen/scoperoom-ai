@@ -71,6 +71,40 @@ test.describe("project creation", () => {
     expect(new Set(keys).size).toBe(1);
   });
 
+  test("Esc does not close the dialog while a create is in flight", async ({ page }) => {
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let posts = 0;
+    const dialog = await openNewProject(page, async (route) => {
+      posts += 1;
+      await held;
+      await route.fulfill({ status: 201, json: { ...project, replayed: false } });
+    });
+    await dialog.getByRole("button", { name: "Create" }).click();
+    await expect(dialog.getByRole("button", { name: "Creating…" })).toBeDisabled();
+    // Twice: Chrome lets a page cancel only the first Esc without a user activation in between.
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Creating…" })).toBeDisabled();
+    release();
+    await expect(page).toHaveURL(new RegExp(`/app/projects/${project.id}$`));
+    expect(posts).toBe(1);
+  });
+
+  test("closing the dialog after an uncertain create re-reads the lists", async ({ page }) => {
+    let listReads = 0;
+    page.on("request", (request) => { if (request.method() === "GET" && new URL(request.url()).pathname === "/api/projects") listReads += 1; });
+    const dialog = await openNewProject(page, (route) => route.abort("failed"));
+    await dialog.getByRole("button", { name: "Create" }).click();
+    await expect(dialog.getByRole("alert")).toHaveText("We could not confirm project creation. Retry uses the same request.");
+    const readsBeforeClose = listReads;
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    // The project may have been created after all: re-reading lists it, so the user doesn't create it twice.
+    await expect.poll(() => listReads).toBeGreaterThan(readsBeforeClose);
+  });
+
   test("a refused create keeps the dialog open with the name editable", async ({ page }) => {
     const message = "You've reached your active project limit. Archive a project or ask for a higher limit.";
     const dialog = await openNewProject(page, (route) => route.fulfill({ status: 422, json: { error: { code: "OWNED_PROJECT_LIMIT", message, requestId: "00000000-0000-4000-8000-000000000000", retryable: false, details: { activeOwned: 10, maxOwned: 10 } } } }));

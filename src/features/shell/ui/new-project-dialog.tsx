@@ -5,7 +5,10 @@ import { apiMutate } from "@/client/api";
 import type { CreatedProject } from "@/features/projects/contracts/project";
 import Dialog from "./dialog";
 
-/** Owner creation. An uncertain result keeps the name and the same Idempotency-Key, so Retry cannot create a second project. */
+/**
+ * Owner creation. An uncertain result keeps the name and the same Idempotency-Key, so Retry cannot create a second project.
+ * Esc is ignored while the request is in flight (Cancel is disabled then too); the shell re-reads its lists when this closes.
+ */
 export default function NewProjectDialog({ onClose, onCreated, onRefused }: { onClose: () => void; onCreated: (project: CreatedProject) => void; onRefused: () => void }) {
   const [name, setName] = useState("");
   const [key, setKey] = useState<string | null>(null);
@@ -28,7 +31,7 @@ export default function NewProjectDialog({ onClose, onCreated, onRefused }: { on
     onRefused();
   };
 
-  return <Dialog title="New project" onClose={onClose} footer={<>
+  return <Dialog title="New project" onClose={busy ? () => {} : onClose} footer={<>
     <button type="button" className="button quiet" onClick={onClose} disabled={busy}>Cancel</button>
     <button type="submit" form="new-project-form" className="button primary" disabled={busy || !name.trim()}>{busy ? "Creating…" : key ? "Retry" : "Create"}</button>
   </>}>

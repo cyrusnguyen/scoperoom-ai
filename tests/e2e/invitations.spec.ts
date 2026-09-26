@@ -110,7 +110,7 @@ test.describe("project invitations", () => {
     const url = await invitationLink.inputValue();
     await expect(page.getByRole("button", { name: "Copy link" })).toBeVisible();
     await page.getByRole("button", { name: "Copy link" }).click();
-    await expect(page.getByText("Copy did not complete. Select the link and copy it manually.")).toBeVisible();
+    await expect(page.locator("#right-panel").getByRole("alert")).toHaveText("Copy did not complete. Select the link and copy it manually.");
     releaseRefresh();
     await expect(page.getByText(fixture.invitee.email, { exact: true })).toBeVisible();
     await expect(page.getByText("Copy did not complete. Select the link and copy it manually.")).toBeVisible();
@@ -130,7 +130,8 @@ test.describe("project invitations", () => {
     await expect(page).toHaveURL(new RegExp(`/app/projects/${fixture.projectId}$`), { timeout: 15_000 });
     const context = await openDetails(page);
     await expect(context.getByText("Viewer", { exact: true }).first()).toBeVisible();
-    await expect(context.getByRole("button", { name: "Share project" })).toHaveCount(0);
+    await expect(context.getByLabel("Verified email")).toHaveCount(0);
+    await expect(context.getByRole("button", { name: "Archive project…" })).toHaveCount(0);
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page).toHaveURL(new RegExp(`/app/projects/${fixture.projectId}$`));
     await expect((await openDetails(page)).getByText("Viewer", { exact: true }).first()).toBeVisible();
@@ -189,6 +190,37 @@ test.describe("project invitations", () => {
     await page.getByRole("button", { name: "Revoke" }).click();
     await expect(page.getByText("Invitation revoked. You can create a replacement invitation. Invitation index is unavailable.")).toBeVisible();
     await expect(page.getByText("Invitation details could not be refreshed. Use Refresh to retry.")).toBeVisible();
+  });
+  test("an uncertain revoke retries with the same key, and a conflict re-reads the list before Revoke re-enables", async ({ page }) => {
+    const fixture = await createFixture(page, database, admin, users);
+    await page.goto(`/app/projects/${fixture.projectId}`);
+    await openShare(page);
+    const panel = page.locator("#right-panel");
+    await panel.getByLabel("Verified email").fill(fixture.invitee.email);
+    await panel.getByRole("button", { name: "Create invitation" }).click();
+    await expect(panel.getByText(fixture.invitee.email, { exact: true })).toBeVisible();
+
+    const keys: string[] = [];
+    let listReads = 0;
+    await page.route(`**/api/projects/${fixture.projectId}/invitations`, async (route) => { if (route.request().method() === "GET") listReads += 1; await route.continue(); });
+    await page.route(`**/api/projects/${fixture.projectId}/invitations/*/revoke`, async (route) => {
+      keys.push(route.request().headers()["idempotency-key"]!);
+      if (keys.length === 1) return route.abort("failed");
+      if (keys.length === 2) return route.fulfill({ status: 409, json: { error: { code: "CONFLICT", message: "That change conflicts with current data. Refresh and try again.", requestId: "00000000-0000-4000-8000-000000000000", retryable: false } } });
+      await route.continue();
+    });
+    await panel.getByRole("button", { name: "Revoke", exact: true }).click();
+    await expect(panel.getByRole("alert")).toHaveText("We could not confirm that invitation was revoked. Retry uses the same request.");
+    const readsBeforeConflict = listReads;
+    await panel.getByRole("button", { name: "Retry revoke", exact: true }).click();
+    await expect(panel.getByRole("alert")).toHaveText("That change conflicts with current data. Refresh and try again.");
+    await expect(panel.getByRole("button", { name: "Revoke", exact: true })).toBeEnabled();
+    expect(listReads).toBeGreaterThan(readsBeforeConflict);
+    expect(keys[1]).toBe(keys[0]);
+    await panel.getByRole("button", { name: "Revoke", exact: true }).click();
+    await expect(panel.getByText("Invitation revoked. You can create a replacement invitation.")).toBeVisible();
+    expect(keys).toHaveLength(3);
+    expect(keys[2]).not.toBe(keys[0]);
   });
   test("an expired access session refreshes on an invitation route before acceptance", async ({ page }) => {
     test.setTimeout(60_000);

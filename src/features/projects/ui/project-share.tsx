@@ -23,6 +23,7 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
   const [invitations, setInvitations] = useState<Invitation[] | null>(null);
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [revokeKeys, setRevokeKeys] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async (clearMessage = true, signal?: AbortSignal) => {
     const result = await apiRead<{ invitations: Invitation[] }>(`/api/projects/${projectId}/invitations`, signal);
@@ -75,19 +76,44 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
     try {
       await navigator.clipboard.writeText(issued.url);
       setMessage("Invitation link copied.");
+      setMessageError(false);
     } catch {
       setMessage("Copy did not complete. Select the link and copy it manually.");
+      setMessageError(true);
     }
   };
 
+  const setRevokeKey = (id: string, key?: string) => setRevokeKeys((current) => {
+    const next = { ...current };
+    if (key) next[id] = key;
+    else delete next[id];
+    return next;
+  });
+
+  /** An uncertain result keeps this row's key for Retry; a CONFLICT re-reads the list before the row's button re-enables. */
   const revoke = async (invitation: Invitation) => {
+    const key = revokeKeys[invitation.id] ?? crypto.randomUUID();
+    setRevokeKey(invitation.id, key);
     setRevoking(invitation.id);
     setMessage("");
     setMessageError(false);
-    const result = await apiMutate(`/api/projects/${projectId}/invitations/${invitation.id}/revoke`, crypto.randomUUID(), { expectedVersion: invitation.version });
+    const result = await apiMutate(`/api/projects/${projectId}/invitations/${invitation.id}/revoke`, key, { expectedVersion: invitation.version });
+    if (sessionEnded(result)) { setRevoking(null); return; }
+    if (!result.ok && result.uncertain) {
+      setRevoking(null);
+      setMessage("We could not confirm that invitation was revoked. Retry uses the same request.");
+      setMessageError(true);
+      return;
+    }
+    setRevokeKey(invitation.id);
+    if (!result.ok) {
+      setMessage(result.message);
+      setMessageError(true);
+      if (result.code === "CONFLICT") await refresh(false);
+      setRevoking(null);
+      return;
+    }
     setRevoking(null);
-    if (sessionEnded(result)) return;
-    if (!result.ok) { setMessage(result.status === 0 ? "We could not confirm that invitation was revoked. Refresh before trying again." : result.message); setMessageError(true); return; }
     setIssued((current) => current?.id === invitation.id ? null : current);
     const confirmation = "Invitation revoked. You can create a replacement invitation.";
     const refreshed = await refresh(false);
@@ -133,7 +159,7 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
     {invitations === null ? <p className="muted">{refreshFailed ? "Invitation details could not be refreshed. Use Refresh to retry." : "Loading invitation details..."}</p>
     : pending.length ? <ul className="item-list">{pending.map((invitation) => <li key={invitation.id} className="item-row">
       <span><strong>{invitation.verifiedEmail}</strong><small>{roleLabel(invitation.role)} · expires {new Date(invitation.expiresAt).toLocaleDateString()}</small></span>
-      <button type="button" className="button quiet small" onClick={() => void revoke(invitation)} disabled={revoking === invitation.id}>{revoking === invitation.id ? "Revoking..." : "Revoke"}</button>
+      <button type="button" className="button quiet small" onClick={() => void revoke(invitation)} disabled={revoking === invitation.id}>{revoking === invitation.id ? "Revoking..." : revokeKeys[invitation.id] ? "Retry revoke" : "Revoke"}</button>
     </li>)}</ul>
     : <p className="muted">No pending invitations.</p>}
   </section>;

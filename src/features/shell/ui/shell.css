@@ -41,7 +41,7 @@
 .project-row-name, .invite-row-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-row small { display: block; margin-top: 2px; overflow: hidden; color: var(--foreground-muted); text-overflow: ellipsis; white-space: nowrap; }
 .project-row-skeleton { height: var(--row-height); margin: 2px 0; border-radius: var(--radius-control); background: var(--surface-raised); }
-.projects-empty { padding: var(--space-4) var(--space-3); color: var(--foreground-muted); font-size: 13px; }
+.projects-empty { padding: var(--space-4) var(--space-3); color: var(--foreground-muted); font-size: var(--font-label); }
 .projects-empty .button { margin-top: var(--space-2); }
 .projects-truncated { padding: var(--space-2) var(--space-3); color: var(--foreground-muted); font-size: var(--font-label); }
 .invite-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px var(--space-2); padding: var(--space-2); }
@@ -118,7 +118,8 @@
 
 @media (max-width: 639px) {
   .projects-nav-header, .editor-header, .right-panel-header { min-height: 44px; }
-  .project-row, .invite-row, .projects-tabs button, .right-panel-tabs button, .button, .button.small, .app-footer button { min-height: 44px; }
+  .project-row, .invite-row, .projects-tabs button, .right-panel-tabs button, .button, .button.small, .app-footer button, .text-link { min-height: 44px; }
+  :where(.app-shell) :where(input:not([type="checkbox"]), select) { min-height: 44px; }
   .sidebar-slot[data-mode="overlay"] { inset: 0; }
   .sidebar-slot[data-mode="overlay"] .projects-nav, .right-panel[data-dock="overlay"] { width: 100%; }
   .modal-footer .button { flex: 1; }
@@ -140,7 +141,7 @@
 }
 
 /* Details tab sections (Task 5) */
-.muted { color: var(--foreground-muted); font-size: 13px; }
+.muted { color: var(--foreground-muted); font-size: var(--font-label); }
 .detail-section h3 .muted { font-weight: 400; }
 .detail-name { font-size: 14px; overflow-wrap: anywhere; }
 .form-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }

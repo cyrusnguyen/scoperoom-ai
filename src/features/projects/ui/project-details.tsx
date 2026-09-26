@@ -73,8 +73,9 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
       }
       setMessage(result.message);
       setMessageError(true);
-      // A conflict re-reads the versions before the button re-enables, so a fast retry can't reuse a stale one.
-      if (result.code === "CONFLICT") await load();
+      // A conflict re-reads the versions before the button re-enables, so a fast retry can't reuse a stale one,
+      // and re-reads the project so the header shows the current saved name beside the kept attempt.
+      if (result.code === "CONFLICT") { await load(); onChanged(); }
       setBusy(false);
       return;
     }
@@ -83,6 +84,16 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
     const refreshed = await load();
     setMessage(refreshed ? mutation.confirmation : `${mutation.confirmation} Details could not be refreshed.`);
     setMessageError(!refreshed);
+    onChanged();
+  };
+
+  // An uncertain change may still commit: drop its key and re-read what is saved.
+  const discardRetry = () => {
+    if (retry?.mutation.clears) setDraft(retry.mutation.clears, undefined);
+    setRetry(null);
+    setMessage("");
+    setMessageError(false);
+    void load();
     onChanged();
   };
 
@@ -124,8 +135,8 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
       <h3 id="details-project">Project</h3>
       {manage ? <form className="form-row" onSubmit={saveName}>
         <label className="sr-only" htmlFor="project-settings-name">Project name</label>
-        <input id="project-settings-name" value={name} onChange={(event) => setDraft("name", event.target.value === project.name ? undefined : event.target.value)} disabled={busy || !status} required maxLength={120} />
-        <button type="submit" className="button small" disabled={busy || !status || !name.trim() || name.trim() === project.name}>Save</button>
+        <input id="project-settings-name" value={name} onChange={(event) => setDraft("name", event.target.value === project.name ? undefined : event.target.value)} disabled={busy || !status || Boolean(retry)} required maxLength={120} />
+        <button type="submit" className="button small" disabled={busy || !status || Boolean(retry) || !name.trim() || name.trim() === project.name}>Save</button>
       </form> : <p className="detail-name">{project.name}</p>}
       <dl className="detail-facts">
         <div><dt>Owner</dt><dd>{ownerName ?? "—"}</dd></div>
@@ -133,7 +144,10 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
         <div><dt>Status</dt><dd>{active ? "Active" : "Archived"}</dd></div>
         <div><dt>Draft</dt><dd>Empty draft · revision {draft.documentRevision}</dd></div>
       </dl>
-      {retry && <button type="button" className="button small" disabled={busy} onClick={() => void mutate(retry.mutation, retry.key)}>Retry change</button>}
+      {retry && <div className="view-actions">
+        <button type="button" className="button small" disabled={busy} onClick={() => void mutate(retry.mutation, retry.key)}>Retry change</button>
+        <button type="button" className="button quiet small" disabled={busy} onClick={discardRetry}>Discard change</button>
+      </div>}
       <p className="muted" role={messageError ? "alert" : "status"} aria-live="polite">{message}</p>
     </section>
     <section className="detail-section" aria-labelledby="details-members">
@@ -143,6 +157,7 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
         {loadError && <button type="button" className="button small" onClick={() => void load()}>Retry</button>}
       </> : <>
         <h3 id="details-members">Members <span className="muted">{members.length} of {MAX_COLLABORATORS}</span></h3>
+        {owner && !active && <p className="muted">Settings and role increases are unavailable; the owner can reduce or remove member access.</p>}
         <ul className="item-list">{members.map((member) => <li key={member.profileId} className="member-row">
           <div><strong>{member.displayName}</strong><small>{member.role === "OWNER" ? "Owner" : `${roleLabel(member.role)}${member.designatedApprover ? " · Designated approver" : ""}`}</small></div>
           {owner && member.role !== "OWNER" && <>
@@ -153,10 +168,10 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
             <button type="button" className="button quiet small" disabled={busy} aria-label={`Remove ${member.displayName}`} onClick={() => setConfirming({ member })}>Remove</button>
           </>}
         </li>)}</ul>
-        {confirming && <div className="inline-note" role="group" aria-label="Confirm access change">
-          <p>{confirmText}</p>
+        {confirming && <div key={`${confirming.member.profileId}-${confirming.role ?? "remove"}`} className="inline-note" role="group" aria-label="Confirm access change">
+          <p id="access-change-note">{confirmText}</p>
           <div className="view-actions">
-            <button type="button" className="button danger small" disabled={busy} onClick={confirm}>{confirming.role ? "Confirm role change" : "Confirm removal"}</button>
+            <button type="button" className="button danger small" disabled={busy} onClick={confirm} autoFocus aria-describedby="access-change-note">{confirming.role ? "Confirm role change" : "Confirm removal"}</button>
             <button type="button" className="button quiet small" onClick={() => setConfirming(null)}>Cancel</button>
           </div>
         </div>}
@@ -167,11 +182,11 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
       <h3 id="details-approver">Approver</h3>
       <form className="form-row" onSubmit={saveApprover}>
         <label className="sr-only" htmlFor="designated-approver">Designated approver</label>
-        <select id="designated-approver" value={approver} disabled={busy} onChange={(event) => setDraft("approver", event.target.value === savedApprover ? undefined : event.target.value)}>
+        <select id="designated-approver" value={approver} disabled={busy || Boolean(retry)} onChange={(event) => setDraft("approver", event.target.value === savedApprover ? undefined : event.target.value)}>
           <option value="">No designated approver</option>
           {members.filter((member) => member.role !== "VIEWER").map((member) => <option key={member.profileId} value={member.profileId}>{member.displayName} · {roleLabel(member.role)}</option>)}
         </select>
-        <button type="submit" className="button small" disabled={busy || approver === savedApprover}>Save approver</button>
+        <button type="submit" className="button small" disabled={busy || Boolean(retry) || approver === savedApprover}>Save approver</button>
       </form>
     </section>}
     {(active || !owner) && <section className="detail-section">
