@@ -1,23 +1,170 @@
 "use client";
 
-import type { ProjectBootstrap } from "../contracts/project";
+import { useCallback, useEffect, useState, type SubmitEvent } from "react";
+import { apiMutate, apiRead, sessionEnded } from "@/client/api";
+import { MAX_COLLABORATORS, projectMemberRoles, type ProjectMemberRole } from "../contracts/invitation";
+import type { ProjectAccessRole, ProjectBootstrap, ProjectStatusView } from "../contracts/project";
 import { roleLabel } from "./format";
-import ProjectManagement from "./project-management";
 import ProjectShare from "./project-share";
 
-/** The right panel's Details tab. Task 5 replaces the two existing disclosures below with flat Details sections. */
-export default function ProjectDetails({ bootstrap, onChanged }: { bootstrap: ProjectBootstrap; onChanged: () => void }) {
+type Member = { profileId: string; displayName: string; role: ProjectAccessRole; version: number; designatedApprover: boolean };
+type Mutation = { url: string; method?: "PATCH" | "DELETE"; body: Record<string, unknown>; confirmation: string; clears?: string };
+type Confirming = { member: Member; role?: ProjectMemberRole };
+
+const rank: Record<ProjectMemberRole, number> = { VIEWER: 1, REVIEWER: 2, EDITOR: 3 };
+
+/**
+ * The right panel's Details tab: project facts, members, invitations, approver, and archive or leave. Unsaved name,
+ * approver and invite-email values live in the shell's per-project store (`drafts`), so closing the panel or switching
+ * away never drops them silently. Mutations carry the versions read here; an uncertain result retries with the same key.
+ */
+export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged, onLifecycle }: {
+  bootstrap: ProjectBootstrap; drafts: Record<string, string>; setDraft: (key: string, value: string | undefined) => void;
+  onChanged: () => void; onLifecycle: (kind: "archive" | "leave") => void;
+}) {
   const { project, draft } = bootstrap;
+  const owner = project.role === "OWNER";
+  const active = project.status === "ACTIVE";
+  const manage = owner && active;
+  const [status, setStatus] = useState<ProjectStatusView | null>(null);
+  const [members, setMembers] = useState<Member[] | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [retry, setRetry] = useState<{ mutation: Mutation; key: string } | null>(null);
+  const [confirming, setConfirming] = useState<Confirming | null>(null);
+
+  const load = useCallback(async (signal?: AbortSignal) => {
+    const [nextStatus, nextMembers] = await Promise.all([
+      apiRead<ProjectStatusView>(`/api/projects/${project.id}/status`, signal),
+      apiRead<{ members: Member[] }>(`/api/projects/${project.id}/members`, signal),
+    ]);
+    if (signal?.aborted) return false;
+    if (sessionEnded(nextStatus) || sessionEnded(nextMembers)) return false;
+    const failed = !nextStatus.ok ? nextStatus.message : !nextMembers.ok ? nextMembers.message : null;
+    if (failed !== null || !nextStatus.ok || !nextMembers.ok) { setStatus(null); setMembers(null); setLoadError(failed ?? ""); return false; }
+    setStatus(nextStatus.data);
+    setMembers(nextMembers.data.members);
+    setLoadError("");
+    return true;
+  }, [project.id]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => { void load(controller.signal); }, 0);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [load, project.status]); // an archive or restore reloads the versions this tab writes with
+
+  const mutate = async (mutation: Mutation, key = crypto.randomUUID()) => {
+    setBusy(true);
+    setRetry(null);
+    setMessage("");
+    const result = await apiMutate(mutation.url, key, mutation.body, mutation.method ?? "PATCH");
+    setBusy(false);
+    if (sessionEnded(result)) return;
+    if (!result.ok) {
+      if (result.uncertain) { setRetry({ mutation, key }); setMessage("We could not confirm that change. Retry uses the same request."); }
+      else { setMessage(result.message); if (result.code === "CONFLICT") void load(); }
+      return;
+    }
+    if (mutation.clears) setDraft(mutation.clears, undefined);
+    const refreshed = await load();
+    setMessage(refreshed ? mutation.confirmation : `${mutation.confirmation} Details could not be refreshed.`);
+    onChanged();
+  };
+
+  const name = drafts.name ?? project.name;
+  const savedApprover = status?.designatedApproverId ?? "";
+  const approver = drafts.approver ?? savedApprover;
+  const ownerName = members?.find((member) => member.role === "OWNER")?.displayName;
+
+  const saveName = (event: SubmitEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (status) void mutate({ url: `/api/projects/${project.id}/settings`, body: { name, expectedSettingsVersion: status.settingsVersion }, confirmation: "Project name updated.", clears: "name" });
+  };
+  const saveApprover = (event: SubmitEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (status) void mutate({ url: `/api/projects/${project.id}/approval-policy`, body: { designatedApproverId: approver || null, expectedApprovalPolicyVersion: status.approvalPolicyVersion }, confirmation: "Approver updated.", clears: "approver" });
+  };
+  const changeRole = (member: Member, role: ProjectMemberRole) => void mutate({ url: `/api/projects/${project.id}/members/${member.profileId}`, body: { role, expectedMemberVersion: member.version }, confirmation: "Member role updated." });
+  const removeMember = (member: Member) => void mutate({ url: `/api/projects/${project.id}/members/${member.profileId}`, method: "DELETE", body: { expectedMemberVersion: member.version }, confirmation: "Member removed." });
+  // A reduction names its effect before confirmation (UI01); an increase applies directly.
+  const pickRole = (member: Member, role: ProjectMemberRole) => {
+    if (rank[role] < rank[member.role as ProjectMemberRole]) setConfirming({ member, role });
+    else changeRole(member, role);
+  };
+  const confirm = () => {
+    if (!confirming) return;
+    const { member, role } = confirming;
+    setConfirming(null);
+    if (role) changeRole(member, role);
+    else removeMember(member);
+  };
+  // The server clears the designated approver on removal or a downgrade to Viewer.
+  const confirmText = !confirming ? "" : (confirming.role
+    ? `Changing ${confirming.member.displayName} to ${roleLabel(confirming.role)} reduces their project access.`
+    : `Removing ${confirming.member.displayName} revokes their project access.`)
+    + (confirming.member.designatedApprover && (!confirming.role || confirming.role === "VIEWER") ? " They are the designated approver, so the project will have none." : "");
+
   return <>
-    <section className="detail-section" aria-labelledby="details-title">
-      <h3 id="details-title">{project.name}</h3>
+    <section className="detail-section" aria-labelledby="details-project">
+      <h3 id="details-project">Project</h3>
+      {manage ? <form className="form-row" onSubmit={saveName}>
+        <label className="sr-only" htmlFor="project-settings-name">Project name</label>
+        <input id="project-settings-name" value={name} onChange={(event) => setDraft("name", event.target.value === project.name ? undefined : event.target.value)} disabled={busy || !status} required maxLength={120} />
+        <button type="submit" className="button small" disabled={busy || !status || !name.trim() || name.trim() === project.name}>Save</button>
+      </form> : <p className="detail-name">{project.name}</p>}
       <dl className="detail-facts">
+        <div><dt>Owner</dt><dd>{ownerName ?? "—"}</dd></div>
         <div><dt>Your role</dt><dd>{roleLabel(project.role)}</dd></div>
-        <div><dt>Status</dt><dd>{project.status === "ARCHIVED" ? "Archived" : "Active"}</dd></div>
+        <div><dt>Status</dt><dd>{active ? "Active" : "Archived"}</dd></div>
         <div><dt>Draft</dt><dd>Empty draft · revision {draft.documentRevision}</dd></div>
       </dl>
+      {retry && <button type="button" className="button small" disabled={busy} onClick={() => void mutate(retry.mutation, retry.key)}>Retry change</button>}
+      <p className="muted" role="status" aria-live="polite">{message}</p>
     </section>
-    {project.status === "ACTIVE" && <ProjectShare projectId={project.id} role={project.role} />}
-    <ProjectManagement projectId={project.id} role={project.role} projectName={project.name} projectStatus={project.status} onProjectChange={onChanged} />
+    <section className="detail-section" aria-labelledby="details-members">
+      {!members ? <>
+        <h3 id="details-members">Members</h3>
+        <p className="muted">{loadError || "Loading details…"}</p>
+        {loadError && <button type="button" className="button small" onClick={() => void load()}>Retry</button>}
+      </> : <>
+        <h3 id="details-members">Members <span className="muted">{members.length} of {MAX_COLLABORATORS}</span></h3>
+        <ul className="item-list">{members.map((member) => <li key={member.profileId} className="member-row">
+          <div><strong>{member.displayName}</strong><small>{member.role === "OWNER" ? "Owner" : `${roleLabel(member.role)}${member.designatedApprover ? " · Designated approver" : ""}`}</small></div>
+          {owner && member.role !== "OWNER" && <>
+            <label className="sr-only" htmlFor={`role-${member.profileId}`}>{`Role for ${member.displayName}`}</label>
+            <select id={`role-${member.profileId}`} value={member.role} disabled={busy} onChange={(event) => pickRole(member, event.target.value as ProjectMemberRole)}>
+              {projectMemberRoles.filter((role) => active || rank[role] <= rank[member.role as ProjectMemberRole]).map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
+            </select>
+            <button type="button" className="button quiet small" disabled={busy} aria-label={`Remove ${member.displayName}`} onClick={() => setConfirming({ member })}>Remove</button>
+          </>}
+        </li>)}</ul>
+        {confirming && <div className="inline-note" role="group" aria-label="Confirm access change">
+          <p>{confirmText}</p>
+          <div className="view-actions">
+            <button type="button" className="button danger small" disabled={busy} onClick={confirm}>{confirming.role ? "Confirm role change" : "Confirm removal"}</button>
+            <button type="button" className="button quiet small" onClick={() => setConfirming(null)}>Cancel</button>
+          </div>
+        </div>}
+      </>}
+    </section>
+    {manage && <ProjectShare projectId={project.id} email={drafts["invite-email"] ?? ""} onEmailChange={(value) => setDraft("invite-email", value || undefined)} />}
+    {manage && members && <section className="detail-section" aria-labelledby="details-approver">
+      <h3 id="details-approver">Approver</h3>
+      <form className="form-row" onSubmit={saveApprover}>
+        <label className="sr-only" htmlFor="designated-approver">Designated approver</label>
+        <select id="designated-approver" value={approver} disabled={busy} onChange={(event) => setDraft("approver", event.target.value === savedApprover ? undefined : event.target.value)}>
+          <option value="">No designated approver</option>
+          {members.filter((member) => member.role !== "VIEWER").map((member) => <option key={member.profileId} value={member.profileId}>{member.displayName} · {roleLabel(member.role)}</option>)}
+        </select>
+        <button type="submit" className="button small" disabled={busy || approver === savedApprover}>Save approver</button>
+      </form>
+    </section>}
+    {(active || !owner) && <section className="detail-section">
+      {owner
+        ? <button type="button" className="button danger small" onClick={() => onLifecycle("archive")}>Archive project…</button>
+        : <button type="button" className="button danger small" onClick={() => onLifecycle("leave")}>Leave project…</button>}
+    </section>}
   </>;
 }

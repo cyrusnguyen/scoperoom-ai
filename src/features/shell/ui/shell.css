@@ -138,3 +138,21 @@
   .menu-item { min-height: 44px; }
   .more-button { width: 44px; height: 44px; }
 }
+
+/* Details tab sections (Task 5) */
+.muted { color: var(--foreground-muted); font-size: 13px; }
+.detail-section h3 .muted { font-weight: 400; }
+.detail-name { font-size: 14px; overflow-wrap: anywhere; }
+.form-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+.form-row :is(input, select) { flex: 1 1 160px; }
+.item-list { margin: 0; padding: 0; list-style: none; }
+.member-row, .item-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-3); padding: var(--space-2) 0; border-bottom: var(--panel-border); }
+.member-row > div, .item-row > span { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; }
+.member-row strong, .item-row strong { display: block; font-weight: 500; }
+.member-row small, .item-row small { display: block; color: var(--foreground-muted); }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin: var(--space-4) 0 var(--space-2); }
+.section-heading h4 { font-size: 13px; }
+.inline-note { margin: var(--space-3) 0; padding: 11px 12px; border-left: 2px solid var(--border-strong); background: var(--surface-raised); font-size: 13px; overflow-wrap: anywhere; }
+.inline-note .view-actions { margin-top: var(--space-2); }
+.invite-link { margin-top: var(--space-3); }
+.invite-link small { color: var(--foreground-muted); }

@@ -1,24 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { apiRead, sessionEnded } from "@/client/api";
 import type { MyInvitation } from "@/features/projects/contracts/invitation";
 import type { CreatedProject, ProjectBootstrap, ProjectLists } from "@/features/projects/contracts/project";
 import { expiryLabel } from "@/features/projects/ui/format";
 import ProjectDetails from "@/features/projects/ui/project-details";
+import Dialog, { CancelFocus } from "./dialog";
 import { resolveDock } from "./dock";
 import LifecycleDialog, { type LifecycleKind } from "./lifecycle-dialog";
 import NewProjectDialog from "./new-project-dialog";
 import ProjectEditor, { NoProjectOpen, ProjectUnavailable } from "./project-editor";
-import { dropProject, setRightOpen, uiFor, type UiStore } from "./project-ui";
+import { anyDirty, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, type UiStore } from "./project-ui";
 import ProjectsSidebar, { LIST_TABS, type InviteRow, type ListTab } from "./projects-sidebar";
 import RightPanel from "./right-panel";
 
 type Prefs = { leftOpen: boolean; listTab: ListTab };
 type Opened = { projectId: string; bootstrap?: ProjectBootstrap; missing?: boolean; error?: string };
 type Target = { id: string; name: string };
-type ShellDialog = { kind: "create" } | { kind: LifecycleKind; project: Target };
+type ShellDialog = { kind: "create" } | { kind: "switch"; target: string } | { kind: LifecycleKind; project: Target };
 
 const prefsKey = "scoperoom_shell";
 const doneVerb: Record<LifecycleKind, string> = { archive: "Archived", restore: "Restored", leave: "Left" };
@@ -35,6 +36,7 @@ function readPrefs(): Prefs {
 
 export default function ProjectShell({ signOut, children }: { signOut: () => Promise<void>; children: ReactNode }) {
   const router = useRouter();
+  const [navigating, startNavigation] = useTransition();
   const params = useParams();
   const projectId = typeof params.projectId === "string" ? params.projectId : undefined;
   const shellRef = useRef<HTMLDivElement>(null);
@@ -101,6 +103,15 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [projectId, loadProject]);
 
+  const unsaved = anyDirty(store);
+  useEffect(() => {
+    // Reload or close with unsaved Details values asks first; nothing unsaved is written to browser storage.
+    if (!unsaved) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved]);
+
   const ui = uiFor(store, projectId);
   const dock = resolveDock(width ?? 0, { leftOpen: prefs.leftOpen, rightOpen: Boolean(projectId) && ui.rightOpen, lastOpened });
   const current = projectId && opened?.projectId === projectId ? opened : null;
@@ -133,10 +144,15 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (dock.left === "overlay") setPrefs((previous) => ({ ...previous, leftOpen: false }));
     if (projectId && dock.right === "overlay") setStore((previous) => setRightOpen(previous, projectId, false));
     setFocusTarget(id);
-    router.push(id ? `/app/projects/${id}` : "/app");
+    // A pending transition hides the previous project's controls (e.g. Inspect) immediately: the target
+    // route re-runs a server auth check (force-dynamic), so useParams only catches up once that resolves.
+    startNavigation(() => router.push(id ? `/app/projects/${id}` : "/app"));
   }
   function openProject(id: string) {
-    if (id !== projectId) navigate(id);
+    if (id === projectId) return;
+    // Switching projects resolves unsaved edits first (UI00): Stay, or an explicit Discard, never silent.
+    if (dirtyCount(store, projectId) > 0) { setDialog({ kind: "switch", target: id }); return; }
+    navigate(id);
   }
   async function created(project: CreatedProject) {
     setDialog(null);
@@ -159,9 +175,11 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   }
 
   const restoreNote = capacity && !capacity.canCreate ? (capacity.entitled ? `${capacity.activeOwned}/${capacity.maxOwned} active` : "Restoring isn’t enabled for this account") : undefined;
-  const lifecycleDialog = dialog && dialog.kind !== "create" ? dialog : null;
+  const lifecycleDialog = dialog && dialog.kind !== "create" && dialog.kind !== "switch" ? dialog : null;
+  const switchTarget = dialog?.kind === "switch" ? dialog.target : null;
 
-  const editor = !projectId
+  const editor = navigating ? <div className="empty-state" aria-busy="true"><p>Loading project…</p></div>
+    : !projectId
     ? <NoProjectOpen sidebarClosed={sidebarClosed} capacity={capacity} hasInvites={Boolean(invites?.items.length)} onShowProjects={() => showProjects()} onCreate={() => setDialog({ kind: "create" })} onViewInvites={() => showProjects("invites")} />
     : !current ? <div className="empty-state" aria-busy="true"><p>Loading project…</p></div>
     : bootstrap ? <ProjectEditor key={projectId} bootstrap={bootstrap} autoFocus={focusTarget === projectId} sidebarClosed={sidebarClosed} onShowProjects={() => showProjects()}
@@ -170,7 +188,10 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     : <ProjectUnavailable missing={Boolean(current.missing)} message={current.error ?? ""} sidebarClosed={sidebarClosed} onShowProjects={() => showProjects()} onRetry={() => void loadProject(projectId)} />;
 
   const panel = projectId && bootstrap && ui.rightMounted
-    ? <RightPanel key={projectId} mode={dock.right} onClose={() => setPanel(false)}><ProjectDetails bootstrap={bootstrap} onChanged={projectChanged} /></RightPanel>
+    ? <RightPanel key={projectId} mode={dock.right} onClose={() => setPanel(false)}>
+      <ProjectDetails bootstrap={bootstrap} drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))}
+        onChanged={projectChanged} onLifecycle={(kind) => setDialog({ kind, project: { id: projectId, name: bootstrap.project.name } })} />
+    </RightPanel>
     : null;
 
   return <div className="app-shell" ref={shellRef}>
@@ -196,6 +217,10 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     </footer>
     {children}
     {dialog?.kind === "create" && <NewProjectDialog onClose={() => setDialog(null)} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}
+    {switchTarget && <Dialog title={`Unsaved changes in ${bootstrap?.project.name ?? "this project"}`} onClose={() => setDialog(null)} footer={<>
+      <CancelFocus label="Stay" onClick={() => setDialog(null)} />
+      <button type="button" className="button danger" onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
+    </>}><p>{dirtyCount(store, projectId)} unsaved field(s).</p></Dialog>}
     {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project}
       onClose={() => setDialog(null)} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}
   </div>;

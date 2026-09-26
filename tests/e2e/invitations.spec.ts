@@ -44,10 +44,9 @@ function sessionFromCookie(value: string) {
   return JSON.parse(Buffer.from(value.slice("base64-".length), "base64url").toString("utf8")) as { access_token?: string; expires_at?: number };
 }
 
-/** Opens the open project's Details tab, then its Share disclosure (Task 5 flattens Share into Details). */
+/** Opens the open project's Details tab; its Invite section is always visible to the owner of an active project. */
 async function openShare(page: Page) {
   await page.getByRole("button", { name: "Inspect" }).click();
-  await page.getByRole("button", { name: "Share project" }).click();
 }
 
 /** The right panel is a complementary region when docked and a dialog when it overlays, so find it by id. */
@@ -89,7 +88,6 @@ test.describe("project invitations", () => {
     await expect(page.getByRole("heading", { name: "Private invitation project" })).toBeVisible();
     await page.getByRole("button", { name: "Inspect" }).focus();
     await page.keyboard.press("Enter");
-    await page.getByRole("button", { name: "Share project" }).click();
     await expect(page.getByLabel("Verified email")).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
