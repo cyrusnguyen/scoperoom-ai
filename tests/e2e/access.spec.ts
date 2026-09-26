@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { expect, test } from "@playwright/test";
+import { requireEnv } from "../support/env.ts";
 
 const authUrl = process.env.E2E_SUPABASE_URL;
 const secretKey = process.env.E2E_SUPABASE_SECRET_KEY;
@@ -72,7 +73,7 @@ test("signup and pending verification handle direct visits and email changes", a
 });
 
 test.describe("local Supabase Auth", () => {
-  test.skip(!authUrl || !secretKey, "Requires an isolated local Supabase stack");
+  test.skip(!requireEnv(["E2E_SUPABASE_URL", "E2E_SUPABASE_SECRET_KEY"]), "Requires an isolated local Supabase stack");
 
   test.beforeAll(async () => {
     const url = new URL(authUrl!);
@@ -122,7 +123,7 @@ test.describe("local Supabase Auth", () => {
 
   test("resend reaches local Supabase for a pending account", async ({ page }) => {
     const mailpitUrl = process.env.E2E_MAILPIT_URL;
-    test.skip(!mailpitUrl, "Requires local email capture");
+    test.skip(!requireEnv(["E2E_MAILPIT_URL"]), "Requires local email capture");
     const recipient = `resend-${randomUUID()}@example.test`;
     const { data, error } = await admin.auth.admin.createUser({ email: recipient, password, email_confirm: false });
     if (error || !data.user) throw new Error("Could not create a pending local account.");
@@ -143,7 +144,7 @@ test.describe("local Supabase Auth", () => {
   test("email signup needs a delivered code before the canvas opens", async ({ page }) => {
     test.setTimeout(60_000);
     const mailpitUrl = process.env.E2E_MAILPIT_URL;
-    test.skip(!mailpitUrl, "Requires local email capture");
+    test.skip(!requireEnv(["E2E_MAILPIT_URL"]), "Requires local email capture");
     const signupEmail = `signup-${randomUUID()}@example.test`;
     try {
       await page.goto("/signup");
@@ -241,7 +242,7 @@ test.describe("local Supabase Auth", () => {
     await expect(page.getByRole("main")).toBeFocused();
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(page.getByRole("heading", { name: "Your starting point" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your projects" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Project details" })).toBeVisible();
     const dimensions = await page.evaluate(() => ({
       content: document.documentElement.scrollWidth,

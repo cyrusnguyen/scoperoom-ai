@@ -25,18 +25,6 @@ test("generated Prisma client loads in plain Node", async () => {
   assert.equal(typeof generated.PrismaClient, "function");
 });
 
-test("health reports only process and API identity", async () => {
-  const route = await import("../src/app/api/health/route.ts");
-  const response = await route.GET();
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    status: "ok",
-    service: "scoperoom-ai",
-    apiVersion: "v1",
-  });
-});
-
 test("logger omits secret canaries and raw exceptions", async () => {
   const { createLogger } = await import("../src/server/logger.ts");
   const lines: string[] = [];

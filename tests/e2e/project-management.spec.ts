@@ -1,42 +1,29 @@
-import { randomUUID } from "node:crypto";
-import { Client } from "pg";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { Client } from "pg";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test } from "@playwright/test";
+import { adminClient, cleanupUsers, e2eReady, openDatabase, signIn } from "./support";
 
-const authUrl = process.env.E2E_SUPABASE_URL;
-const secretKey = process.env.E2E_SUPABASE_SECRET_KEY;
-const databaseUrl = process.env.E2E_DATABASE_URL ?? process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL;
-const workspace = { id: "11111111-1111-4111-8111-111111111111", name: "Management workspace", createdAt: "2026-09-25T00:00:00.000Z", status: "ACTIVE", version: 1, canManage: true };
-const project = { id: "22222222-2222-4222-8222-222222222222", workspaceId: workspace.id, name: "Management project", status: "ACTIVE", currentDraftId: "33333333-3333-4333-8333-333333333333", createdAt: "2026-09-25T00:00:00.000Z" };
+const project = { id: "22222222-2222-4222-8222-222222222222", name: "Management project", status: "ACTIVE", ownerId: "55555555-5555-4555-8555-555555555555" };
+const draft = { id: "33333333-3333-4333-8333-333333333333", schemaVersion: 3, documentRevision: 1, layoutRevision: 1 };
+const empty = { items: [], truncated: false };
+const listItem = { id: project.id, name: project.name, status: "ACTIVE", ownerName: "Management Owner" };
 
-test.skip(!authUrl || !secretKey || !databaseUrl, "Requires isolated local Supabase Auth and database URLs");
+test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
 test.describe("project management", () => {
   let admin: SupabaseClient;
   let database: Client;
-  let authUserId = "";
+  let users: string[];
 
   test.beforeEach(async ({ page }) => {
-    admin = createClient(authUrl!, secretKey!, { auth: { autoRefreshToken: false, persistSession: false } });
-    database = new Client({ connectionString: databaseUrl! });
-    await database.connect();
-    const email = `management-${randomUUID()}@example.test`;
-    const { data, error } = await admin.auth.admin.createUser({ email, password: "Management-test-pass-1", email_confirm: true, user_metadata: { full_name: "Management Test" } });
-    if (error || !data.user) throw error ?? new Error("Could not create test user.");
-    authUserId = data.user.id;
-    await page.goto("/login");
-    await page.getByLabel("Email address").fill(email);
-    await page.getByLabel("Password").fill("Management-test-pass-1");
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page).toHaveURL(/\/$/, { timeout: 15_000 });
+    admin = adminClient();
+    database = await openDatabase();
+    users = [];
+    await signIn(page, admin, users, "Management Test");
   });
 
   test.afterEach(async () => {
-    if (authUserId) {
-      await database.query("delete from app.user_profile where auth_user_id = $1", [authUserId]);
-      await admin.auth.admin.deleteUser(authUserId);
-    }
-    await database.end();
+    try { await cleanupUsers(database, admin, users); } finally { await database.end(); }
   });
 
   test("an owner changes a member role, chooses an approver, and archives the project", async ({ page }) => {
@@ -44,9 +31,8 @@ test.describe("project management", () => {
     const member = { profileId: "44444444-4444-4444-8444-444444444444", displayName: "Casey Collaborator", role: "VIEWER", version: 1, designatedApprover: false };
     let removed = false;
     const response = () => ({ project: status, members: removed ? [] : [member] });
-    await page.route("**/api/workspaces", async (route) => route.request().method() === "GET" ? route.fulfill({ contentType: "application/json", body: JSON.stringify({ displayName: "Management Test", canCreate: false, maxWorkspaces: 1, ownedCount: 1, workspaces: [workspace] }) }) : route.continue());
-    await page.route(`**/api/workspaces/${workspace.id}/projects`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ workspace: { id: workspace.id, name: workspace.name, canCreateProject: true }, projects: [project] }) }));
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: { ...project, role: "OWNER" }, draft: { id: project.currentDraftId, schemaVersion: 3, documentRevision: 1, layoutRevision: 1 } }) }));
+    await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: { items: [{ ...listItem, role: "OWNER" }], truncated: false }, shared: empty, archived: empty, capacity: { entitled: true, activeOwned: 1, maxOwned: 10, canCreate: true } } }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: { ...project, role: "OWNER" }, draft }) }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(status) }));
     await page.route(`**/api/projects/${project.id}/members/${member.profileId}`, async (route) => {
       if (route.request().method() === "DELETE") {
@@ -105,9 +91,8 @@ test.describe("project management", () => {
 
   test("a non-owner can inspect members without management controls", async ({ page }) => {
     const status = { status: "ACTIVE", version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null };
-    await page.route("**/api/workspaces", async (route) => route.request().method() === "GET" ? route.fulfill({ contentType: "application/json", body: JSON.stringify({ displayName: "Management Test", canCreate: false, maxWorkspaces: 1, ownedCount: 0, workspaces: [{ ...workspace, canManage: false }] }) }) : route.continue());
-    await page.route(`**/api/workspaces/${workspace.id}/projects`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ workspace: { id: workspace.id, name: workspace.name, canCreateProject: false }, projects: [project] }) }));
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: { ...project, role: "VIEWER" }, draft: { id: project.currentDraftId, schemaVersion: 3, documentRevision: 1, layoutRevision: 1 } }) }));
+    await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: empty, shared: { items: [{ ...listItem, role: "VIEWER" }], truncated: false }, archived: empty, capacity: { entitled: false, activeOwned: 0, maxOwned: 0, canCreate: false } } }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: { ...project, role: "VIEWER" }, draft }) }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(status) }));
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: status, members: [{ profileId: "44444444-4444-4444-8444-444444444444", displayName: "Owner", role: "OWNER", version: 1, designatedApprover: false }] }) }));
 

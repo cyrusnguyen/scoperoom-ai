@@ -15,7 +15,7 @@ export default function AuthCard({ title, description, children }: AuthCardProps
           <span className="login-brand-mark" aria-hidden="true"><span /><span /><span /><span /></span>
           <span>ScopeRoom <span className="login-brand-suffix">/ Studio</span></span>
         </div>
-        <p className="login-kicker">YOUR WORKSPACE</p>
+        <p className="login-kicker">SCOPEROOM</p>
         <h1 id="auth-title">{title}</h1>
         <p className="login-description">{description}</p>
         {children}

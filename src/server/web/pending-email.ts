@@ -7,7 +7,7 @@ const CODE_SENT_COOKIE = "scoperoom.code-sent-at";
 const COOKIE_MAX_AGE = 60 * 60;
 
 // This remembers where to send the code during signup. Supabase still verifies the
-// email and token; the cookie grants no access to the workspace.
+// email and token; the cookie grants no access to any project.
 export async function getPendingEmail(): Promise<string | null> {
   const value = (await cookies()).get(COOKIE_NAME)?.value;
   return value && value.length <= 320 ? value : null;

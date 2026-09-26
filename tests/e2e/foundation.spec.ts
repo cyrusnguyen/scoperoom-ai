@@ -4,4 +4,6 @@ test("health remains reachable without signing in", async ({ request }) => {
   const health = await request.get("/api/health");
   await expect(health).toBeOK();
   await expect(health.json()).resolves.toEqual({ apiVersion: "v1", service: "scoperoom-ai", status: "ok" });
+  expect(health.headers()["cache-control"]).toContain("no-store");
+  expect(health.headers()["x-request-id"]).toMatch(/^[0-9a-f-]{36}$/);
 });
