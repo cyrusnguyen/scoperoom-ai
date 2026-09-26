@@ -7,6 +7,9 @@ process.env.NEXT_PUBLIC_APP_URL = appUrl;
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,
+  // next dev compiles each page/API route on its first request (5-8s observed on Windows),
+  // so the first assertion that depends on a newly hit route needs more than the 5s default.
+  expect: { timeout: 10_000 },
   workers: 1,
   reporter: "list",
   use: { baseURL: appUrl, trace: "retain-on-failure" },

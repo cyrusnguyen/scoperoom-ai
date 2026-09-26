@@ -68,6 +68,7 @@ test.describe("project invitations", () => {
   });
 
   test("owner shares once, survives clipboard rejection, and an invited account opens the project after reload", async ({ page }) => {
+    test.setTimeout(60_000);
     await page.addInitScript(() => {
       Object.defineProperty(Navigator.prototype, "clipboard", { configurable: true, get: () => ({ writeText: () => Promise.reject(new Error("clipboard unavailable")) }) });
     });
@@ -179,6 +180,7 @@ test.describe("project invitations", () => {
     await expect(page.getByText("Invitation details could not be refreshed. Use Refresh to retry.")).toBeVisible();
   });
   test("an expired access session refreshes on an invitation route before acceptance", async ({ page }) => {
+    test.setTimeout(60_000);
     const fixture = await createFixture(page, database, admin, users);
     await page.goto(`/app/projects/${fixture.projectId}`);
     await page.getByRole("button", { name: "Share project" }).click();
@@ -199,6 +201,7 @@ test.describe("project invitations", () => {
     expect(refreshed.access_token).not.toBe(expired.expiredAccessToken);
   });
   test("wrong account receives a neutral invitation denial without project metadata", async ({ page }) => {
+    test.setTimeout(60_000);
     const fixture = await createFixture(page, database, admin, users);
     await page.goto(`/app/projects/${fixture.projectId}`);
     await page.getByRole("button", { name: "Share project" }).click();
