@@ -7,5 +7,7 @@ function run(command, args, env = process.env) {
 
 const currentEnvironmentId = process.env.SCOPEROOM_CURRENT_ENVIRONMENT_ID ?? process.env.SCOPEROOM_ENVIRONMENT_ID;
 run(process.execPath, ["scripts/db/guard.mjs"], { ...process.env, SCOPEROOM_ENVIRONMENT_ID: currentEnvironmentId });
-run(process.platform === "win32" ? "corepack.cmd" : "corepack", ["pnpm", "exec", "supabase", "db", "reset", "--local"]);
+// Keep the recreated database on the loopback-only network from scripts/ci/start-local-supabase.sh; without it the
+// container returns on the default network, bound to all interfaces and unreachable by the other services.
+run(process.platform === "win32" ? "corepack.cmd" : "corepack", ["pnpm", "exec", "supabase", "db", "reset", "--local", "--network-id", "scoperoom-ci-loopback"]);
 run(process.execPath, ["scripts/db/bootstrap.mjs"]);
