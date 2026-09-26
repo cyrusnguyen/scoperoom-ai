@@ -1,6 +1,7 @@
 import "server-only";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { sessionCookieOptions } from "@/features/access/session-cookies";
 import { authConfig } from "./auth-config";
 
 export async function createAuthClient() {
@@ -9,6 +10,7 @@ export async function createAuthClient() {
   const cookieStore = await cookies();
 
   return createServerClient(config.url, config.publishableKey, {
+    cookieOptions: sessionCookieOptions(process.env.NEXT_PUBLIC_APP_URL),
     cookies: {
       getAll: () => cookieStore.getAll(),
       setAll: (cookiesToSet) => {

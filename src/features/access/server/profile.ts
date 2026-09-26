@@ -11,11 +11,17 @@ function normalizedDisplayName(value: string) {
   return displayName;
 }
 
+const profileSelect = { id: true, displayName: true } as const;
+
+/** Resolves or creates the profile. The name is captured once: Auth metadata is user-editable, so later requests never rewrite it. */
 export async function resolveProfile(database: PrismaClient, identity: ProfileIdentity) {
-  return database.userProfile.upsert({
-    where: { authUserId: identity.authUserId },
-    create: { authUserId: identity.authUserId, displayName: normalizedDisplayName(identity.displayName) },
-    update: { displayName: normalizedDisplayName(identity.displayName) },
-    select: { id: true, displayName: true },
-  });
+  const existing = await database.userProfile.findUnique({ where: { authUserId: identity.authUserId }, select: profileSelect });
+  if (existing) return existing;
+  try {
+    return await database.userProfile.create({ data: { authUserId: identity.authUserId, displayName: normalizedDisplayName(identity.displayName) }, select: profileSelect });
+  } catch (error) {
+    const created = await database.userProfile.findUnique({ where: { authUserId: identity.authUserId }, select: profileSelect });
+    if (created) return created;
+    throw error;
+  }
 }
