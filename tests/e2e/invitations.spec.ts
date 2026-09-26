@@ -23,7 +23,7 @@ async function logIn(page: Page, account: Account) {
   await page.getByLabel("Email address").fill(account.email);
   await page.getByLabel("Password").fill(account.password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/$/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/\/app$/, { timeout: 15_000 });
 }
 
 
@@ -42,6 +42,18 @@ async function expireAccessSession(page: Page) {
 function sessionFromCookie(value: string) {
   if (!value.startsWith("base64-")) throw new Error("Expected a local Supabase SSR auth cookie.");
   return JSON.parse(Buffer.from(value.slice("base64-".length), "base64url").toString("utf8")) as { access_token?: string; expires_at?: number };
+}
+
+/** Opens the open project's Details tab, then its Share disclosure (Task 5 flattens Share into Details). */
+async function openShare(page: Page) {
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await page.getByRole("button", { name: "Share project" }).click();
+}
+
+/** The right panel is a complementary region when docked and a dialog when it overlays, so find it by id. */
+async function openDetails(page: Page) {
+  await page.getByRole("button", { name: "Inspect" }).click();
+  return page.locator("#right-panel");
 }
 async function createFixture(page: Page, database: Client, admin: SupabaseClient, users: string[]): Promise<Fixture> {
   const invitee = await createAccount(admin, users, "invitee");
@@ -75,8 +87,9 @@ test.describe("project invitations", () => {
     const fixture = await createFixture(page, database, admin, users);
     await page.goto(`/app/projects/${fixture.projectId}`);
     await expect(page.getByRole("heading", { name: "Private invitation project" })).toBeVisible();
-    await page.getByRole("button", { name: "Share project" }).focus();
+    await page.getByRole("button", { name: "Inspect" }).focus();
     await page.keyboard.press("Enter");
+    await page.getByRole("button", { name: "Share project" }).click();
     await expect(page.getByLabel("Verified email")).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
@@ -106,7 +119,7 @@ test.describe("project invitations", () => {
     await page.unroute(listPattern);
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByLabel("One-time invitation link")).toHaveCount(0);
-    await page.getByRole("button", { name: "Share project" }).click();
+    await openShare(page);
     await expect(page.getByText(fixture.invitee.email, { exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Sign out" }).click();
@@ -117,12 +130,12 @@ test.describe("project invitations", () => {
     await page.getByLabel("Password").fill(fixture.invitee.password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page).toHaveURL(new RegExp(`/app/projects/${fixture.projectId}$`), { timeout: 15_000 });
-    const context = page.getByRole("complementary", { name: "Project details" });
-    await expect(context.getByText("Viewer", { exact: true })).toBeVisible();
+    const context = await openDetails(page);
+    await expect(context.getByText("Viewer", { exact: true }).first()).toBeVisible();
     await expect(context.getByRole("button", { name: "Share project" })).toHaveCount(0);
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page).toHaveURL(new RegExp(`/app/projects/${fixture.projectId}$`));
-    await expect(page.getByRole("complementary", { name: "Project details" }).getByText("Viewer", { exact: true })).toBeVisible();
+    await expect((await openDetails(page)).getByText("Viewer", { exact: true }).first()).toBeVisible();
   });
 
 
@@ -131,15 +144,15 @@ test.describe("project invitations", () => {
     const fixture = await createFixture(page, database, admin, users);
     const otherProjectId = await createProjectViaApi(page, "Second owner project");
     await page.goto(`/app/projects/${fixture.projectId}`);
-    await page.getByRole("button", { name: "Share project" }).click();
+    await openShare(page);
     await page.getByLabel("Verified email").fill(fixture.invitee.email);
     await page.getByRole("button", { name: "Create invitation" }).click();
     await expect(page.getByLabel("One-time invitation link")).toBeVisible();
 
-    await page.getByRole("button", { name: /Second owner project/ }).click();
+    await page.locator("#projects-nav").getByRole("button", { name: "Second owner project", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/app/projects/${otherProjectId}$`));
     await expect(page.getByRole("heading", { name: "Second owner project" })).toBeVisible();
-    await page.getByRole("button", { name: "Share project" }).click();
+    await openShare(page);
     await expect(page.getByLabel("One-time invitation link")).toHaveCount(0);
     await expect(page.getByLabel("Verified email")).toHaveValue("");
     await expect(page.getByText(fixture.invitee.email, { exact: true })).toHaveCount(0);
@@ -160,7 +173,7 @@ test.describe("project invitations", () => {
     };
 
     await page.goto(`/app/projects/${fixture.projectId}`);
-    await page.getByRole("button", { name: "Share project" }).click();
+    await openShare(page);
     await page.route(listPattern, listHandler);
     await page.getByLabel("Verified email").fill(fixture.invitee.email);
     await page.getByRole("button", { name: "Create invitation" }).click();
@@ -183,7 +196,7 @@ test.describe("project invitations", () => {
     test.setTimeout(60_000);
     const fixture = await createFixture(page, database, admin, users);
     await page.goto(`/app/projects/${fixture.projectId}`);
-    await page.getByRole("button", { name: "Share project" }).click();
+    await openShare(page);
     await page.getByLabel("Verified email").fill(fixture.invitee.email);
     await page.getByRole("button", { name: "Create invitation" }).click();
     const url = await page.getByLabel("One-time invitation link").inputValue();
@@ -193,7 +206,7 @@ test.describe("project invitations", () => {
 
     await page.goto(url);
     await expect(page).toHaveURL(new RegExp(`/app/projects/${fixture.projectId}$`), { timeout: 15_000 });
-    await expect(page.getByRole("complementary", { name: "Project details" }).getByText("Editor", { exact: true })).toBeVisible();
+    await expect((await openDetails(page)).getByText("Editor", { exact: true }).first()).toBeVisible();
     const refreshedCookie = (await page.context().cookies(appUrl)).find(({ name }) => name === expired.cookieName);
     expect(refreshedCookie).toBeTruthy();
     const refreshed = sessionFromCookie(refreshedCookie!.value);
@@ -204,7 +217,7 @@ test.describe("project invitations", () => {
     test.setTimeout(60_000);
     const fixture = await createFixture(page, database, admin, users);
     await page.goto(`/app/projects/${fixture.projectId}`);
-    await page.getByRole("button", { name: "Share project" }).click();
+    await openShare(page);
     await page.getByLabel("Verified email").fill(fixture.invitee.email);
     await page.getByRole("button", { name: "Create invitation" }).click();
     const url = await page.getByLabel("One-time invitation link").inputValue();

@@ -15,7 +15,7 @@ export default async function SignupPage({ searchParams }: SignupPageProps) {
   if (authConfig()) {
     const supabase = await createAuthClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (user?.email_confirmed_at && !user.is_anonymous) redirect(continuation ?? "/");
+    if (user?.email_confirmed_at && !user.is_anonymous) redirect(continuation ?? "/app");
   }
   const message = error === "invalid" ? "Check your details and try again." :
     error === "rate-limited" ? "Too many emails were requested. Please wait before trying again." :

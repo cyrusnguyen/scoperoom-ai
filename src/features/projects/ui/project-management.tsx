@@ -110,7 +110,7 @@ export default function ProjectManagement({ projectId, role, projectName, projec
   return <section className="project-management" aria-labelledby="project-management-title">
     <button className="context-share-button" type="button" aria-expanded={open} aria-controls="project-management-panel" onClick={() => setOpen((value) => !value)}>Manage project</button>
     {open && <div id="project-management-panel" className="project-management-panel">
-      <div className="workspace-list-heading"><h3 id="project-management-title">Project management</h3><button className="text-button" type="button" onClick={() => void refresh()} disabled={busy}>Refresh</button></div>
+      <div className="list-heading"><h3 id="project-management-title">Project management</h3><button className="text-button" type="button" onClick={() => void refresh()} disabled={busy}>Refresh</button></div>
       {!status || !members ? <p>{message || "Loading project management..."}</p> : <>
         <span className={`lifecycle-badge lifecycle-${status.status.toLowerCase()}`}>{status.status === "ARCHIVED" ? "Archived" : "Active"}</span>
         {archived && <p className="management-notice">This project is archived. Settings and role increases are unavailable; the owner can reduce or remove member access.</p>}

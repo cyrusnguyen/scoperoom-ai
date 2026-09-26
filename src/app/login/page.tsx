@@ -15,7 +15,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   if (authConfig()) {
     const supabase = await createAuthClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (user?.email_confirmed_at && !user.is_anonymous) redirect(continuation ?? "/");
+    if (user?.email_confirmed_at && !user.is_anonymous) redirect(continuation ?? "/app");
   }
   if (code) redirect(`/login?status=confirmed${continuation ? `&continue=${encodeURIComponent(continuation)}` : ""}`);
   const message = error === "invalid"

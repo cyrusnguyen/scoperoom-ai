@@ -152,7 +152,7 @@ export default function ProjectShare({ projectId, role }: { projectId: string; r
         </div>}
         <p className="share-message" role="status" aria-live="polite">{message}</p>
         <div className="pending-invitations">
-          <div className="workspace-list-heading"><h4>Pending invitations</h4><button className="text-button" type="button" onClick={() => void refresh()} disabled={Boolean(revoking)}>Refresh</button></div>
+          <div className="list-heading"><h4>Pending invitations</h4><button className="text-button" type="button" onClick={() => void refresh()} disabled={Boolean(revoking)}>Refresh</button></div>
           {invitations === null ? <p>{refreshFailed ? "Invitation details could not be refreshed. Use Refresh to retry." : "Loading invitation details..."}</p> : pending.length ? <ul>
             {pending.map((invitation) => <li key={invitation.id}>
               <span><strong>{invitation.verifiedEmail}</strong><small>{roleLabel(invitation.role)} - expires {new Date(invitation.expiresAt).toLocaleDateString()}</small></span>

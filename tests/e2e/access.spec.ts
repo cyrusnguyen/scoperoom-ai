@@ -16,7 +16,7 @@ test("anonymous visitors reach login before the canvas", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Sign in to ScopeRoom" })).toBeVisible();
   await expect(page.getByLabel("Email address")).toBeVisible();
   await expect(page.getByLabel("Password")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Blank canvas" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "No project open" })).toHaveCount(0);
   const centerOffset = await page.locator(".login-card").evaluate((card) => {
     const box = card.getBoundingClientRect();
     return Math.abs(box.left + box.width / 2 - window.innerWidth / 2);
@@ -203,8 +203,8 @@ test.describe("local Supabase Auth", () => {
 
       await page.getByLabel("Verification code").fill(code!);
       await page.getByRole("button", { name: "Verify email" }).click();
-      await expect(page).toHaveURL(/\/$/);
-      await expect(page.getByRole("heading", { name: "Blank canvas" })).toBeVisible();
+      await expect(page).toHaveURL(/\/app$/);
+      await expect(page.getByRole("heading", { level: 1, name: "No project open" })).toBeVisible();
       const { data: verified } = await admin.auth.admin.getUserById(pending!.id);
       expect(verified.user?.email_confirmed_at).toBeTruthy();
     } finally {
@@ -225,25 +225,24 @@ test.describe("local Supabase Auth", () => {
     await expect(page).toHaveURL(/\/login$/);
   });
 
-  test("account sign-in opens the canvas and sign-out closes access", async ({ page }) => {
+  test("account sign-in opens the projects shell and sign-out closes access", async ({ page }) => {
     await page.goto("/login");
     await page.getByLabel("Email address").fill(email);
     await page.getByLabel("Password").fill(password);
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByRole("heading", { name: "Blank canvas" })).toBeVisible();
-    await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible();
-    await expect(page.getByText("No project is connected yet.")).toBeVisible();
+    await expect(page).toHaveURL(/\/app$/);
+    await expect(page.getByRole("heading", { level: 1, name: "No project open" })).toBeVisible();
+    await expect(page.locator("#projects-nav")).toBeVisible();
     expect(await page.locator("body").evaluate((body) => getComputedStyle(body).backgroundColor)).toBe("rgb(25, 28, 26)");
-    await page.goto("/");
+    await page.goto("/app");
+    await expect(page.getByRole("heading", { level: 1, name: "No project open" })).toBeVisible();
     await page.keyboard.press("Tab");
-    await expect(page.getByRole("link", { name: "Skip to main content" })).toBeFocused();
+    await expect(page.getByRole("link", { name: "Skip to editor" })).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("main")).toBeFocused();
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(page.getByRole("heading", { name: "Your projects" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Project details" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "No project open" })).toBeVisible();
     const dimensions = await page.evaluate(() => ({
       content: document.documentElement.scrollWidth,
       viewport: document.documentElement.clientWidth,

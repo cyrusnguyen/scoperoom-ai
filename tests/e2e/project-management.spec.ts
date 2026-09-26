@@ -68,6 +68,7 @@ test.describe("project management", () => {
     });
 
     await page.goto(`/app/projects/${project.id}`);
+    await page.getByRole("button", { name: "Inspect" }).click();
     await page.getByRole("button", { name: "Manage project" }).click();
     await expect(page.getByText("Casey Collaborator", { exact: true })).toBeVisible();
     await page.getByLabel("Role for Casey Collaborator").selectOption("EDITOR");
@@ -78,7 +79,7 @@ test.describe("project management", () => {
     await page.getByRole("button", { name: "Archive project" }).click();
     await page.getByLabel("Archive reason").fill("Finished pilot work");
     await page.getByRole("button", { name: "Confirm archive" }).click();
-    await expect(page.getByText("Archived", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Project management" }).getByText("Archived", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Restore project" })).toBeVisible();
     await page.getByLabel("Role for Casey Collaborator").selectOption("REVIEWER");
     await expect(page.getByRole("button", { name: "Confirm role change" })).toBeVisible();
@@ -97,6 +98,7 @@ test.describe("project management", () => {
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ project: status, members: [{ profileId: "44444444-4444-4444-8444-444444444444", displayName: "Owner", role: "OWNER", version: 1, designatedApprover: false }] }) }));
 
     await page.goto(`/app/projects/${project.id}`);
+    await page.getByRole("button", { name: "Inspect" }).click();
     await page.getByRole("button", { name: "Manage project" }).click();
     await expect(page.getByRole("region", { name: "Project management" }).getByText("Owner", { exact: true }).first()).toBeVisible();
     await expect(page.getByLabel("Project name")).toBeDisabled();
