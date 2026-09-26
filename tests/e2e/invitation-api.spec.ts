@@ -42,7 +42,7 @@ test("an invited account accepts only its own project through the API", async ({
     expect(await listed.json()).toEqual({ invitations: [] });
   } finally {
     await memberContext?.close();
-    await cleanupUsers(database, admin, users);
+    await cleanupUsers(database, admin, users, page);
     await database.end();
   }
 });

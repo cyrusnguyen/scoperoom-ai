@@ -47,8 +47,8 @@ test.describe("project shell", () => {
     await signIn(page, admin, users, "Shell Test");
   });
 
-  test.afterEach(async () => {
-    try { await cleanupUsers(database, admin, users); } finally { await database.end(); }
+  test.afterEach(async ({ page }) => {
+    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("sidebar tabs are keyboard operable, the filter narrows only the visible list, and tabs never change the open project", async ({ page }) => {

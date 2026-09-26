@@ -35,8 +35,8 @@ test.describe("project creation", () => {
     await signIn(page, admin, users, "Creation Test");
   });
 
-  test.afterEach(async () => {
-    try { await cleanupUsers(database, admin, users); } finally { await database.end(); }
+  test.afterEach(async ({ page }) => {
+    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("creates a named project from the sidebar, sends one request per activation, and opens it", async ({ page }) => {

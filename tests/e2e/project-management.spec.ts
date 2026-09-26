@@ -42,8 +42,8 @@ test.describe("project details", () => {
     await signIn(page, admin, users, "Management Test");
   });
 
-  test.afterEach(async () => {
-    try { await cleanupUsers(database, admin, users); } finally { await database.end(); }
+  test.afterEach(async ({ page }) => {
+    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("an owner changes a member role, chooses an approver, archives, then reduces and removes access", async ({ page }) => {

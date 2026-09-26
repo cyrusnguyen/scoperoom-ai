@@ -30,8 +30,8 @@ test.describe("shell actions", () => {
     users = [];
   });
 
-  test.afterEach(async () => {
-    try { await cleanupUsers(database, admin, users); } finally { await database.end(); }
+  test.afterEach(async ({ page }) => {
+    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("row menus archive with a reason and restore within capacity, and the sidebar refreshes from the server", async ({ page }) => {

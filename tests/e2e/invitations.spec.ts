@@ -74,8 +74,8 @@ test.describe("project invitations", () => {
     users = [];
   });
 
-  test.afterEach(async () => {
-    try { await cleanupUsers(database, admin, users); } finally { await database.end(); }
+  test.afterEach(async ({ page }) => {
+    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("owner shares once, survives clipboard rejection, and an invited account opens the project after reload", async ({ page }) => {

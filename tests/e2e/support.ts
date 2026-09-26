@@ -73,7 +73,21 @@ export async function createProjectViaApi(page: Page, name: string) {
   return (await response.json() as { id: string }).id;
 }
 
-export async function cleanupUsers(database: Client, admin: SupabaseClient, users: string[]) {
+/**
+ * Deletes the test accounts. Pass the test's page so it closes first: deleting a profile or Auth user under
+ * the page's in-flight reads makes the server re-create the profile mid-delete (FK/duplicate-key → 503 and
+ * orphan profiles). Close any extra pages or contexts yourself before calling this.
+ */
+export async function cleanupUsers(database: Client, admin: SupabaseClient, users: string[], page?: Page) {
+  if (page && !page.isClosed()) {
+    // Let the page's requests finish first: a request that reaches a cold `next dev` route still runs its handler after
+    // the page closes, seconds later. A request a test's route handler holds forever never reaches the server, hence the bound.
+    const responses = (await page.requests()).map((request) => request.response().catch(() => null));
+    await Promise.race([Promise.all(responses), new Promise((resolve) => setTimeout(resolve, 5_000))]);
+    await page.close();
+    // ponytail: fixed settle for requests sent after the snapshot above; warm handlers finish in <=300 ms, a cold compile can exceed it.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
   if (!users.length) return;
   const profiles = "(select id from app.user_profile where auth_user_id = any($1::uuid[]))";
   await database.query(`delete from app.mutation_receipt where actor_id in ${profiles}`, [users]);

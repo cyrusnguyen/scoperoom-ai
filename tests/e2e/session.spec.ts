@@ -22,7 +22,7 @@ test("session cookies are HttpOnly/Lax and the security headers are present", as
     expect(response.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");
     const api = await page.request.get("/api/me");
     expect(api.headers()["x-request-id"]).toMatch(/^[0-9a-f-]{36}$/);
-  } finally { await cleanupUsers(database, admin, users); await database.end(); }
+  } finally { await cleanupUsers(database, admin, users, page); await database.end(); }
 });
 
 test("an expired access token on a project page is refreshed and saved", async ({ page, context }) => {
@@ -45,5 +45,5 @@ test("an expired access token on a project page is refreshed and saved", async (
     expect(refreshed.expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000));
     await page.reload();
     await expect(page.getByRole("heading", { name: "Session project" }).first()).toBeVisible();
-  } finally { await cleanupUsers(database, admin, users); await database.end(); }
+  } finally { await cleanupUsers(database, admin, users, page); await database.end(); }
 });

@@ -60,5 +60,5 @@ test("a project is created once, owned by its creator and private to others", as
     const otherPage = await other.newPage();
     await signIn(otherPage, admin, users, "API Outsider");
     expect((await otherPage.request.get(`/api/projects/${project.id}/bootstrap`)).status()).toBe(404);
-  } finally { await other.close(); await cleanupUsers(database, admin, users); await database.end(); }
+  } finally { await other.close(); await cleanupUsers(database, admin, users, page); await database.end(); }
 });

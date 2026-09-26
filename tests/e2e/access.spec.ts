@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { requireEnv } from "../support/env.ts";
-import { neutralizeStrayOverlays } from "./support";
+import { cleanupUsers, neutralizeStrayOverlays, openDatabase } from "./support";
 
 const authUrl = process.env.E2E_SUPABASE_URL;
 const secretKey = process.env.E2E_SUPABASE_SECRET_KEY;
@@ -10,6 +10,13 @@ const password = `Test-${randomUUID()}-Pass!`;
 const email = `canvas-${randomUUID()}@example.test`;
 let admin: SupabaseClient;
 let userId: string;
+
+/** Deleting only the Auth user leaves its app profile behind as an orphan (auth_user_id set null), so remove both. */
+async function removeAccount(authUserId: string, page?: Page) {
+  if (!process.env.E2E_DATABASE_URL) { await admin.auth.admin.deleteUser(authUserId); return; }
+  const database = await openDatabase();
+  try { await cleanupUsers(database, admin, [authUserId], page); } finally { await database.end(); }
+}
 
 test("anonymous visitors reach login before the canvas", async ({ page }) => {
   await page.goto("/");
@@ -101,7 +108,7 @@ test.describe("local Supabase Auth", () => {
   });
 
   test.afterAll(async () => {
-    if (userId) await admin.auth.admin.deleteUser(userId);
+    if (userId) await removeAccount(userId);
   });
 
   test("blank signup name creates no Supabase identity", async ({ page }) => {
@@ -224,7 +231,7 @@ test.describe("local Supabase Auth", () => {
     } finally {
       const { data: users } = await admin.auth.admin.listUsers();
       const created = users.users.find((user) => user.email === signupEmail);
-      if (created) await admin.auth.admin.deleteUser(created.id);
+      if (created) await removeAccount(created.id, page);
     }
   });
 
