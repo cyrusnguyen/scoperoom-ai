@@ -32,3 +32,10 @@ test("every custom property a stylesheet reads is defined in tokens.css, and onl
     assert.doesNotMatch(css, /^\s*--[\w-]+\s*:/m, `${file} defines its own custom properties; move them to ${tokensPath}`);
   }
 });
+
+test("no stylesheet outside tokens.css writes a hex colour", () => {
+  for (const file of stylesheets()) {
+    const hex = readFileSync(file, "utf8").match(/#[0-9a-f]{3,8}\b/gi);
+    assert.equal(hex, null, `${file} uses ${hex?.join(", ")}; use a token from ${tokensPath}`);
+  }
+});

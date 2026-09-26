@@ -4,7 +4,7 @@
   place-items: center;
   padding: 24px;
   background-color: var(--canvas-background);
-  background-image: radial-gradient(#394139 1px, transparent 1px);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
   background-size: 22px 22px;
 }
 .login-card {
@@ -13,7 +13,7 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
-  box-shadow: 0 22px 60px #0005;
+  box-shadow: var(--shadow-overlay);
 }
 .login-brand { display: flex; align-items: center; gap: 11px; font-size: 14px; font-weight: 700; }
 .login-brand-suffix { color: var(--foreground-subtle); font-weight: 400; }
@@ -35,8 +35,8 @@
   min-height: 44px; margin-top: 2px; border: 1px solid var(--accent); border-radius: 6px;
   background: var(--accent); color: var(--background); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
 }
-.login-form button:hover { background: #d3bd8d; }
-.login-error { margin: -5px 0 19px; color: #f2afa5; font-size: 12px; line-height: 1.5; }
+.login-form button:hover { background: var(--accent-hover); }
+.login-error { margin: -5px 0 19px; color: var(--danger-foreground); font-size: 12px; line-height: 1.5; }
 .login-footnote { margin: 28px 0 0; padding-top: 19px; border-top: 1px solid var(--border); color: var(--foreground-subtle); font-size: 12px; }
 
 .login-notice { margin: -5px 0 19px; color: var(--foreground-muted); font-size: 12px; line-height: 1.5; }

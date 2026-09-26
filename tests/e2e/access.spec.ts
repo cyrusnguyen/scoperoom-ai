@@ -32,6 +32,19 @@ test("confirmation link drops the temporary auth code before sign-in", async ({ 
   await expect(page).toHaveURL(/\/login\?status=confirmed$/);
   await expect(page.getByRole("status")).toHaveText("Email confirmed. Sign in to continue.");
 });
+test("sign-in and sign-up fit a 390 px screen and show a visible keyboard focus ring", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const path of ["/login", "/signup"]) {
+    await page.goto(path);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), `${path} fits 390 px`).toBe(true);
+    await page.keyboard.press("Tab");
+    const outline = await page.evaluate(() => {
+      const element = document.activeElement;
+      return element && element !== document.body ? getComputedStyle(element).outlineStyle : "none";
+    });
+    expect(outline, `${path} first Tab stop shows a focus ring`).not.toBe("none");
+  }
+});
 test("signup and pending verification handle direct visits and email changes", async ({ page }) => {
   await page.goto("/signup");
   await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();

@@ -225,6 +225,8 @@ test.describe("project invitations", () => {
     await logIn(page, fixture.outsider);
     await page.goto(url);
     await expect(page.getByRole("heading", { name: "Open a shared project" })).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await expect(page.getByText("Private invitation project", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Use another account" })).toBeVisible();
     await page.getByRole("button", { name: "Use another account" }).click();
