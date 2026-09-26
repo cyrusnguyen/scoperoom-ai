@@ -8,7 +8,7 @@ import {
 import { type ProjectAccessRole, type ProjectIdentity, uuid } from "../contracts/project.ts";
 import {
   checkReceipt, findReceipt, lockActor, lockProject, profileFor, readProject, receiptString, recordEvent, requestHash,
-  requireActive, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot,
+  requireActive, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow, type Transaction,
 } from "./access.ts";
 import { ProjectError } from "./errors.ts";
 
@@ -147,7 +147,18 @@ export async function listMyInvitations(identity: InvitationIdentity): Promise<{
   });
 }
 
-type RawMembership = { active: boolean; deactivated_sequence: bigint | null };
+type RawMembership = { active: boolean; role: ProjectMemberRole; deactivated_sequence: bigint | null };
+
+/**
+ * Locks the caller's membership row (after the project lock) and derives their current role from it. lockProject's joined role can be
+ * stale: after a wait on the project lock, READ COMMITTED rechecks the project row but not the membership row it was joined with.
+ */
+async function lockMembership(tx: Transaction, project: ProjectRow, profileId: string) {
+  const [membership] = await tx.$queryRaw<RawMembership[]>`SELECT active, role::text AS role, deactivated_sequence FROM app.project_membership WHERE project_id = ${project.id}::uuid AND profile_id = ${profileId}::uuid FOR UPDATE`;
+  const role: ProjectAccessRole | null = project.ownerId === profileId ? "OWNER" : membership?.active ? membership.role : null;
+  return { membership, role };
+}
+
 type RawInvitation = { id: string; verified_email: string; role: string; issued_sequence: bigint; expires_at: Date; accepted_by: string | null; accepted_at: Date | null; revoked_at: Date | null };
 
 export async function acceptInvitation(identity: InvitationIdentity, input: unknown): Promise<{ projectId: string; role: ProjectAccessRole; replayed: boolean }> {
@@ -166,7 +177,9 @@ export async function acceptInvitation(identity: InvitationIdentity, input: unkn
         const projectId = receiptString(receipt.result, "projectId");
         if (!projectId) throw new ProjectError("UNAVAILABLE");
         const project = await lockProject(tx, profile.id, projectId);
-        return { projectId: project.id, role: requireMember(project), replayed: true };
+        const { role } = await lockMembership(tx, project, profile.id);
+        if (!role) throw new ProjectError("NOT_FOUND");
+        return { projectId: project.id, role, replayed: true };
       }
       const found = await tx.invitation.findFirst({
         where: "tokenHash" in target ? { tokenHash: target.tokenHash } : { id: target.invitationId, verifiedEmail: identity.verifiedEmail },
@@ -174,20 +187,20 @@ export async function acceptInvitation(identity: InvitationIdentity, input: unkn
       });
       if (!found) throw new ProjectError("NOT_FOUND");
       const project = await lockProject(tx, profile.id, found.projectId);
-      const [membership] = await tx.$queryRaw<RawMembership[]>`SELECT active, deactivated_sequence FROM app.project_membership WHERE project_id = ${project.id}::uuid AND profile_id = ${profile.id}::uuid FOR UPDATE`;
+      const { membership, role: memberRole } = await lockMembership(tx, project, profile.id);
       const [invitation] = await tx.$queryRaw<RawInvitation[]>`
         SELECT id, verified_email, role::text AS role, issued_sequence, expires_at, accepted_by, accepted_at, revoked_at
         FROM app.invitation WHERE id = ${found.id}::uuid FOR UPDATE`;
       if (!invitation || invitation.revoked_at || invitation.verified_email !== identity.verifiedEmail) throw new ProjectError("NOT_FOUND");
       if (invitation.accepted_at) {
         // A consumed link returns the established result only to its acceptor while still admitted.
-        if (invitation.accepted_by !== profile.id || !project.role) throw new ProjectError("NOT_FOUND");
-        const established = { projectId: project.id, role: project.role };
+        if (invitation.accepted_by !== profile.id || !memberRole) throw new ProjectError("NOT_FOUND");
+        const established = { projectId: project.id, role: memberRole };
         await saveReceipt(tx, profile.id, "USER", profile.id, validated.key, ACCEPT_OPERATION, hash, established);
         return { ...established, replayed: true };
       }
       if (project.status !== "ACTIVE" || invitation.expires_at <= new Date()) throw new ProjectError("NOT_FOUND");
-      if (project.role) throw new ProjectError("ALREADY_MEMBER", { role: project.role });
+      if (memberRole) throw new ProjectError("ALREADY_MEMBER", { role: memberRole });
       // An invitation issued at or before the latest removal/leave never readmits (ordered by project event sequence).
       const deactivatedSequence = membership?.deactivated_sequence ?? null;
       if (deactivatedSequence !== null && invitation.issued_sequence <= deactivatedSequence) throw new ProjectError("NOT_FOUND");

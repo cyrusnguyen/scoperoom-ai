@@ -121,6 +121,23 @@ test("sequence rule under lock contention: an invite issued before removal never
   });
 });
 
+test("two tabs accepting the same link at once both land on the membership", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const member = await user("Two Tabs");
+    const projectId = await project(owner);
+    const token = tokenOf(await invite(owner, projectId, member.verifiedEmail));
+    // Queue both acceptances behind a held project lock so the second one re-reads the row the first one changed.
+    await database.query("begin");
+    await database.query("select id from app.project where id = $1 for update", [projectId]);
+    const tabs = [acceptInvitation(member, { token, key: randomUUID() }), acceptInvitation(member, { token, key: randomUUID() })];
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await database.query("commit");
+    const results = await Promise.all(tabs);
+    assert.deepEqual(results.map(({ replayed }) => replayed).sort(), [false, true]);
+    for (const result of results) assert.deepEqual({ projectId: result.projectId, role: result.role }, { projectId, role: "EDITOR" });
+  });
+});
+
 test("collaborator capacity holds under concurrent acceptance at 9 of 10", { skip: !canRun }, async () => {
   await withFixture(async ({ user, project }) => {
     const owner = await user();
