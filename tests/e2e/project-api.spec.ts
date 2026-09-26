@@ -13,6 +13,12 @@ test("project APIs require an authenticated identity and never cache", async ({ 
     expect((await response.json() as { error: { requestId: string } }).error.requestId).toMatch(/^[0-9a-f-]{36}$/);
   }
   expect((await request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { name: "Denied" } })).status()).toBe(401);
+  // The same-origin check runs before authentication: a missing or foreign Origin is refused outright.
+  for (const origin of [undefined, "https://evil.example"]) {
+    const refused = await request.post("/api/projects", { headers: { ...(origin ? { Origin: origin } : {}), "Idempotency-Key": randomUUID() }, data: { name: "Cross-site" } });
+    expect(refused.status()).toBe(403);
+    expect((await refused.json() as { error: { code: string } }).error.code).toBe("INVALID_REQUEST");
+  }
 });
 
 test("a project is created once, owned by its creator and private to others", async ({ page, browser }) => {
@@ -21,6 +27,9 @@ test("a project is created once, owned by its creator and private to others", as
   const other = await browser.newContext();
   try {
     const { authUserId } = await signIn(page, admin, users, "API Owner");
+    const keyless = await page.request.post("/api/projects", { headers: { Origin: appUrl }, data: { name: "No key" } });
+    expect(keyless.status()).toBe(400);
+    expect((await keyless.json() as { error: { code: string } }).error.code).toBe("INVALID_INPUT");
     const denied = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { name: "No entitlement" } });
     expect(denied.status()).toBe(403);
     expect((await denied.json() as { error: { code: string } }).error.code).toBe("ENTITLEMENT_REQUIRED");
