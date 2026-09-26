@@ -1,17 +1,9 @@
 import { restoreProject } from "@/features/projects/server/management";
-import { authConfig } from "@/server/web/auth-config";
-import { boundedJsonBody, verifiedIdentity } from "@/server/web/api-request";
-import { projectError, projectFailure, projectResponse } from "@/server/web/project-api";
-import { readProcessEnv } from "@/server/env";
+import { mutationRoute } from "@/server/web/api-request";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request, { params }: { params: Promise<{ projectId: string }> }) {
-  if (request.headers.get("origin") !== readProcessEnv().appUrl) return projectError("INVALID_REQUEST", "This request could not be accepted.", 403);
-  const user = await verifiedIdentity();
-  if (!user) return authConfig() ? projectError("UNAUTHENTICATED", "Sign in to continue.", 401) : projectError("UNAVAILABLE", "Project access is unavailable.", 503);
-  const body = await boundedJsonBody(request);
-  const key = request.headers.get("idempotency-key");
-  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 1 || typeof (body as { expectedProjectVersion?: unknown }).expectedProjectVersion !== "number" || !key) return projectError("INVALID_INPUT", "Enter a valid project version and try again.", 400);
-  try { return projectResponse(await restoreProject(user, (await params).projectId, { ...(body as { expectedProjectVersion: number }), key })); } catch (error) { return projectFailure(error); }
+  const { projectId } = await params;
+  return mutationRoute(request, (user, input) => restoreProject(user, projectId, input));
 }

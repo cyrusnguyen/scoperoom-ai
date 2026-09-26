@@ -1,28 +1,9 @@
 import { revokeInvitation } from "@/features/projects/server/invitations";
-import { authConfig } from "@/server/web/auth-config";
-import { boundedJsonBody, verifiedIdentity } from "@/server/web/api-request";
-import { projectError, projectFailure, projectResponse } from "@/server/web/project-api";
-import { readProcessEnv } from "@/server/env";
+import { mutationRoute } from "@/server/web/api-request";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request, { params }: { params: Promise<{ projectId: string; invitationId: string }> }) {
-  if (request.headers.get("origin") !== readProcessEnv().appUrl) return projectError("INVALID_REQUEST", "This request could not be accepted.", 403);
-  const user = await verifiedIdentity();
-  if (!user) return authConfig()
-    ? projectError("UNAUTHENTICATED", "Sign in to continue.", 401)
-    : projectError("UNAVAILABLE", "Project access is unavailable.", 503);
-  const body = await boundedJsonBody(request);
-  const key = request.headers.get("idempotency-key");
-  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 1 ||
-      typeof (body as { expectedVersion?: unknown }).expectedVersion !== "number" || typeof key !== "string") {
-    return projectError("INVALID_INPUT", "This invitation cannot be revoked.", 400);
-  }
-  try {
-    const { projectId, invitationId } = await params;
-    const revoked = await revokeInvitation(user, projectId, invitationId, { expectedVersion: (body as { expectedVersion: number }).expectedVersion, key });
-    return projectResponse(revoked, revoked.replayed ? 200 : 201);
-  } catch (error) {
-    return projectFailure(error);
-  }
+  const { projectId, invitationId } = await params;
+  return mutationRoute(request, (user, input) => revokeInvitation(user, projectId, invitationId, input));
 }

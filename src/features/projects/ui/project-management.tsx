@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type SubmitEvent } from "reac
 
 type Role = "OWNER" | "EDITOR" | "REVIEWER" | "VIEWER";
 type ProjectStatus = "ACTIVE" | "ARCHIVED";
-type Status = { status: ProjectStatus; workspaceStatus?: ProjectStatus; version: number; settingsVersion: number; approvalPolicyVersion: number; membershipVersion: number; designatedApproverId: string | null };
+type Status = { status: ProjectStatus; version: number; settingsVersion: number; approvalPolicyVersion: number; membershipVersion: number; designatedApproverId: string | null };
 type Member = { profileId: string; displayName: string; role: Role; version: number; designatedApprover: boolean };
 type ApiError = { error?: { message?: string } };
 type Mutation = { method: "PATCH" | "POST" | "DELETE"; url: string; body: Record<string, unknown>; confirmation: string };
@@ -15,12 +15,11 @@ async function errorMessage(response: Response, fallback: string) {
 function roleLabel(role: Role) { return role[0] + role.slice(1).toLowerCase(); }
 const rank = { VIEWER: 1, REVIEWER: 2, EDITOR: 3 } as const;
 
-export default function ProjectManagement({ projectId, role, projectName, projectStatus, workspaceArchived, onProjectChange }: {
+export default function ProjectManagement({ projectId, role, projectName, projectStatus, onProjectChange }: {
   projectId: string;
   role: Role;
   projectName: string;
   projectStatus: ProjectStatus;
-  workspaceArchived: boolean;
   onProjectChange: (next: Partial<{ name: string; status: ProjectStatus }>) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -38,8 +37,7 @@ export default function ProjectManagement({ projectId, role, projectName, projec
   const retryRef = useRef<(() => Promise<void>) | null>(null);
   const owner = role === "OWNER";
   const archived = (status?.status ?? projectStatus) === "ARCHIVED";
-  const workspaceReadOnly = workspaceArchived || status?.workspaceStatus === "ARCHIVED";
-  const readOnly = archived || workspaceReadOnly;
+  const readOnly = archived;
 
   const refresh = useCallback(async (clearMessage = true) => {
     try {
@@ -95,14 +93,14 @@ export default function ProjectManagement({ projectId, role, projectName, projec
   };
   const applyRole = (member: Member, nextRole: Exclude<Role, "OWNER">) => {
     setPendingRole(null);
-    if (status && owner && !workspaceReadOnly && (!archived || rank[nextRole] < rank[member.role as Exclude<Role, "OWNER">])) void mutate({ method: "PATCH", url: `/api/projects/${projectId}/members/${member.profileId}`, body: { role: nextRole, expectedMemberVersion: member.version }, confirmation: "Member role updated." });
+    if (status && owner && (!archived || rank[nextRole] < rank[member.role as Exclude<Role, "OWNER">])) void mutate({ method: "PATCH", url: `/api/projects/${projectId}/members/${member.profileId}`, body: { role: nextRole, expectedMemberVersion: member.version }, confirmation: "Member role updated." });
   };
   const remove = (member: Member) => {
     setRemovePending(null);
-    if (status && owner && !workspaceReadOnly) void mutate({ method: "DELETE", url: `/api/projects/${projectId}/members/${member.profileId}`, body: { expectedMemberVersion: member.version }, confirmation: "Member removed." });
+    if (status && owner) void mutate({ method: "DELETE", url: `/api/projects/${projectId}/members/${member.profileId}`, body: { expectedMemberVersion: member.version }, confirmation: "Member removed." });
   };
   const lifecycle = () => {
-    if (!status || !owner || workspaceReadOnly) return;
+    if (!status || !owner) return;
     const restoring = status.status === "ARCHIVED";
     if (!restoring && !archiveReason.trim()) return;
     setArchivePending(false);
@@ -115,16 +113,16 @@ export default function ProjectManagement({ projectId, role, projectName, projec
       <div className="workspace-list-heading"><h3 id="project-management-title">Project management</h3><button className="text-button" type="button" onClick={() => void refresh()} disabled={busy}>Refresh</button></div>
       {!status || !members ? <p>{message || "Loading project management..."}</p> : <>
         <span className={`lifecycle-badge lifecycle-${status.status.toLowerCase()}`}>{status.status === "ARCHIVED" ? "Archived" : "Active"}</span>
-        {workspaceReadOnly ? <p className="management-notice">This workspace is archived. Project controls are read-only until the workspace is restored.</p> : archived && <p className="management-notice">This project is archived. Settings and role increases are unavailable; the owner can reduce or remove member access.</p>}
+        {archived && <p className="management-notice">This project is archived. Settings and role increases are unavailable; the owner can reduce or remove member access.</p>}
         <form className="share-form" onSubmit={saveName}><label htmlFor="project-settings-name">Project name</label><input id="project-settings-name" aria-label="Project name" value={name} onChange={(event) => setName(event.target.value)} disabled={!owner || readOnly || busy} required maxLength={120} />{owner && !readOnly && <button className="context-share-button" type="submit" disabled={busy || !name.trim() || name.trim() === projectName}>Save name</button>}</form>
         <div className="management-members"><h4>Project members <span>{members.length}</span></h4><ul>{members.map((member) => <li key={member.profileId}>
           <span><strong>{member.displayName}</strong><small>{member.designatedApprover ? "Designated approver" : roleLabel(member.role)}</small></span>
-          {owner && member.role !== "OWNER" && !workspaceReadOnly ? <span className="member-actions"><select aria-label={`Role for ${member.displayName}`} value={member.role} onChange={(event) => { const nextRole = event.target.value as Exclude<Role, "OWNER">; if (rank[nextRole] < rank[member.role as Exclude<Role, "OWNER">]) setPendingRole({ member, role: nextRole }); else applyRole(member, nextRole); }} disabled={busy}>{(["EDITOR", "REVIEWER", "VIEWER"] as const).filter((value) => !archived || rank[value] <= rank[member.role as Exclude<Role, "OWNER">]).map((value) => <option key={value} value={value}>{roleLabel(value)}</option>)}</select><button className="text-button" type="button" onClick={() => setRemovePending(member)} disabled={busy}>Remove</button></span> : <span className="member-role">{roleLabel(member.role)}</span>}
+          {owner && member.role !== "OWNER" ? <span className="member-actions"><select aria-label={`Role for ${member.displayName}`} value={member.role} onChange={(event) => { const nextRole = event.target.value as Exclude<Role, "OWNER">; if (rank[nextRole] < rank[member.role as Exclude<Role, "OWNER">]) setPendingRole({ member, role: nextRole }); else applyRole(member, nextRole); }} disabled={busy}>{(["EDITOR", "REVIEWER", "VIEWER"] as const).filter((value) => !archived || rank[value] <= rank[member.role as Exclude<Role, "OWNER">]).map((value) => <option key={value} value={value}>{roleLabel(value)}</option>)}</select><button className="text-button" type="button" onClick={() => setRemovePending(member)} disabled={busy}>Remove</button></span> : <span className="member-role">{roleLabel(member.role)}</span>}
         </li>)}</ul></div>
         {pendingRole && <div className="management-confirm"><p>Changing {pendingRole.member.displayName} to {roleLabel(pendingRole.role)} reduces their project access.</p><button className="text-button" type="button" onClick={() => applyRole(pendingRole.member, pendingRole.role)} disabled={busy}>Confirm role change</button><button className="text-button" type="button" onClick={() => setPendingRole(null)} disabled={busy}>Cancel</button></div>}
         {removePending && <div className="management-confirm"><p>Removing {removePending.displayName} revokes their project access.</p><button className="text-button" type="button" onClick={() => remove(removePending)} disabled={busy}>Confirm removal</button><button className="text-button" type="button" onClick={() => setRemovePending(null)} disabled={busy}>Cancel</button></div>}
         <form className="share-form" onSubmit={saveApprover}><label htmlFor="designated-approver">Designated approver</label><select id="designated-approver" value={approver ?? ""} onChange={(event) => setApprover(event.target.value || null)} disabled={!owner || readOnly || busy}><option value="">No designated approver</option>{members.filter((member) => member.role !== "VIEWER").map((member) => <option key={member.profileId} value={member.profileId}>{member.displayName} / {roleLabel(member.role)}</option>)}</select>{owner && !readOnly && <button className="context-share-button" type="submit" disabled={busy || approver === status.designatedApproverId}>Save approver</button>}</form>
-        {owner && !workspaceReadOnly && <div className="management-lifecycle">{status.status === "ARCHIVED" ? <button className="text-button" type="button" onClick={lifecycle} disabled={busy}>Restore project</button> : archivePending ? <div className="management-confirm"><p>Archiving keeps this project readable and revokes pending invitations.</p><label htmlFor="archive-reason">Archive reason</label><input id="archive-reason" value={archiveReason} onChange={(event) => setArchiveReason(event.target.value)} disabled={busy} required maxLength={1000} /><button className="text-button" type="button" onClick={lifecycle} disabled={busy || !archiveReason.trim()}>Confirm archive</button><button className="text-button" type="button" onClick={() => { setArchivePending(false); setArchiveReason(""); }} disabled={busy}>Cancel</button></div> : <button className="text-button" type="button" onClick={() => setArchivePending(true)} disabled={busy}>Archive project</button>}</div>}
+        {owner && <div className="management-lifecycle">{status.status === "ARCHIVED" ? <button className="text-button" type="button" onClick={lifecycle} disabled={busy}>Restore project</button> : archivePending ? <div className="management-confirm"><p>Archiving keeps this project readable and revokes pending invitations.</p><label htmlFor="archive-reason">Archive reason</label><input id="archive-reason" value={archiveReason} onChange={(event) => setArchiveReason(event.target.value)} disabled={busy} required maxLength={1000} /><button className="text-button" type="button" onClick={lifecycle} disabled={busy || !archiveReason.trim()}>Confirm archive</button><button className="text-button" type="button" onClick={() => { setArchivePending(false); setArchiveReason(""); }} disabled={busy}>Cancel</button></div> : <button className="text-button" type="button" onClick={() => setArchivePending(true)} disabled={busy}>Archive project</button>}</div>}
       </>}
       {retryAvailable && <button className="text-button" type="button" onClick={() => void retryRef.current?.()} disabled={busy}>Retry project change</button>}
       <p className="share-message" role="status" aria-live="polite">{message}</p>

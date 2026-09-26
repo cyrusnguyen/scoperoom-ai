@@ -1,31 +1,12 @@
-import { createProject } from "@/features/projects/server/projects";
-import { authConfig } from "@/server/web/auth-config";
-import { boundedJsonBody, verifiedIdentity } from "@/server/web/api-request";
-import { projectError, projectFailure, projectResponse } from "@/server/web/project-api";
-import { readProcessEnv } from "@/server/env";
+import { createProject, listProjects } from "@/features/projects/server/projects";
+import { mutationRoute, readRoute } from "@/server/web/api-request";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(request: Request) {
-  if (request.headers.get("origin") !== readProcessEnv().appUrl) {
-    return projectError("INVALID_REQUEST", "This request could not be accepted.", 403);
-  }
-  const user = await verifiedIdentity();
-  if (!user) return authConfig()
-    ? projectError("UNAUTHENTICATED", "Sign in to continue.", 401)
-    : projectError("UNAVAILABLE", "Project access is unavailable.", 503);
+export function GET(request: Request) {
+  return readRoute(request, listProjects);
+}
 
-  const body = await boundedJsonBody(request);
-  const key = request.headers.get("idempotency-key");
-  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 2 ||
-    typeof (body as { workspaceId?: unknown }).workspaceId !== "string" || typeof (body as { name?: unknown }).name !== "string" ||
-    typeof key !== "string" || !/^[\x21-\x7e]{16,128}$/.test(key)) {
-    return projectError("INVALID_INPUT", "Enter a valid project name and try again.", 400);
-  }
-  try {
-    const created = await createProject(user, { workspaceId: (body as { workspaceId: string }).workspaceId, name: (body as { name: string }).name, key });
-    return projectResponse(created, created.replayed ? 200 : 201);
-  } catch (error) {
-    return projectFailure(error);
-  }
+export function POST(request: Request) {
+  return mutationRoute(request, createProject, { createdStatus: 201 });
 }

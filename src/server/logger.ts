@@ -11,7 +11,6 @@ export type LogEvent = {
   safeFailureCode?: string;
   durationMs?: number;
   projectId?: string;
-  workspaceId?: string;
 };
 
 type LoggerOptions = { environment?: string; releaseId?: string; write?: (line: string) => void };
@@ -45,7 +44,6 @@ export function createLogger(options: LoggerOptions = {}) {
       ...(event.safeFailureCode && failureCodes.has(event.safeFailureCode) ? { safeFailureCode: event.safeFailureCode } : level === "error" ? { safeFailureCode: "INTERNAL_ERROR" } : {}),
       ...(duration !== undefined ? { durationMs: duration } : {}),
       ...(uuid(event.projectId) ? { projectId: uuid(event.projectId) } : {}),
-      ...(uuid(event.workspaceId) ? { workspaceId: uuid(event.workspaceId) } : {}),
     };
     try {
       write(`${JSON.stringify(entry)}\n`);

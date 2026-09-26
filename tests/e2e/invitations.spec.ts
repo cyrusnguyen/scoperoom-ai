@@ -1,29 +1,24 @@
 import { randomUUID } from "node:crypto";
-import { Client } from "pg";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { Client } from "pg";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, entitle, openDatabase, signIn } from "./support";
 
-const authUrl = process.env.E2E_SUPABASE_URL;
-const secretKey = process.env.E2E_SUPABASE_SECRET_KEY;
-const databaseUrl = process.env.E2E_DATABASE_URL ?? process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL;
-const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://127.0.0.1:3103";
-
-test.skip(!authUrl || !secretKey || !databaseUrl, "Requires isolated local Supabase Auth and database URLs");
+test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
 type Account = { authId: string; email: string; password: string };
-type Fixture = { owner: Account; invitee: Account; outsider: Account; workspaceId: string; projectId: string };
+type Fixture = { owner: { authUserId: string; email: string }; invitee: Account; outsider: Account; projectId: string };
 
-async function createAccount(admin: SupabaseClient, accounts: Account[], label: string) {
+async function createAccount(admin: SupabaseClient, users: string[], label: string) {
   const email = `${label}-${randomUUID()}@example.test`;
   const password = `Invitation-${randomUUID()}-Pass!`;
   const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { full_name: `${label} invitation test` } });
   if (error || !data.user) throw error ?? new Error("Could not create test user.");
-  const account = { authId: data.user.id, email, password };
-  accounts.push(account);
-  return account;
+  users.push(data.user.id);
+  return { authId: data.user.id, email, password };
 }
 
-async function signIn(page: Page, account: Account) {
+async function logIn(page: Page, account: Account) {
   await page.goto("/login");
   await page.getByLabel("Email address").fill(account.email);
   await page.getByLabel("Password").fill(account.password);
@@ -48,62 +43,36 @@ function sessionFromCookie(value: string) {
   if (!value.startsWith("base64-")) throw new Error("Expected a local Supabase SSR auth cookie.");
   return JSON.parse(Buffer.from(value.slice("base64-".length), "base64url").toString("utf8")) as { access_token?: string; expires_at?: number };
 }
-async function createFixture(page: Page, database: Client, admin: SupabaseClient, accounts: Account[]): Promise<Fixture> {
-  const owner = await createAccount(admin, accounts, "owner");
-  const invitee = await createAccount(admin, accounts, "invitee");
-  const outsider = await createAccount(admin, accounts, "outsider");
-  await signIn(page, owner);
-  expect((await page.request.get("/api/workspaces")).status()).toBe(200);
-  const { rows: [profile] } = await database.query<{ id: string }>("select id from app.user_profile where auth_user_id = $1", [owner.authId]);
-  if (!profile) throw new Error("Owner profile was not created.");
-  await database.query("insert into app.pilot_entitlement (profile_id, max_workspaces, active, granted_by_operator) values ($1, 1, true, gen_random_uuid())", [profile.id]);
-  const workspaceResponse = await page.request.post("/api/workspaces", { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { name: "Invitation workspace" } });
-  expect(workspaceResponse.status()).toBe(201);
-  const { id: workspaceId } = await workspaceResponse.json() as { id: string };
-  const projectResponse = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { workspaceId, name: "Private invitation project" } });
-  expect(projectResponse.status()).toBe(201);
-  const { id: projectId } = await projectResponse.json() as { id: string };
-  return { owner, invitee, outsider, workspaceId, projectId };
-}
-
-
-async function createProject(page: Page, workspaceId: string, name: string) {
-  const response = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { workspaceId, name } });
-  expect(response.status()).toBe(201);
-  return (await response.json() as { id: string }).id;
-}
-async function cleanFixture(database: Client, admin: SupabaseClient, accounts: Account[]) {
-  if (accounts.length) {
-    const authIds = accounts.map(({ authId }) => authId);
-    await database.query("delete from app.mutation_receipt where actor_id in (select id from app.user_profile where auth_user_id = any($1::uuid[]))", [authIds]);
-    await database.query("delete from app.workspace where owner_id in (select id from app.user_profile where auth_user_id = any($1::uuid[]))", [authIds]);
-    await database.query("delete from app.pilot_entitlement where profile_id in (select id from app.user_profile where auth_user_id = any($1::uuid[]))", [authIds]);
-    await database.query("delete from app.user_profile where auth_user_id = any($1::uuid[])", [authIds]);
-    await Promise.all(accounts.map(({ authId }) => admin.auth.admin.deleteUser(authId)));
-  }
+async function createFixture(page: Page, database: Client, admin: SupabaseClient, users: string[]): Promise<Fixture> {
+  const invitee = await createAccount(admin, users, "invitee");
+  const outsider = await createAccount(admin, users, "outsider");
+  const owner = await signIn(page, admin, users, "owner invitation test");
+  await entitle(database, owner.authUserId);
+  const projectId = await createProjectViaApi(page, "Private invitation project");
+  return { owner, invitee, outsider, projectId };
 }
 
 test.describe("project invitations", () => {
   let admin: SupabaseClient;
   let database: Client;
-  let accounts: Account[];
+  let users: string[];
 
   test.beforeEach(async () => {
-    admin = createClient(authUrl!, secretKey!, { auth: { autoRefreshToken: false, persistSession: false } });
-    database = new Client({ connectionString: databaseUrl! });
-    accounts = [];
-    await database.connect();
+    admin = adminClient();
+    database = await openDatabase();
+    users = [];
   });
 
   test.afterEach(async () => {
-    try { await cleanFixture(database, admin, accounts); } finally { await database.end(); }
+    try { await cleanupUsers(database, admin, users); } finally { await database.end(); }
   });
 
   test("owner shares once, survives clipboard rejection, and an invited account opens the project after reload", async ({ page }) => {
+    test.setTimeout(60_000);
     await page.addInitScript(() => {
       Object.defineProperty(Navigator.prototype, "clipboard", { configurable: true, get: () => ({ writeText: () => Promise.reject(new Error("clipboard unavailable")) }) });
     });
-    const fixture = await createFixture(page, database, admin, accounts);
+    const fixture = await createFixture(page, database, admin, users);
     await page.goto(`/app/projects/${fixture.projectId}`);
     await expect(page.getByRole("heading", { name: "Private invitation project" })).toBeVisible();
     await page.getByRole("button", { name: "Share project" }).focus();
@@ -114,6 +83,16 @@ test.describe("project invitations", () => {
 
     await page.getByLabel("Verified email").fill(fixture.invitee.email);
     await page.getByLabel("Project role").selectOption("VIEWER");
+    // Hold the list refresh that follows issuance so Copy runs while it is pending.
+    const listPattern = `**/api/projects/${fixture.projectId}/invitations`;
+    let releaseRefresh = () => {};
+    const refreshHeld = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    let issuedInvitation = false;
+    await page.route(listPattern, async (route) => {
+      if (route.request().method() === "POST") issuedInvitation = true;
+      else if (issuedInvitation) await refreshHeld;
+      await route.continue();
+    });
     await page.getByRole("button", { name: "Create invitation" }).click();
     const invitationLink = page.getByLabel("One-time invitation link");
     await expect(invitationLink).toBeVisible();
@@ -121,6 +100,10 @@ test.describe("project invitations", () => {
     await expect(page.getByRole("button", { name: "Copy link" })).toBeVisible();
     await page.getByRole("button", { name: "Copy link" }).click();
     await expect(page.getByText("Copy did not complete. Select the link and copy it manually.")).toBeVisible();
+    releaseRefresh();
+    await expect(page.getByText(fixture.invitee.email, { exact: true })).toBeVisible();
+    await expect(page.getByText("Copy did not complete. Select the link and copy it manually.")).toBeVisible();
+    await page.unroute(listPattern);
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByLabel("One-time invitation link")).toHaveCount(0);
     await page.getByRole("button", { name: "Share project" }).click();
@@ -145,8 +128,8 @@ test.describe("project invitations", () => {
 
 
   test("Share state does not carry an invitation link or recipient into another project", async ({ page }) => {
-    const fixture = await createFixture(page, database, admin, accounts);
-    const otherProjectId = await createProject(page, fixture.workspaceId, "Second owner project");
+    const fixture = await createFixture(page, database, admin, users);
+    const otherProjectId = await createProjectViaApi(page, "Second owner project");
     await page.goto(`/app/projects/${fixture.projectId}`);
     await page.getByRole("button", { name: "Share project" }).click();
     await page.getByLabel("Verified email").fill(fixture.invitee.email);
@@ -163,7 +146,7 @@ test.describe("project invitations", () => {
   });
 
   test("invite confirmations remain visible when the invitation index refresh fails", async ({ page }) => {
-    const fixture = await createFixture(page, database, admin, accounts);
+    const fixture = await createFixture(page, database, admin, users);
     const listPattern = `**/api/projects/${fixture.projectId}/invitations`;
     let failNextRefresh = false;
     const listHandler = async (route: Route) => {
@@ -197,14 +180,15 @@ test.describe("project invitations", () => {
     await expect(page.getByText("Invitation details could not be refreshed. Use Refresh to retry.")).toBeVisible();
   });
   test("an expired access session refreshes on an invitation route before acceptance", async ({ page }) => {
-    const fixture = await createFixture(page, database, admin, accounts);
+    test.setTimeout(60_000);
+    const fixture = await createFixture(page, database, admin, users);
     await page.goto(`/app/projects/${fixture.projectId}`);
     await page.getByRole("button", { name: "Share project" }).click();
     await page.getByLabel("Verified email").fill(fixture.invitee.email);
     await page.getByRole("button", { name: "Create invitation" }).click();
     const url = await page.getByLabel("One-time invitation link").inputValue();
     await page.getByRole("button", { name: "Sign out" }).click();
-    await signIn(page, fixture.invitee);
+    await logIn(page, fixture.invitee);
     const expired = await expireAccessSession(page);
 
     await page.goto(url);
@@ -217,14 +201,15 @@ test.describe("project invitations", () => {
     expect(refreshed.access_token).not.toBe(expired.expiredAccessToken);
   });
   test("wrong account receives a neutral invitation denial without project metadata", async ({ page }) => {
-    const fixture = await createFixture(page, database, admin, accounts);
+    test.setTimeout(60_000);
+    const fixture = await createFixture(page, database, admin, users);
     await page.goto(`/app/projects/${fixture.projectId}`);
     await page.getByRole("button", { name: "Share project" }).click();
     await page.getByLabel("Verified email").fill(fixture.invitee.email);
     await page.getByRole("button", { name: "Create invitation" }).click();
     const url = await page.getByLabel("One-time invitation link").inputValue();
     await page.getByRole("button", { name: "Sign out" }).click();
-    await signIn(page, fixture.outsider);
+    await logIn(page, fixture.outsider);
     await page.goto(url);
     await expect(page.getByRole("heading", { name: "Open a shared project" })).toBeVisible();
     await expect(page.getByText("Private invitation project", { exact: true })).toHaveCount(0);

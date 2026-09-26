@@ -55,30 +55,39 @@ function object(value: unknown) {
   return value as Record<string, unknown>;
 }
 
+function only(value: Record<string, unknown>, allowed: string[]) {
+  if (Object.keys(value).some((field) => !allowed.includes(field))) invalidInput();
+  return value;
+}
+
+export function validateLeaveInput(input: unknown): ProjectManagementKey {
+  return { key: key(only(object(input), ["key"]).key) };
+}
+
 export function validateProjectSettingsInput(input: unknown): ProjectSettingsInput {
-  const value = object(input);
+  const value = only(object(input), ["name", "expectedSettingsVersion", "key"]);
   return { name: name(value.name), expectedSettingsVersion: version(value.expectedSettingsVersion), key: key(value.key) };
 }
 
 export function validateMemberChangeInput(input: unknown): MemberChangeInput {
-  const value = object(input);
+  const value = only(object(input), ["role", "expectedMemberVersion", "key"]);
   if (!projectMemberRoles.includes(value.role as (typeof projectMemberRoles)[number])) invalidInput();
   return { role: value.role as MemberChangeInput["role"], expectedMemberVersion: version(value.expectedMemberVersion), key: key(value.key) };
 }
 
 export function validateMemberRemovalInput(input: unknown): MemberRemovalInput {
-  const value = object(input);
+  const value = only(object(input), ["expectedMemberVersion", "key"]);
   return { expectedMemberVersion: version(value.expectedMemberVersion), key: key(value.key) };
 }
 
 export function validateApprovalPolicyInput(input: unknown): ApprovalPolicyInput {
-  const value = object(input);
+  const value = only(object(input), ["designatedApproverId", "expectedApprovalPolicyVersion", "key"]);
   if (value.designatedApproverId !== null && (typeof value.designatedApproverId !== "string" || !uuid.test(value.designatedApproverId))) invalidInput();
   return { designatedApproverId: value.designatedApproverId as string | null, expectedApprovalPolicyVersion: version(value.expectedApprovalPolicyVersion), key: key(value.key) };
 }
 
 export function validateProjectArchiveInput(input: unknown): ProjectArchiveInput {
-  const value = object(input);
+  const value = only(object(input), ["expectedProjectVersion", "reason", "key"]);
   if (typeof value.reason !== "string") invalidInput();
   const reason = value.reason.normalize("NFC").trim();
   if (!reason || Array.from(reason).length > 1_000) invalidInput();
@@ -86,6 +95,6 @@ export function validateProjectArchiveInput(input: unknown): ProjectArchiveInput
 }
 
 export function validateProjectRestoreInput(input: unknown): ProjectArchiveInput {
-  const value = object(input);
+  const value = only(object(input), ["expectedProjectVersion", "key"]);
   return { expectedProjectVersion: version(value.expectedProjectVersion), key: key(value.key) };
 }

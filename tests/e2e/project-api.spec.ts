@@ -1,112 +1,64 @@
 import { randomUUID } from "node:crypto";
-import { Client } from "pg";
-import { createClient } from "@supabase/supabase-js";
 import { expect, test } from "@playwright/test";
+import { adminClient, appUrl, cleanupUsers, e2eReady, entitle, openDatabase, signIn } from "./support";
 
-const authUrl = process.env.E2E_SUPABASE_URL;
-const secretKey = process.env.E2E_SUPABASE_SECRET_KEY;
-const databaseUrl = process.env.E2E_DATABASE_URL;
-const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://127.0.0.1:3101";
+test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
-test.skip(!authUrl || !secretKey || !databaseUrl, "Requires isolated local Supabase Auth and database URLs");
-
-test("project APIs require an authenticated identity", async ({ request }) => {
+test("project APIs require an authenticated identity and never cache", async ({ request }) => {
   const id = randomUUID();
-  for (const path of [`/api/workspaces/${id}/projects`, `/api/projects/${id}/bootstrap`, `/api/projects/${id}/status`, `/api/projects/${id}/members`]) {
+  for (const path of ["/api/projects", "/api/invitations", `/api/projects/${id}/bootstrap`, `/api/projects/${id}/status`, `/api/projects/${id}/members`]) {
     const response = await request.get(path);
     expect(response.status()).toBe(401);
     expect(response.headers()["cache-control"]).toContain("no-store");
+    expect((await response.json() as { error: { requestId: string } }).error.requestId).toMatch(/^[0-9a-f-]{36}$/);
   }
-  const response = await request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { workspaceId: id, name: "Denied" } });
-  expect(response.status()).toBe(401);
+  expect((await request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { name: "Denied" } })).status()).toBe(401);
+  // The same-origin check runs before authentication: a missing or foreign Origin is refused outright.
+  for (const origin of [undefined, "https://evil.example"]) {
+    const refused = await request.post("/api/projects", { headers: { ...(origin ? { Origin: origin } : {}), "Idempotency-Key": randomUUID() }, data: { name: "Cross-site" } });
+    expect(refused.status()).toBe(403);
+    expect((await refused.json() as { error: { code: string } }).error.code).toBe("INVALID_REQUEST");
+  }
 });
 
-test("a project can be created once and remains private to its owner", async ({ page, browser }) => {
+test("a project is created once, owned by its creator and private to others", async ({ page, browser }) => {
   test.setTimeout(90_000);
-  const admin = createClient(authUrl!, secretKey!, { auth: { autoRefreshToken: false, persistSession: false } });
-  const database = new Client({ connectionString: databaseUrl! });
-  const users: string[] = [];
-  let otherContext: Awaited<ReturnType<typeof browser.newContext>> | undefined;
-  await database.connect();
-  async function signIn(target: typeof page) {
-    const email = `project-api-${randomUUID()}@example.test`;
-    const password = `Project-${randomUUID()}-Pass!`;
-    const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { full_name: "Project API Test" } });
-    if (error || !data.user) throw error ?? new Error("Could not create test user.");
-    users.push(data.user.id);
-    await target.goto("/login");
-    await target.getByLabel("Email address").fill(email);
-    await target.getByLabel("Password").fill(password);
-    await target.getByRole("button", { name: "Sign in" }).click();
-    await expect(target).toHaveURL(/\/$/, { timeout: 15_000 });
-    expect((await target.request.get("/api/workspaces")).status()).toBe(200);
-    return data.user.id;
-  }
+  const admin = adminClient(); const database = await openDatabase(); const users: string[] = [];
+  const other = await browser.newContext();
   try {
-    const ownerId = await signIn(page);
-    const { rows: [profile] } = await database.query<{ id: string }>("select id from app.user_profile where auth_user_id = $1", [ownerId]);
-    if (!profile) throw new Error("Owner profile missing.");
-    await database.query("insert into app.pilot_entitlement (profile_id, max_workspaces, active, granted_by_operator) values ($1, 1, true, gen_random_uuid())", [profile.id]);
-    const workspaceResponse = await page.request.post("/api/workspaces", { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { name: "Project API workspace" } });
-    expect(workspaceResponse.status()).toBe(201);
-    const { id: workspaceId } = await workspaceResponse.json() as { id: string };
-
+    const { authUserId } = await signIn(page, admin, users, "API Owner");
+    const keyless = await page.request.post("/api/projects", { headers: { Origin: appUrl }, data: { name: "No key" } });
+    expect(keyless.status()).toBe(400);
+    expect((await keyless.json() as { error: { code: string } }).error.code).toBe("INVALID_INPUT");
+    const denied = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { name: "No entitlement" } });
+    expect(denied.status()).toBe(403);
+    expect((await denied.json() as { error: { code: string } }).error.code).toBe("ENTITLEMENT_REQUIRED");
+    await entitle(database, authUserId);
     const key = randomUUID();
-    const input = { workspaceId, name: "Private project" };
-    const createdResponse = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": key }, data: input });
-    expect(createdResponse.status()).toBe(201);
-    expect(createdResponse.headers()["cache-control"]).toContain("no-store");
-    const created = await createdResponse.json() as { id: string; replayed: boolean };
-    expect(created.replayed).toBe(false);
-    const replay = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": key }, data: input });
+    const created = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": key }, data: { name: "Private project" } });
+    expect(created.status()).toBe(201);
+    const project = await created.json() as { id: string; replayed: boolean };
+    const replay = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": key }, data: { name: "Private project" } });
     expect(replay.status()).toBe(200);
-    expect((await replay.json() as { id: string; replayed: boolean })).toMatchObject({ id: created.id, replayed: true });
-    const conflict = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": key }, data: { ...input, name: "Changed" } });
-    expect(conflict.status()).toBe(409);
-    const listing = await page.request.get(`/api/workspaces/${workspaceId}/projects`);
-    expect(listing.status()).toBe(200);
-    expect((await listing.json() as { projects: Array<{ id: string }> }).projects.map((item) => item.id)).toEqual([created.id]);
-    const bootstrap = await page.request.get(`/api/projects/${created.id}/bootstrap`);
-    expect(bootstrap.status()).toBe(200);
-    const body = await bootstrap.json() as { project: { name: string }; draft: { documentRevision: number; layoutRevision: number } };
-    expect(body.project.name).toBe(input.name);
-    expect(body.draft).toMatchObject({ documentRevision: 1, layoutRevision: 1 });
-
-    const statusResponse = await page.request.get(`/api/projects/${created.id}/status`);
-    expect(statusResponse.status()).toBe(200);
-    const currentStatus = await statusResponse.json() as { version: number; settingsVersion: number };
-    const settingsResponse = await page.request.patch(`/api/projects/${created.id}/settings`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { name: "Renamed private project", expectedSettingsVersion: currentStatus.settingsVersion } });
-    expect(settingsResponse.status()).toBe(200);
-    expect((await settingsResponse.json() as { name: string }).name).toBe("Renamed private project");
-    const archiveResponse = await page.request.post(`/api/projects/${created.id}/archive`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedProjectVersion: currentStatus.version, reason: "Local route check" } });
-    expect(archiveResponse.status()).toBe(200);
-    const archivedProject = await archiveResponse.json() as { status: string; version: number };
-    expect(archivedProject.status).toBe("ARCHIVED");
-    const archivedWorkspaceResponse = await page.request.post(`/api/workspaces/${workspaceId}/archive`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedVersion: 1 } });
-    expect(archivedWorkspaceResponse.status()).toBe(200);
-    const archivedWorkspace = await archivedWorkspaceResponse.json() as { status: string; version: number };
-    expect(archivedWorkspace.status).toBe("ARCHIVED");
-    expect((await page.request.get(`/api/projects/${created.id}/bootstrap`)).status()).toBe(200);
-    const restoredWorkspace = await page.request.post(`/api/workspaces/${workspaceId}/restore`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedVersion: archivedWorkspace.version } });
-    expect(restoredWorkspace.status()).toBe(200);
-    const restoredProject = await page.request.post(`/api/projects/${created.id}/restore`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedProjectVersion: archivedProject.version } });
-    expect(restoredProject.status()).toBe(200);
-    expect((await restoredProject.json() as { status: string }).status).toBe("ACTIVE");
-    otherContext = await browser.newContext({ baseURL: appUrl });
-    const otherPage = await otherContext.newPage();
-    await signIn(otherPage);
-    const denied = await otherPage.request.get(`/api/projects/${created.id}/bootstrap`);
-    expect(denied.status()).toBe(404);
-    expect(await denied.text()).not.toContain(input.name);
-  } finally {
-    await otherContext?.close();
-    if (users.length) {
-      await database.query("delete from app.mutation_receipt where actor_id in (select id from app.user_profile where auth_user_id = any($1::uuid[]))", [users]);
-      await database.query("delete from app.workspace where owner_id in (select id from app.user_profile where auth_user_id = any($1::uuid[]))", [users]);
-      await database.query("delete from app.pilot_entitlement where profile_id in (select id from app.user_profile where auth_user_id = any($1::uuid[]))", [users]);
-      await database.query("delete from app.user_profile where auth_user_id = any($1::uuid[])", [users]);
-      await Promise.all(users.map((id) => admin.auth.admin.deleteUser(id)));
-    }
-    await database.end();
-  }
+    expect(await replay.json()).toMatchObject({ id: project.id, replayed: true });
+    const reused = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": key }, data: { name: "Different name" } });
+    expect(reused.status()).toBe(409);
+    expect((await reused.json() as { error: { code: string } }).error.code).toBe("KEY_REUSED");
+    const status = async () => await (await page.request.get(`/api/projects/${project.id}/status`)).json() as { version: number; settingsVersion: number };
+    const headers = () => ({ Origin: appUrl, "Idempotency-Key": randomUUID() });
+    const renamed = await page.request.patch(`/api/projects/${project.id}/settings`, { headers: headers(), data: { name: "Renamed project", expectedSettingsVersion: (await status()).settingsVersion } });
+    expect(renamed.status()).toBe(200);
+    expect(await renamed.json()).toMatchObject({ name: "Renamed project", replayed: false });
+    const archived = await page.request.post(`/api/projects/${project.id}/archive`, { headers: headers(), data: { expectedProjectVersion: (await status()).version, reason: "Finished" } });
+    expect(archived.status()).toBe(200);
+    expect(await archived.json()).toMatchObject({ status: "ARCHIVED", replayed: false });
+    const restored = await page.request.post(`/api/projects/${project.id}/restore`, { headers: headers(), data: { expectedProjectVersion: (await status()).version } });
+    expect(restored.status()).toBe(200);
+    expect(await restored.json()).toMatchObject({ status: "ACTIVE", replayed: false });
+    const lists = await (await page.request.get("/api/projects")).json() as { owned: { items: Array<{ id: string; role: string }> } };
+    expect(lists.owned.items).toEqual([expect.objectContaining({ id: project.id, role: "OWNER" })]);
+    const otherPage = await other.newPage();
+    await signIn(otherPage, admin, users, "API Outsider");
+    expect((await otherPage.request.get(`/api/projects/${project.id}/bootstrap`)).status()).toBe(404);
+  } finally { await other.close(); await cleanupUsers(database, admin, users); await database.end(); }
 });

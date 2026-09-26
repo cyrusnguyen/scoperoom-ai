@@ -16,3 +16,18 @@ if ! corepack pnpm exec supabase start --network-id "$network" --exclude vector 
 fi
 
 docker ps --filter 'label=com.supabase.cli.project=scoperoom-ai' --format '{{.Names}} {{.Status}} {{.Ports}}'
+
+publishable="$(corepack pnpm exec supabase status --output json | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0, "utf8")).PUBLISHABLE_KEY || "")')"
+ready=0
+for attempt in $(seq 1 60); do
+  if docker exec supabase_db_scoperoom-ai pg_isready -U postgres -q && curl -fsS -o /dev/null -H "apikey: ${publishable}" http://127.0.0.1:54321/auth/v1/health; then
+    ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$ready" != 1 ]]; then
+  echo "Local Supabase database or Auth did not become ready within 120 seconds." >&2
+  bash "$(dirname "$0")/print-local-supabase-logs.sh"
+  exit 1
+fi

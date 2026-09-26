@@ -74,9 +74,10 @@ export default function ProjectShare({ projectId, role }: { projectId: string; r
       setIssued(next);
       setKey("");
       setUncertain(false);
-      const refreshed = await refresh(false);
       const confirmation = next.linkUnavailable ? "The invitation was already created, but its one-time link is no longer available." : next.replayed ? "This invitation was already created." : "Invitation created.";
-      setMessage((current) => refreshed ? confirmation : `${confirmation} ${current}`);
+      // Confirm with the link, so a Copy result reported during the list refresh is not overwritten.
+      setMessage(confirmation);
+      if (!await refresh(false)) setMessage((current) => `${confirmation} ${current}`);
     } catch {
       setUncertain(true);
       setMessage("We could not confirm invitation creation. Retry uses the same invitation request.");

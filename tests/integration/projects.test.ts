@@ -1,103 +1,145 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { Client } from "pg";
-import { createClient } from "@supabase/supabase-js";
-import { createWorkspace, getWorkspaceHome } from "../../src/features/workspaces/server/workspaces.ts";
-import { ProjectError, createProject, getProjectBootstrap, getWorkspaceProjects } from "../../src/features/projects/server/projects.ts";
+import { createProject, getProjectBootstrap, getProjectStatus, listProjects } from "../../src/features/projects/server/projects.ts";
+import { ProjectError } from "../../src/features/projects/server/errors.ts";
+import { canRun, withFixture } from "./support/fixture.ts";
 
-type Identity = { authUserId: string; displayName: string };
-const canRun = Boolean(process.env.E2E_SUPABASE_URL && process.env.E2E_SUPABASE_SECRET_KEY && process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL);
+const code = (expected: string) => (error: unknown) => error instanceof ProjectError && error.code === expected;
 
-async function withFixture(run: (fixture: {
-  user: () => Promise<Identity>;
-  ownerWorkspace: (identity: Identity) => Promise<string>;
-  database: Client;
-}) => Promise<void>) {
-  const admin = createClient(process.env.E2E_SUPABASE_URL!, process.env.E2E_SUPABASE_SECRET_KEY!, { auth: { autoRefreshToken: false, persistSession: false } });
-  const database = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
-  const authIds: string[] = [];
-  await database.connect();
-  try {
-    await run({
-      user: async () => {
-        const displayName = "Project Test";
-        const { data, error } = await admin.auth.admin.createUser({ email: `project-${randomUUID()}@example.test`, password: `Project-${randomUUID()}-Pass!`, email_confirm: true, user_metadata: { full_name: displayName } });
-        if (error || !data.user) throw error ?? new Error("Could not create test user.");
-        authIds.push(data.user.id);
-        const identity = { authUserId: data.user.id, displayName };
-        await getWorkspaceHome(identity);
-        return identity;
-      },
-      ownerWorkspace: async (identity) => {
-        const { rows: [profile] } = await database.query<{ id: string }>("select id from app.user_profile where auth_user_id = $1", [identity.authUserId]);
-        if (!profile) throw new Error("Profile missing.");
-        await database.query("insert into app.pilot_entitlement (profile_id, max_workspaces, active, granted_by_operator) values ($1, 1, true, gen_random_uuid())", [profile.id]);
-        return (await createWorkspace(identity, { name: "Owner workspace", key: randomUUID() })).id;
-      },
-      database,
-    });
-  } finally {
-    if (authIds.length) {
-      await database.query("delete from app.mutation_receipt where actor_id in (select id from app.user_profile where auth_user_id = any($1::uuid[]))", [authIds]);
-      await database.query("delete from app.workspace where owner_id in (select id from app.user_profile where auth_user_id = any($1::uuid[]))", [authIds]);
-      await database.query("delete from app.pilot_entitlement where profile_id in (select id from app.user_profile where auth_user_id = any($1::uuid[]))", [authIds]);
-      await database.query("delete from app.user_profile where auth_user_id = any($1::uuid[])", [authIds]);
-      await Promise.all(authIds.map((id) => admin.auth.admin.deleteUser(id)));
-    }
-    await database.end();
-  }
-}
-
-test("project creation atomically saves one empty draft and replays a matching workspace key", { skip: !canRun }, async () => {
-  await withFixture(async ({ user, ownerWorkspace, database }) => {
-    const owner = await user();
-    const workspaceId = await ownerWorkspace(owner);
-    const input = { workspaceId, name: "First project", key: randomUUID() };
-    const created = await createProject(owner, input);
-    assert.equal(created.replayed, false);
-    assert.deepEqual(await createProject(owner, input), { ...created, replayed: true });
-    await assert.rejects(createProject(owner, { ...input, name: "Changed" }), (error: unknown) => error instanceof ProjectError && error.code === "KEY_REUSED");
-    const { rows: [row] } = await database.query<{ project_count: number; draft_count: number; audit_count: number; receipt_count: number }>(`
-      select (select count(*)::int from app.project where id = $1) project_count,
-             (select count(*)::int from app.scope_draft where project_id = $1) draft_count,
-             (select count(*)::int from app.audit_event where project_id = $1 and action = 'PROJECT_CREATED') audit_count,
-             (select count(*)::int from app.mutation_receipt where scope_kind = 'WORKSPACE' and scope_id = $2 and key = $3) receipt_count`,
-      [created.id, workspaceId, input.key],
-    );
-    assert.deepEqual(row, { project_count: 1, draft_count: 1, audit_count: 1, receipt_count: 1 });
+test("a named project is owned by its creator, replays by key and needs nothing else", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, entitle, database }) => {
+    const owner = await user("Owner");
+    await entitle(owner);
+    const key = randomUUID();
+    const created = await createProject(owner, { name: "  Booking  ", key });
+    assert.deepEqual({ name: created.name, replayed: created.replayed }, { name: "Booking", replayed: false });
+    assert.deepEqual(await createProject(owner, { name: "Booking", key }), { ...created, replayed: true });
+    await assert.rejects(createProject(owner, { name: "Different", key }), code("KEY_REUSED"));
+    const { rows: [row] } = await database.query<{ owner: string; events: number; designated: string | null }>(
+      "select (select auth_user_id::text from app.user_profile where id = project.owner_id) as owner, (select count(*)::int from app.audit_event where project_id = project.id) as events, designated_approver_id as designated from app.project where id = $1",
+      [created.id]);
+    assert.deepEqual(row, { owner: owner.authUserId, events: 1, designated: null });
     const bootstrap = await getProjectBootstrap(owner, created.id);
     assert.equal(bootstrap.project.role, "OWNER");
-    assert.equal(bootstrap.draft.id, (await getWorkspaceProjects(owner, workspaceId)).projects[0]?.currentDraftId);
     assert.equal(bootstrap.draft.documentRevision, 1);
-    assert.equal(bootstrap.draft.layoutRevision, 1);
-    assert.deepEqual(bootstrap.draft.layoutJson, { schemaVersion: 1, positions: {}, directions: {} });
   });
 });
 
-test("a basic workspace member cannot read or create its owner's project", { skip: !canRun }, async () => {
-  await withFixture(async ({ user, ownerWorkspace, database }) => {
-    const owner = await user();
-    const member = await user();
-    const workspaceId = await ownerWorkspace(owner);
-    const created = await createProject(owner, { workspaceId, name: "Private project", key: randomUUID() });
-    const { rows: [memberProfile] } = await database.query<{ id: string }>("select id from app.user_profile where auth_user_id = $1", [member.authUserId]);
-    await database.query("insert into app.workspace_membership (workspace_id, profile_id, role) values ($1, $2, 'MEMBER')", [workspaceId, memberProfile.id]);
-    assert.deepEqual((await getWorkspaceProjects(member, workspaceId)).projects, []);
-    await assert.rejects(createProject(member, { workspaceId, name: "Denied", key: randomUUID() }), (error: unknown) => error instanceof ProjectError && error.code === "NOT_AUTHORIZED");
-    await assert.rejects(getProjectBootstrap(member, created.id), (error: unknown) => error instanceof ProjectError && error.code === "NOT_FOUND");
-    await assert.rejects(getProjectBootstrap(await user(), created.id), (error: unknown) => error instanceof ProjectError && error.code === "NOT_FOUND");
+test("owning a project requires an active entitlement; accepting never does", { skip: !canRun }, async () => {
+  await withFixture(async ({ user }) => {
+    const person = await user();
+    await assert.rejects(createProject(person, { name: "Denied", key: randomUUID() }), code("ENTITLEMENT_REQUIRED"));
   });
 });
 
-test("revoked entitlement prevents new projects but preserves an owner's matching replay", { skip: !canRun }, async () => {
-  await withFixture(async ({ user, ownerWorkspace, database }) => {
+test("concurrent creates at max-1 admit exactly one project", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, entitle, database, profileId }) => {
     const owner = await user();
-    const workspaceId = await ownerWorkspace(owner);
-    const input = { workspaceId, name: "Before revocation", key: randomUUID() };
-    const created = await createProject(owner, input);
-    await database.query("update app.pilot_entitlement set active = false where profile_id = (select id from app.user_profile where auth_user_id = $1)", [owner.authUserId]);
-    assert.deepEqual(await createProject(owner, input), { ...created, replayed: true });
-    await assert.rejects(createProject(owner, { workspaceId, name: "After revocation", key: randomUUID() }), (error: unknown) => error instanceof ProjectError && error.code === "NOT_ENTITLED");
+    await entitle(owner, 2);
+    await createProject(owner, { name: "Existing", key: randomUUID() });
+    const results = await Promise.allSettled([createProject(owner, { name: "Tab A", key: randomUUID() }), createProject(owner, { name: "Tab B", key: randomUUID() })]);
+    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+    const rejected = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
+    assert.ok(code("OWNED_PROJECT_LIMIT")(rejected.reason));
+    assert.deepEqual((rejected.reason as ProjectError).details, { activeOwned: 2, maxOwned: 2 });
+    const { rows: [count] } = await database.query<{ n: number }>("select count(*)::int as n from app.project where owner_id = $1 and status = 'ACTIVE'", [await profileId(owner)]);
+    assert.equal(count!.n, 2);
+  });
+});
+
+test("the same key sent twice concurrently creates one project", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, entitle }) => {
+    const owner = await user();
+    await entitle(owner);
+    const key = randomUUID();
+    const [a, b] = await Promise.all([createProject(owner, { name: "Once", key }), createProject(owner, { name: "Once", key })]);
+    assert.equal(a.id, b.id);
+    assert.deepEqual([a.replayed, b.replayed].sort(), [false, true]);
+  });
+});
+
+test("a committed entitlement revocation denies a waiting create", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, entitle, database, profileId }) => {
+    const owner = await user();
+    await entitle(owner);
+    await database.query("begin");
+    await database.query("update app.pilot_entitlement set revoked_at = now() where profile_id = $1", [await profileId(owner)]);
+    const pending = createProject(owner, { name: "Racing", key: randomUUID() });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await database.query("commit");
+    await assert.rejects(pending, code("ENTITLEMENT_REQUIRED"));
+  });
+});
+
+test("lowering the limit blocks new creation without touching existing projects", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, entitle }) => {
+    const owner = await user();
+    await entitle(owner, 3);
+    await createProject(owner, { name: "One", key: randomUUID() });
+    await createProject(owner, { name: "Two", key: randomUUID() });
+    await entitle(owner, 1);
+    await assert.rejects(createProject(owner, { name: "Three", key: randomUUID() }), code("OWNED_PROJECT_LIMIT"));
+    assert.equal((await listProjects(owner)).owned.items.length, 2);
+  });
+});
+
+test("lists group owned, shared and archived projects with truncation and server capacity", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, entitle, database, profileId, project }) => {
+    const owner = await user("List Owner");
+    const other = await user("Other Owner");
+    await entitle(owner, 200);
+    const ownerProfile = await profileId(owner);
+    await database.query(`
+      with ids as (select gen_random_uuid() as project_id, gen_random_uuid() as draft_id, g from generate_series(1, 101) g),
+      p as (insert into app.project (id, owner_id, name, current_draft_id) select project_id, $1, 'Bulk ' || g, draft_id from ids returning id),
+      d as (insert into app.scope_draft (id, project_id, created_by, document_json, layout_json) select draft_id, project_id, $1, '{}'::jsonb, '{}'::jsonb from ids returning id)
+      select count(*) from p`, [ownerProfile]);
+    const sharedId = await project(other, "Shared with owner");
+    await database.query("insert into app.project_membership (project_id, profile_id, role) values ($1, $2, 'VIEWER')", [sharedId, ownerProfile]);
+    const lists = await listProjects(owner);
+    assert.equal(lists.owned.items.length, 100);
+    assert.equal(lists.owned.truncated, true);
+    assert.deepEqual(lists.shared.items.map((item) => [item.name, item.role, item.ownerName]), [["Shared with owner", "VIEWER", "Other Owner"]]);
+    assert.deepEqual(lists.archived, { items: [], truncated: false });
+    assert.deepEqual(lists.capacity, { entitled: true, activeOwned: 101, maxOwned: 200, canCreate: true });
+    assert.deepEqual((await listProjects(other)).shared.items, []);
+  });
+});
+
+test("ordinary reads do not wait for a held project write lock", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user();
+    const projectId = await project(owner);
+    await database.query("begin");
+    let reads: Promise<unknown> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await database.query("select id from app.project where id = $1 for update", [projectId]);
+      reads = Promise.all([getProjectBootstrap(owner, projectId), getProjectStatus(owner, projectId), listProjects(owner)]);
+      const completed = await Promise.race([reads.then(() => true), new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 1500); })]);
+      assert.equal(completed, true, "GET paths must not take row locks");
+    } finally {
+      if (timer) clearTimeout(timer);
+      await database.query("rollback");
+      await reads?.catch(() => undefined);
+    }
+  });
+});
+
+test("status carries the draft, revision, epoch and sequence fields; outsiders get NOT_FOUND", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project }) => {
+    const owner = await user();
+    const outsider = await user();
+    const projectId = await project(owner);
+    const status = await getProjectStatus(owner, projectId);
+    assert.equal(status.status, "ACTIVE");
+    assert.match(status.currentDraftId, /^[0-9a-f-]{36}$/);
+    assert.equal(status.documentRevision, 1);
+    assert.equal(status.layoutRevision, 1);
+    assert.match(status.realtimeEpoch, /^[0-9a-f-]{36}$/);
+    assert.equal(status.eventSequence, 1);
+    await assert.rejects(getProjectStatus(outsider, projectId), code("NOT_FOUND"));
+    await assert.rejects(getProjectBootstrap(outsider, projectId), code("NOT_FOUND"));
   });
 });

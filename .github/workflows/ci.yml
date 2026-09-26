@@ -36,15 +36,19 @@ jobs:
       - run: corepack pnpm db:generate
       - run: bash scripts/ci/start-local-supabase.sh
       - run: bash scripts/ci/export-local-db-env.sh
+      - run: bash scripts/ci/export-local-auth-env.sh
       - run: corepack pnpm db:bootstrap
       - run: corepack pnpm test:integration
+      - name: Supabase diagnostics
+        if: failure()
+        run: bash scripts/ci/print-local-supabase-logs.sh
       - name: Stop isolated Supabase
         if: always()
         run: bash scripts/ci/stop-local-supabase.sh
 
   chromium:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -54,8 +58,21 @@ jobs:
       - run: corepack pnpm db:generate
       - run: corepack pnpm exec playwright install --with-deps chromium
       - run: bash scripts/ci/start-local-supabase.sh
+      - run: bash scripts/ci/export-local-db-env.sh
       - run: bash scripts/ci/export-local-auth-env.sh
+      - run: corepack pnpm db:bootstrap
       - run: corepack pnpm test:e2e:chromium
+      - name: Supabase diagnostics
+        if: failure()
+        run: bash scripts/ci/print-local-supabase-logs.sh
+      - name: Keep Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-traces
+          path: test-results
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Stop isolated Supabase
         if: always()
         run: bash scripts/ci/stop-local-supabase.sh

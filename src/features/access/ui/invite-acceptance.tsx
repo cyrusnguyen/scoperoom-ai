@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type Acceptance = { projectId: string; workspaceId: string; role: "OWNER" | "EDITOR" | "REVIEWER" | "VIEWER"; replayed: boolean };
+type Acceptance = { projectId: string; role: "EDITOR" | "REVIEWER" | "VIEWER"; replayed: boolean };
 type ErrorBody = { error?: { message?: string } };
 
 async function problem(response: Response) {

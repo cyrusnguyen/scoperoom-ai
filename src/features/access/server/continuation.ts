@@ -8,7 +8,8 @@ export function safeInviteContinuation(value: unknown): string | null {
   return match && inviteToken.test(match[1]) ? value : null;
 }
 
-export function continuationQuery(value: unknown): string {
+// Adds a safe continuation to a path whether or not it already carries a query.
+export function withContinuation(path: string, value: unknown): string {
   const continuation = safeInviteContinuation(value);
-  return continuation ? `?continue=${encodeURIComponent(continuation)}` : "";
+  return continuation ? `${path}${path.includes("?") ? "&" : "?"}continue=${encodeURIComponent(continuation)}` : path;
 }
