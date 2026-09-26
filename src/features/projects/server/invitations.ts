@@ -1,167 +1,39 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { Prisma, type PrismaClient } from "../../../../prisma/generated/client.ts";
+import type { Prisma } from "../../../../prisma/generated/client.ts";
 import { readProcessEnv } from "../../../server/env.ts";
-import { createDatabase } from "../../../server/db.ts";
-import { resolveProfile } from "../../access/server/profile.ts";
-import { uuid, type ProjectIdentity } from "../contracts/project.ts";
-import { type ProjectMemberRole, validateInvitationAcceptInput, validateInvitationIssueInput, validateInvitationRevokeInput } from "../contracts/invitation.ts";
-import { ProjectError } from "./projects.ts";
+import {
+  MAX_COLLABORATORS, MAX_PENDING_INVITATIONS, MY_INVITATION_LIMIT, type InvitationAcceptInput, type MyInvitation, type ProjectMemberRole,
+  validateInvitationAcceptInput, validateInvitationIssueInput, validateInvitationRevokeInput,
+} from "../contracts/invitation.ts";
+import { type ProjectAccessRole, type ProjectIdentity, uuid } from "../contracts/project.ts";
+import {
+  checkReceipt, findReceipt, lockActor, lockProject, profileFor, readProject, receiptString, recordEvent, requestHash,
+  requireActive, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot,
+} from "./access.ts";
+import { ProjectError } from "./errors.ts";
 
-const RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const INVITATION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
-const ISSUE_OPERATION = "ISSUE_INVITATION_V1";
-const REVOKE_OPERATION = "REVOKE_INVITATION_V1";
-const ACCEPT_OPERATION = "ACCEPT_INVITATION_V1";
+const ISSUE_OPERATION = "ISSUE_INVITATION_V2";
+const REVOKE_OPERATION = "REVOKE_INVITATION_V2";
+const ACCEPT_OPERATION = "ACCEPT_INVITATION_V2";
 
 export type InvitationIdentity = ProjectIdentity & { verifiedEmail: string };
+type SafeInvitation = { id: string; verifiedEmail: string; role: ProjectMemberRole; expiresAt: string; status: "PENDING" | "ACCEPTED" | "REVOKED" | "EXPIRED"; version: number };
+type InvitationRecord = { id: string; verifiedEmail: string; role: ProjectMemberRole; version: number; expiresAt: Date; acceptedAt: Date | null; revokedAt: Date | null };
 
-type LockedProject = {
-  id: string;
-  workspaceId: string;
-  eventSequence: bigint;
-  status: "ACTIVE" | "ARCHIVED";
-  workspaceStatus: "ACTIVE" | "ARCHIVED";
-  role: "OWNER" | ProjectMemberRole | null;
-};
+const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 
-type InvitationRecord = {
-  id: string;
-  projectId: string;
-  workspaceId: string;
-  verifiedEmail: string;
-  role: ProjectMemberRole;
-  version: number;
-  expiresAt: Date;
-  acceptedBy: string | null;
-  acceptedAt: Date | null;
-  revokedAt: Date | null;
-};
-
-function requestHash(operation: string, input: unknown) {
-  return createHash("sha256").update(JSON.stringify({ operation, input })).digest("hex");
+function safeInvitation(invitation: InvitationRecord): SafeInvitation {
+  const status = invitation.acceptedAt ? "ACCEPTED" : invitation.revokedAt ? "REVOKED" : invitation.expiresAt <= new Date() ? "EXPIRED" : "PENDING";
+  return { id: invitation.id, verifiedEmail: invitation.verifiedEmail, role: invitation.role, expiresAt: invitation.expiresAt.toISOString(), status, version: invitation.version };
 }
 
-function tokenHash(token: string) {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-function invitationStatus(invitation: Pick<InvitationRecord, "acceptedAt" | "revokedAt" | "expiresAt">) {
-  if (invitation.acceptedAt) return "ACCEPTED" as const;
-  if (invitation.revokedAt) return "REVOKED" as const;
-  return invitation.expiresAt <= new Date() ? "EXPIRED" as const : "PENDING" as const;
-}
-
-function safeInvitation(invitation: InvitationRecord) {
-  return {
-    id: invitation.id,
-    verifiedEmail: invitation.verifiedEmail,
-    role: invitation.role,
-    expiresAt: invitation.expiresAt.toISOString(),
-    status: invitationStatus(invitation),
-    version: invitation.version,
-  };
-}
-
-function safeIssuedResult(result: Prisma.JsonValue) {
+function safeStoredInvitation(result: Prisma.JsonValue): SafeInvitation | null {
   if (!result || typeof result !== "object" || Array.isArray(result)) return null;
   const value = result as Record<string, Prisma.JsonValue>;
-  if (typeof value.id !== "string" || typeof value.verifiedEmail !== "string" ||
-      (value.role !== "EDITOR" && value.role !== "REVIEWER" && value.role !== "VIEWER") ||
+  if (typeof value.id !== "string" || typeof value.verifiedEmail !== "string" || (value.role !== "EDITOR" && value.role !== "REVIEWER" && value.role !== "VIEWER") ||
       typeof value.expiresAt !== "string" || typeof value.status !== "string" || !Number.isSafeInteger(value.version)) return null;
-  return { id: value.id, verifiedEmail: value.verifiedEmail, role: value.role, expiresAt: value.expiresAt, status: value.status, version: value.version };
-}
-
-function safeAcceptedResult(result: Prisma.JsonValue) {
-  if (!result || typeof result !== "object" || Array.isArray(result)) return null;
-  const value = result as Record<string, Prisma.JsonValue>;
-  if (typeof value.projectId !== "string" || typeof value.workspaceId !== "string" ||
-      (value.role !== "OWNER" && value.role !== "EDITOR" && value.role !== "REVIEWER" && value.role !== "VIEWER")) return null;
-  return { projectId: value.projectId, workspaceId: value.workspaceId, role: value.role } as const;
-}
-
-async function withDatabase<T>(run: (database: PrismaClient) => Promise<T>): Promise<T> {
-  let database: PrismaClient | undefined;
-  try {
-    database = await createDatabase();
-    return await run(database);
-  } catch (error) {
-    if (error instanceof ProjectError) throw error;
-    throw new ProjectError("UNAVAILABLE");
-  } finally {
-    await database?.$disconnect();
-  }
-}
-
-async function profileFor(database: PrismaClient, identity: ProjectIdentity) {
-  try {
-    return await resolveProfile(database, identity);
-  } catch {
-    throw new ProjectError("UNAVAILABLE");
-  }
-}
-
-async function lockProject(transaction: Prisma.TransactionClient, profileId: string, projectId: string, update: boolean): Promise<LockedProject> {
-  const location = await transaction.project.findUnique({ where: { id: projectId }, select: { workspaceId: true } });
-  if (!location) throw new ProjectError("NOT_FOUND");
-  await transaction.$queryRaw(update
-    ? Prisma.sql`SELECT app.lock_workspace_for_project_creation(${location.workspaceId}::uuid)::text AS locked`
-    : Prisma.sql`SELECT app.lock_workspace_for_project_read(${location.workspaceId}::uuid)::text AS locked`);
-  const workspace = await transaction.workspace.findFirst({ where: { id: location.workspaceId, status: { in: ["ACTIVE", "ARCHIVED"] } }, select: { id: true, status: true } });
-  if (!workspace) throw new ProjectError("NOT_FOUND");
-  const projects = update
-    ? await transaction.$queryRaw<{ id: string; workspace_id: string; event_sequence: bigint; status: string }[]>(Prisma.sql`
-      SELECT id, workspace_id, event_sequence, status::text FROM app.project WHERE id = ${projectId}::uuid AND workspace_id = ${location.workspaceId}::uuid AND status IN ('ACTIVE'::app.project_status, 'ARCHIVED'::app.project_status) FOR UPDATE
-    `)
-    : await transaction.$queryRaw<{ id: string; workspace_id: string; event_sequence: bigint; status: string }[]>(Prisma.sql`
-      SELECT id, workspace_id, event_sequence, status::text FROM app.project WHERE id = ${projectId}::uuid AND workspace_id = ${location.workspaceId}::uuid AND status IN ('ACTIVE'::app.project_status, 'ARCHIVED'::app.project_status) FOR SHARE
-    `);
-  const project = projects[0];
-  if (!project) throw new ProjectError("NOT_FOUND");
-  const access = await transaction.$queryRaw<{ role: string | null }[]>(Prisma.sql`
-    SELECT CASE
-      WHEN workspace.owner_id = ${profileId}::uuid AND EXISTS (
-        SELECT 1 FROM app.workspace_membership membership
-        WHERE membership.workspace_id = workspace.id AND membership.profile_id = ${profileId}::uuid
-          AND membership.role = 'OWNER'::app.workspace_member_role AND membership.active
-      ) THEN 'OWNER'
-      ELSE (
-        SELECT membership.role::text FROM app.project_membership membership
-        WHERE membership.project_id = project.id AND membership.profile_id = ${profileId}::uuid AND membership.active
-      )
-    END AS role
-    FROM app.workspace workspace JOIN app.project project ON project.workspace_id = workspace.id
-    WHERE project.id = ${projectId}::uuid
-  `);
-  const role = access[0]?.role;
-  if (project.status !== "ACTIVE" && project.status !== "ARCHIVED") throw new ProjectError("NOT_FOUND");
-  return { id: project.id, workspaceId: project.workspace_id, eventSequence: project.event_sequence, status: project.status, workspaceStatus: workspace.status === "ACTIVE" ? "ACTIVE" : "ARCHIVED", role: role === "OWNER" || role === "EDITOR" || role === "REVIEWER" || role === "VIEWER" ? role : null };
-}
-
-function requireActive(project: LockedProject) {
-  if (project.status !== "ACTIVE" || project.workspaceStatus !== "ACTIVE") throw new ProjectError("CONFLICT");
-}
-
-async function lockProfile(transaction: Prisma.TransactionClient, profileId: string, authUserId: string) {
-  const profiles = await transaction.$queryRaw<{ id: string }[]>(Prisma.sql`
-    SELECT id FROM app.user_profile WHERE id = ${profileId}::uuid AND auth_user_id = ${authUserId}::uuid FOR SHARE
-  `);
-  if (profiles.length !== 1) throw new ProjectError("NOT_AUTHORIZED");
-}
-
-function requireOwner(project: LockedProject) {
-  if (project.role !== "OWNER") throw new ProjectError("NOT_FOUND");
-}
-
-function requireMember(project: LockedProject) {
-  if (!project.role) throw new ProjectError("NOT_FOUND");
-  return project.role;
-}
-
-async function receipt(transaction: Prisma.TransactionClient, actorId: string, scopeKind: "PROJECT" | "USER", scopeId: string, key: string) {
-  return transaction.mutationReceipt.findFirst({
-    where: { actorId, scopeKind, scopeId, key, expiresAt: { gt: new Date() } },
-    select: { operation: true, requestHash: true, result: true },
-  });
+  return value as unknown as SafeInvitation;
 }
 
 function invitationUrl(token: string) {
@@ -176,37 +48,32 @@ export async function issueInvitation(identity: InvitationIdentity, projectId: s
   let validated: ReturnType<typeof validateInvitationIssueInput>;
   try { validated = validateInvitationIssueInput(input); } catch { throw new ProjectError("INVALID_INPUT"); }
   const hash = requestHash(ISSUE_OPERATION, { projectId, verifiedEmail: validated.verifiedEmail, role: validated.role });
-  const url = invitationUrl(randomBytes(32).toString("base64url"));
-  const token = url.split("/").at(-1)!;
+  const token = randomBytes(32).toString("base64url");
+  const url = invitationUrl(token);
   return withDatabase(async (database) => {
     const profile = await profileFor(database, identity);
-    return database.$transaction(async (transaction) => {
-      await lockProfile(transaction, profile.id, identity.authUserId);
-      const project = await lockProject(transaction, profile.id, projectId, true);
+    return database.$transaction(async (tx) => {
+      await lockActor(tx, profile.id, identity.authUserId);
+      const project = await lockProject(tx, profile.id, projectId);
       requireOwner(project);
-      const previous = await receipt(transaction, profile.id, "PROJECT", project.id, validated.key);
-      if (previous) {
-        if (previous.operation !== ISSUE_OPERATION || previous.requestHash !== hash) throw new ProjectError("KEY_REUSED");
-        const result = safeIssuedResult(previous.result);
-        if (!result) throw new ProjectError("UNAVAILABLE");
-        return { ...result, url: undefined, linkUnavailable: true, replayed: true };
+      const receipt = await findReceipt(tx, profile.id, "PROJECT", project.id, validated.key);
+      if (receipt) {
+        checkReceipt(receipt, ISSUE_OPERATION, hash);
+        const stored = safeStoredInvitation(receipt.result);
+        if (!stored) throw new ProjectError("UNAVAILABLE");
+        return { ...stored, url: undefined, linkUnavailable: true, replayed: true };
       }
       requireActive(project);
-      const pending = await transaction.invitation.count({ where: { projectId: project.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } } });
-      if (pending >= 50) throw new ProjectError("INVITATION_LIMIT");
-      const expiresAt = new Date(Date.now() + INVITATION_LIFETIME_MS);
-      const invitation = await transaction.invitation.create({
-        data: { projectId: project.id, workspaceId: project.workspaceId, tokenHash: tokenHash(token), verifiedEmail: validated.verifiedEmail, role: validated.role as never, invitedBy: profile.id, expiresAt },
+      if (validated.verifiedEmail === identity.verifiedEmail) throw new ProjectError("ALREADY_MEMBER", { role: "OWNER" });
+      const pending = await tx.invitation.count({ where: { projectId: project.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } } });
+      if (pending >= MAX_PENDING_INVITATIONS) throw new ProjectError("INVITATION_LIMIT");
+      const invitationId = randomUUID();
+      const issuedSequence = await recordEvent(tx, project, profile.id, "INVITATION_ISSUED", [{ kind: "INVITATION", id: invitationId }], { role: validated.role });
+      const invitation = await tx.invitation.create({
+        data: { id: invitationId, projectId: project.id, tokenHash: tokenHash(token), verifiedEmail: validated.verifiedEmail, role: validated.role, issuedSequence, invitedBy: profile.id, expiresAt: new Date(Date.now() + INVITATION_LIFETIME_MS) },
       });
-      const safe = safeInvitation(invitation as InvitationRecord);
-      const sequence = project.eventSequence + BigInt(1);
-      await transaction.project.update({ where: { id: project.id }, data: { eventSequence: sequence } });
-      await transaction.auditEvent.create({
-        data: { projectId: project.id, workspaceId: project.workspaceId, sequence, actorId: profile.id, action: "INVITATION_ISSUED", entityRefs: [{ kind: "INVITATION", id: invitation.id }], metadata: { role: invitation.role, verifiedEmail: invitation.verifiedEmail } },
-      });
-      await transaction.mutationReceipt.create({
-        data: { actorId: profile.id, scopeKind: "PROJECT", scopeId: project.id, key: validated.key, operation: ISSUE_OPERATION, requestHash: hash, result: safe, expiresAt: new Date(Date.now() + RECEIPT_RETENTION_MS) },
-      });
+      const safe = safeInvitation(invitation);
+      await saveReceipt(tx, profile.id, "PROJECT", project.id, validated.key, ISSUE_OPERATION, hash, safe);
       return { ...safe, url, linkUnavailable: false, replayed: false };
     });
   });
@@ -216,11 +83,11 @@ export async function listProjectInvitations(identity: ProjectIdentity, projectI
   if (!uuid.test(projectId)) throw new ProjectError("NOT_FOUND");
   return withDatabase(async (database) => {
     const profile = await profileFor(database, identity);
-    return database.$transaction(async (transaction) => {
-      const project = await lockProject(transaction, profile.id, projectId, false);
+    return withReadSnapshot(database, async (tx) => {
+      const project = await readProject(tx, profile.id, projectId);
       requireOwner(project);
-      const invitations = await transaction.invitation.findMany({ where: { projectId: project.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 50 });
-      return { invitations: invitations.map((invitation) => safeInvitation(invitation as InvitationRecord)) };
+      const invitations = await tx.invitation.findMany({ where: { projectId: project.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: MAX_PENDING_INVITATIONS });
+      return { invitations: invitations.map(safeInvitation) };
     });
   });
 }
@@ -232,104 +99,114 @@ export async function revokeInvitation(identity: ProjectIdentity, projectId: str
   const hash = requestHash(REVOKE_OPERATION, { projectId, invitationId, expectedVersion: validated.expectedVersion });
   return withDatabase(async (database) => {
     const profile = await profileFor(database, identity);
-    return database.$transaction(async (transaction) => {
-      await lockProfile(transaction, profile.id, identity.authUserId);
-      const project = await lockProject(transaction, profile.id, projectId, true);
+    return database.$transaction(async (tx) => {
+      await lockActor(tx, profile.id, identity.authUserId);
+      const project = await lockProject(tx, profile.id, projectId);
       requireOwner(project);
-      const previous = await receipt(transaction, profile.id, "PROJECT", project.id, validated.key);
-      if (previous) {
-        if (previous.operation !== REVOKE_OPERATION || previous.requestHash !== hash) throw new ProjectError("KEY_REUSED");
-        const result = safeIssuedResult(previous.result);
-        if (!result) throw new ProjectError("UNAVAILABLE");
-        return { ...result, replayed: true };
+      const receipt = await findReceipt(tx, profile.id, "PROJECT", project.id, validated.key);
+      if (receipt) {
+        checkReceipt(receipt, REVOKE_OPERATION, hash);
+        const stored = safeStoredInvitation(receipt.result);
+        if (!stored) throw new ProjectError("UNAVAILABLE");
+        return { ...stored, replayed: true };
       }
-      const invitation = await transaction.invitation.findFirst({ where: { id: invitationId, projectId: project.id } });
-      if (!invitation) throw new ProjectError("NOT_FOUND");
-      const current = invitation as InvitationRecord;
+      const current = await tx.invitation.findFirst({ where: { id: invitationId, projectId: project.id } });
+      if (!current) throw new ProjectError("NOT_FOUND");
       if (current.version !== validated.expectedVersion || current.acceptedAt || current.revokedAt || current.expiresAt <= new Date()) throw new ProjectError("CONFLICT");
-      const revoked = await transaction.invitation.update({ where: { id: current.id }, data: { revokedAt: new Date(), version: { increment: 1 } } });
-      const safe = safeInvitation(revoked as InvitationRecord);
-      const sequence = project.eventSequence + BigInt(1);
-      await transaction.project.update({ where: { id: project.id }, data: { eventSequence: sequence } });
-      await transaction.auditEvent.create({
-        data: { projectId: project.id, workspaceId: project.workspaceId, sequence, actorId: profile.id, action: "INVITATION_REVOKED", entityRefs: [{ kind: "INVITATION", id: current.id }], metadata: {} },
-      });
-      await transaction.mutationReceipt.create({
-        data: { actorId: profile.id, scopeKind: "PROJECT", scopeId: project.id, key: validated.key, operation: REVOKE_OPERATION, requestHash: hash, result: safe, expiresAt: new Date(Date.now() + RECEIPT_RETENTION_MS) },
-      });
+      await recordEvent(tx, project, profile.id, "INVITATION_REVOKED", [{ kind: "INVITATION", id: current.id }], {});
+      const safe = safeInvitation(await tx.invitation.update({ where: { id: current.id }, data: { revokedAt: new Date(), version: { increment: 1 } } }));
+      await saveReceipt(tx, profile.id, "PROJECT", project.id, validated.key, REVOKE_OPERATION, hash, safe);
       return { ...safe, replayed: false };
     });
   });
 }
 
-export async function acceptInvitation(identity: InvitationIdentity, input: unknown) {
-  let validated: ReturnType<typeof validateInvitationAcceptInput>;
-  try { validated = validateInvitationAcceptInput(input); } catch { throw new ProjectError("INVALID_INPUT"); }
-  const hash = requestHash(ACCEPT_OPERATION, { tokenHash: tokenHash(validated.token) });
+type RawMine = { id: string; project_name: string; inviter_name: string; role: string; expires_at: Date };
+
+/** The Invites tab: actionable invitations for the caller's verified email, with invitation metadata only. */
+export async function listMyInvitations(identity: InvitationIdentity): Promise<{ items: MyInvitation[]; truncated: boolean }> {
   return withDatabase(async (database) => {
     const profile = await profileFor(database, identity);
-    return database.$transaction(async (transaction) => {
-      await lockProfile(transaction, profile.id, identity.authUserId);
-      const prior = await receipt(transaction, profile.id, "USER", profile.id, validated.key);
-      if (prior) {
-        if (prior.operation !== ACCEPT_OPERATION || prior.requestHash !== hash) throw new ProjectError("KEY_REUSED");
-        const result = safeAcceptedResult(prior.result);
-        if (!result) throw new ProjectError("UNAVAILABLE");
-        const project = await lockProject(transaction, profile.id, result.projectId, false);
-        requireMember(project);
-        return { ...result, replayed: true };
+    return withReadSnapshot(database, async (tx) => {
+      const rows = await tx.$queryRaw<RawMine[]>`
+        SELECT invitation.id, project.name AS project_name, inviter.display_name AS inviter_name, invitation.role::text AS role, invitation.expires_at
+        FROM app.invitation invitation
+        JOIN app.project project ON project.id = invitation.project_id
+        JOIN app.user_profile inviter ON inviter.id = invitation.invited_by
+        LEFT JOIN app.project_membership membership ON membership.project_id = project.id AND membership.profile_id = ${profile.id}::uuid
+        WHERE invitation.verified_email = ${identity.verifiedEmail} AND invitation.accepted_at IS NULL AND invitation.revoked_at IS NULL
+          AND invitation.expires_at > CURRENT_TIMESTAMP AND project.status = 'ACTIVE'::app.project_status AND project.owner_id <> ${profile.id}::uuid
+          AND (membership.profile_id IS NULL OR (NOT membership.active AND invitation.issued_sequence > membership.deactivated_sequence))
+        ORDER BY invitation.created_at DESC, invitation.id DESC
+        LIMIT ${MY_INVITATION_LIMIT + 1}`;
+      return {
+        items: rows.slice(0, MY_INVITATION_LIMIT).map((row) => ({ id: row.id, projectName: row.project_name, inviterName: row.inviter_name, role: row.role as ProjectMemberRole, expiresAt: row.expires_at.toISOString() })),
+        truncated: rows.length > MY_INVITATION_LIMIT,
+      };
+    });
+  });
+}
+
+type RawMembership = { active: boolean; deactivated_sequence: bigint | null };
+type RawInvitation = { id: string; verified_email: string; role: string; issued_sequence: bigint; expires_at: Date; accepted_by: string | null; accepted_at: Date | null; revoked_at: Date | null };
+
+export async function acceptInvitation(identity: InvitationIdentity, input: unknown): Promise<{ projectId: string; role: ProjectAccessRole; replayed: boolean }> {
+  let validated: InvitationAcceptInput;
+  try { validated = validateInvitationAcceptInput(input); } catch { throw new ProjectError("INVALID_INPUT"); }
+  const target = validated.token !== undefined ? { tokenHash: tokenHash(validated.token) } : { invitationId: validated.invitationId };
+  const hash = requestHash(ACCEPT_OPERATION, target);
+  return withDatabase(async (database) => {
+    const profile = await profileFor(database, identity);
+    return database.$transaction(async (tx) => {
+      await lockActor(tx, profile.id, identity.authUserId);
+      const receipt = await findReceipt(tx, profile.id, "USER", profile.id, validated.key);
+      if (receipt) {
+        // A key with a receipt never falls through to new work, and replays only while access remains.
+        checkReceipt(receipt, ACCEPT_OPERATION, hash);
+        const projectId = receiptString(receipt.result, "projectId");
+        if (!projectId) throw new ProjectError("UNAVAILABLE");
+        const project = await lockProject(tx, profile.id, projectId);
+        return { projectId: project.id, role: requireMember(project), replayed: true };
       }
-      const found = await transaction.invitation.findUnique({ where: { tokenHash: tokenHash(validated.token) } });
+      const found = await tx.invitation.findFirst({
+        where: "tokenHash" in target ? { tokenHash: target.tokenHash } : { id: target.invitationId, verifiedEmail: identity.verifiedEmail },
+        select: { id: true, projectId: true },
+      });
       if (!found) throw new ProjectError("NOT_FOUND");
-      const project = await lockProject(transaction, profile.id, found.projectId, true);
-      const completed = await receipt(transaction, profile.id, "USER", profile.id, validated.key);
-      if (completed) {
-        if (completed.operation !== ACCEPT_OPERATION || completed.requestHash !== hash) throw new ProjectError("KEY_REUSED");
-        const result = safeAcceptedResult(completed.result);
-        if (!result) throw new ProjectError("UNAVAILABLE");
-        requireMember(project);
-        return { ...result, replayed: true };
+      const project = await lockProject(tx, profile.id, found.projectId);
+      const [membership] = await tx.$queryRaw<RawMembership[]>`SELECT active, deactivated_sequence FROM app.project_membership WHERE project_id = ${project.id}::uuid AND profile_id = ${profile.id}::uuid FOR UPDATE`;
+      const [invitation] = await tx.$queryRaw<RawInvitation[]>`
+        SELECT id, verified_email, role::text AS role, issued_sequence, expires_at, accepted_by, accepted_at, revoked_at
+        FROM app.invitation WHERE id = ${found.id}::uuid FOR UPDATE`;
+      if (!invitation || invitation.revoked_at || invitation.verified_email !== identity.verifiedEmail) throw new ProjectError("NOT_FOUND");
+      if (invitation.accepted_at) {
+        // A consumed link returns the established result only to its acceptor while still admitted.
+        if (invitation.accepted_by !== profile.id || !project.role) throw new ProjectError("NOT_FOUND");
+        const established = { projectId: project.id, role: project.role };
+        await saveReceipt(tx, profile.id, "USER", profile.id, validated.key, ACCEPT_OPERATION, hash, established);
+        return { ...established, replayed: true };
       }
-      const invitation = await transaction.invitation.findUnique({ where: { id: found.id } });
-      if (!invitation) throw new ProjectError("NOT_FOUND");
-      const current = invitation as InvitationRecord;
-      if (current.revokedAt || current.verifiedEmail !== identity.verifiedEmail.toLowerCase()) throw new ProjectError("NOT_FOUND");
-      if (current.acceptedAt) {
-        if (current.acceptedBy !== profile.id) throw new ProjectError("NOT_FOUND");
-        const role = requireMember(project);
-        const result = { projectId: project.id, workspaceId: project.workspaceId, role };
-        await transaction.mutationReceipt.create({
-          data: { actorId: profile.id, scopeKind: "USER", scopeId: profile.id, key: validated.key, operation: ACCEPT_OPERATION, requestHash: hash, result, expiresAt: new Date(Date.now() + RECEIPT_RETENTION_MS) },
-        });
-        return { ...result, replayed: true };
+      if (project.status !== "ACTIVE" || invitation.expires_at <= new Date()) throw new ProjectError("NOT_FOUND");
+      if (project.role) throw new ProjectError("ALREADY_MEMBER", { role: project.role });
+      // An invitation issued at or before the latest removal/leave never readmits (ordered by project event sequence).
+      const deactivatedSequence = membership?.deactivated_sequence ?? null;
+      if (deactivatedSequence !== null && invitation.issued_sequence <= deactivatedSequence) throw new ProjectError("NOT_FOUND");
+      // The owner counts toward the cap; counted under the project lock so concurrent acceptances cannot exceed it.
+      const activeMembers = await tx.projectMembership.count({ where: { projectId: project.id, active: true } });
+      if (activeMembers + 1 >= MAX_COLLABORATORS) throw new ProjectError("COLLABORATOR_LIMIT");
+      const role = invitation.role as ProjectMemberRole;
+      await recordEvent(tx, project, profile.id, "INVITATION_ACCEPTED", [{ kind: "INVITATION", id: invitation.id }, { kind: "PROJECT_MEMBER", id: profile.id }], { role });
+      if (membership) {
+        await tx.$executeRaw`UPDATE app.project_membership SET active = true, role = ${role}::app.project_member_role, version = version + 1, deactivated_sequence = NULL, updated_at = CURRENT_TIMESTAMP WHERE project_id = ${project.id}::uuid AND profile_id = ${profile.id}::uuid`;
+      } else {
+        await tx.projectMembership.create({ data: { projectId: project.id, profileId: profile.id, role } });
       }
-      if (project.status !== "ACTIVE" || project.workspaceStatus !== "ACTIVE") throw new ProjectError("NOT_FOUND");
-      if (current.expiresAt <= new Date() || project.role) throw new ProjectError("NOT_FOUND");
-      const activeCollaborators = await transaction.projectMembership.count({ where: { projectId: project.id, active: true } });
-      if (activeCollaborators + 1 >= 10) throw new ProjectError("COLLABORATOR_LIMIT");
-      const workspaceMembership = await transaction.workspaceMembership.findUnique({
-        where: { workspaceId_profileId: { workspaceId: project.workspaceId, profileId: profile.id } },
-        select: { active: true },
-      });
-      if (!workspaceMembership) {
-        await transaction.workspaceMembership.create({ data: { workspaceId: project.workspaceId, profileId: profile.id, role: "MEMBER" } });
-      } else if (!workspaceMembership.active) {
-        await transaction.workspaceMembership.update({
-          where: { workspaceId_profileId: { workspaceId: project.workspaceId, profileId: profile.id } },
-          data: { active: true, version: { increment: 1 } },
-        });
-      }
-      await transaction.projectMembership.create({ data: { projectId: project.id, profileId: profile.id, role: current.role as never } });
-      await transaction.invitation.update({ where: { id: current.id }, data: { acceptedBy: profile.id, acceptedAt: new Date(), version: { increment: 1 } } });
-      const sequence = project.eventSequence + BigInt(1);
-      await transaction.project.update({ where: { id: project.id }, data: { eventSequence: sequence, membershipVersion: { increment: 1 }, realtimeEpoch: randomUUID() } });
-      const result = { projectId: project.id, workspaceId: project.workspaceId, role: current.role };
-      await transaction.auditEvent.create({
-        data: { projectId: project.id, workspaceId: project.workspaceId, sequence, actorId: profile.id, action: "INVITATION_ACCEPTED", entityRefs: [{ kind: "INVITATION", id: current.id }, { kind: "PROJECT_MEMBERSHIP", id: profile.id }], metadata: { role: current.role } },
-      });
-      await transaction.mutationReceipt.create({
-        data: { actorId: profile.id, scopeKind: "USER", scopeId: profile.id, key: validated.key, operation: ACCEPT_OPERATION, requestHash: hash, result, expiresAt: new Date(Date.now() + RECEIPT_RETENTION_MS) },
-      });
+      await tx.$executeRaw`UPDATE app.invitation SET accepted_by = ${profile.id}::uuid, accepted_at = CURRENT_TIMESTAMP, version = version + 1 WHERE id = ${invitation.id}::uuid`;
+      await tx.$executeRaw`UPDATE app.invitation SET revoked_at = CURRENT_TIMESTAMP, version = version + 1
+        WHERE project_id = ${project.id}::uuid AND verified_email = ${invitation.verified_email} AND id <> ${invitation.id}::uuid AND accepted_at IS NULL AND revoked_at IS NULL`;
+      await tx.$executeRaw`UPDATE app.project SET membership_version = membership_version + 1, realtime_epoch = gen_random_uuid(), updated_at = CURRENT_TIMESTAMP WHERE id = ${project.id}::uuid`;
+      const result = { projectId: project.id, role };
+      await saveReceipt(tx, profile.id, "USER", profile.id, validated.key, ACCEPT_OPERATION, hash, result);
       return { ...result, replayed: false };
     });
   });
