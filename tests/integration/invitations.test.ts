@@ -149,6 +149,46 @@ test("acceptance works with zero owned projects and at the owned limit", { skip:
   });
 });
 
+test("pending invitations are capped at 50 per project", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project }) => {
+    const owner = await user();
+    const projectId = await project(owner);
+    for (let index = 0; index < 50; index++) {
+      await invite(owner, projectId, `capped-${randomUUID()}@example.test`);
+    }
+    await assert.rejects(invite(owner, projectId, `capped-${randomUUID()}@example.test`), code("INVITATION_LIMIT"));
+  });
+});
+
+test("only the owner lists and revokes invitations", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project }) => {
+    const owner = await user(); const active = await user("Active Member");
+    const projectId = await project(owner);
+    await acceptInvitation(active, { token: tokenOf(await invite(owner, projectId, active.verifiedEmail)), key: randomUUID() });
+    const issued = await invite(owner, projectId, `other-${randomUUID()}@example.test`);
+    await assert.rejects(listProjectInvitations(active, projectId), code("NOT_FOUND"));
+    await assert.rejects(revokeInvitation(active, projectId, issued.id, { expectedVersion: issued.version, key: randomUUID() }), code("NOT_FOUND"));
+  });
+});
+
+test("an issue replay returns the stored result without the link, and the raw token is never stored", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user();
+    const projectId = await project(owner);
+    const email = `replay-${randomUUID()}@example.test`;
+    const key = randomUUID();
+    const first = await issueInvitation(owner, projectId, { verifiedEmail: email, role: "EDITOR", key });
+    const token = tokenOf(first);
+    const replay = await issueInvitation(owner, projectId, { verifiedEmail: email, role: "EDITOR", key });
+    assert.deepEqual(replay, { ...first, url: undefined, linkUnavailable: true, replayed: true });
+    const { rows: hashed } = await database.query<{ found: boolean }>("select exists(select 1 from app.invitation where token_hash = $1) as found", [token]);
+    assert.equal(hashed[0]!.found, false);
+    const { rows: receipts } = await database.query<{ result: string }>("select result::text as result from app.mutation_receipt where key = $1", [key]);
+    assert.ok(receipts.length > 0);
+    assert.ok(receipts.every((entry) => !entry.result.includes(token)));
+  });
+});
+
 test("my invitations list is email-bound, actionable-only and metadata-only", { skip: !canRun }, async () => {
   await withFixture(async ({ user, project, database }) => {
     const owner = await user("Inviting Owner"); const member = await user(); const outsider = await user();
