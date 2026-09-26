@@ -10,8 +10,9 @@ function ShowProjects({ onClick }: { onClick: () => void }) {
 }
 
 /** Keyed by project id in the shell: switching projects unmounts this project's editor state. */
-export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onShowProjects, panelOpen, onTogglePanel }: {
+export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onShowProjects, panelOpen, onTogglePanel, restoreNote, onRestore }: {
   bootstrap: ProjectBootstrap; autoFocus: boolean; sidebarClosed: boolean; onShowProjects: () => void; panelOpen: boolean; onTogglePanel: () => void;
+  restoreNote?: string; onRestore: () => void;
 }) {
   const { project } = bootstrap;
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -25,7 +26,13 @@ export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onS
       <span className="editor-spacer" />
       <button type="button" className="button small editor-toggle" aria-pressed={panelOpen} aria-controls="right-panel" onClick={onTogglePanel}><Icon name="details" size={14} /><span>Inspect</span></button>
     </header>
-    {archived && <div className="editor-banner"><span><Icon name="lock" size={14} />Archived · read-only</span></div>}
+    {archived && <div className="editor-banner">
+      <span><Icon name="lock" size={14} />Archived · read-only</span>
+      {project.role === "OWNER" && <span className="editor-banner-actions">
+        <button type="button" className="button small" onClick={onRestore} disabled={Boolean(restoreNote)} aria-describedby={restoreNote ? "restore-note" : undefined}>Restore…</button>
+        {restoreNote && <small id="restore-note" className="editor-banner-note">{restoreNote}</small>}
+      </span>}
+    </div>}
     <div className="editor-body">
       <div className="empty-state">
         {archived ? <h2>This archived project has no flows.</h2> : <><h2>No flows yet</h2><p>This project has an empty draft. Flow editing isn&rsquo;t available yet.</p></>}

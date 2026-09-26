@@ -8,6 +8,7 @@ import type { CreatedProject, ProjectBootstrap, ProjectLists } from "@/features/
 import { expiryLabel } from "@/features/projects/ui/format";
 import ProjectDetails from "@/features/projects/ui/project-details";
 import { resolveDock } from "./dock";
+import LifecycleDialog, { type LifecycleKind } from "./lifecycle-dialog";
 import NewProjectDialog from "./new-project-dialog";
 import ProjectEditor, { NoProjectOpen, ProjectUnavailable } from "./project-editor";
 import { dropProject, setRightOpen, uiFor, type UiStore } from "./project-ui";
@@ -16,9 +17,11 @@ import RightPanel from "./right-panel";
 
 type Prefs = { leftOpen: boolean; listTab: ListTab };
 type Opened = { projectId: string; bootstrap?: ProjectBootstrap; missing?: boolean; error?: string };
-type ShellDialog = { kind: "create" };
+type Target = { id: string; name: string };
+type ShellDialog = { kind: "create" } | { kind: LifecycleKind; project: Target };
 
 const prefsKey = "scoperoom_shell";
+const doneVerb: Record<LifecycleKind, string> = { archive: "Archived", restore: "Restored", leave: "Left" };
 
 /** Presentation preferences only (UI00): nothing about a project is written to browser storage. */
 function readPrefs(): Prefs {
@@ -148,16 +151,29 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     await loadLists();
     navigate(project.id);
   }
+  async function finishLifecycle(kind: LifecycleKind, target: Target) {
+    setDialog(null);
+    notify(`${doneVerb[kind]} ${target.name}.`);
+    if (kind === "leave") {
+      setStore((previous) => dropProject(previous, target.id));
+      if (target.id === projectId) navigate(null);
+    } else if (target.id === projectId) void loadProject(target.id);
+    await loadLists();
+  }
   function projectChanged() {
     if (projectId) void loadProject(projectId);
     void loadLists();
   }
 
+  const restoreNote = capacity && !capacity.canCreate ? (capacity.entitled ? `${capacity.activeOwned}/${capacity.maxOwned} active` : "Restoring isn’t enabled for this account") : undefined;
+  const lifecycleDialog = dialog && dialog.kind !== "create" ? dialog : null;
+
   const editor = !projectId
     ? <NoProjectOpen sidebarClosed={sidebarClosed} capacity={capacity} hasInvites={Boolean(invites?.items.length)} onShowProjects={() => showProjects()} onCreate={() => setDialog({ kind: "create" })} onViewInvites={() => showProjects("invites")} />
     : !current ? <div className="empty-state" aria-busy="true"><p>Loading project…</p></div>
     : bootstrap ? <ProjectEditor key={projectId} bootstrap={bootstrap} autoFocus={focusTarget === projectId} sidebarClosed={sidebarClosed} onShowProjects={() => showProjects()}
-        panelOpen={dock.right !== "closed"} onTogglePanel={() => setPanel(dock.right === "closed")} />
+        panelOpen={dock.right !== "closed"} onTogglePanel={() => setPanel(dock.right === "closed")}
+        restoreNote={restoreNote} onRestore={() => setDialog({ kind: "restore", project: { id: projectId, name: bootstrap.project.name } })} />
     : <ProjectUnavailable missing={Boolean(current.missing)} message={current.error ?? ""} sidebarClosed={sidebarClosed} onShowProjects={() => showProjects()} onRetry={() => void loadProject(projectId)} />;
 
   const panel = projectId && bootstrap && ui.rightMounted
@@ -173,7 +189,9 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
         <div className="sidebar-slot" data-mode={dock.left}>
           <ProjectsSidebar lists={lists} invites={invites} state={listsState} onRetry={() => { setListsState("loading"); void loadLists(); }}
             tab={prefs.listTab} onTabChange={(listTab) => setPrefs((previous) => ({ ...previous, listTab }))} openProjectId={projectId} onOpenProject={openProject}
-            hidden={sidebarClosed} overlay={dock.left === "overlay"} onHide={hideProjects} onNewProject={() => setDialog({ kind: "create" })} />
+            hidden={sidebarClosed} overlay={dock.left === "overlay"} onHide={hideProjects} onNewProject={() => setDialog({ kind: "create" })}
+            onAction={(kind, item) => setDialog({ kind, project: { id: item.id, name: item.name } })}
+            onInviteSettled={(text, error) => { notify(text, error); void loadLists(); }} />
         </div>
         <main id="editor-main" tabIndex={-1} className="editor-slot" style={{ width: dock.editor }}>{editor}</main>
         {panel}
@@ -185,5 +203,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     </footer>
     {children}
     {dialog?.kind === "create" && <NewProjectDialog onClose={() => setDialog(null)} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}
+    {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project}
+      onClose={() => setDialog(null)} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}
   </div>;
 }
