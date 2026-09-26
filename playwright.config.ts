@@ -17,5 +17,7 @@ export default defineConfig({
     env: { SCOPEROOM_E2E: "1", NEXT_PUBLIC_APP_URL: appUrl },
     reuseExistingServer: false,
     timeout: 120_000,
+    stdout: "pipe",
+    stderr: "pipe",
   },
 });
