@@ -32,3 +32,10 @@ export function apiRead<T>(url: string, signal?: AbortSignal): Promise<ApiResult
 export function apiMutate<T>(url: string, key: string, body: Record<string, unknown> = {}, method: "POST" | "PATCH" | "DELETE" = "POST"): Promise<ApiResult<T>> {
   return settle<T>(() => fetch(url, { method, headers: { "Content-Type": "application/json", "Idempotency-Key": key }, body: JSON.stringify(body) }));
 }
+
+/** A 401 means the session ended: a full load of sign-in drops every private value held in memory. */
+export function sessionEnded(result: ApiResult<unknown>): boolean {
+  if (result.ok || result.status !== 401) return false;
+  window.location.assign("/login");
+  return true;
+}

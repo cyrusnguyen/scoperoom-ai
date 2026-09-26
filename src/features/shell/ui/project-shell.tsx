@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { apiRead, type ApiResult } from "@/client/api";
+import { apiRead, sessionEnded } from "@/client/api";
 import type { MyInvitation } from "@/features/projects/contracts/invitation";
 import type { CreatedProject, ProjectBootstrap, ProjectLists } from "@/features/projects/contracts/project";
 import { expiryLabel } from "@/features/projects/ui/format";
@@ -31,13 +31,6 @@ function readPrefs(): Prefs {
     if (value && typeof value === "object") saved = value as Partial<Prefs>;
   } catch { /* Storage is unavailable or holds something else: use the defaults. */ }
   return { leftOpen: saved.leftOpen !== false, listTab: LIST_TABS.includes(saved.listTab as ListTab) ? saved.listTab as ListTab : "owned" };
-}
-
-/** A 401 means the session ended: a full load of sign-in drops every private value held in memory. */
-function sessionEnded(result: ApiResult<unknown>) {
-  if (result.ok || result.status !== 401) return false;
-  window.location.assign("/login");
-  return true;
 }
 
 export default function ProjectShell({ signOut, children }: { signOut: () => Promise<void>; children: ReactNode }) {

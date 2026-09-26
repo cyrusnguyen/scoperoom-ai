@@ -160,7 +160,7 @@ function InvitesList({ invites, onSettled }: { invites: InviteRow[]; onSettled: 
       aria-describedby={errors[invite.id] ? `invite-error-${invite.id}` : undefined} onClick={() => void accept(invite)}>
       {busy === invite.id ? "Accepting…" : keys[invite.id] ? "Retry" : "Accept"}
     </button>
-    {errors[invite.id] && <small className="invite-error" id={`invite-error-${invite.id}`}>{errors[invite.id]}</small>}
+    {errors[invite.id] && <small className="invite-error" id={`invite-error-${invite.id}`} role="alert">{errors[invite.id]}</small>}
   </li>)}</ul>;
 }
 

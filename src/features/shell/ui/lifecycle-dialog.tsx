@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type SubmitEvent } from "react";
-import { apiMutate, apiRead } from "@/client/api";
+import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import type { ProjectStatusView } from "@/features/projects/contracts/project";
 import Dialog, { CancelFocus } from "./dialog";
 
@@ -29,7 +29,7 @@ export default function LifecycleDialog({ kind, project, onClose, onDone }: { ki
 
   const preview = useCallback(async (signal?: AbortSignal) => {
     const result = await apiRead<ProjectStatusView>(`/api/projects/${project.id}/status`, signal);
-    if (signal?.aborted) return;
+    if (signal?.aborted || sessionEnded(result)) return;
     if (result.ok) setVersion(result.data.version);
     else setError(result.message);
   }, [project.id]);

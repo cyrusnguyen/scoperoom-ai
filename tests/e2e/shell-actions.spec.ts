@@ -91,6 +91,20 @@ test.describe("shell actions", () => {
     await expect(nav.getByRole("button", { name: "Alpha plan", exact: true })).toBeVisible();
   });
 
+  test("a session that ends while the archive dialog reads its preview sends the browser to sign-in", async ({ page, context }) => {
+    const owner = await signIn(page, admin, users, "Actions Test");
+    await entitle(database, owner.authUserId);
+    await createProjectViaApi(page, "Session end project");
+    await page.goto("/app");
+    const nav = sidebar(page);
+    await nav.getByRole("button", { name: "Actions for Session end project" }).click();
+    // Clearing cookies here (not before the menu opens) simulates the session ending between opening
+    // the row menu and the dialog's status read, without a page navigation that would mask the effect.
+    await context.clearCookies();
+    await page.getByRole("menuitem", { name: "Archive…" }).click();
+    await expect(page).toHaveURL(/\/login$/);
+  });
+
   test("a version conflict keeps the archive dialog open and requires a fresh preview", async ({ page }) => {
     await signIn(page, admin, users, "Actions Test");
     let serverVersion = 1;
@@ -137,7 +151,7 @@ test.describe("shell actions", () => {
     await nav.getByRole("tab", { name: "Invitations, 2 pending" }).click();
     await expect(nav.getByText("Expires today")).toBeVisible();
     await nav.getByRole("button", { name: "Accept Delta field app" }).click();
-    await expect(nav.getByText("This project is full (10 collaborators including the owner).")).toBeVisible();
+    await expect(nav.getByRole("alert")).toHaveText("This project is full (10 collaborators including the owner).");
     await nav.getByRole("button", { name: "Accept Old kiosk" }).click();
     await expect(notice(page)).toHaveText("This invitation is no longer available.");
     await expect(nav.getByText("Old kiosk")).toHaveCount(0);
