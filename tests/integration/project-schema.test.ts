@@ -1,61 +1,54 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { Client } from "pg";
+import { requireEnv } from "../support/env.ts";
+import { insertProfile, insertProject, removeSchemaRows } from "./support/schema-fixture.ts";
 
-const databaseUrl = process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL;
-const canRun = Boolean(databaseUrl);
+const canRun = requireEnv(["SCOPEROOM_BOOTSTRAP_DATABASE_URL"]);
+const checkViolation = (error: unknown) => (error as { code?: string }).code === "23514";
 
-test("project storage rejects a missing current draft and a second editable draft", { skip: !canRun }, async () => {
-  const database = new Client({ connectionString: databaseUrl! });
+async function withDatabase(run: (database: Client, profiles: string[]) => Promise<void>) {
+  const database = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
+  const profiles: string[] = [];
   await database.connect();
-  const suffix = randomUUID();
-  let profileId = "";
-  let workspaceId = "";
-  let projectId = "";
-  try {
-    await database.query("begin");
-    const { rows: [profile] } = await database.query<{ id: string }>("insert into app.user_profile (display_name) values ($1) returning id", [`Project schema ${suffix}`]);
-    profileId = profile!.id;
-    const { rows: [workspace] } = await database.query<{ id: string }>("insert into app.workspace (owner_id, name) values ($1, $2) returning id", [profileId, `Workspace ${suffix}`]);
-    workspaceId = workspace!.id;
-    await database.query("insert into app.workspace_membership (workspace_id, profile_id, role) values ($1, $2, 'OWNER')", [workspaceId, profileId]);
-    await database.query("commit");
+  try { await run(database, profiles); } finally { await removeSchemaRows(database, profiles); await database.end(); }
+}
 
+test("a project needs its editable current draft, and only one editable draft", { skip: !canRun }, async () => {
+  await withDatabase(async (database, profiles) => {
+    const owner = await insertProfile(database); profiles.push(owner);
     await database.query("begin");
-    const { rows: [project] } = await database.query<{ id: string }>("insert into app.project (workspace_id, name) values ($1, $2) returning id", [workspaceId, `Project ${suffix}`]);
-    projectId = project!.id;
-    await assert.rejects(database.query("commit"), (error: unknown) => (error as { code?: string }).code === "23514");
-    await database.query("rollback");
+    await database.query("insert into app.project (owner_id, name) values ($1, 'No draft')", [owner]);
+    await assert.rejects(database.query("commit"), checkViolation);
+    const projectId = await insertProject(database, owner);
+    await assert.rejects(database.query("insert into app.scope_draft (project_id, created_by, document_json, layout_json) values ($1, $2, '{}'::jsonb, '{}'::jsonb)", [projectId, owner]), (error: unknown) => (error as { code?: string }).code === "23505");
+  });
+});
 
-    await database.query("begin");
-    const { rows: [validProject] } = await database.query<{ id: string }>("insert into app.project (workspace_id, name) values ($1, $2) returning id", [workspaceId, `Valid project ${suffix}`]);
-    projectId = validProject!.id;
-    const { rows: [draft] } = await database.query<{ id: string }>("insert into app.scope_draft (project_id, created_by, document_json, layout_json) values ($1, $2, '{\"schemaVersion\":3,\"requirements\":{},\"flows\":{},\"nodes\":{},\"edges\":{},\"questions\":{},\"decisions\":{},\"scenarios\":{}}', '{\"schemaVersion\":1,\"nodes\":{}}') returning id", [projectId, profileId]);
-    await database.query("update app.project set current_draft_id = $1 where id = $2", [draft!.id, projectId]);
-    await database.query("commit");
+test("the project owner can never hold a membership row", { skip: !canRun }, async () => {
+  await withDatabase(async (database, profiles) => {
+    const owner = await insertProfile(database); profiles.push(owner);
+    const projectId = await insertProject(database, owner);
+    await assert.rejects(database.query("insert into app.project_membership (project_id, profile_id, role) values ($1, $2, 'EDITOR')", [projectId, owner]), checkViolation);
+  });
+});
 
-    await assert.rejects(
-      database.query("insert into app.scope_draft (project_id, created_by, document_json, layout_json) values ($1, $2, '{}', '{}')", [projectId, profileId]),
-      (error: unknown) => (error as { code?: string }).code === "23505",
-    );
-    await database.query("insert into app.audit_event (project_id, workspace_id, sequence, actor_id, action, entity_refs, metadata) values ($1, $2, 1, $3, 'PROJECT_CREATED', '{}', '{}')", [projectId, workspaceId, profileId]);
-    await database.query("begin");
-    await database.query("delete from app.scope_draft where id = $1", [draft!.id]);
-    await assert.rejects(database.query("commit"), (error: unknown) => (error as { code?: string }).code === "23503");
-    await database.query("rollback");
-    const { rows: [preserved] } = await database.query<{ projects: number; drafts: number; events: number }>("select (select count(*)::int from app.project where id = $1) as projects, (select count(*)::int from app.scope_draft where project_id = $1) as drafts, (select count(*)::int from app.audit_event where project_id = $1) as events", [projectId]);
-    assert.deepEqual(preserved, { projects: 1, drafts: 1, events: 1 });    await database.query("delete from app.project where id = $1", [projectId]);
-    const { rows: [remaining] } = await database.query<{ drafts: number; events: number }>("select (select count(*)::int from app.scope_draft where project_id = $1) as drafts, (select count(*)::int from app.audit_event where project_id = $1) as events", [projectId]);
-    assert.deepEqual(remaining, { drafts: 0, events: 0 });
-    projectId = "";
-  } finally {
-    if (projectId) await database.query("delete from app.audit_event where project_id = $1", [projectId]).catch(() => undefined);
-    if (projectId) await database.query("delete from app.scope_draft where project_id = $1", [projectId]).catch(() => undefined);
-    if (projectId) await database.query("delete from app.project where id = $1", [projectId]).catch(() => undefined);
-    if (workspaceId) await database.query("delete from app.workspace_membership where workspace_id = $1", [workspaceId]).catch(() => undefined);
-    if (workspaceId) await database.query("delete from app.workspace where id = $1", [workspaceId]).catch(() => undefined);
-    if (profileId) await database.query("delete from app.user_profile where id = $1", [profileId]).catch(() => undefined);
-    await database.end();
-  }
+test("membership deactivation and invitation ordering carry event sequences", { skip: !canRun }, async () => {
+  await withDatabase(async (database, profiles) => {
+    const owner = await insertProfile(database); const member = await insertProfile(database); profiles.push(owner, member);
+    const projectId = await insertProject(database, owner);
+    await database.query("insert into app.project_membership (project_id, profile_id, role) values ($1, $2, 'VIEWER')", [projectId, member]);
+    await assert.rejects(database.query("update app.project_membership set active = false where project_id = $1 and profile_id = $2", [projectId, member]), checkViolation);
+    await database.query("update app.project_membership set active = false, deactivated_sequence = 3 where project_id = $1 and profile_id = $2", [projectId, member]);
+    await assert.rejects(database.query("insert into app.invitation (project_id, token_hash, verified_email, role, invited_by, expires_at) values ($1, repeat('a', 64), 'x@example.test', 'VIEWER', $2, now() + interval '1 day')", [projectId, owner]), (error: unknown) => (error as { code?: string }).code === "23502");
+  });
+});
+
+test("receipt scopes are USER or PROJECT only", { skip: !canRun }, async () => {
+  await withDatabase(async (database) => {
+    const { rows } = await database.query<{ label: string }>("select enumlabel as label from pg_enum join pg_type on pg_type.oid = enumtypid where typname = 'mutation_scope_kind' order by enumsortorder");
+    assert.deepEqual(rows.map((row) => row.label), ["USER", "PROJECT"]);
+    const { rows: [stale] } = await database.query<{ tables: number }>("select count(*)::int as tables from pg_tables where schemaname = 'app' and tablename like 'workspace%'");
+    assert.equal(stale!.tables, 0);
+  });
 });
