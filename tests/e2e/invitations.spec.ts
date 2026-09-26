@@ -82,6 +82,16 @@ test.describe("project invitations", () => {
 
     await page.getByLabel("Verified email").fill(fixture.invitee.email);
     await page.getByLabel("Project role").selectOption("VIEWER");
+    // Hold the list refresh that follows issuance so Copy runs while it is pending.
+    const listPattern = `**/api/projects/${fixture.projectId}/invitations`;
+    let releaseRefresh = () => {};
+    const refreshHeld = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    let issuedInvitation = false;
+    await page.route(listPattern, async (route) => {
+      if (route.request().method() === "POST") issuedInvitation = true;
+      else if (issuedInvitation) await refreshHeld;
+      await route.continue();
+    });
     await page.getByRole("button", { name: "Create invitation" }).click();
     const invitationLink = page.getByLabel("One-time invitation link");
     await expect(invitationLink).toBeVisible();
@@ -89,6 +99,10 @@ test.describe("project invitations", () => {
     await expect(page.getByRole("button", { name: "Copy link" })).toBeVisible();
     await page.getByRole("button", { name: "Copy link" }).click();
     await expect(page.getByText("Copy did not complete. Select the link and copy it manually.")).toBeVisible();
+    releaseRefresh();
+    await expect(page.getByText(fixture.invitee.email, { exact: true })).toBeVisible();
+    await expect(page.getByText("Copy did not complete. Select the link and copy it manually.")).toBeVisible();
+    await page.unroute(listPattern);
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByLabel("One-time invitation link")).toHaveCount(0);
     await page.getByRole("button", { name: "Share project" }).click();
