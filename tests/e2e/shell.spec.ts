@@ -239,4 +239,25 @@ test.describe("project shell", () => {
     await expect(sidebar(page).getByRole("button", { name: longName, exact: true })).toBeVisible();
     expect(await pageFits(page)).toBe(true);
   });
+
+  test("a delayed manual reload of a closed project never clobbers the next open one", async ({ page }) => {
+    await mockShell(page);
+    let failFirst = true;
+    await page.route(`**/api/projects/${ids.alpha}/bootstrap`, async (route) => {
+      if (failFirst) { failFirst = false; await route.fulfill({ status: 503, json: envelope("UNAVAILABLE", "Project access is unavailable. Try again.") }); return; }
+      // Retry's re-read resolves only after the user has already switched to Beta below.
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await route.fulfill({ json: bootstrap(ids.alpha, "Alpha plan") }).catch(() => undefined); // the page may have aborted it
+    });
+    await page.goto(`/app/projects/${ids.alpha}`);
+    await expect(page.getByRole("heading", { level: 1, name: "Project couldn’t load" })).toBeVisible();
+    await page.getByRole("button", { name: "Retry" }).click();
+    const nav = sidebar(page);
+    await nav.getByRole("button", { name: "Beta notes", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Beta notes" })).toBeVisible();
+    await page.waitForTimeout(2_000);
+    await expect(page.getByRole("heading", { level: 1, name: "Beta notes" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Alpha plan" })).toHaveCount(0);
+    await expect(page.getByText("Loading project…")).toHaveCount(0);
+  });
 });

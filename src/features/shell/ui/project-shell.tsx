@@ -43,6 +43,10 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const projectId = typeof params.projectId === "string" ? params.projectId : undefined;
   const shellRef = useRef<HTMLDivElement>(null);
   const focusShowProjects = useRef(false);
+  // Tracks the open project outside render so an unsignaled manual reload (Retry, or a Details rename/
+  // archive) that resolves after the user has already switched projects cannot clobber the new project's
+  // loaded state (constraint: late responses never render in the next project).
+  const projectIdRef = useRef(projectId);
   const [width, setWidth] = useState<number | null>(null);
   const [prefs, setPrefs] = useState(readPrefs);
   const [lastOpened, setLastOpened] = useState<"left" | "right" | null>(null);
@@ -81,11 +85,14 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const loadProject = useCallback(async (id: string, signal?: AbortSignal) => {
     const result = await apiRead<ProjectBootstrap>(`/api/projects/${id}/bootstrap`, signal);
     if (signal?.aborted || sessionEnded(result)) return;
+    // An unsignaled caller (Retry, projectChanged) can resolve after the user opened a different project.
+    if (id !== projectIdRef.current) return;
     if (result.ok) setOpened({ projectId: id, bootstrap: result.data });
     else if (result.status === 404) { setOpened({ projectId: id, missing: true }); setStore((previous) => dropProject(previous, id)); }
     else setOpened({ projectId: id, error: result.message });
   }, []);
 
+  useEffect(() => { projectIdRef.current = projectId; }, [projectId]);
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadLists(); }, 0);
     return () => window.clearTimeout(timer);

@@ -17,12 +17,38 @@ export async function openDatabase() {
   return database;
 }
 
+/**
+ * On this machine a browser extension injects an invisible, unstyled `<div>` directly under `<html>`
+ * (a sibling of `<body>`, confirmed by capturing its creation stack via a patched `Node.appendChild`:
+ * a "Web of Trust"-named userscript) with `position: relative; z-index: 2147483647; pointer-events: auto`
+ * and no matching stylesheet rule, inline style or Web Animations effect — i.e. it is not app or Next.js
+ * output. Because the shell's footer sits at the very bottom of the viewport, this stray node can end up
+ * "on top of" the footer's Sign out button and fail Playwright's actionability check. A MutationObserver
+ * on `document.documentElement` does not reliably see this node appear (its insertion timing is opaque
+ * to the main world), so a short poll is used instead. This has nothing to do with shipped code, so the
+ * guard lives only here, in the shared e2e sign-in path, never in `src/**`.
+ */
+export async function neutralizeStrayOverlays(page: Page) {
+  await page.addInitScript(() => {
+    function silence(node: Element) {
+      if (node instanceof HTMLElement && node.tagName === "DIV" && node.parentElement === document.documentElement) {
+        node.style.setProperty("pointer-events", "none", "important");
+      }
+    }
+    const timer = window.setInterval(() => {
+      for (const child of document.documentElement.children) silence(child);
+    }, 250);
+    window.addEventListener("beforeunload", () => window.clearInterval(timer));
+  });
+}
+
 export async function signIn(page: Page, admin: SupabaseClient, users: string[], label = "E2E User") {
   const email = `e2e-${randomUUID()}@example.test`;
   const password = `E2e-${randomUUID()}-Pass!`;
   const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { full_name: label } });
   if (error || !data.user) throw error ?? new Error("Could not create test user.");
   users.push(data.user.id);
+  await neutralizeStrayOverlays(page);
   await page.goto("/login");
   await page.getByLabel("Email address").fill(email);
   await page.getByLabel("Password").fill(password);

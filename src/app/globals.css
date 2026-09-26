@@ -13,11 +13,6 @@ code, pre, kbd { font-family: var(--font-mono); }
 ::selection { background: var(--selection); color: var(--foreground); }
 :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
 [hidden] { display: none !important; }
-/* Next.js dev-mode's devtools/toast container never ships to production, but it mounts an empty div as
-   body's sibling that a stuck Web Animations API entrance/exit effect can leave at the maximum z-index
-   with pointer-events on, intercepting clicks on real controls near the viewport edges (e.g. the shell's
-   footer). A WAAPI animation outranks a normal author rule, so this needs !important to win the cascade. */
-body ~ div { pointer-events: none !important; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 .skip-link {

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { expect, test } from "@playwright/test";
 import { requireEnv } from "../support/env.ts";
+import { neutralizeStrayOverlays } from "./support";
 
 const authUrl = process.env.E2E_SUPABASE_URL;
 const secretKey = process.env.E2E_SUPABASE_SECRET_KEY;
@@ -226,6 +227,7 @@ test.describe("local Supabase Auth", () => {
   });
 
   test("account sign-in opens the projects shell and sign-out closes access", async ({ page }) => {
+    await neutralizeStrayOverlays(page);
     await page.goto("/login");
     await page.getByLabel("Email address").fill(email);
     await page.getByLabel("Password").fill(password);
