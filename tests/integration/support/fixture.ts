@@ -5,7 +5,7 @@ import { createProject, listProjects } from "../../../src/features/projects/serv
 import { requireEnv } from "../../support/env.ts";
 
 export type Identity = { authUserId: string; displayName: string; verifiedEmail: string };
-export const canRun = requireEnv(["E2E_SUPABASE_URL", "E2E_SUPABASE_SECRET_KEY", "SCOPEROOM_BOOTSTRAP_DATABASE_URL", "DATABASE_URL", "SCOPEROOM_ENVIRONMENT_ID"]);
+export const canRun = requireEnv(["E2E_SUPABASE_URL", "E2E_SUPABASE_SECRET_KEY", "SCOPEROOM_BOOTSTRAP_DATABASE_URL", "DATABASE_URL", "SCOPEROOM_ENVIRONMENT_ID", "NEXT_PUBLIC_APP_URL"]);
 
 export type Fixture = {
   database: Client;
