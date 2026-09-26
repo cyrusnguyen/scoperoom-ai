@@ -123,7 +123,7 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
           <section className="canvas-column" aria-label="Canvas">
             <div className="canvas-toolbar">
               <div className="canvas-toolbar-start">
-                {!leftOpen && <button ref={leftShowRef} className="panel-toggle" type="button" aria-label="Show left sidebar" aria-controls="workspace-sidebar" aria-expanded={false} title="Show workspace sidebar" onClick={() => setLeftPanel(true)}><PanelIcon side="left" /></button>}
+                {!leftOpen && <button ref={leftShowRef} className="panel-toggle" type="button" aria-label="Show left sidebar" aria-controls="workspace-sidebar" aria-expanded={false} title="Show projects sidebar" onClick={() => setLeftPanel(true)}><PanelIcon side="left" /></button>}
                 <div className="canvas-breadcrumb">
                   <span>Projects</span>
                   <span aria-hidden="true">/</span>
@@ -152,7 +152,7 @@ export default function WorkspaceHome({ signOut, projectId }: { signOut: () => P
 
           <aside id="workspace-sidebar" className="workspace-sidebar" aria-labelledby="guide-title" hidden={!leftOpen}>
             <div className="panel-heading">
-              <button ref={leftCloseRef} className="panel-close panel-close-right" type="button" aria-label="Hide left sidebar" aria-controls="workspace-sidebar" aria-expanded={true} title="Close workspace sidebar" onClick={() => setLeftPanel(false)}><CloseIcon /></button>
+              <button ref={leftCloseRef} className="panel-close panel-close-right" type="button" aria-label="Hide left sidebar" aria-controls="workspace-sidebar" aria-expanded={true} title="Close projects sidebar" onClick={() => setLeftPanel(false)}><CloseIcon /></button>
               <span className="panel-kicker">PROJECTS</span><h2 id="guide-title">Your projects</h2>
             </div>
             <div className="panel-body">
