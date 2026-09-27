@@ -125,6 +125,14 @@
   .modal-footer .button { flex: 1; }
 }
 
+@media (max-width: 999px) {
+  .right-panel[data-dock="docked"] :is(button, input:not([type="checkbox"]), select, textarea) { min-height: 44px; }
+}
+
+@media (max-width: 939px) {
+  .right-panel[data-dock="overlay"] :is(button, input:not([type="checkbox"]), select, textarea) { min-height: 44px; }
+}
+
 /* Row menus, invitation actions and the archived banner's Restore (Task 4) */
 .projects-row-menu { position: relative; flex-shrink: 0; }
 .more-button { width: 28px; height: 28px; padding: 0; }

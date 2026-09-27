@@ -49,6 +49,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   const current = currentFlow(document, ui.flowId);
   const shown = flows.filter((flow) => filter === "ALL" || flow.inclusion === filter);
   const full = flows.length >= LIMITS.flows;
+  const duplicateTooLong = Boolean(current && [...`Copy of ${current.title}`].length > LIMITS.title);
   const counts = (flowId: string) => Object.values(document.nodes).filter((node) => node.flowId === flowId).length;
   const open = (flowId: string | null) => {
     update(() => ({ flowId, selection: null }));
@@ -97,7 +98,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     }, values);
   };
   const duplicate = async () => {
-    if (!current || busy || !editable) return;
+    if (!current || busy || !editable || duplicateTooLong) return;
     await send({ commandSchemaVersion: 1, command: "DUPLICATE_FLOW", expectedDocumentRevision: draft.documentRevision, payload: { flowId: current.id } });
   };
   const remove = async () => {
@@ -168,10 +169,10 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     {editable && <>
       <div className="view-actions">
         <button type="button" className="button small" onClick={() => setMode("create")} disabled={busy || full}>New flow</button>
-        {current && <button type="button" className="button small" onClick={() => void duplicate()} disabled={busy || full}>Duplicate {current.title}</button>}
+        {current && <button type="button" className="button small" onClick={() => void duplicate()} disabled={busy || full || duplicateTooLong}>Duplicate {current.title}</button>}
         {current && <button type="button" className="button danger small" onClick={() => setMode("delete")} disabled={busy}>Delete {current.title}…</button>}
       </div>
-      <p className="muted">A duplicate gets new identities, keeps its steps, connections and positions, and starts unconfirmed.{full ? ` A project can have up to ${LIMITS.flows} flows.` : ""}</p>
+      <p className="muted">A duplicate gets new identities, keeps its steps, connections and positions, and starts unconfirmed.{full ? ` A project can have up to ${LIMITS.flows} flows.` : duplicateTooLong ? ` This flow title cannot be duplicated because "Copy of " would exceed the ${LIMITS.title}-character limit.` : ""}</p>
     </>}
     {message && <p className="error-message" role="alert">{message}</p>}
   </Dialog>;

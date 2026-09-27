@@ -66,4 +66,5 @@ button.item-row { width: 100%; border: 0; border-bottom: var(--panel-border); ba
   .step-check { display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
   .studio .react-flow__controls-button { min-width: 44px; min-height: 44px; }
   .studio .field :is(input:not([type="checkbox"]), select, textarea) { min-height: 44px; }
+  .modal :is(button, input:not([type="checkbox"]), select, textarea) { min-height: 44px; }
 }
