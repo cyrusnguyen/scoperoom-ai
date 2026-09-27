@@ -129,6 +129,10 @@
   .right-panel[data-dock="docked"] :is(button, input:not([type="checkbox"]), select, textarea) { min-height: 44px; }
 }
 
+@media (max-width: 1299px) {
+  .app-main:has(.sidebar-slot[data-mode="docked"]) .right-panel[data-dock="docked"] :is(button, input:not([type="checkbox"]), select, textarea) { min-height: 44px; }
+}
+
 @media (max-width: 939px) {
   .right-panel[data-dock="overlay"] :is(button, input:not([type="checkbox"]), select, textarea) { min-height: 44px; }
 }

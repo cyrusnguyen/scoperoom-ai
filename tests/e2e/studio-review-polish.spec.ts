@@ -91,4 +91,31 @@ test.describe("Studio review polish", () => {
       expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     }
   });
+
+  test("keeps Inspector and Flows controls at 44 px with both panels docked at 1250 px", async ({ page }) => {
+    await createFlow(page, "Intake");
+    await toolbar(page).getByRole("button", { name: "Add step" }).click();
+    const add = modal(page, "Add step");
+    await add.getByLabel("Name").fill("Receive form");
+    await add.getByRole("button", { name: "Add step" }).click();
+    await expect(add).toBeHidden();
+
+    await page.setViewportSize({ width: 1250, height: 844 });
+    await toolbar(page).getByRole("button", { name: "List", exact: true }).click();
+    await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Receive form/ }).click();
+    await page.getByRole("button", { name: "Inspect" }).click();
+    await expect(panel(page)).toHaveAttribute("data-dock", "docked");
+    await expect(page.locator(".sidebar-slot")).toHaveAttribute("data-mode", "docked");
+    const editorWidth = await page.locator(".project-editor").evaluate((element) => element.getBoundingClientRect().width);
+    expect(editorWidth).toBeLessThan(640);
+    for (const control of [panel(page).getByLabel("Name"), panel(page).getByRole("button", { name: "Save", exact: true })]) {
+      expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    }
+
+    await page.locator(".flow-switch").click();
+    const flows = modal(page, "Flows");
+    for (const control of [flows.getByRole("button", { name: "New flow" }), flows.getByLabel("Show"), flows.getByRole("button", { name: "Close" })]) {
+      expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    }
+  });
 });
