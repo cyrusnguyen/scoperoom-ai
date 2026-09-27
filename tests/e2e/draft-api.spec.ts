@@ -56,6 +56,9 @@ test("an owner saves a command once, reads the coherent draft, and another accou
     expect(forged.status()).toBe(400);
     expect((await forged.json() as { error: { code: string } }).error.code).toBe("INVALID_INPUT");
 
+    const replacement = await post({ ...createFlow(1), documentJson: {} });
+    expect(replacement.status()).toBe(400);
+    expect((await replacement.json() as { error: { code: string } }).error.code).toBe("INVALID_INPUT");
     const key = randomUUID();
     const saved = await post(createFlow(1), key);
     expect(saved.status()).toBe(200);
