@@ -1,12 +1,13 @@
 import type { DraftView } from "../../drafts/contracts/scope-document.ts";
-import type { Buffers } from "./buffers.ts";
+import { dirtyFields, isDirty, type Buffers } from "./buffers.ts";
 
 // The Studio's slice of the shell's per-project UI store (UI00 "Per-project UI state"). Memory only: none of it is
 // written to browser storage, and a project switch keeps it until the project is dropped or its edits discarded.
 export type Selection = { kind: "NODES"; ids: string[] } | { kind: "EDGE"; id: string } | { kind: "FLOW"; id: string } | null;
 export type StudioView = "canvas" | "list";
-export type StudioUi = { buffers: Buffers; flowId: string | null; selection: Selection; view: StudioView | null };
-export const defaultStudioUi: StudioUi = { buffers: {}, flowId: null, selection: null, view: null };
+// Endpoint buffers store document revisions in baseVersion and are sent only as RECONNECT_EDGE.
+export type StudioUi = { buffers: Buffers; endpointBuffers: Buffers; flowId: string | null; selection: Selection; view: StudioView | null };
+export const defaultStudioUi: StudioUi = { buffers: {}, endpointBuffers: {}, flowId: null, selection: null, view: null };
 export type SelectChange = { id: string; selected: boolean };
 
 /** Folds React Flow node select/unselect changes into the selection. Edge or flow selections survive unselect-only batches. */
@@ -36,4 +37,10 @@ export function toggleNode(selection: Selection, id: string): Selection {
 /** A later read of the same draft: neither revision went backwards. Late responses fail this and are dropped. */
 export function isNewer(candidate: DraftView, current: DraftView): boolean {
   return candidate.id === current.id && candidate.documentRevision >= current.documentRevision && candidate.layoutRevision >= current.layoutRevision;
+}
+
+/** Text edits and endpoint choices share leave-guard/status semantics, but use different commands. */
+export function studioDirtyCount(ui: StudioUi): number {
+  return [...Object.values(ui.buffers), ...Object.values(ui.endpointBuffers)]
+    .filter(isDirty).reduce((count, buffer) => count + Math.max(dirtyFields(buffer).length, 1), 0);
 }

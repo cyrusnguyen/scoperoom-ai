@@ -6,10 +6,11 @@ import { graphWarnings, type GraphWarning } from "@/features/drafts/domain/warni
 import {
   bufferKey, changes, dirtyFields, discard, edit, rebase, refuse, send, type EntityBuffer, type EntityKind, type Fields, type Saved,
 } from "./buffers";
-import { edgeFields, FIELDS, fieldErrors, flowFields, KIND_LABELS, nodeFields, updateCommand } from "./fields";
+import { edgeFields, FIELDS, fieldErrors, flowFields, KIND_LABELS, nodeFields, reconnectCommand, updateCommand } from "./fields";
 import { neighbours, recordOf, stepName } from "./graph-view";
 import { DeleteStepsDialog } from "./step-dialogs";
 import { explain, formKeys, useCommandSubmit, useStudio } from "./studio-context";
+import { studioDirtyCount } from "./studio-ui";
 
 const NOUNS: Record<EntityKind, string> = { FLOW: "flow", NODE: "step", EDGE: "connection" };
 
@@ -47,7 +48,7 @@ export default function Inspector({ onBack }: { onBack: () => void }) {
     {back}
     <EntityEditor key={bufferKey(kind, id)} kind={kind} saved={savedOf(kind, record)} />
     {kind === "NODE" && <StepContext key={id} node={record as NodeRecord} />}
-    {kind === "EDGE" && <Endpoints key={`${id}:${(record as EdgeRecord).version}`} edge={record as EdgeRecord} />}
+    {kind === "EDGE" && <Endpoints key={id} edge={record as EdgeRecord} />}
     {kind === "FLOW" && <DraftChecks flowId={id} />}
   </>;
 }
@@ -68,6 +69,8 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
         <dt>{spec.label}</dt>
         <dd>{(spec.options?.find(([value]) => value === saved.fields[spec.name])?.[1] ?? saved.fields[spec.name]) || "—"}</dd>
       </div>)}</dl>
+      {buffer && <RetainedText text={typedText(kind, changes(buffer))} pending={Boolean(buffer.sent)}
+        onDiscard={() => update((current) => ({ buffers: discard(current.buffers, key) }))} />}
     </section>;
   }
 
@@ -145,7 +148,7 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
         <button type="submit" className="button primary small" disabled={busy || !buffer || buffer.conflict}>{buffer?.sent ? "Save again" : "Save"}</button>
         {buffer && !buffer.conflict && <button type="button" className="button quiet small" onClick={keepSaved} disabled={busy || buffer.sent !== null}>Discard local changes</button>}
       </div>
-      <p className="muted" role="status" aria-live="polite">{buffer?.sent && !busy ? "We couldn’t confirm this save. Save again repeats the same request." : message}</p>
+      <p className="muted" role="status" aria-live="polite">{buffer?.sent && !busy ? "We couldn’t confirm this save. Save again repeats the same request." : message === "Saved." && studioDirtyCount(ui) ? "Unsaved changes" : message}</p>
     </form>
   </section>;
 }
@@ -185,17 +188,25 @@ function ManySteps({ ids }: { ids: string[] }) {
 
 /** Reconnect guards the document revision (topology), so it is a separate action from editing the condition text. */
 function Endpoints({ edge }: { edge: EdgeRecord }) {
-  const { draft, editable, busy, update } = useStudio();
+  const { draft, editable, busy, ui, update } = useStudio();
   const submitCommand = useCommandSubmit();
-  const [fromId, setFromId] = useState(edge.fromId);
-  const [toId, setToId] = useState(edge.toId);
+  const key = bufferKey("EDGE", edge.id);
+  const saved: Saved = { kind: "EDGE", id: edge.id, version: draft.documentRevision, fields: { fromId: edge.fromId, toId: edge.toId } };
+  const buffer = ui.endpointBuffers[key];
+  const values = buffer ? { ...saved.fields, ...changes(buffer) } : saved.fields;
   const [message, setMessage] = useState("");
   const steps = Object.values(draft.document.nodes).filter((node) => node.flowId === edge.flowId);
   const reconnect = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (busy || !editable) return;
-    const outcome = await submitCommand({ commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { edgeId: edge.id, fromId, toId } });
-    setMessage(outcome.ok ? "Connection moved." : explain(outcome));
+    if (busy || !editable || !buffer) return;
+    const target = buffer.sent ? buffer : rebase(ui.endpointBuffers, saved)[key];
+    if (!target) { update((current) => ({ endpointBuffers: rebase(current.endpointBuffers, saved) })); setMessage("Endpoints already match the saved connection."); return; }
+    const requestKey = target.key ?? crypto.randomUUID();
+    if (!target.sent) update((current) => ({ endpointBuffers: send(rebase(current.endpointBuffers, saved), key, requestKey) }));
+    const fields = target.sent ? { ...target.original, ...target.sent } : target.values;
+    const outcome = await submitCommand(reconnectCommand(edge.id, target.baseVersion, fields), requestKey);
+    if (!outcome.ok && !outcome.uncertain) update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, false) }));
+    setMessage(outcome.ok ? "Connection moved." : outcome.uncertain ? "" : explain(outcome));
   };
   const remove = async () => {
     if (busy || !editable) return;
@@ -203,22 +214,29 @@ function Endpoints({ edge }: { edge: EdgeRecord }) {
     if (outcome.ok) { update(() => ({ selection: null })); focusAfterRemoval(); }
     else setMessage(explain(outcome));
   };
-  if (!editable) return <section className="detail-section"><p>{stepName(draft.document, edge.fromId)} → {stepName(draft.document, edge.toId)}</p></section>;
-  const picker = (id: string, label: string, value: string, onChange: (value: string) => void) => <div className="field">
-    <label htmlFor={id}>{label}</label>
-    <select id={id} value={value} onChange={(event) => onChange(event.target.value)}>{steps.map((node) => <option key={node.id} value={node.id}>{stepName(draft.document, node.id)}</option>)}</select>
+  if (!editable) return <section className="detail-section">
+    <p>{stepName(draft.document, edge.fromId)} {"\u2192"} {stepName(draft.document, edge.toId)}</p>
+    {buffer && <RetainedText label="Your unsaved endpoint choices" text={endpointText(changes(buffer))} pending={Boolean(buffer.sent)}
+      onDiscard={() => update((current) => ({ endpointBuffers: discard(current.endpointBuffers, key) }))} />}
+  </section>;
+  const picker = (field: string, label: string) => <div className="field">
+    <label htmlFor={`reconnect-${field}`}>{label}</label>
+    <select id={`reconnect-${field}`} value={values[field]} onChange={(event) => { const value = event.target.value; update((current) => ({ endpointBuffers: edit(current.endpointBuffers, saved, field, value) })); }}>
+      {steps.map((node) => <option key={node.id} value={node.id}>{stepName(draft.document, node.id)}</option>)}
+    </select>
   </div>;
   return <section className="detail-section" aria-labelledby="inspector-ends">
     <h3 id="inspector-ends">Endpoints</h3>
     <form onSubmit={reconnect} onKeyDown={formKeys}>
-      {picker("reconnect-from", "From", fromId, setFromId)}
-      {picker("reconnect-to", "To", toId, setToId)}
+      {picker("fromId", "From")}
+      {picker("toId", "To")}
       <div className="view-actions">
-        <button type="submit" className="button small" disabled={busy || (fromId === edge.fromId && toId === edge.toId)}>Reconnect</button>
+        <button type="submit" className="button small" disabled={busy || !buffer}>{buffer?.sent ? "Retry reconnect" : "Reconnect"}</button>
+        {buffer && <button type="button" className="button quiet small" disabled={busy || Boolean(buffer.sent)} onClick={() => update((current) => ({ endpointBuffers: discard(current.endpointBuffers, key) }))}>Discard endpoint changes</button>}
         <button type="button" className="button danger small" onClick={() => void remove()} disabled={busy}>Delete connection</button>
       </div>
     </form>
-    <p className="muted" role="status" aria-live="polite">{message}</p>
+    <p className="muted" role="status" aria-live="polite">{buffer?.sent && !busy ? "Unconfirmed endpoint change. Retry reconnect repeats the same request." : buffer && message === "Connection moved." ? "Connection saved; newer endpoint choices remain unsaved." : message || (buffer ? "Unsaved endpoint choices" : "")}</p>
   </section>;
 }
 
@@ -240,26 +258,40 @@ function DraftChecks({ flowId }: { flowId: string }) {
   </section>;
 }
 
-/** The selected item was removed (by someone else, or a delete elsewhere). Unsent text can be copied, never re-created. */
-function Removed({ kind, id }: { kind: EntityKind; id: string }) {
-  const { ui, update } = useStudio();
+function endpointText(values: Fields) {
+  return [["fromId", "From step"], ["toId", "To step"]].filter(([field]) => values[field] !== undefined)
+    .map(([field, label]) => `${label}: ${values[field]}`).join("\n");
+}
+
+function RetainedText({ text, onDiscard, pending = false, label = "Your unsaved text" }: { text: string; onDiscard: () => void; pending?: boolean; label?: string }) {
+  const { busy } = useStudio();
   const [message, setMessage] = useState("");
-  const buffer = ui.buffers[bufferKey(kind, id)];
-  const text = buffer ? typedText(kind, changes(buffer)) : "";
   const copy = async () => {
     try { await navigator.clipboard.writeText(text); setMessage("Copied your text."); } catch { setMessage("Copy failed. Select the text instead."); }
   };
+  return <div className="inline-note">
+    <p>Your unsaved input is kept for copying. It cannot be saved here.</p>
+    <textarea aria-label={label} readOnly rows={4} value={text} />
+    <div className="view-actions">
+      <button type="button" className="button small" onClick={() => void copy()}>Copy</button>
+      <button type="button" className="button quiet small" disabled={busy || pending} onClick={onDiscard}>Discard</button>
+    </div>
+    {pending && <p className="muted">Retry the unconfirmed change before discarding.</p>}
+    <p className="muted" role="status" aria-live="polite">{message}</p>
+  </div>;
+}
+
+/** Removed items retain isolated local input for copying, never a recreation action. */
+function Removed({ kind, id }: { kind: EntityKind; id: string }) {
+  const { ui, update } = useStudio();
+  const key = bufferKey(kind, id);
+  const buffer = ui.buffers[key];
+  const endpoints = ui.endpointBuffers[key];
+  const text = [buffer ? typedText(kind, changes(buffer)) : "", endpoints ? endpointText(changes(endpoints)) : ""].filter(Boolean).join("\n");
   return <section className="detail-section" aria-labelledby="inspector-removed">
     <h3 id="inspector-removed">This {NOUNS[kind]} was removed</h3>
-    {text ? <>
-      <p>Your unsaved text is kept here until you discard it. It can’t be saved to a removed item.</p>
-      <label className="sr-only" htmlFor="removed-text">Your unsaved text</label>
-      <textarea id="removed-text" readOnly rows={4} value={text} />
-      <div className="view-actions">
-        <button type="button" className="button small" onClick={() => void copy()}>Copy</button>
-        <button type="button" className="button quiet small" onClick={() => update((current) => ({ buffers: discard(current.buffers, bufferKey(kind, id)), selection: null }))}>Discard</button>
-      </div>
-    </> : <p className="muted">Choose another item, or go back to the project.</p>}
-    <p className="muted" role="status" aria-live="polite">{message}</p>
+    {buffer || endpoints ? <RetainedText text={text} pending={Boolean(buffer?.sent || endpoints?.sent)}
+      onDiscard={() => update((current) => ({ buffers: discard(current.buffers, key), endpointBuffers: discard(current.endpointBuffers, key), selection: null }))} />
+      : <p className="muted">Choose another item, or go back to the project.</p>}
   </section>;
 }

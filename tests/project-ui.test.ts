@@ -3,7 +3,7 @@ import test from "node:test";
 import { edit, send, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
-const closed = { rightOpen: false, rightMounted: false, drafts: {}, buffers: {}, flowId: null, selection: null, view: null };
+const closed = { rightOpen: false, rightMounted: false, drafts: {}, buffers: {}, endpointBuffers: {}, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("an unknown or absent project reads the closed default", () => {
@@ -59,4 +59,17 @@ test("discard clears only that project's drafts and buffers and keeps its panel;
   assert.deepEqual(uiFor(dropProject(store, "a"), "a"), defaultUi);
   assert.equal(anyDirty(dropProject(dropProject(store, "a"), "b")), false);
   assert.deepEqual(defaultUi, closed, "the shared default is never mutated");
+});
+
+
+test("endpoint choices count as unsaved and discard clears only their project", () => {
+  const saved: Saved = { kind: "EDGE", id: "e1", version: 1, fields: { fromId: "a", toId: "b" } };
+  let store = updateUi({}, "a", () => ({ endpointBuffers: edit({}, saved, "toId", "c") }));
+  store = updateUi(store, "b", () => ({ endpointBuffers: edit({}, saved, "toId", "d") }));
+  assert.equal(dirtyCount(store, "a"), 1);
+  assert.equal(anyDirty(store), true);
+  const discarded = discardDrafts(store, "a");
+  assert.equal(dirtyCount(discarded, "a"), 0);
+  assert.deepEqual(uiFor(discarded, "a").endpointBuffers, {});
+  assert.equal(dirtyCount(discarded, "b"), 1);
 });

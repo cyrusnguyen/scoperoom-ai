@@ -188,8 +188,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
       setStore((previous) => dropProject(previous, target.id));
       if (leavingOpen) navigate(null);
     } else {
-      // An archived project hides its name/invite/approver fields, so a draft left behind would stay dirty forever.
-      if (kind === "archive") setStore((previous) => discardDrafts(previous, target.id));
+      // Archive hides metadata forms. Studio input remains available in its read-only copy/discard recovery.
+      if (kind === "archive") setStore((previous) => updateUi(previous, target.id, () => ({ drafts: {} })));
       if (target.id === projectId) void loadProject(target.id);
     }
     // Every lifecycle change removes its opener (the row, "Archive project…", the banner's Restore), so focus a stable
@@ -229,7 +229,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   // With a Studio selection the Details tab inspects it; "← Project" clears the selection and returns to project details.
   const panel = projectId && bootstrap && ui.rightMounted
     ? <RightPanel key={projectId} mode={dock.right} onClose={() => setPanel(false)}>
-      {ui.selection ? <Inspector onBack={() => updateStudio(() => ({ selection: null }))} />
+      {ui.selection ? <Inspector onBack={() => { updateStudio(() => ({ selection: null })); requestAnimationFrame(() => document.getElementById("right-tab-details")?.focus()); }} />
         : <ProjectDetails bootstrap={bootstrap} drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))}
           onChanged={projectChanged} onLifecycle={(kind) => setDialog({ kind, project: { id: projectId, name: bootstrap.project.name } })} />}
     </RightPanel>

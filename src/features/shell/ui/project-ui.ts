@@ -1,7 +1,6 @@
 // Per-project UI store (UI00 "Per-project UI state"), held in memory above the keyed project subtree.
 // Unsaved field values live here, so closing the panel or navigating away never drops them silently.
-import { dirtyFields, isDirty } from "../../studio/ui/buffers.ts";
-import { defaultStudioUi, type StudioUi } from "../../studio/ui/studio-ui.ts";
+import { defaultStudioUi, studioDirtyCount, type StudioUi } from "../../studio/ui/studio-ui.ts";
 
 export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; drafts: Record<string, string> } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
@@ -36,8 +35,7 @@ export function updateUi(store: UiStore, projectId: string, change: (ui: Project
 /** Unsaved Details fields plus unsaved Studio fields (an unconfirmed save or an open conflict counts as one). */
 export function dirtyCount(store: UiStore, projectId: string | undefined): number {
   const ui = uiFor(store, projectId);
-  const studio = Object.values(ui.buffers).filter(isDirty).reduce((count, buffer) => count + Math.max(dirtyFields(buffer).length, 1), 0);
-  return Object.keys(ui.drafts).length + studio;
+  return Object.keys(ui.drafts).length + studioDirtyCount(ui);
 }
 
 export function anyDirty(store: UiStore): boolean {
@@ -45,7 +43,7 @@ export function anyDirty(store: UiStore): boolean {
 }
 
 export function discardDrafts(store: UiStore, projectId: string): UiStore {
-  return { ...store, [projectId]: { ...uiFor(store, projectId), drafts: {}, buffers: {} } };
+  return { ...store, [projectId]: { ...uiFor(store, projectId), drafts: {}, buffers: {}, endpointBuffers: {} } };
 }
 
 /** Access loss or leaving: forget everything held for that project. */

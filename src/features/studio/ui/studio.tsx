@@ -10,6 +10,7 @@ import GraphList from "./graph-list";
 import { currentFlow, recordOf } from "./graph-view";
 import { AddStepDialog, ConnectDialog, DeleteStepsDialog } from "./step-dialogs";
 import { CommandRecovery, useStudio } from "./studio-context";
+import { studioDirtyCount } from "./studio-ui";
 
 type StudioDialog = "add" | "connect" | "delete" | null;
 
@@ -68,15 +69,28 @@ export default function Studio() {
 
 function NoFlows({ onCreate }: { onCreate: () => void }) {
   const { archived, editable } = useStudio();
-  if (archived) return <div className="empty-state"><h2>This archived project has no flows.</h2></div>;
   return <div className="empty-state">
-    <h2>No flows yet</h2>
-    {editable ? <>
-      <p>Create a flow to map a journey or process. Requirements and approval can come later.</p>
-      <div className="view-actions"><button type="button" className="button primary" onClick={onCreate}>New flow</button></div>
-    </> : <p>Only the owner and editors can add flows.</p>}
-    <CommandRecovery />
+    {archived ? <h2>This archived project has no flows.</h2> : <>
+      <h2>No flows yet</h2>
+      {editable ? <>
+        <p>Create a flow to map a journey or process. Requirements and approval can come later.</p>
+        <div className="view-actions"><button type="button" className="button primary" onClick={onCreate}>New flow</button></div>
+      </> : <p>Only the owner and editors can add flows.</p>}
+    </>}
+    <div className="studio-status"><RemovedRecovery /><CommandRecovery /></div>
   </div>;
+}
+
+/** A removed item's local input remains reachable even after the last flow disappears. */
+function RemovedRecovery() {
+  const { draft, ui, update, inspect } = useStudio();
+  const orphan = [...Object.values(ui.buffers), ...Object.values(ui.endpointBuffers)].find((buffer) => !recordOf(draft.document, buffer.kind, buffer.id));
+  if (!orphan) return null;
+  const review = () => {
+    update(() => ({ selection: orphan.kind === "NODE" ? { kind: "NODES", ids: [orphan.id] } : { kind: orphan.kind, id: orphan.id } }));
+    inspect();
+  };
+  return <button type="button" className="button quiet small" onClick={review}>Unsaved text for a removed item</button>;
 }
 
 function StudioStatus({ flowId }: { flowId: string }) {
@@ -84,19 +98,14 @@ function StudioStatus({ flowId }: { flowId: string }) {
   const steps = Object.values(draft.document.nodes).filter((node) => node.flowId === flowId).length;
   const connections = Object.values(draft.document.edges).filter((edge) => edge.flowId === flowId).length;
   const checks = graphWarnings(draft.document, flowId).length;
-  const orphan = Object.values(ui.buffers).find((buffer) => !recordOf(draft.document, buffer.kind, buffer.id));
-  const review = () => {
-    if (!orphan) return;
-    update(() => ({ selection: orphan.kind === "NODE" ? { kind: "NODES", ids: [orphan.id] } : { kind: orphan.kind, id: orphan.id } }));
-    inspect();
-  };
-  const saveText = save.state === "saving" ? "Saving…" : save.state === "saved" ? (refreshFailed ? "" : "All changes saved") : save.state === "failed" ? save.message : "";
+  const saveText = save.state === "saving" ? "Saving…" : save.state === "failed" ? save.message
+    : studioDirtyCount(ui) ? "Unsaved changes" : save.state === "saved" && !refreshFailed ? "All changes saved" : "";
   return <div className="studio-status">
     <span>{steps} {steps === 1 ? "step" : "steps"} · {connections} {connections === 1 ? "connection" : "connections"}</span>
     <button type="button" className="button quiet small" onClick={() => { update(() => ({ selection: { kind: "FLOW", id: flowId } })); inspect(); }}>
       {checks ? `${checks} draft ${checks === 1 ? "check" : "checks"}` : "No draft checks"}
     </button>
-    {orphan && <button type="button" className="button quiet small" onClick={review}>Unsaved text for a removed item</button>}
+    <RemovedRecovery />
     <span className="editor-spacer" />
     <CommandRecovery />
     <span className={save.state === "failed" ? "status-error" : "muted"} role="status" aria-live="polite">{saveText}</span>

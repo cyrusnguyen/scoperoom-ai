@@ -62,3 +62,9 @@ export function updateCommand(kind: EntityKind, id: string, expectedEntityVersio
   if (changed.condition === undefined) throw new Error("Missing edge condition.");
   return { commandSchemaVersion: 1, command: "UPDATE_EDGE", expectedEntityVersion, payload: { edgeId: id, condition: changed.condition } };
 }
+
+/** Endpoint choices are a topology command, never fields of UPDATE_EDGE. */
+export function reconnectCommand(id: string, expectedDocumentRevision: number, values: Fields): GraphCommand {
+  return { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision,
+    payload: { edgeId: id, fromId: values.fromId!, toId: values.toId! } };
+}

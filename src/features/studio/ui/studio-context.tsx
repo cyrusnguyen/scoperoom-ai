@@ -7,7 +7,7 @@ import type { CommandResult, GraphCommand } from "@/features/drafts/contracts/co
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
 import { acknowledge, follow, refuse } from "./buffers";
-import { updateCommand } from "./fields";
+import { reconnectCommand, updateCommand } from "./fields";
 import type { StudioUi } from "./studio-ui";
 
 export type RunOutcome =
@@ -65,10 +65,12 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
   }, [projectId, draftId, adopt, onAccessChanged]);
 
   const run = useCallback(async (command: GraphCommand, key: string = crypto.randomUUID()): Promise<RunOutcome> => {
-    if (!editable) return { ok: false, code: "FORBIDDEN", message: "This draft is read-only.", uncertain: false };
     if (busyRef.current) return { ok: false, code: "BUSY", message: "Another change is still saving.", uncertain: false };
     // One uncertain command stays recoverable across dialogs and view switches. Resolve it before new work.
     const waiting = pendingRef.current;
+    // An admitted reader may resolve an already-issued receipt; only the exact pending key/body can cross this guard.
+    const exactRetry = waiting?.key === key && JSON.stringify(waiting.command) === JSON.stringify(command);
+    if (!editable && !exactRetry) return { ok: false, code: "FORBIDDEN", message: "This draft is read-only.", uncertain: false };
     if (waiting && JSON.stringify(waiting.command) !== JSON.stringify(command)) {
       return { ok: false, code: "UNCONFIRMED_CHANGE", message: "Retry the unconfirmed change before making another.", uncertain: false };
     }
@@ -81,7 +83,13 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
         if (outcome.ok) buffers = acknowledge(buffers, bufferKey, outcome.result.versions[buffer.id] ?? buffer.baseVersion);
         else if (!outcome.uncertain) buffers = refuse(buffers, bufferKey, outcome.code === "STALE_ENTITY_VERSION");
       }
-      return { buffers: outcome.ok ? follow(buffers, outcome.result.versions) : buffers };
+      let endpointBuffers = current.endpointBuffers;
+      for (const [bufferKey, buffer] of Object.entries(endpointBuffers)) {
+        if (!buffer.sent || buffer.key !== key || JSON.stringify(reconnectCommand(buffer.id, buffer.baseVersion, { ...buffer.original, ...buffer.sent })) !== JSON.stringify(command)) continue;
+        if (outcome.ok) endpointBuffers = acknowledge(endpointBuffers, bufferKey, outcome.result.documentRevision);
+        else if (!outcome.uncertain) endpointBuffers = refuse(endpointBuffers, bufferKey, false);
+      }
+      return { buffers: outcome.ok ? follow(buffers, outcome.result.versions) : buffers, endpointBuffers };
     });
     busyRef.current = true;
     setBusy(true);
