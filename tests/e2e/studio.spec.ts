@@ -535,6 +535,18 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
       expect(box!.height).toBeGreaterThanOrEqual(44);
       expect(box!.width).toBeGreaterThanOrEqual(44);
     }
+    await toolbar(page).getByRole("button", { name: "Add step" }).click();
+    const add = modal(page, "Add step");
+    for (const label of ["Shape", "Name", "Actor", "Description"]) {
+      expect((await add.getByLabel(label).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    }
+    await add.getByRole("button", { name: "Cancel" }).click();
+    await toolbar(page).getByRole("button", { name: "Connect" }).click();
+    const connect = modal(page, "Connect steps");
+    for (const label of ["From", "To", "Condition"]) {
+      expect((await connect.getByLabel(label).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    }
+    await connect.getByRole("button", { name: "Cancel" }).click();
     expect(await pageFits(page)).toBe(true);
   });
 
