@@ -1,13 +1,13 @@
 import type { Client } from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
-import { adminClient, cleanupUsers, e2eReady, openDatabase, signIn } from "./support";
+import { adminClient, cleanupUsers, e2eReady, emptyDraftView, openDatabase, signIn } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
 const project = { id: "22222222-2222-4222-8222-222222222222", name: "Management project", ownerId: "55555555-5555-4555-8555-555555555555" };
 const other = { id: "66666666-6666-4666-8666-666666666666", name: "Other project" };
-const draft = { id: "33333333-3333-4333-8333-333333333333", schemaVersion: 3, documentRevision: 1, layoutRevision: 1, documentJson: {}, layoutJson: {} };
+const draft = emptyDraftView("33333333-3333-4333-8333-333333333333");
 const empty = { items: [], truncated: false };
 const owner = { profileId: project.ownerId, displayName: "Management Owner", role: "OWNER", version: 1, designatedApprover: false };
 const listItem = (id: string, name: string, role: string) => ({ id, name, status: "ACTIVE", role, ownerName: "Management Owner", updatedAt: "2026-09-26T00:00:00.000Z" });

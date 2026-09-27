@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
-import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, entitle, openDatabase, signIn } from "./support";
+import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, openDatabase, signIn } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -201,7 +201,7 @@ test.describe("shell actions", () => {
     await page.route("**/api/invitations", (route) => route.fulfill({ json: noInvites }));
     await page.route(`**/api/projects/${ids.alpha}/bootstrap`, (route) => {
       bootstrapReads += 1;
-      return route.fulfill({ json: { project: { id: ids.alpha, name: "Alpha plan", status: archivedElsewhere ? "ARCHIVED" : "ACTIVE", role: "OWNER", ownerId: ids.alpha }, draft: { id: "55555555-5555-4555-8555-555555555555", schemaVersion: 3, documentRevision: 1, layoutRevision: 1, documentJson: {}, layoutJson: {} } } });
+      return route.fulfill({ json: { project: { id: ids.alpha, name: "Alpha plan", status: archivedElsewhere ? "ARCHIVED" : "ACTIVE", role: "OWNER", ownerId: ids.alpha }, draft: emptyDraftView() } });
     });
     // Another tab archived the open project after it loaded here.
     await page.route(`**/api/projects/${ids.alpha}/status`, (route) => { archivedElsewhere = true; return route.fulfill({ json: status(2, "ARCHIVED") }); });

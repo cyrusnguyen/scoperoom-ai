@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { emptyDraft } from "../../src/features/drafts/contracts/scope-document.ts";
 import { createProject, getProjectBootstrap, getProjectStatus, listProjects } from "../../src/features/projects/server/projects.ts";
 import { ProjectError } from "../../src/features/projects/server/errors.ts";
 import { canRun, withFixture } from "./support/fixture.ts";
@@ -23,6 +24,8 @@ test("a named project is owned by its creator, replays by key and needs nothing 
     const bootstrap = await getProjectBootstrap(owner, created.id);
     assert.equal(bootstrap.project.role, "OWNER");
     assert.equal(bootstrap.draft.documentRevision, 1);
+    // The bootstrap carries the parsed, coherent draft the Studio renders.
+    assert.deepEqual({ document: bootstrap.draft.document, layout: bootstrap.draft.layout }, emptyDraft());
   });
 });
 

@@ -1,13 +1,13 @@
 import type { Client } from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import { adminClient, cleanupUsers, e2eReady, openDatabase, signIn } from "./support";
+import { adminClient, cleanupUsers, e2eReady, emptyDraftView, openDatabase, signIn } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
 const project = { id: "7f5b6c8e-2b1a-4e6f-9d3c-1a2b3c4d5e6f", name: "Browser project" };
 const lists = { owned: { items: [], truncated: false }, shared: { items: [], truncated: false }, archived: { items: [], truncated: false }, capacity: { entitled: true, activeOwned: 0, maxOwned: 10, canCreate: true } };
-const bootstrap = { project: { ...project, status: "ACTIVE", role: "OWNER", ownerId: project.id }, draft: { id: project.id, schemaVersion: 3, documentRevision: 1, layoutRevision: 1, documentJson: {}, layoutJson: {} } };
+const bootstrap = { project: { ...project, status: "ACTIVE", role: "OWNER", ownerId: project.id }, draft: emptyDraftView(project.id) };
 
 async function openNewProject(page: Page, handlePost: (route: Route) => Promise<void>) {
   await page.route("**/api/projects", (route) => route.request().method() === "GET" ? route.fulfill({ json: lists }) : handlePost(route));
