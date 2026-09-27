@@ -107,6 +107,7 @@ export async function lockProject(tx: Transaction, profileId: string, projectId:
   const project = toProjectRow((await tx.$queryRaw<RawProject[]>(projectQuery(projectId, true)))[0], null);
   return { ...project, role: await projectRole(tx, project, profileId) };
 }
+
 /** Lock order 2: the owner capacity guard shared by project creation and restore. Operators lock the same row. */
 export async function lockOwnerCapacity(tx: Transaction, ownerId: string) {
   await tx.$queryRaw`SELECT app.lock_pilot_entitlement(${ownerId}::uuid)::text AS locked`;

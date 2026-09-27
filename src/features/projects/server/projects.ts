@@ -12,7 +12,6 @@ import { ProjectError } from "./errors.ts";
 
 const CREATE_OPERATION = "CREATE_PROJECT_V2";
 
-
 export async function createProject(identity: ProjectIdentity, input: unknown): Promise<CreatedProject> {
   let validated: CreateProjectInput;
   try { validated = validateProjectCreateInput(input); } catch { throw new ProjectError("INVALID_INPUT"); }

@@ -43,6 +43,7 @@ async function requireStoredSize(tx: Transaction, document: unknown, layout: unk
     throw new ProjectError("LIMIT_EXCEEDED");
   }
 }
+
 async function requireReadableDraft(tx: Transaction, projectId: string, draftId: string) {
   const draft = await tx.scopeDraft.findFirst({ where: { id: draftId, projectId }, select: { id: true } });
   if (!draft) throw new ProjectError("NOT_FOUND");
@@ -59,8 +60,8 @@ async function lockDraft(tx: Transaction, project: ProjectRow, draftId: string):
 }
 
 /**
- * Draft mutation skeleton, in the Data03 order: actor ??? project lock ??? current read access ??? matching receipt replay ???
- * (new work only) owner/editor capability ??? ACTIVE project ??? current draft lock ??? work. `work` returns the safe result
+ * Draft mutation skeleton, in the Data03 order: actor → project lock → current read access → matching receipt replay →
+ * (new work only) owner/editor capability → ACTIVE project → current draft lock → work. `work` returns the safe result
  * that is saved as the receipt and replayed for the same key.
  */
 export async function draftMutation<T extends object>(
