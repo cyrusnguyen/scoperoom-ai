@@ -48,10 +48,11 @@ export function edit(buffers: Buffers, saved: Saved, field: string, value: strin
   return put(buffers, { ...current, values: { ...current.values, [field]: value } });
 }
 
-/** Save pressed: remember what was sent and its key, so a retry repeats it exactly and an acknowledgement clears only it. */
+/** Save pressed: remember what was sent and its key. An uncertain save retries exactly that request until it settles. */
 export function send(buffers: Buffers, key: string, requestKey: string): Buffers {
   const buffer = buffers[key];
-  return buffer ? { ...buffers, [key]: { ...buffer, sent: changes(buffer), key: requestKey, conflict: false } } : buffers;
+  if (!buffer || buffer.sent) return buffers;
+  return { ...buffers, [key]: { ...buffer, sent: changes(buffer), key: requestKey, conflict: false } };
 }
 
 /** Saved at `version`: fields still showing their sent value become clean; text typed after sending stays dirty. */
@@ -67,10 +68,10 @@ export function refuse(buffers: Buffers, key: string, conflict: boolean): Buffer
   return buffer ? put(buffers, { ...buffer, sent: null, key: null, conflict }) : buffers;
 }
 
-/** Explicit "save my edit" after a conflict: the newly inspected saved record becomes the base; typed values are kept. */
+/** Explicit "save my edit" after a conflict: refresh clean values and retain only edits made against the previous base. */
 export function rebase(buffers: Buffers, saved: Saved): Buffers {
   const buffer = buffers[bufferKey(saved.kind, saved.id)];
-  return buffer ? put(buffers, { ...buffer, baseVersion: saved.version, original: saved.fields, conflict: false }) : buffers;
+  return buffer ? put(buffers, { ...buffer, baseVersion: saved.version, original: saved.fields, values: { ...saved.fields, ...changes(buffer) }, conflict: false }) : buffers;
 }
 
 export function discard(buffers: Buffers, key: string): Buffers {

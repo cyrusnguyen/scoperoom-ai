@@ -35,6 +35,21 @@ test("a refused save keeps the typed values; a conflict stays until it is resolv
   assert.deepEqual(discard(conflicted, key), {});
 });
 
+test("rebasing refreshes clean fields from the latest record while retaining the local edit", () => {
+  const original: Saved = { kind: "NODE", id: "n1", version: 3, fields: { label: "A", description: "old" } };
+  const buffers = rebase(edit({}, original, "label", "Mine"), { ...original, version: 4, fields: { label: "Theirs", description: "new" } });
+  assert.deepEqual(changes(buffers[key]!), { label: "Mine" });
+  assert.deepEqual(buffers[key]!.values, { label: "Mine", description: "new" });
+});
+
+test("an uncertain retry preserves its original fields and key while later typing remains local", () => {
+  let buffers = send(edit({}, node, "label", "First"), key, "key-1");
+  buffers = edit(buffers, node, "label", "Second");
+  const retried = send(buffers, key, "key-1");
+  assert.deepEqual([retried[key]!.sent, retried[key]!.key, retried[key]!.values.label], [{ label: "First" }, "key-1", "Second"]);
+  assert.strictEqual(send(retried, key, "key-2"), retried, "a different key waits for acknowledgement or refusal");
+});
+
 test("own saves that advance another record move its buffer only when nothing else changed it", () => {
   const flow: Saved = { kind: "FLOW", id: "f1", version: 7, fields: { title: "Checkout" } };
   const buffers = edit({}, flow, "title", "Checkout v2");
