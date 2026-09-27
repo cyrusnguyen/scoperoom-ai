@@ -1,5 +1,5 @@
 import { CLASSIFICATIONS, INCLUSIONS, LIMITS, NODE_KINDS, type Classification, type Inclusion, type NodeKind } from "./scope-document.ts";
-import { id, idList, invalid, keys, object, oneOf, text, version } from "./strict.ts";
+import { id, idList, invalid, keys, object, oneOf, text, utf8Bytes, version } from "./strict.ts";
 
 // Graph commands for POST D/commands (API "Drafts and manual Studio"). Single-record edits guard the record's version;
 // topology changes guard the exact documentRevision, which advances on every semantic change and so also covers
@@ -136,11 +136,14 @@ const MAX_RESULT_IDS = LIMITS.flows + LIMITS.nodes + LIMITS.edges;
 /** Validates a stored receipt result before it is replayed. */
 export function parseCommandResult(value: unknown): Omit<CommandResult, "replayed"> {
   const result = object(value);
+  if (utf8Bytes(result) > COMMAND_BODY_LIMIT) invalid();
   keys(result, ["draftId", "documentRevision", "layoutRevision", "eventSequence", "createdIds", "versions", "retiredIds"]);
   if (typeof result.eventSequence !== "number" || !Number.isSafeInteger(result.eventSequence) || result.eventSequence < 0) invalid();
+  const versionEntries = Object.entries(object(result.versions));
+  if (versionEntries.length > MAX_RESULT_IDS) invalid();
   return {
     draftId: id(result.draftId), documentRevision: version(result.documentRevision), layoutRevision: version(result.layoutRevision), eventSequence: result.eventSequence,
     createdIds: idList(result.createdIds, MAX_RESULT_IDS), retiredIds: idList(result.retiredIds, MAX_RESULT_IDS),
-    versions: Object.fromEntries(Object.entries(object(result.versions)).map(([key, entry]) => [id(key), version(entry)])),
+    versions: Object.fromEntries(versionEntries.map(([key, entry]) => [id(key), version(entry)])),
   };
 }
