@@ -1,7 +1,16 @@
 # Progress tracker
 
-Last updated: 2026-09-27. Stage 01 and PR #4 are complete. Stage 02 workspace admission, project shell, invitations, and management APIs were merged in PR #5, PR #6, PR #7, and PR #8. The final project and workspace lifecycle UI is open in PR #9 for review. Stage 02R.1 (project-only data and API) merged in PR #11. Stage 02R.2 (shell UI) merged in PR #12 (`5f80bb3`) — see the section immediately below. Context docs now point at the v1.6 handbook (v1.5 is superseded).
+Last updated: 2026-09-27. Stages 01, 02 and 02R are merged through PR #12. The product is project-only. Stage 03.1 is locally implemented and verified on an unpushed branch, pending whole-branch review and user approval. The v1.6 handbook is current; v1.5 is superseded.
 
+## Stage 03.1 — graph command foundation (local, awaiting approval)
+
+- Branch `feat/stage-03-1-graph-commands` in `.worktrees/stage-03-1-graph-commands`, based on merged PR #12 (`5f80bb3`), carries the pre-existing uncommitted context changes. `docs/superpowers/` remains untracked and excluded from commits. Atlas Projects was used as the project-only UI reference and left untouched.
+- Implemented strict ScopeDocument v3 and DraftLayout v1 contracts, eleven typed graph commands, pure graph transforms and exact dependency plans, a transactional command dispatcher, PROJECT-scoped receipts, audit events and event sequences. GET draft returns editable or archived status; POST draft commands has a 64 KiB request limit. The app_web role receives only the five required draft update columns.
+- Topology commands require the exact document revision; single-record commands require the exact entity version. A no-op records only its receipt. Replay rechecks current access and draft scope. Project locking precedes a fresh membership read so a concurrent role downgrade or removal cannot authorize a waiting command. Generated duplicate titles that exceed 120 code points fail with LIMIT_EXCEEDED.
+- Scope boundary: Stage 03.1 has no new graph UI; Stage 03.2 owns manual studio UI, and Stage 03.3 owns MOVE_NODES and ARRANGE_FLOW. Draft document, layout, flows and dependency-preview read routes remain for their first consumers. The baseline pointer remains absent because Stage 02R has no baseline snapshot ID column.
+- Local gates at `2e7125c` on Node v24.21.0: Prisma validate, lint, typecheck and production build passed; unit 84/84, guarded local database integration 57/57, full Chromium 58/58, all with zero failures or skips. The new migration applied to local E2 without reset; hosted migration and deployment were untouched.
+- Each of five implementation tasks passed independent review. A security audit found a stale membership role possible after a project lock wait; `a3ac2c0` fixed it and added deterministic downgrade/removal regressions, and the scoped security re-review passed. Whole-branch review is pending.
+- Remaining verification: hosted migration and deployment, migration replay, GitHub CI and browsers beyond Chromium. Next action: whole-branch review and fix any in-scope findings, then request approval before pushing or opening a PR.
 ## Stage 02R.2 — shell UI (merged, PR #12)
 
 - Branch `feat/workspace-redesign-ui-shell` from `origin/main` at `579b6f7` (02R.1 merged in PR #11); 13 commits.
@@ -16,7 +25,7 @@ Last updated: 2026-09-27. Stage 01 and PR #4 are complete. Stage 02 workspace ad
 - Open watch items: **open, not root-caused** — the invitation-accept navigation stall. After `POST /api/invitations/accept` 201 → RSC 200, the page sometimes stays on `/invite/{token}`; it did not reproduce in 25 attempts. Hypothesis: React 19 holds the commit until the new `/app` layout stylesheet loads, and a stalled CSS request (for example through the AdGuard proxy) would look like this; `trace: retain-on-failure` is set. Also watched: a single ECONNRESET in 1 of 6 runs (the request never reached the server), and rare `page.goto` timeouts on cold `next dev` routes on Windows.
 - Deferred, needing a user decision (server-service change, outside this stage): log a safe error class in `src/features/projects/server/access.ts` (`withDatabase`/`profileFor` swallow the cause), and map a `resolveProfile` FK violation (deleted Auth user) to 401 instead of 503.
 - Deferred minors: M6 (brand-mark/text-link accent, a plan gap); M9 (list-reload ordering guard); M14 (live regions flip role on the same node); M17 (the session-end test doesn't prove a full load); row menus scroll inside the list; one busy id for invitation rows; `created()` navigates without the switch guard; arrowing a closed role select applies each step; focus sits on `<body>` while a confirmed member removal or role change is in flight.
-- Next action: pick the next v1.6 stage checkpoint (Stage 03 manual studio) on user request.
+- Merged in PR #12; Stage 03.1 follows.
 
 ## Stage 02R.1 — project-only data and API (merged, PR #11)
 
@@ -32,7 +41,7 @@ Last updated: 2026-09-27. Stage 01 and PR #4 are complete. Stage 02 workspace ad
 
 ## Current scope
 
-Stage 02 final UI work adds project management and recoverable project and workspace archive/restore controls on the merged PR #8 base. Atlas Outline remains a visual reference and was not copied or changed. Hosted invitation delivery and acceptance were excluded at the user's request; deployment remains unverified.
+Stage 03.1 supplies the project-only graph command foundation. The Atlas Projects worktree remains a visual reference; no feature UI is added in this stage. Hosted migration and deployment remain unverified.
 
 ## Stage 02 workspace admission - PR #5 (merged)
 
@@ -64,7 +73,7 @@ Stage 02 final UI work adds project management and recoverable project and works
 - A guarded disposable Supabase stack on loopback ports 57321/57322 applied the invitation schema and the new shared-read-lock migration; a guarded repeat migration found no pending work. The initial PR checkpoint passed 23/23 unit, 27/27 database integration, and 30/30 Chromium tests. After the review fixes, import boundaries/ESLint, TypeScript, 23/23 unit tests, 28/28 database integration tests, 10/10 affected Chromium tests, and the Next production build passed on Node 24.21.0. The new regression failed under the old exclusive read lock and passed with the shared lock.
 - PR #7 was merged before the final Stage 02 checkpoint. Its shared read lock and operation-neutral error wording remain in the merged base. Hosted migration, deployment, and hosted invitation Auth behavior remain unverified.
 
-## Stage 02 final UI slice - PR #9 (under review)
+## Stage 02 final UI slice - PR #9 (merged)
 
 - Built on merged PR #8. The schema, service, API, and focused tests were committed as 1b278c0 and merged from PR #8. PR #9 adds the project and workspace lifecycle UI, browser coverage, and this tracker update. The docs/superpowers folder is excluded. The Atlas Outline worktree was only a visual reference and was not changed.
 - The new project-management migration adds ARCHIVED workspace status, independent project settings and approval-policy versions, a designated-approver foreign key, and column-scoped app_web update grants. A guarded isolated Supabase stack on loopback ports 57321/57322 applied all six migrations; replay found no pending migrations. Prisma schema validation and client generation passed.
@@ -72,7 +81,7 @@ Stage 02 final UI work adds project management and recoverable project and works
 - Workspace owners can archive and restore a workspace. Archived workspaces remain visible and readable to admitted members, revoke pending invitations, block project writes, and release an owned workspace quota place. Restore checks entitlement and an available place under the same lock order as creation. Operator-suspended workspaces still consume quota. The shell exposes project management and workspace lifecycle controls with confirmation, authoritative refresh, and same-key retry after uncertain responses.
 - Independent review found and fixed a real archived-project UI gap: the owner could not downgrade or remove members despite the server contract allowing it. Browser and database regressions now cover those actions and promotion denial. An initial full Chromium run found three older test fixtures/selectors incompatible with the new workspace summary and Archive control; those fixtures were corrected, the affected browser suites passed 11/11, and the final complete suite passed.
 - The exact backend-only PR #8 commit passed import boundaries/ESLint, TypeScript, 25/25 unit tests, 36/36 guarded database integration tests, 30/30 Chromium tests, and the Next production build; its static/build, database, and Chromium CI jobs passed before merge. On this separate UI branch, import boundaries/ESLint, TypeScript, 25/25 unit tests, 36/36 guarded database integration tests, 33/33 Chromium tests, and the Next production build passed. PR #9 static/build, database integration, and Chromium CI jobs also passed. Local verification ran on Node 22.20.0 with pnpm 10.34.5; the repo pins Node 24.21.0.
-- The user chose local evidence only. Hosted invitation delivery/acceptance, hosted migration for this slice, Vercel deployment, and production redirects were not verified. Next action: review PR #9 before proceeding beyond Stage 02.
+- The user chose local evidence only. Hosted invitation delivery/acceptance, hosted migration for this slice, Vercel deployment, and production redirects were not verified. PR #9 was merged before the project-only redesign in PR #11 and PR #12.
 
 ## Previous access checkpoint
 
@@ -103,4 +112,4 @@ The user-reported Gmail address was already confirmed in hosted `auth.users` bef
 
 ## Remaining deployment check
 
-ScopeRoom has not been deployed to Vercel. Supabase's hosted Site URL is still localhost, so a production redirect cannot be verified yet. At deployment, set the exact HTTPS production origin in Supabase Site URL and allow `<production-origin>/login`; set matching Vercel public environment variables, then repeat a fresh delivered-email signup and redirect test. PR #5, PR #6, and PR #7 are merged. PR #8 merged the schema and API slice; the final UI slice is open in PR #9.
+ScopeRoom has not been deployed to Vercel. Supabase's hosted Site URL is still localhost, so a production redirect cannot be verified yet. At deployment, set the exact HTTPS production origin in Supabase Site URL and allow `<production-origin>/login`; set matching Vercel public environment variables, then repeat a fresh delivered-email signup and redirect test. PR #5, PR #6, and PR #7 are merged. PR #8 and PR #9 merged the Stage 02 management slice; PR #11 and PR #12 merged the project-only redesign. Stage 03.1 has been verified locally but has not been pushed.
