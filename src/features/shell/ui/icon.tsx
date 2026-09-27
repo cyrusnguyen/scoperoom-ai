@@ -5,6 +5,11 @@ const paths = {
   close: ["m6 6 12 12M6 18 18 6"],
   plus: ["M12 5v14M5 12h14"],
   more: ["M4 12h.01M12 12h.01M20 12h.01"],
+  flow: ["M9 3H3v6h6V3Zm12 12h-6v6h6v-6ZM6 9v9h9M9 6h9v9"],
+  list: ["M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"],
+  link: ["m10 13 4-4m-6 7-1 1a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m0 2 1-1a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0"],
+  chevron: ["m8 10 4 4 4-4"],
+  check: ["m5 12 4 4L19 6"],
 } as const;
 
 export type IconName = keyof typeof paths;

@@ -4,16 +4,19 @@ import { useCallback, useEffect, useRef, useState, useTransition, type ReactNode
 import { useParams, useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
 import { apiRead, sessionEnded } from "@/client/api";
+import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { MyInvitation } from "@/features/projects/contracts/invitation";
 import type { CreatedProject, ProjectBootstrap, ProjectLists } from "@/features/projects/contracts/project";
 import { expiryLabel } from "@/features/projects/ui/format";
 import ProjectDetails from "@/features/projects/ui/project-details";
+import { StudioProvider } from "@/features/studio/ui/studio-context";
+import { isNewer, type StudioUi } from "@/features/studio/ui/studio-ui";
 import Dialog, { CancelFocus } from "./dialog";
 import { resolveDock } from "./dock";
 import LifecycleDialog, { type LifecycleKind } from "./lifecycle-dialog";
 import NewProjectDialog from "./new-project-dialog";
 import ProjectEditor, { NoProjectOpen, ProjectUnavailable } from "./project-editor";
-import { anyDirty, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, type UiStore } from "./project-ui";
+import { anyDirty, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, updateUi, type UiStore } from "./project-ui";
 import ProjectsSidebar, { LIST_TABS, type InviteRow, type ListTab } from "./projects-sidebar";
 import RightPanel from "./right-panel";
 
@@ -33,6 +36,12 @@ function readPrefs(): Prefs {
     if (value && typeof value === "object") saved = value as Partial<Prefs>;
   } catch { /* Storage is unavailable or holds something else: use the defaults. */ }
   return { leftOpen: saved.leftOpen !== false, listTab: LIST_TABS.includes(saved.listTab as ListTab) ? saved.listTab as ListTab : "owned" };
+}
+
+/** A project re-read that raced a Studio save must not roll the draft back: keep whichever read is newer. */
+function keepNewerDraft(bootstrap: ProjectBootstrap, previous: Opened | null): ProjectBootstrap {
+  const kept = previous?.projectId === bootstrap.project.id ? previous.bootstrap?.draft : undefined;
+  return kept && isNewer(kept, bootstrap.draft) ? { ...bootstrap, draft: kept } : bootstrap;
 }
 
 export default function ProjectShell({ signOut, children }: { signOut: () => Promise<void>; children: ReactNode }) {
@@ -86,10 +95,18 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (signal?.aborted || sessionEnded(result)) return;
     // An unsignaled caller (Retry, projectChanged) can resolve after the user opened a different project.
     if (id !== projectIdRef.current) return;
-    if (result.ok) setOpened({ projectId: id, bootstrap: result.data });
+    if (result.ok) setOpened((previous) => ({ projectId: id, bootstrap: keepNewerDraft(result.data, previous) }));
     else if (result.status === 404) { setOpened({ projectId: id, missing: true }); setStore((previous) => dropProject(previous, id)); }
     else setOpened({ projectId: id, error: result.message });
   }, []);
+
+  // The Studio's saved draft lives with the bootstrap; a read replaces it only when neither revision goes backwards.
+  const adoptDraft = useCallback((view: DraftView) => {
+    setOpened((previous) => previous?.bootstrap && isNewer(view, previous.bootstrap.draft) ? { ...previous, bootstrap: { ...previous.bootstrap, draft: view } } : previous);
+  }, []);
+  const updateStudio = useCallback((change: (ui: StudioUi) => Partial<StudioUi>) => {
+    if (projectId) setStore((previous) => updateUi(previous, projectId, change));
+  }, [projectId]);
 
   useEffect(() => { projectIdRef.current = projectId; }, [projectId]);
   useEffect(() => {
@@ -215,6 +232,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     </RightPanel>
     : null;
 
+  const main = <main id="editor-main" tabIndex={-1} className="editor-slot" style={{ width: dock.editor }}>{editor}</main>;
+
   return <div className="app-shell" ref={shellRef}>
     <a className="skip-link" href="#editor-main">Skip to editor</a>
     <div className="app-main">
@@ -228,8 +247,12 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
             onAction={(kind, item) => setDialog({ kind, project: { id: item.id, name: item.name } })}
             onInviteSettled={(text, error) => { notify(text, error); void loadLists(); }} />
         </div>
-        <main id="editor-main" tabIndex={-1} className="editor-slot" style={{ width: dock.editor }}>{editor}</main>
-        {panel}
+        {projectId && bootstrap
+          ? <StudioProvider key={projectId} projectId={projectId} draft={bootstrap.draft} role={bootstrap.project.role} archived={bootstrap.project.status === "ARCHIVED"}
+              narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={projectChanged} onInspect={() => setPanel(true)}>
+              {main}{panel}
+            </StudioProvider>
+          : <>{main}{panel}</>}
       </>}
     </div>
     <footer className="app-footer">

@@ -1,0 +1,68 @@
+/* Workflow Studio (UI02), after the Atlas Projects canvas. Colours come only from src/styles/tokens.css. */
+.studio { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.studio-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); flex-shrink: 0; min-height: var(--bar-height); padding: var(--space-2) var(--space-4); border-bottom: var(--panel-border); background: var(--surface-muted); }
+.studio-flow-title { min-width: 0; max-width: 40%; overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.studio-stage { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 260px; overflow: hidden; background: var(--canvas-background); }
+.studio-status { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); flex-shrink: 0; min-height: 36px; padding: 4px var(--space-4); border-top: var(--panel-border); background: var(--surface-muted); color: var(--foreground-muted); font-size: var(--font-label); }
+.status-error { color: var(--danger-foreground); font-size: var(--font-label); }
+
+.segmented { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-control); overflow: hidden; }
+.segmented button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 4px 10px; border: 0; background: transparent; color: var(--foreground-muted); font-size: var(--font-label); }
+.segmented button + button { border-left: 1px solid var(--border-strong); }
+.segmented button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-hover); }
+
+.flow-switch { min-width: 0; max-width: 240px; }
+.flow-switch > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge[data-inclusion="INCLUDED"] { border-color: var(--scope-included-border); background: var(--scope-included-background); color: var(--scope-included); }
+.badge[data-inclusion="UNDECIDED"] { border-color: var(--scope-undecided-border); background: var(--scope-undecided-background); color: var(--scope-undecided); }
+.badge[data-inclusion="EXCLUDED"] { border-color: var(--scope-excluded-border); background: var(--scope-excluded-background); color: var(--scope-excluded); }
+
+.canvas { position: relative; flex: 1; min-height: 0; }
+.canvas > .react-flow { position: absolute; inset: 0; }
+.canvas-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--foreground-muted); pointer-events: none; }
+.step-node { display: flex; flex-direction: column; gap: 4px; width: 200px; min-height: 72px; padding: 10px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface); color: var(--foreground); }
+.step-node[data-kind="START"], .step-node[data-kind="OUTCOME"] { border-radius: 22px; }
+.step-node[data-kind="DECISION"] { border-left: 3px solid var(--accent); background: var(--accent-soft); }
+.step-kind { color: var(--foreground-muted); font-size: var(--font-label); }
+.step-label { display: -webkit-box; overflow: hidden; font-size: 13px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.step-actor { overflow: hidden; color: var(--foreground-subtle); font-size: var(--font-label); text-overflow: ellipsis; white-space: nowrap; }
+.edge-label { position: absolute; max-width: 180px; padding: 2px 6px; border: var(--panel-border); border-radius: 3px; background: var(--canvas-background); color: var(--foreground); font-size: var(--font-label); overflow-wrap: anywhere; text-align: center; pointer-events: none; }
+.react-flow__node.selected .step-node { border-color: var(--accent-hover); outline: 2px solid var(--accent); outline-offset: 3px; }
+.react-flow__node:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 5px; }
+.react-flow__handle { width: 8px; height: 8px; border: 2px solid var(--canvas-background); background: var(--accent-hover); }
+.react-flow__edge.selected .react-flow__edge-path { stroke-width: 2; }
+.react-flow__controls { overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-control); box-shadow: none; }
+.react-flow__controls-button { width: 32px; height: 32px; }
+.react-flow__attribution a { color: var(--foreground-muted); }
+
+.graph-list { flex: 1; min-height: 0; padding: var(--space-3) var(--space-4); overflow: auto; background: var(--background); }
+.list-tools { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+.list-tools input { flex: 1 1 200px; }
+.list-heading { margin: var(--space-4) 0 var(--space-2); font-size: 13px; }
+.step-list { margin: 0; padding: 0; list-style: none; }
+.step-row { display: flex; align-items: center; gap: var(--space-2); padding: 2px 0; border-bottom: var(--panel-border); }
+.step-row[data-selected] { background: var(--surface-raised); }
+.step-row input[type="checkbox"] { flex-shrink: 0; width: 18px; height: 18px; margin: 0 var(--space-2); }
+.step-open { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 2px var(--space-2); min-width: 0; min-height: var(--row-height); padding: 6px var(--space-2); border: 0; background: none; text-align: left; }
+.step-open small, .step-open span { color: var(--foreground-muted); font-size: var(--font-label); }
+.step-open strong { font-weight: 500; overflow-wrap: anywhere; }
+
+button.item-row { width: 100%; border: 0; border-bottom: var(--panel-border); background: none; text-align: left; }
+.plain-list { margin: var(--space-2) 0; padding-left: var(--space-5); overflow-wrap: anywhere; }
+.plain-list li + li { margin-top: 4px; }
+.inspector-back { display: inline-block; margin: var(--space-3) 0 0; font-size: var(--font-label); }
+.inspector-facts { display: grid; gap: var(--space-2); margin: 0; }
+.inspector-facts dt { color: var(--foreground-muted); font-size: var(--font-label); }
+.inspector-facts dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.conflict-list { display: grid; gap: var(--space-2); margin: var(--space-2) 0; }
+.conflict-list dt { font-weight: 600; }
+.conflict-list dd { display: grid; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.field-error { color: var(--danger-foreground); font-size: var(--font-label); }
+
+@container editor (max-width: 639px) {
+  .studio-toolbar, .studio-status { padding-inline: var(--space-3); }
+  .studio-flow-title { max-width: 100%; flex-basis: 100%; }
+  .studio button, .studio .button.small, .editor-header .flow-switch, .segmented button, .step-open { min-height: 44px; }
+  .step-check { display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
+  .react-flow__controls-button { min-width: 44px; }
+}

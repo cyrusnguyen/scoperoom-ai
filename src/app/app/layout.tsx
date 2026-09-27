@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
+import "@xyflow/react/dist/style.css";
 import "@/features/shell/ui/shell.css";
+import "@/features/studio/ui/studio.css";
 import { signOut } from "@/features/access/server/actions";
 import ProjectShell from "@/features/shell/ui/project-shell";
 
