@@ -9,7 +9,7 @@ The current user request determines authorized work. Historical documentation-on
 ## Project rules
 
 - Preserve the Atlas Outline source worktree and unrelated user changes. Add active UI only with its stage; visible screens do not prove their backend works.
-- The v1.5 planning material under `.codex/docs/implementation/v1.5` is archived reference. The current user request and [progress tracker](docs/context/progress-tracker.md) define active stage scope. Record authorized changes and actual evidence there.
+- The v1.6 handbook under `.codex/docs/implementation/v1.6` is the current plan/spec reference; v1.5 under `.codex/docs/implementation/v1.5` is superseded history — do not implement from it. The current user request and [progress tracker](docs/context/progress-tracker.md) define active stage scope. Record authorized changes and actual evidence there.
 - Implement one small reviewable stage at a time. Stage 01 is only a shell and database foundation; later stages add feature UI, data and recovery with their first consumer.
 - PostgreSQL owns saved content, node positions and authority. Supabase Realtime carries presence and advisory previews/hints. AI proposes changes for human review.
 - Preserve current authorization, scoped receipts, targeted version checks and transaction boundaries. Normal publication keeps the current draft and newer work.

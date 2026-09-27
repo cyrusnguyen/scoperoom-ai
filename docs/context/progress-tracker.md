@@ -1,8 +1,8 @@
 # Progress tracker
 
-Last updated: 2026-09-27. Stage 01 and PR #4 are complete. Stage 02 workspace admission, project shell, invitations, and management APIs were merged in PR #5, PR #6, PR #7, and PR #8. The final project and workspace lifecycle UI is open in PR #9 for review. Stage 02R.1 (project-only data and API) merged in PR #11. Stage 02R.2 (shell UI) is open in PR #12 from `feat/workspace-redesign-ui-shell` — see the section immediately below.
+Last updated: 2026-09-27. Stage 01 and PR #4 are complete. Stage 02 workspace admission, project shell, invitations, and management APIs were merged in PR #5, PR #6, PR #7, and PR #8. The final project and workspace lifecycle UI is open in PR #9 for review. Stage 02R.1 (project-only data and API) merged in PR #11. Stage 02R.2 (shell UI) merged in PR #12 (`5f80bb3`) — see the section immediately below. Context docs now point at the v1.6 handbook (v1.5 is superseded).
 
-## Stage 02R.2 — shell UI (PR #12, open)
+## Stage 02R.2 — shell UI (merged, PR #12)
 
 - Branch `feat/workspace-redesign-ui-shell` from `origin/main` at `579b6f7` (02R.1 merged in PR #11); 13 commits.
 - Implemented: `/app` shell (`/` redirects there; sign-in lands there). The Projects sidebar has Owned/Shared/Archived/Invites tabs with arrow-key roving, a visible-list filter, truncation lines, a server-derived capacity footer, and a New project dialog with same-key retry. Row menus (Archive…/Leave…/Restore…) go through one version-checked lifecycle dialog (a CONFLICT keeps the dialog and re-reads the version), and invitation rows have Accept. The editor header has a role badge and an archived banner with owner Restore. The right panel's Details tab covers facts, members with role-change/removal confirmation, Invite with the one-time link, approver, and archive/leave. Docking uses `resolveDock`. Per-project UI state is memory-only, with a Stay/Discard guard and a leave-page warning. Tokens moved to `src/styles/tokens.css` (Atlas Projects set, palette unchanged). `src/features/workspace` and `ProjectManagement` were deleted, and `src/client/api.ts` is the single browser fetch helper.
@@ -16,7 +16,7 @@ Last updated: 2026-09-27. Stage 01 and PR #4 are complete. Stage 02 workspace ad
 - Open watch items: **open, not root-caused** — the invitation-accept navigation stall. After `POST /api/invitations/accept` 201 → RSC 200, the page sometimes stays on `/invite/{token}`; it did not reproduce in 25 attempts. Hypothesis: React 19 holds the commit until the new `/app` layout stylesheet loads, and a stalled CSS request (for example through the AdGuard proxy) would look like this; `trace: retain-on-failure` is set. Also watched: a single ECONNRESET in 1 of 6 runs (the request never reached the server), and rare `page.goto` timeouts on cold `next dev` routes on Windows.
 - Deferred, needing a user decision (server-service change, outside this stage): log a safe error class in `src/features/projects/server/access.ts` (`withDatabase`/`profileFor` swallow the cause), and map a `resolveProfile` FK violation (deleted Auth user) to 401 instead of 503.
 - Deferred minors: M6 (brand-mark/text-link accent, a plan gap); M9 (list-reload ordering guard); M14 (live regions flip role on the same node); M17 (the session-end test doesn't prove a full load); row menus scroll inside the list; one busy id for invitation rows; `created()` navigates without the switch guard; arrowing a closed role select applies each step; focus sits on `<body>` while a confirmed member removal or role change is in flight.
-- Next action: review PR #12 (Auto-fix is on) and confirm GitHub CI's zero-skip record before merging.
+- Next action: pick the next v1.6 stage checkpoint (Stage 03 manual studio) on user request.
 
 ## Stage 02R.1 — project-only data and API (merged, PR #11)
 

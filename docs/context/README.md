@@ -1,6 +1,6 @@
 # ScopeRoom AI context
 
-These six short files keep stable guidance and a current handoff. The former v1.5 stage handbook is archived under `.codex/docs/implementation/v1.5` for reference; current work follows the user request and progress tracker.
+These six short files keep stable guidance and a current handoff. The v1.6 handbook under `.codex/docs/implementation/v1.6` is the current plan/spec reference (v1.5 is superseded; history only). Current work follows the user request and progress tracker.
 
 ## Reading order
 
@@ -15,7 +15,7 @@ Start later sessions with the tracker and only the relevant owners/stage. Root [
 
 ## Maintenance
 
-Archived plans are reference material, not the active implementation sequence. Keep the tracker current with the actual scope, packages, checks and limitations of each user-authorized step.
+The handbook is reference material, not proof of implemented behavior; the user request and tracker set the active sequence. Keep the tracker current with the actual scope, packages, checks and limitations of each user-authorized step.
 
 Update the owner when an authorized decision changes, then its affected summary. Plans/checklists are not evidence of working code. Preserve the six purposes of the supplied context methodology while following Codex's repository instructions and current user authorization.
 
