@@ -1156,10 +1156,13 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await expect(flows.getByRole("button", { name: /^Duplicate/ })).toBeDisabled();
     await expect(flows.getByText("A project can have up to 5 flows.", { exact: false })).toBeVisible();
   });
-  test("keyboard List selection survives filtering and Canvas pan, zoom and drag never write", async ({ page }) => {
+  test("keyboard List selection survives filtering, Canvas pan and zoom never write, and a drag writes only one position save", async ({ page }) => {
     await mock(page, "OWNER");
     let writes = 0;
+    let positionWrites = 0;
     await page.route("**/commands", async (route) => { writes++; await route.abort(); });
+    // Stage 03.3: an editor's drag saves its final position once, on drop, through the positions route only.
+    await page.route("**/positions", async (route) => { positionWrites++; await route.abort(); });
     await page.goto(`/app/projects/${projectId}`);
     await toolbar(page).getByRole("button", { name: "List", exact: true }).click();
     const picked = page.getByRole("checkbox", { name: "Select Receive form" });
@@ -1178,12 +1181,28 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await expect(node).toHaveClass(/selected/);
     await expect(panel(page)).toHaveCount(0);
     const before = await node.getAttribute("style");
-    await node.dragTo(node, { sourcePosition: { x: 50, y: 30 }, targetPosition: { x: 150, y: 60 } });
-    await expect(node).toHaveAttribute("style", before!);
+    await node.dragTo(node, { sourcePosition: { x: 50, y: 30 }, targetPosition: { x: 150, y: 60 }, steps: 5 });
+    // The lost acknowledgement keeps the attempted placement on screen with a same-key Retry.
+    await expect(page.locator(".placement-note")).toContainText("We couldn’t confirm the new position.");
+    await expect(node).not.toHaveAttribute("style", before!);
     await page.getByRole("button", { name: "Zoom In", exact: true }).click();
     await page.getByRole("button", { name: "Fit View", exact: true }).click();
     expect(writes).toBe(0);
+    expect(positionWrites).toBe(1);
     await page.screenshot({ path: test.info().outputPath("studio-canvas.png") });
+  });
+
+  for (const [role, status] of [["VIEWER", "ACTIVE"], ["OWNER", "ARCHIVED"]]) test(`a read-only canvas (${role}, ${status}) never moves or saves a dragged step`, async ({ page }) => {
+    await mock(page, role!, status);
+    let writes = 0;
+    await page.route(/\/(commands|positions)$/, async (route) => { writes++; await route.abort(); });
+    await page.goto(`/app/projects/${projectId}`);
+    const node = page.locator(`.react-flow__node[data-id="${start}"]`);
+    await expect(node).toBeVisible();
+    const before = await node.getAttribute("style");
+    await node.dragTo(node, { sourcePosition: { x: 50, y: 30 }, targetPosition: { x: 150, y: 60 }, steps: 5 });
+    await expect(node).toHaveAttribute("style", before!);
+    expect(writes).toBe(0);
   });
 
   test("an uncertain List deletion retries its exact request after switching views", async ({ page }) => {

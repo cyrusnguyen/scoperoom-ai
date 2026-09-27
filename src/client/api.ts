@@ -28,9 +28,12 @@ export function apiRead<T>(url: string, signal?: AbortSignal): Promise<ApiResult
   return settle<T>(() => fetch(url, { cache: "no-store", signal }));
 }
 
-/** Callers keep `key` and reuse it to retry an uncertain result; a certain failure should get a new key. */
-export function apiMutate<T>(url: string, key: string, body: Record<string, unknown> = {}, method: "POST" | "PATCH" | "DELETE" = "POST"): Promise<ApiResult<T>> {
-  return settle<T>(() => fetch(url, { method, headers: { "Content-Type": "application/json", "Idempotency-Key": key }, body: JSON.stringify(body) }));
+/**
+ * Callers keep `key` and reuse it to retry an uncertain result; a certain failure should get a new key.
+ * `null` is for a nonmutating preview POST, which takes no Idempotency-Key.
+ */
+export function apiMutate<T>(url: string, key: string | null, body: Record<string, unknown> = {}, method: "POST" | "PATCH" | "DELETE" = "POST"): Promise<ApiResult<T>> {
+  return settle<T>(() => fetch(url, { method, headers: { "Content-Type": "application/json", ...(key ? { "Idempotency-Key": key } : {}) }, body: JSON.stringify(body) }));
 }
 
 /**

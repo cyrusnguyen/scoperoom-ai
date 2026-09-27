@@ -59,6 +59,7 @@ export default function Studio() {
     <div className="studio-stage">
       {view === "canvas" ? <FlowCanvas flowId={flow.id} /> : <GraphList flowId={flow.id} onDeleteSelected={() => setDialog("delete")} />}
     </div>
+    <PlacementNote />
     <StudioStatus flowId={flow.id} />
     {editable && dialog === "add" && <AddStepDialog flowId={flow.id} onClose={() => setDialog(null)} onAdded={(nodeId) => { setDialog(null); update(() => ({ selection: { kind: "NODES", ids: [nodeId] } })); }} />}
     {editable && dialog === "connect" && <ConnectDialog flowId={flow.id} from={selectedSteps.length === 1 ? selectedSteps[0] : undefined} onClose={() => setDialog(null)} />}
@@ -93,21 +94,42 @@ function RemovedRecovery() {
   return <button type="button" className="button quiet small" onClick={review}>Unsaved text for a removed item</button>;
 }
 
+/** A placement that did not save: kept on the canvas until the person retries, reapplies it or keeps the saved positions. */
+function PlacementNote() {
+  const { attempt, busy, retryPlacement, applyMyPlacement, keepSavedPositions } = useStudio();
+  if (!attempt || attempt.state === "pending") return null;
+  const conflict = attempt.state === "conflict";
+  return <div className="placement-note" role="alert">
+    <span>{conflict ? "Someone moved these steps first. Your placement is shown until you choose." : "We couldn’t confirm the new position."}</span>
+    <span className="view-actions">
+      {conflict
+        ? <button type="button" className="button primary small" onClick={() => void applyMyPlacement()} disabled={busy}>Apply my placement</button>
+        : <button type="button" className="button primary small" onClick={() => void retryPlacement()} disabled={busy}>Retry</button>}
+      <button type="button" className="button quiet small" onClick={keepSavedPositions} disabled={busy}>Keep saved positions</button>
+    </span>
+  </div>;
+}
+
 function StudioStatus({ flowId }: { flowId: string }) {
-  const { draft, ui, update, save, refreshFailed, inspect } = useStudio();
+  const { draft, ui, update, save, placement, attempt, busy, undoFlowId, undoMove, refreshFailed, inspect } = useStudio();
   const steps = Object.values(draft.document.nodes).filter((node) => node.flowId === flowId).length;
   const connections = Object.values(draft.document.edges).filter((edge) => edge.flowId === flowId).length;
   const checks = graphWarnings(draft.document, flowId).length;
   const saveText = save.state === "saving" ? "Saving…" : save.state === "failed" ? save.message
     : studioDirtyCount(ui) ? "Unsaved changes" : save.state === "saved" && !refreshFailed ? "All changes saved" : "";
+  // Position status is its own line (UI02): content can be saved while a position is still pending, and the reverse.
+  const placeText = placement.state === "saving" ? "Position pending" : placement.state === "saved" && !refreshFailed ? "Positions saved"
+    : placement.state === "failed" && !attempt ? placement.message : "";
   return <div className="studio-status">
     <span>{steps} {steps === 1 ? "step" : "steps"} · {connections} {connections === 1 ? "connection" : "connections"}</span>
     <button type="button" className="button quiet small" onClick={() => { update(() => ({ selection: { kind: "FLOW", id: flowId } })); inspect(); }}>
       {checks ? `${checks} draft ${checks === 1 ? "check" : "checks"}` : "No draft checks"}
     </button>
     <RemovedRecovery />
+    {undoFlowId === flowId && <button type="button" className="button quiet small" onClick={() => void undoMove()} disabled={busy || Boolean(attempt)}><Icon name="undo" size={14} />Undo move</button>}
     <span className="editor-spacer" />
     <CommandRecovery />
+    <span className={placement.state === "failed" ? "status-error" : "muted"} role="status" aria-live="polite">{placeText}</span>
     <span className={save.state === "failed" ? "status-error" : "muted"} role="status" aria-live="polite">{saveText}</span>
   </div>;
 }

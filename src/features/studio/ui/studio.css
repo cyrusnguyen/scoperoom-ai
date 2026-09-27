@@ -58,6 +58,12 @@ button.item-row { width: 100%; border: 0; border-bottom: var(--panel-border); ba
 .conflict-list dt { font-weight: 600; }
 .conflict-list dd { display: grid; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .field-error { color: var(--danger-foreground); font-size: var(--font-label); }
+.placement-note { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); flex-shrink: 0; padding: var(--space-2) var(--space-4); border-top: 1px solid var(--warning-border); background: var(--warning-background); color: var(--warning-foreground); font-size: var(--font-label); }
+.canvas-note { position: absolute; bottom: var(--space-4); left: 50%; margin: 0; padding: 6px 10px; border: 1px solid var(--warning-border); border-radius: var(--radius-control); background: var(--warning-background); color: var(--warning-foreground); font-size: var(--font-label); transform: translateX(-50%); }
+.arrange-preview { position: relative; height: 280px; margin: var(--space-3) 0; border: var(--panel-border); border-radius: var(--radius-card); overflow: hidden; background: var(--canvas-background); }
+.arrange-preview .canvas { position: absolute; inset: 0; }
+.position-form { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-3) 0; }
+.position-form input { width: 96px; }
 
 @container editor (max-width: 639px) {
   .studio-toolbar, .studio-status { padding-inline: var(--space-3); }

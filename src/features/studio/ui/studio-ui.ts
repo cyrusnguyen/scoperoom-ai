@@ -1,4 +1,6 @@
 import type { CommandResult, GraphCommand } from "../../drafts/contracts/commands.ts";
+import type { DraftLayout } from "../../drafts/contracts/draft-layout.ts";
+import type { MoveNodes } from "../../drafts/contracts/positions.ts";
 import type { DraftView } from "../../drafts/contracts/scope-document.ts";
 import { dirtyFields, isDirty, type Buffers } from "./buffers.ts";
 
@@ -9,9 +11,21 @@ export type StudioView = "canvas" | "list";
 type RevisionFloor = Pick<DraftView, "documentRevision" | "layoutRevision">;
 export type SaveState = { state: "idle" | "saving" | "saved" | "failed"; message: string };
 export type PendingCommand = { draftId: string; command: GraphCommand; key: string; inFlight: boolean };
+/** The person's last acknowledged move: where each step was before it, and the position version the move saved. */
+export type LastMove = { flowId: string; items: { nodeId: string; x: number; y: number; version: number }[] };
+/** A position save the person made. Its placement is shown over the saved layout until it is saved, dropped or reapplied. */
+export type Attempt = { draftId: string; flowId: string; command: MoveNodes; key: string; before: Record<string, { x: number; y: number }>; undo: boolean; state: "pending" | "uncertain" | "conflict" };
 // Endpoint buffers store document revisions in baseVersion and are sent only as RECONNECT_EDGE.
-export type StudioUi = { acknowledgedRevisions: Record<string, RevisionFloor>; save: SaveState; refreshFailed: boolean; pending: PendingCommand | null; buffers: Buffers; endpointBuffers: Buffers; flowId: string | null; selection: Selection; view: StudioView | null };
-export const defaultStudioUi: StudioUi = { acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, pending: null, buffers: {}, endpointBuffers: {}, flowId: null, selection: null, view: null };
+// Position state sits beside the command receipt for the same reason: a remounted provider must still see the request
+// in flight (`placing` is its key) and the unresolved attempt. `placement` is reported apart from content `save`.
+export type StudioUi = {
+  acknowledgedRevisions: Record<string, RevisionFloor>; save: SaveState; refreshFailed: boolean; pending: PendingCommand | null; buffers: Buffers; endpointBuffers: Buffers;
+  placement: SaveState; placing: string | null; attempt: Attempt | null; lastMove: LastMove | null; flowId: string | null; selection: Selection; view: StudioView | null;
+};
+export const defaultStudioUi: StudioUi = {
+  acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, pending: null, buffers: {}, endpointBuffers: {},
+  placement: { state: "idle", message: "" }, placing: null, attempt: null, lastMove: null, flowId: null, selection: null, view: null,
+};
 export type SelectChange = { id: string; selected: boolean };
 
 /** Folds React Flow node select/unselect changes into the selection. Edge or flow selections survive unselect-only batches. */
@@ -71,4 +85,18 @@ export function afterDraftRead(ui: StudioUi, view: Pick<DraftView, "id" | "docum
   const acknowledgedRevisions = { ...ui.acknowledgedRevisions };
   delete acknowledgedRevisions[view.id];
   return { acknowledgedRevisions, refreshFailed: false };
+}
+
+/** Undo is offered only while every step of the last own move still has the version that move saved. */
+export function canUndo(lastMove: LastMove | null, layout: DraftLayout): boolean {
+  return Boolean(lastMove?.items.length) && lastMove!.items.every((item) => layout.positions[item.nodeId]?.version === item.version);
+}
+
+/** Final drag positions worth saving: rounded to whole pixels, and only for steps that actually moved. */
+export function moveTargets(moved: { id: string; position: { x: number; y: number } }[], layout: DraftLayout): { nodeId: string; x: number; y: number }[] {
+  return moved.flatMap(({ id, position }) => {
+    const saved = layout.positions[id];
+    const x = Math.round(position.x), y = Math.round(position.y);
+    return saved && (saved.x !== x || saved.y !== y) ? [{ nodeId: id, x, y }] : [];
+  });
 }

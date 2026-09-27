@@ -1,20 +1,22 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Background, BaseEdge, Controls, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow,
   type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
 } from "@xyflow/react";
 import type { Direction } from "@/features/drafts/contracts/draft-layout";
+import { MAX_MOVE_NODES } from "@/features/drafts/contracts/positions";
 import type { NodeKind } from "@/features/drafts/contracts/scope-document";
 import { bufferKey, editFields, refuse, send, type Saved } from "./buffers";
 import { KIND_LABELS, reconnectCommand } from "./fields";
 import { useStudio } from "./studio-context";
-import { selectEdge, selectNodes, type SelectChange, type StudioUi } from "./studio-ui";
+import { moveTargets, selectEdge, selectNodes, type SelectChange, type StudioUi } from "./studio-ui";
 
 type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction; connectable: boolean };
 type StepNode = Node<StepData, "step">;
 type FlowEdge = Edge<{ condition: string }, "flow">;
+type Point = { x: number; y: number };
 
 /** Fixed application-owned shapes (UI02); names are plain text, clamped here and complete in the inspector. */
 function StepCard({ data }: NodeProps<StepNode>) {
@@ -44,31 +46,51 @@ const edgeTypes = { flow: FlowEdgeLine };
 /**
  * Controlled React Flow view of one flow's saved document and layout. Selection, pan, zoom and measurement stay local
  * and never become edits; connecting and reconnecting call the same commands as the Connect form and the inspector.
+ * A drag shows locally and saves once, on drop, as one MOVE_NODES for every moved step. Keyboard arrow moves are
+ * ignored: the inspector's position form is the keyboard path. `preview` renders proposed positions read-only.
  */
-export default function FlowCanvas({ flowId }: { flowId: string }) {
-  const { draft, editable, busy, ui, update, run, inspect } = useStudio();
+export default function FlowCanvas({ flowId, preview }: { flowId: string; preview?: { positions: Record<string, Point>; direction: Direction } }) {
+  const { draft, editable, busy, ui, update, run, inspect, attempt, moveSteps } = useStudio();
   const { document, layout } = draft;
-  const connectable = editable && !busy && !ui.pending;
+  const [dragging, setDragging] = useState<Record<string, Point>>({});
+  const [note, setNote] = useState("");
+  const interactive = !preview;
+  const connectable = interactive && editable && !busy && !ui.pending;
+  // The person's own placement stays on screen while it saves, awaits a retry, or waits for their conflict choice.
+  const shown = interactive && attempt?.flowId === flowId ? attempt : null;
+  // One unresolved placement at a time: no step can be dragged again until it is saved, retried, reapplied or dropped.
+  const draggable = interactive && editable && !busy && !attempt;
 
   const nodes = useMemo<StepNode[]>(() => {
-    const selected = ui.selection?.kind === "NODES" ? ui.selection.ids : [];
-    const direction = layout.directions[flowId] ?? "TB";
+    const selected = interactive && ui.selection?.kind === "NODES" ? ui.selection.ids : [];
+    const attempted: Record<string, Point> = Object.fromEntries((shown?.command.items ?? []).map(({ nodeId, x, y }) => [nodeId, { x, y }]));
+    const direction = preview?.direction ?? layout.directions[flowId] ?? "TB";
     return Object.values(document.nodes).filter((node) => node.flowId === flowId).map((node) => ({
-      id: node.id, type: "step", position: { x: layout.positions[node.id]!.x, y: layout.positions[node.id]!.y },
+      id: node.id, type: "step", position: preview?.positions[node.id] ?? dragging[node.id] ?? attempted[node.id] ?? { x: layout.positions[node.id]!.x, y: layout.positions[node.id]!.y },
       data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction, connectable }, selected: selected.includes(node.id),
     }));
-  }, [document, layout, flowId, ui.selection, connectable]);
+  }, [document, layout, flowId, ui.selection, connectable, preview, dragging, shown, interactive]);
 
   const edges = useMemo<FlowEdge[]>(() => Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => ({
     id: edge.id, type: "flow", source: edge.fromId, target: edge.toId, data: { condition: edge.condition },
-    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 }, selected: ui.selection?.kind === "EDGE" && ui.selection.id === edge.id,
-  })), [document, flowId, ui.selection]);
+    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 }, selected: interactive && ui.selection?.kind === "EDGE" && ui.selection.id === edge.id,
+  })), [document, flowId, ui.selection, interactive]);
 
   const picks = (changes: (NodeChange<StepNode> | EdgeChange<FlowEdge>)[]): SelectChange[] =>
     changes.flatMap((change) => (change.type === "select" ? [{ id: change.id, selected: change.selected }] : []));
   const onNodesChange = (changes: NodeChange<StepNode>[]) => {
     const selection = picks(changes);
     if (selection.length) update((current) => ({ selection: selectNodes(current.selection, selection) }));
+    // Only pointer drags move steps on screen; keyboard nudges (dragging: false) never become saves.
+    const moving = changes.flatMap((change) => (change.type === "position" && change.dragging && change.position ? [[change.id, change.position] as const] : []));
+    if (moving.length) setDragging((current) => ({ ...current, ...Object.fromEntries(moving) }));
+  };
+  const drop = (_event: unknown, _node: unknown, moved: StepNode[]) => {
+    const targets = moveTargets(moved, layout);
+    setDragging({});
+    if (targets.length > MAX_MOVE_NODES) { setNote(`Move up to ${MAX_MOVE_NODES} steps at a time.`); return; }
+    setNote("");
+    if (targets.length) void moveSteps(flowId, targets);
   };
   const onEdgesChange = (changes: EdgeChange<FlowEdge>[]) => {
     const selection = picks(changes);
@@ -98,14 +120,17 @@ export default function FlowCanvas({ flowId }: { flowId: string }) {
   };
 
   return <div className="canvas">
-    <ReactFlow<StepNode, FlowEdge> key={flowId} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
-      onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeDoubleClick={inspect} onConnect={connect} onReconnect={reconnect}
-      nodesDraggable={false} nodesConnectable={connectable} edgesReconnectable={connectable} deleteKeyCode={null}
+    <ReactFlow<StepNode, FlowEdge> key={preview ? `preview-${preview.direction}` : flowId} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+      onNodesChange={interactive ? onNodesChange : undefined} onEdgesChange={interactive ? onEdgesChange : undefined}
+      onNodeDoubleClick={interactive ? inspect : undefined} onNodeDragStop={interactive ? drop : undefined}
+      onConnect={connect} onReconnect={reconnect} elementsSelectable={interactive}
+      nodesDraggable={draggable} nodesConnectable={connectable} edgesReconnectable={connectable} deleteKeyCode={null}
       fitView fitViewOptions={{ padding: 0.2, maxZoom: 1 }} minZoom={0.1} maxZoom={4}
-      aria-label={`${editable ? "Editable" : "Read-only"} flow canvas: ${document.flows[flowId]?.title ?? ""}`}>
+      aria-label={preview ? "Arrangement preview" : `${editable ? "Editable" : "Read-only"} flow canvas: ${document.flows[flowId]?.title ?? ""}`}>
       <Background gap={24} size={1} />
-      <Controls showInteractive={false} />
+      {interactive && <Controls showInteractive={false} />}
     </ReactFlow>
     {!nodes.length && <div className="canvas-empty"><p>This flow has no steps yet.</p></div>}
+    {note && <p className="canvas-note" role="alert">{note}</p>}
   </div>;
 }
