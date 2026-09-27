@@ -11,7 +11,10 @@ export type GraphErrorCode =
   | "STALE_DOCUMENT_REVISION"
   | "DEPENDENCY_CONFLICT"
   | "LIMIT_EXCEEDED"
-  | "VERSION_EXHAUSTED";
+  | "VERSION_EXHAUSTED"
+  | "POSITION_CONFLICT"
+  | "STALE_LAYOUT_REVISION"
+  | "ARRANGEMENT_PREVIEW_CHANGED";
 export type GraphErrorDetails = Record<string, string | number | null>;
 
 export class GraphError extends Error {

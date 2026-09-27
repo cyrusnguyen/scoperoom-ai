@@ -17,6 +17,9 @@ export const projectErrors = {
   LIMIT_EXCEEDED: { status: 422, message: "This draft has reached a size limit." },
   VERSION_EXHAUSTED: { status: 409, message: "This item can't be changed any further." },
   DRAFT_REPLACED: { status: 409, message: "This draft was replaced. Reload the project." },
+  POSITION_CONFLICT: { status: 409, message: "Someone moved this step first. Keep the saved position or apply yours again." },
+  STALE_LAYOUT_REVISION: { status: 409, message: "The layout changed. Preview the arrangement again." },
+  ARRANGEMENT_PREVIEW_CHANGED: { status: 409, message: "The flow changed since this preview. Preview the arrangement again." },
 } as const;
 
 export type ProjectErrorCode = keyof typeof projectErrors;
