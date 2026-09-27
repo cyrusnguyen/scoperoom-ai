@@ -96,7 +96,10 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (signal?.aborted || sessionEnded(result)) return;
     // An unsignaled caller (Retry, projectChanged) can resolve after the user opened a different project.
     if (id !== projectIdRef.current) return;
-    if (result.ok) setOpened((previous) => ({ projectId: id, bootstrap: keepNewerDraft(result.data, previous) }));
+    if (result.ok) {
+      setOpened((previous) => ({ projectId: id, bootstrap: keepNewerDraft(result.data, previous) }));
+      setStore((previous) => updateUi(previous, id, () => ({ refreshFailed: false })));
+    }
     else if (result.status === 404) { setOpened({ projectId: id, missing: true }); setStore((previous) => dropProject(previous, id)); }
     else setOpened({ projectId: id, error: result.message });
   }, []);

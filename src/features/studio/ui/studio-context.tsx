@@ -8,12 +8,11 @@ import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
 import { acknowledge, follow, refuse } from "./buffers";
 import { reconnectCommand, updateCommand } from "./fields";
-import type { PendingCommand, StudioUi } from "./studio-ui";
+import type { SaveState, StudioUi } from "./studio-ui";
 
 export type RunOutcome =
   | { ok: true; result: CommandResult }
   | { ok: false; code: string; message: string; uncertain: boolean; details?: ErrorDetails };
-export type SaveState = { state: "idle" | "saving" | "saved" | "failed"; message: string };
 
 type Studio = {
   projectId: string; draft: DraftView; role: ProjectAccessRole; archived: boolean; editable: boolean; narrow: boolean;
@@ -47,31 +46,27 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
   ui: StudioUi; update: (change: (ui: StudioUi) => Partial<StudioUi>) => void;
   adopt: (view: DraftView) => void; onAccessChanged: () => void; onInspect: () => void; children: ReactNode;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [save, setSave] = useState<SaveState>(ui.pending ? { state: "failed", message: "We could not confirm the last change. Retry it." } : { state: "idle", message: "" });
-  const [refreshFailed, setRefreshFailed] = useState(false);
+  const [localBusy, setBusy] = useState(false);
   const busyRef = useRef(false);
-  const pending = ui.pending;
-  const pendingRef = useRef(pending);
-  const setPending = useCallback((next: PendingCommand | null) => {
-    pendingRef.current = next;
-    update(() => ({ pending: next }));
-  }, [update]);
+  const { pending, save, refreshFailed } = ui;
+  // Another instance may still own the request after browser history remounts this keyed provider.
+  const busy = localBusy || Boolean(pending?.inFlight);
   const draftId = draft.id;
   const editable = !archived && (role === "OWNER" || role === "EDITOR");
 
   const reload = useCallback(async () => {
     const result = await apiRead<DraftView>(`/api/projects/${projectId}/drafts/${draftId}`);
     if (sessionEnded(result)) return;
-    setRefreshFailed(!result.ok);
+    update(() => ({ refreshFailed: !result.ok }));
     if (result.ok) adopt(result.data);
     else if (result.status === 404) onAccessChanged();
-  }, [projectId, draftId, adopt, onAccessChanged]);
+  }, [projectId, draftId, adopt, onAccessChanged, update]);
 
   const run = useCallback(async (command: GraphCommand, key: string = crypto.randomUUID()): Promise<RunOutcome> => {
-    if (busyRef.current) return { ok: false, code: "BUSY", message: "Another change is still saving.", uncertain: false };
+    // Read the current shared receipt, not a ref captured by an earlier provider instance.
+    const waiting = pending;
+    if (busyRef.current || waiting?.inFlight) return { ok: false, code: "BUSY", message: "Another change is still saving.", uncertain: false };
     // One uncertain command stays recoverable across dialogs and view switches. Resolve it before new work.
-    const waiting = pendingRef.current;
     // An admitted reader may resolve an already-issued receipt; only the exact pending key/body can cross this guard.
     const exactRetry = waiting?.key === key && JSON.stringify(waiting.command) === JSON.stringify(command);
     if (!editable && !exactRetry) return { ok: false, code: "FORBIDDEN", message: "This draft is read-only.", uncertain: false };
@@ -81,7 +76,9 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
     if (waiting) key = waiting.key;
     const requestDraftId = waiting?.draftId ?? draftId;
     // A global retry can finish after the originating inspector unmounts. Settle only its exact sent request.
-    const settleBuffers = (outcome: RunOutcome) => update((current) => {
+    const settle = (outcome: RunOutcome) => update((current) => {
+      // A late completion may settle only its own request, never a replacement receipt or another draft.
+      if (current.pending?.key !== key || current.pending.draftId !== requestDraftId || JSON.stringify(current.pending.command) !== JSON.stringify(command)) return {};
       let buffers = current.buffers;
       for (const [bufferKey, buffer] of Object.entries(buffers)) {
         if (!buffer.sent || buffer.key !== key || JSON.stringify(updateCommand(buffer.kind, buffer.id, buffer.baseVersion, buffer.sent)) !== JSON.stringify(command)) continue;
@@ -94,35 +91,34 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
         if (outcome.ok) endpointBuffers = acknowledge(endpointBuffers, bufferKey, outcome.result.documentRevision);
         else if (!outcome.uncertain) endpointBuffers = refuse(endpointBuffers, bufferKey, outcome.code === "STALE_DOCUMENT_REVISION");
       }
-      return { buffers: outcome.ok ? follow(buffers, outcome.result.versions) : buffers, endpointBuffers };
+      return {
+        buffers: outcome.ok ? follow(buffers, outcome.result.versions) : buffers, endpointBuffers,
+        pending: !outcome.ok && outcome.uncertain ? { command, key, draftId: requestDraftId, inFlight: false } : null,
+        save: outcome.ok ? { state: "saved", message: "" } : { state: "failed", message: outcome.uncertain ? "We could not confirm the last change. Retry it." : outcome.message },
+      };
     });
     busyRef.current = true;
     setBusy(true);
-    setSave({ state: "saving", message: "" });
-    setPending({ command, key, draftId: requestDraftId, inFlight: true });
+    update(() => ({ pending: { command, key, draftId: requestDraftId, inFlight: true }, save: { state: "saving", message: "" } }));
     try {
       const result = await apiMutate<CommandResult>(`/api/projects/${projectId}/drafts/${requestDraftId}/commands`, key, command);
       if (sessionEnded(result)) return { ok: false, code: "UNAUTHENTICATED", message: "", uncertain: false };
       if (result.ok) {
-        setPending(null);
         await reload();
-        setSave({ state: "saved", message: "" });
         const outcome = { ok: true as const, result: result.data };
-        settleBuffers(outcome);
+        settle(outcome);
         return outcome;
       }
-      setPending(result.uncertain ? { command, key, draftId: requestDraftId, inFlight: false } : null);
-      setSave({ state: "failed", message: result.uncertain ? "We couldn’t confirm the last change. Retry it." : result.message });
       if (accessCodes.has(result.code)) onAccessChanged();
       else if (!result.uncertain) await reload(); // a certain refusal (stale, invalid) often means newer saved data
       const outcome = { ok: false as const, code: result.code, message: result.message, uncertain: result.uncertain, ...(result.details ? { details: result.details } : {}) };
-      settleBuffers(outcome);
+      settle(outcome);
       return outcome;
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [projectId, draftId, reload, onAccessChanged, editable, update, setPending]);
+  }, [projectId, draftId, reload, onAccessChanged, editable, update, pending]);
 
   const value = useMemo<Studio>(() => ({ projectId, draft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, reload, retry: pending && !pending.inFlight ? () => run(pending.command, pending.key) : null, inspect: onInspect }),
     [projectId, draft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, reload, pending, onInspect]);

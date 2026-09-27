@@ -774,6 +774,74 @@ test.describe("Studio on a real draft", () => {
     expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
   });
 
+  for (const { uncertain, failedRead } of [{ uncertain: false, failedRead: false }, { uncertain: true, failedRead: false }, { uncertain: false, failedRead: true }]) test(`an in-flight List command stays locked after browser history remount (uncertain: ${uncertain}, failed read: ${failedRead})`, async ({ page }) => {
+    await createProjectViaApi(page, "History project");
+    await page.reload();
+    await createFlowInUi(page, "History recovery");
+    await addStepInUi(page, "From", "Start");
+    await addStepInUi(page, "To", "Outcome");
+    const draft = await draftOf(page, projectId);
+    const nodes = Object.values(draft.document.nodes);
+    await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
+      payload: { flowId: nodes[0]!.flowId, fromId: nodes[0]!.id, toId: nodes[1]!.id, condition: "" } });
+    await page.reload();
+    await toolbar(page).getByRole("button", { name: "List" }).click();
+    await page.locator("#projects-nav").getByRole("button", { name: "History project", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "History project" })).toBeVisible();
+    await page.locator("#projects-nav").getByRole("button", { name: "Studio project", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Studio project" })).toBeVisible();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const requests: { key: string; body: string }[] = [];
+    if (failedRead) await page.route(`**/drafts/${draft.id}`, (route) => route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Read unavailable" } } }));
+    await page.route("**/drafts/*/commands", async (route) => {
+      requests.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
+      if (requests.length !== 1) return route.continue();
+      await held;
+      const response = await route.fetch();
+      if (uncertain) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
+      else await route.fulfill({ response });
+    });
+    try {
+      await page.getByRole("button", { name: /^Delete connection/ }).click();
+      await expect.poll(() => requests.length).toBe(1);
+      await page.goBack();
+      await expect(page.getByRole("heading", { level: 1, name: "History project" })).toBeVisible();
+      await page.goForward();
+      await expect(page.getByRole("heading", { level: 1, name: "Studio project" })).toBeVisible();
+      await expect(page.getByRole("button", { name: /^Delete connection/ })).toBeDisabled();
+      await expect(toolbar(page).getByRole("button", { name: "Add step", exact: true })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toHaveCount(0);
+      await expect(page.locator(".studio-status")).toContainText("Saving");
+      expect(requests).toHaveLength(1);
+      release();
+      if (uncertain) {
+        await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toBeEnabled();
+        await page.getByRole("button", { name: "Retry last change", exact: true }).click();
+      }
+      if (failedRead) {
+        await expect(page.locator(".studio-status")).toContainText("Change saved. The latest draft could not load.");
+        await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
+        await page.goBack();
+        await expect(page.getByRole("heading", { level: 1, name: "History project" })).toBeVisible();
+        await page.goForward();
+        await expect(page.getByRole("heading", { level: 1, name: "Studio project" })).toBeVisible();
+        await expect(page.getByRole("button", { name: "Retry read", exact: true })).toHaveCount(0);
+      }
+      await expect(page.locator(".studio-status")).toContainText("0 connections");
+      await expect(page.locator(".studio-status")).toContainText("All changes saved");
+      await expect(page.locator(".studio-status")).not.toContainText("could not confirm");
+      await expect(toolbar(page).getByRole("button", { name: "Add step", exact: true })).toBeEnabled();
+      await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toHaveCount(0);
+      expect(requests).toHaveLength(uncertain ? 2 : 1);
+      if (uncertain) expect(requests[1]).toEqual(requests[0]);
+      const saved = await draftOf(page, projectId);
+      expect(saved.documentRevision).toBe(draft.documentRevision + 2);
+      expect(Object.keys(saved.document.edges)).toHaveLength(0);
+      expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
+    } finally { release(); }
+  });
+
   test("a stale canvas reconnect retains mine and original for explicit inspector recovery", async ({ page }) => {
     await createFlowInUi(page, "Canvas recovery");
     await addStepInUi(page, "Start", "Start");
