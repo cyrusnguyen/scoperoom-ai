@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, type SubmitEvent } from "react";
+import { flushSync } from "react-dom";
 import type { GraphCommand } from "@/features/drafts/contracts/commands";
 import { CLASSIFICATIONS, INCLUSIONS, LIMITS, type Classification, type Inclusion } from "@/features/drafts/contracts/scope-document";
 import { dependencyPlan } from "@/features/drafts/domain/graph";
@@ -52,8 +53,11 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   const duplicateTooLong = Boolean(current && [...`Copy of ${current.title}`].length > LIMITS.title);
   const counts = (flowId: string) => Object.values(document.nodes).filter((node) => node.flowId === flowId).length;
   const open = (flowId: string | null) => {
-    update(() => ({ flowId, selection: null }));
-    onClose();
+    // Commit the destination and native dialog close before focusing outside its modal focus trap.
+    flushSync(() => {
+      update(() => ({ flowId, selection: null }));
+      onClose();
+    });
     requestAnimationFrame(() => (window.document.getElementById("studio-flow-title") ?? window.document.querySelector<HTMLElement>("#editor-main h1"))?.focus());
   };
 

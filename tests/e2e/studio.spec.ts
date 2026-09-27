@@ -235,6 +235,40 @@ test.describe("Studio on a real draft", () => {
     expect(Object.keys(draft.document.edges)).toHaveLength(0);
   });
 
+  test("deleting a flow restores focus after the native modal closes", async ({ page }) => {
+    await createFlowInUi(page, "Original");
+    await toolbar(page).getByRole("button", { name: "List", exact: true }).click();
+    await page.locator(".flow-switch").click();
+    await modal(page, "Flows").getByRole("button", { name: "Duplicate Original" }).click();
+    await expect(page.locator("#studio-flow-title")).toHaveText("Copy of Original");
+    await page.locator(".flow-switch").click();
+    await modal(page, "Flows").getByRole("button", { name: /^Delete Copy of Original/ }).click();
+
+    // Simulate an animation callback running before React commits the dialog close.
+    await page.evaluate(() => {
+      const native = window.requestAnimationFrame.bind(window);
+      (window as typeof window & { __focusFrameProbe?: number }).__focusFrameProbe = 0;
+      window.requestAnimationFrame = (callback) => {
+        if (callback.toString().includes("studio-flow-title")) {
+          (window as typeof window & { __focusFrameProbe?: number }).__focusFrameProbe!++;
+          callback(performance.now());
+          return 0;
+        }
+        return native(callback);
+      };
+    });
+    await modal(page, "Delete Copy of Original?").getByRole("button", { name: "Delete flow", exact: true }).click();
+    await expect(page.locator("#studio-flow-title")).toHaveText("Original");
+    expect(await page.evaluate(() => (window as typeof window & { __focusFrameProbe?: number }).__focusFrameProbe)).toBeGreaterThan(0);
+    await expect(page.locator("#studio-flow-title")).toBeFocused();
+
+    await page.locator(".flow-switch").click();
+    await modal(page, "Flows").getByRole("button", { name: /^Delete Original/ }).click();
+    await modal(page, "Delete Original?").getByRole("button", { name: "Delete flow", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "No flows yet" })).toBeVisible();
+    await expect(page.locator("#editor-main h1")).toBeFocused();
+  });
+
   test("uncertain creation retries the exact receipt, then duplicate and delete survive refresh", async ({ page }) => {
     const attempts: { key: string; body: string }[] = [];
     let releaseFirst!: () => void;
