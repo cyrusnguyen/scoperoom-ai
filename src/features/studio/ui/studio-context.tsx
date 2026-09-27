@@ -6,6 +6,8 @@ import type { ErrorDetails } from "@/contracts/http";
 import type { CommandResult, GraphCommand } from "@/features/drafts/contracts/commands";
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
+import { acknowledge, follow, refuse } from "./buffers";
+import { updateCommand } from "./fields";
 import type { StudioUi } from "./studio-ui";
 
 export type RunOutcome =
@@ -63,6 +65,7 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
   }, [projectId, draftId, adopt, onAccessChanged]);
 
   const run = useCallback(async (command: GraphCommand, key: string = crypto.randomUUID()): Promise<RunOutcome> => {
+    if (!editable) return { ok: false, code: "FORBIDDEN", message: "This draft is read-only.", uncertain: false };
     if (busyRef.current) return { ok: false, code: "BUSY", message: "Another change is still saving.", uncertain: false };
     // One uncertain command stays recoverable across dialogs and view switches. Resolve it before new work.
     const waiting = pendingRef.current;
@@ -70,6 +73,16 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
       return { ok: false, code: "UNCONFIRMED_CHANGE", message: "Retry the unconfirmed change before making another.", uncertain: false };
     }
     if (waiting) key = waiting.key;
+    // A global retry can finish after the originating inspector unmounts. Settle only its exact sent request.
+    const settleBuffers = (outcome: RunOutcome) => update((current) => {
+      let buffers = current.buffers;
+      for (const [bufferKey, buffer] of Object.entries(buffers)) {
+        if (!buffer.sent || buffer.key !== key || JSON.stringify(updateCommand(buffer.kind, buffer.id, buffer.baseVersion, buffer.sent)) !== JSON.stringify(command)) continue;
+        if (outcome.ok) buffers = acknowledge(buffers, bufferKey, outcome.result.versions[buffer.id] ?? buffer.baseVersion);
+        else if (!outcome.uncertain) buffers = refuse(buffers, bufferKey, outcome.code === "STALE_ENTITY_VERSION");
+      }
+      return { buffers: outcome.ok ? follow(buffers, outcome.result.versions) : buffers };
+    });
     busyRef.current = true;
     setBusy(true);
     setSave({ state: "saving", message: "" });
@@ -81,19 +94,23 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
         setPending(null);
         await reload();
         setSave({ state: "saved", message: "" });
-        return { ok: true, result: result.data };
+        const outcome = { ok: true as const, result: result.data };
+        settleBuffers(outcome);
+        return outcome;
       }
       pendingRef.current = result.uncertain ? { command, key } : null;
       setPending(pendingRef.current);
       setSave({ state: "failed", message: result.uncertain ? "We couldn’t confirm the last change. Retry it." : result.message });
       if (accessCodes.has(result.code)) onAccessChanged();
       else if (!result.uncertain) await reload(); // a certain refusal (stale, invalid) often means newer saved data
-      return { ok: false, code: result.code, message: result.message, uncertain: result.uncertain, ...(result.details ? { details: result.details } : {}) };
+      const outcome = { ok: false as const, code: result.code, message: result.message, uncertain: result.uncertain, ...(result.details ? { details: result.details } : {}) };
+      settleBuffers(outcome);
+      return outcome;
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [projectId, draftId, reload, onAccessChanged]);
+  }, [projectId, draftId, reload, onAccessChanged, editable, update]);
 
   const value = useMemo<Studio>(() => ({ projectId, draft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, reload, retry: pending ? () => run(pending.command, pending.key) : null, inspect: onInspect }),
     [projectId, draft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, reload, pending, onInspect]);

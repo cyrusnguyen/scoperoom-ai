@@ -9,6 +9,7 @@ import type { MyInvitation } from "@/features/projects/contracts/invitation";
 import type { CreatedProject, ProjectBootstrap, ProjectLists } from "@/features/projects/contracts/project";
 import { expiryLabel } from "@/features/projects/ui/format";
 import ProjectDetails from "@/features/projects/ui/project-details";
+import Inspector from "@/features/studio/ui/inspector";
 import { StudioProvider } from "@/features/studio/ui/studio-context";
 import { isNewer, type StudioUi } from "@/features/studio/ui/studio-ui";
 import Dialog, { CancelFocus } from "./dialog";
@@ -225,10 +226,12 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
         restoreNote={restoreNote} onRestore={() => setDialog({ kind: "restore", project: { id: projectId, name: bootstrap.project.name } })} />
     : <ProjectUnavailable missing={Boolean(current.missing)} message={current.error ?? ""} sidebarClosed={sidebarClosed} onShowProjects={() => showProjects()} onRetry={() => void loadProject(projectId)} />;
 
+  // With a Studio selection the Details tab inspects it; "← Project" clears the selection and returns to project details.
   const panel = projectId && bootstrap && ui.rightMounted
     ? <RightPanel key={projectId} mode={dock.right} onClose={() => setPanel(false)}>
-      <ProjectDetails bootstrap={bootstrap} drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))}
-        onChanged={projectChanged} onLifecycle={(kind) => setDialog({ kind, project: { id: projectId, name: bootstrap.project.name } })} />
+      {ui.selection ? <Inspector onBack={() => updateStudio(() => ({ selection: null }))} />
+        : <ProjectDetails bootstrap={bootstrap} drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))}
+          onChanged={projectChanged} onLifecycle={(kind) => setDialog({ kind, project: { id: projectId, name: bootstrap.project.name } })} />}
     </RightPanel>
     : null;
 
