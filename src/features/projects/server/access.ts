@@ -130,6 +130,7 @@ export function requireActive(project: ProjectRow) {
 
 /** Assigns the next per-project event sequence (under the project lock) and writes its audit event. */
 export async function recordEvent(tx: Transaction, project: Pick<ProjectRow, "id" | "eventSequence">, actorId: string, action: string, entityRefs: Prisma.InputJsonValue, metadata: Prisma.InputJsonValue) {
+  if (project.eventSequence >= BigInt(Number.MAX_SAFE_INTEGER)) throw new ProjectError("VERSION_EXHAUSTED");
   const sequence = project.eventSequence + BigInt(1);
   await tx.$executeRaw`UPDATE app.project SET event_sequence = ${sequence}::bigint, updated_at = CURRENT_TIMESTAMP WHERE id = ${project.id}::uuid`;
   await tx.auditEvent.create({ data: { projectId: project.id, sequence, actorId, action, entityRefs, metadata } });

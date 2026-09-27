@@ -11,6 +11,12 @@ export const projectErrors = {
   CONFLICT: { status: 409, message: "That change conflicts with current data. Refresh and try again." },
   FORBIDDEN: { status: 403, message: "This action isn't available for your account." },
   UNAVAILABLE: { status: 503, message: "Project access is unavailable. Try again." },
+  STALE_ENTITY_VERSION: { status: 409, message: "Someone saved this item first. Compare the saved value, then save again." },
+  STALE_DOCUMENT_REVISION: { status: 409, message: "The flow changed. Review the current version and try again." },
+  DEPENDENCY_CONFLICT: { status: 422, message: "Review what this deletion removes, then try again." },
+  LIMIT_EXCEEDED: { status: 422, message: "This draft has reached a size limit." },
+  VERSION_EXHAUSTED: { status: 409, message: "This item can't be changed any further." },
+  DRAFT_REPLACED: { status: 409, message: "This draft was replaced. Reload the project." },
 } as const;
 
 export type ProjectErrorCode = keyof typeof projectErrors;
