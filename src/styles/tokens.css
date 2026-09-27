@@ -106,3 +106,21 @@
 @media (prefers-reduced-motion: reduce) {
   :root { --duration: 0ms; }
 }
+
+/* React Flow's own variables, mapped to ScopeRoom tokens. `.app-shell .react-flow` outranks the library's `.react-flow`. */
+.app-shell .react-flow {
+  --xy-background-color-default: var(--canvas-background);
+  --xy-background-pattern-dots-color-default: var(--border);
+  --xy-edge-stroke-default: var(--foreground-subtle);
+  --xy-edge-stroke-width-default: 1.5;
+  --xy-edge-stroke-selected-default: var(--accent-hover);
+  --xy-connectionline-stroke-default: var(--accent);
+  --xy-node-color-default: var(--foreground);
+  --xy-node-border-radius-default: var(--radius-card);
+  --xy-controls-button-background-color-default: var(--surface);
+  --xy-controls-button-background-color-hover-default: var(--surface-raised);
+  --xy-controls-button-color-default: var(--foreground);
+  --xy-controls-button-color-hover-default: var(--foreground);
+  --xy-controls-button-border-color-default: var(--border);
+  --xy-attribution-background-color-default: var(--surface-muted);
+}

@@ -3,13 +3,15 @@
 import { useEffect, useRef } from "react";
 import type { ProjectBootstrap, ProjectCapacity } from "@/features/projects/contracts/project";
 import { roleLabel } from "@/features/projects/ui/format";
+import { FlowSwitcher } from "@/features/studio/ui/flows-dialog";
+import Studio from "@/features/studio/ui/studio";
 import { Icon } from "./icon";
 
 function ShowProjects({ onClick }: { onClick: () => void }) {
   return <button type="button" className="button quiet small" onClick={onClick} aria-label="Show projects" aria-expanded={false} aria-controls="projects-nav"><Icon name="panel" /></button>;
 }
 
-/** Keyed by project id in the shell: switching projects unmounts this project's editor state. */
+/** Keyed by project id in the shell: switching projects unmounts this project's editor state. Renders inside the StudioProvider. */
 export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onShowProjects, panelOpen, onTogglePanel, restoreNote, onRestore }: {
   bootstrap: ProjectBootstrap; autoFocus: boolean; sidebarClosed: boolean; onShowProjects: () => void; panelOpen: boolean; onTogglePanel: () => void;
   restoreNote?: string; onRestore: () => void;
@@ -23,6 +25,7 @@ export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onS
       {sidebarClosed && <ShowProjects onClick={onShowProjects} />}
       <h1 ref={titleRef} className="editor-title" tabIndex={-1} title={project.name}>{project.name}</h1>
       {project.role !== "OWNER" && <span className="badge">{roleLabel(project.role)}</span>}
+      <FlowSwitcher />
       <span className="editor-spacer" />
       <button type="button" className="button small editor-toggle" aria-pressed={panelOpen} aria-controls="right-panel" onClick={onTogglePanel}><Icon name="details" size={14} /><span>Inspect</span></button>
     </header>
@@ -33,11 +36,7 @@ export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onS
         {restoreNote && <small id="restore-note" className="editor-banner-note">{restoreNote}</small>}
       </span>}
     </div>}
-    <div className="editor-body">
-      <div className="empty-state">
-        {archived ? <h2>This archived project has no flows.</h2> : <><h2>No flows yet</h2><p>This project has an empty draft. Flow editing isn&rsquo;t available yet.</p></>}
-      </div>
-    </div>
+    <div className="editor-body"><Studio /></div>
   </div>;
 }
 

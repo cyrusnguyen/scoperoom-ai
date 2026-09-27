@@ -1,13 +1,27 @@
 import type { Client } from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
+import { emptyDraft, parseDraftPair } from "../../src/features/drafts/contracts/scope-document.ts";
 import { adminClient, cleanupUsers, e2eReady, openDatabase, signIn } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
 const project = { id: "22222222-2222-4222-8222-222222222222", name: "Management project", ownerId: "55555555-5555-4555-8555-555555555555" };
 const other = { id: "66666666-6666-4666-8666-666666666666", name: "Other project" };
-const draft = { id: "33333333-3333-4333-8333-333333333333", schemaVersion: 3, documentRevision: 1, layoutRevision: 1, documentJson: {}, layoutJson: {} };
+const storedEmptyDraft = emptyDraft();
+const flowId = "11111111-1111-4111-8111-111111111111";
+const draft = {
+  id: "33333333-3333-4333-8333-333333333333", status: "EDITABLE" as const, documentRevision: 1, layoutRevision: 1,
+  ...parseDraftPair({
+    ...storedEmptyDraft.document,
+    flows: {
+      [flowId]: {
+        id: flowId, version: 1, behaviourVersion: 1, title: "Checkout", purpose: "",
+        classification: "BUSINESS_PROCESS", inclusion: "INCLUDED", confirmation: null, verificationMethod: null,
+      },
+    },
+  }, { ...storedEmptyDraft.layout, directions: { [flowId]: "TB" } }),
+};
 const empty = { items: [], truncated: false };
 const owner = { profileId: project.ownerId, displayName: "Management Owner", role: "OWNER", version: 1, designatedApprover: false };
 const listItem = (id: string, name: string, role: string) => ({ id, name, status: "ACTIVE", role, ownerName: "Management Owner", updatedAt: "2026-09-26T00:00:00.000Z" });
@@ -83,6 +97,7 @@ test.describe("project details", () => {
     await page.goto(`/app/projects/${project.id}`);
     await page.getByRole("button", { name: "Inspect" }).click();
     const panel = page.locator("#right-panel");
+    await expect(panel.getByText("1 flow · revision 1")).toBeVisible();
     await expect(panel.getByText("Casey Collaborator", { exact: true })).toBeVisible();
     await expect(panel.getByText("2 of 10")).toBeVisible();
     await panel.getByLabel("Role for Casey Collaborator").selectOption("EDITOR");

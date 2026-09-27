@@ -2,10 +2,16 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { expect, type Page } from "@playwright/test";
+import { emptyDraft } from "../../src/features/drafts/contracts/scope-document.ts";
 import { requireEnv } from "../support/env.ts";
 
 export const e2eReady = requireEnv(["E2E_SUPABASE_URL", "E2E_SUPABASE_SECRET_KEY", "E2E_DATABASE_URL"]);
 export const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://127.0.0.1:3101";
+
+/** A saved empty draft as the bootstrap and `GET D` return it, for mocked projects. */
+export function emptyDraftView(id = "55555555-5555-4555-8555-555555555555") {
+  return { id, status: "EDITABLE" as const, documentRevision: 1, layoutRevision: 1, ...emptyDraft() };
+}
 
 export function adminClient() {
   return createClient(process.env.E2E_SUPABASE_URL!, process.env.E2E_SUPABASE_SECRET_KEY!, { auth: { autoRefreshToken: false, persistSession: false } });

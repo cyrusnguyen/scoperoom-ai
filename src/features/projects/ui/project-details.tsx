@@ -118,6 +118,7 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
   const savedApprover = status?.designatedApproverId ?? "";
   const approver = drafts.approver ?? savedApprover;
   const ownerName = members?.find((member) => member.role === "OWNER")?.displayName;
+  const flowCount = Object.keys(draft.document.flows).length;
 
   const saveName = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -163,7 +164,7 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
         <div><dt>Owner</dt><dd>{ownerName ?? "—"}</dd></div>
         <div><dt>Your role</dt><dd>{roleLabel(project.role)}</dd></div>
         <div><dt>Status</dt><dd>{active ? "Active" : "Archived"}</dd></div>
-        <div><dt>Draft</dt><dd>Empty draft · revision {draft.documentRevision}</dd></div>
+        <div><dt>Draft</dt><dd>{flowCount ? `${flowCount} ${flowCount === 1 ? "flow" : "flows"}` : "Empty draft"} · revision {draft.documentRevision}</dd></div>
       </dl>
       {retry && <div className="view-actions">
         <button id="details-retry" type="button" className="button small" disabled={busy} onClick={() => void mutate(retry.mutation, retry.key)}>Retry change</button>

@@ -1,5 +1,5 @@
 import { Prisma } from "../../../../prisma/generated/client.ts";
-import { emptyDraft } from "../../drafts/contracts/scope-document.ts";
+import { emptyDraft, parseDraftPair } from "../../drafts/contracts/scope-document.ts";
 import {
   PROJECT_LIST_LIMIT, type CreatedProject, type CreateProjectInput, type ProjectAccessRole, type ProjectBootstrap, type ProjectGroup,
   type ProjectIdentity, type ProjectListItem, type ProjectLists, type ProjectStatusView, uuid, validateProjectCreateInput,
@@ -86,9 +86,15 @@ export async function getProjectBootstrap(identity: ProjectIdentity, projectId: 
       const role = requireMember(project);
       const draft = project.currentDraftId ? await tx.scopeDraft.findFirst({ where: { id: project.currentDraftId, projectId: project.id, status: "EDITABLE" } }) : null;
       if (!draft) throw new ProjectError("NOT_FOUND");
+      let saved: ReturnType<typeof parseDraftPair>;
+      try {
+        saved = parseDraftPair(draft.documentJson, draft.layoutJson);
+      } catch {
+        throw new ProjectError("UNAVAILABLE");
+      }
       return {
         project: { id: project.id, name: project.name, status: project.status, role, ownerId: project.ownerId },
-        draft: { id: draft.id, schemaVersion: 3, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, documentJson: draft.documentJson, layoutJson: draft.layoutJson },
+        draft: { id: draft.id, status: draft.status, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, ...saved },
       };
     });
   });

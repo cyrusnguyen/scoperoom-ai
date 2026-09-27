@@ -4,16 +4,20 @@ import { useCallback, useEffect, useRef, useState, useTransition, type ReactNode
 import { useParams, useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
 import { apiRead, sessionEnded } from "@/client/api";
+import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { MyInvitation } from "@/features/projects/contracts/invitation";
 import type { CreatedProject, ProjectBootstrap, ProjectLists } from "@/features/projects/contracts/project";
 import { expiryLabel } from "@/features/projects/ui/format";
 import ProjectDetails from "@/features/projects/ui/project-details";
+import Inspector from "@/features/studio/ui/inspector";
+import { StudioProvider } from "@/features/studio/ui/studio-context";
+import { afterDraftRead, isNewer, type StudioUi } from "@/features/studio/ui/studio-ui";
 import Dialog, { CancelFocus } from "./dialog";
 import { resolveDock } from "./dock";
 import LifecycleDialog, { type LifecycleKind } from "./lifecycle-dialog";
 import NewProjectDialog from "./new-project-dialog";
 import ProjectEditor, { NoProjectOpen, ProjectUnavailable } from "./project-editor";
-import { anyDirty, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, type UiStore } from "./project-ui";
+import { anyDirty, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, updateUi, type UiStore } from "./project-ui";
 import ProjectsSidebar, { LIST_TABS, type InviteRow, type ListTab } from "./projects-sidebar";
 import RightPanel from "./right-panel";
 
@@ -33,6 +37,12 @@ function readPrefs(): Prefs {
     if (value && typeof value === "object") saved = value as Partial<Prefs>;
   } catch { /* Storage is unavailable or holds something else: use the defaults. */ }
   return { leftOpen: saved.leftOpen !== false, listTab: LIST_TABS.includes(saved.listTab as ListTab) ? saved.listTab as ListTab : "owned" };
+}
+
+/** A project re-read that raced a Studio save must not roll the draft back: keep whichever read is newer. */
+function keepNewerDraft(bootstrap: ProjectBootstrap, previous: Opened | null): ProjectBootstrap {
+  const kept = previous?.projectId === bootstrap.project.id ? previous.bootstrap?.draft : undefined;
+  return kept && isNewer(kept, bootstrap.draft) ? { ...bootstrap, draft: kept } : bootstrap;
 }
 
 export default function ProjectShell({ signOut, children }: { signOut: () => Promise<void>; children: ReactNode }) {
@@ -86,10 +96,21 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (signal?.aborted || sessionEnded(result)) return;
     // An unsignaled caller (Retry, projectChanged) can resolve after the user opened a different project.
     if (id !== projectIdRef.current) return;
-    if (result.ok) setOpened({ projectId: id, bootstrap: result.data });
+    if (result.ok) {
+      setOpened((previous) => ({ projectId: id, bootstrap: keepNewerDraft(result.data, previous) }));
+      setStore((previous) => updateUi(previous, id, (current) => afterDraftRead(current, result.data.draft)));
+    }
     else if (result.status === 404) { setOpened({ projectId: id, missing: true }); setStore((previous) => dropProject(previous, id)); }
     else setOpened({ projectId: id, error: result.message });
   }, []);
+
+  // The Studio's saved draft lives with the bootstrap; a read replaces it only when neither revision goes backwards.
+  const adoptDraft = useCallback((view: DraftView) => {
+    setOpened((previous) => previous?.bootstrap && isNewer(view, previous.bootstrap.draft) ? { ...previous, bootstrap: { ...previous.bootstrap, draft: view } } : previous);
+  }, []);
+  const updateStudio = useCallback((change: (ui: StudioUi) => Partial<StudioUi>) => {
+    if (projectId) setStore((previous) => updateUi(previous, projectId, change));
+  }, [projectId]);
 
   useEffect(() => { projectIdRef.current = projectId; }, [projectId]);
   useEffect(() => {
@@ -170,8 +191,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
       setStore((previous) => dropProject(previous, target.id));
       if (leavingOpen) navigate(null);
     } else {
-      // An archived project hides its name/invite/approver fields, so a draft left behind would stay dirty forever.
-      if (kind === "archive") setStore((previous) => discardDrafts(previous, target.id));
+      // Archive hides metadata forms. Studio input remains available in its read-only copy/discard recovery.
+      if (kind === "archive") setStore((previous) => updateUi(previous, target.id, () => ({ drafts: {} })));
       if (target.id === projectId) void loadProject(target.id);
     }
     // Every lifecycle change removes its opener (the row, "Archive project…", the banner's Restore), so focus a stable
@@ -208,12 +229,16 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
         restoreNote={restoreNote} onRestore={() => setDialog({ kind: "restore", project: { id: projectId, name: bootstrap.project.name } })} />
     : <ProjectUnavailable missing={Boolean(current.missing)} message={current.error ?? ""} sidebarClosed={sidebarClosed} onShowProjects={() => showProjects()} onRetry={() => void loadProject(projectId)} />;
 
+  // With a Studio selection the Details tab inspects it; "← Project" clears the selection and returns to project details.
   const panel = projectId && bootstrap && ui.rightMounted
     ? <RightPanel key={projectId} mode={dock.right} onClose={() => setPanel(false)}>
-      <ProjectDetails bootstrap={bootstrap} drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))}
-        onChanged={projectChanged} onLifecycle={(kind) => setDialog({ kind, project: { id: projectId, name: bootstrap.project.name } })} />
+      {ui.selection ? <Inspector onBack={() => { updateStudio(() => ({ selection: null })); requestAnimationFrame(() => document.getElementById("right-tab-details")?.focus()); }} />
+        : <ProjectDetails bootstrap={bootstrap} drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))}
+          onChanged={projectChanged} onLifecycle={(kind) => setDialog({ kind, project: { id: projectId, name: bootstrap.project.name } })} />}
     </RightPanel>
     : null;
+
+  const main = <main id="editor-main" tabIndex={-1} className="editor-slot" style={{ width: dock.editor }}>{editor}</main>;
 
   return <div className="app-shell" ref={shellRef}>
     <a className="skip-link" href="#editor-main">Skip to editor</a>
@@ -228,8 +253,12 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
             onAction={(kind, item) => setDialog({ kind, project: { id: item.id, name: item.name } })}
             onInviteSettled={(text, error) => { notify(text, error); void loadLists(); }} />
         </div>
-        <main id="editor-main" tabIndex={-1} className="editor-slot" style={{ width: dock.editor }}>{editor}</main>
-        {panel}
+        {projectId && bootstrap
+          ? <StudioProvider key={projectId} projectId={projectId} draft={bootstrap.draft} role={bootstrap.project.role} archived={bootstrap.project.status === "ARCHIVED"}
+              narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={projectChanged} onInspect={() => setPanel(true)}>
+              {main}{panel}
+            </StudioProvider>
+          : <>{main}{panel}</>}
       </>}
     </div>
     <footer className="app-footer">
@@ -240,8 +269,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     {dialog?.kind === "create" && <NewProjectDialog onClose={() => closeDialog()} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}
     {switchTarget && <Dialog title={`Unsaved changes in ${bootstrap?.project.name ?? "this project"}`} onClose={() => setDialog(null)} footer={<>
       <CancelFocus label="Stay" onClick={() => setDialog(null)} />
-      <button type="button" className="button danger" onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
-    </>}><p>{dirtyCount(store, projectId)} unsaved field(s).</p></Dialog>}
+      <button type="button" className="button danger" disabled={ui.pending?.inFlight} onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
+    </>}><p>{dirtyCount(store, projectId)} {ui.pending ? "unsaved edit(s) or unconfirmed change(s)." : "unsaved field(s)."}</p>{ui.pending && <p>The unconfirmed change will still be available to retry when you return. Discard only removes local edits; it cannot cancel a change already sent.</p>}</Dialog>}
     {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project}
       onClose={() => closeDialog(lifecycleDialog.project.id)} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}
   </div>;

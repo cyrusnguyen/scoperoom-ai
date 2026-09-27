@@ -1,3 +1,5 @@
+import type { DraftView } from "../../drafts/contracts/scope-document.ts";
+
 export type { ProjectErrorCode } from "./errors.ts";
 
 export type ProjectIdentity = { authUserId: string; displayName: string };
@@ -12,7 +14,7 @@ export type ProjectLists = { owned: ProjectGroup; shared: ProjectGroup; archived
 
 export type ProjectBootstrap = {
   project: { id: string; name: string; status: "ACTIVE" | "ARCHIVED"; role: ProjectAccessRole; ownerId: string };
-  draft: { id: string; schemaVersion: 3; documentRevision: number; layoutRevision: number; documentJson: unknown; layoutJson: unknown };
+  draft: DraftView;
 };
 
 export type ProjectStatusView = {
