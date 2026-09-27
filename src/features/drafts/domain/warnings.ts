@@ -12,7 +12,12 @@ export function graphWarnings(document: ScopeDocument, flowId: string): GraphWar
   if (!nodes.some((node) => node.kind === "START")) warnings.push({ code: "NO_START", targetId: flowId });
   if (!nodes.some((node) => node.kind === "OUTCOME")) warnings.push({ code: "NO_OUTCOME", targetId: flowId });
   const connected = new Set(edges.flatMap((edge) => [edge.fromId, edge.toId]));
-  for (const node of nodes) if (!connected.has(node.id)) warnings.push({ code: "UNCONNECTED_STEP", targetId: node.id });
+  const starts = nodes.filter((node) => node.kind === "START");
+  const reachable = new Set(starts.map((node) => node.id));
+  for (const nodeId of reachable) {
+    for (const edge of edges) if (edge.fromId === nodeId && !reachable.has(edge.toId)) reachable.add(edge.toId);
+  }
+  for (const node of nodes) if (!connected.has(node.id) || !reachable.has(node.id)) warnings.push({ code: "UNCONNECTED_STEP", targetId: node.id });
   for (const edge of edges) if (document.nodes[edge.fromId]?.kind === "DECISION" && !edge.condition.trim()) warnings.push({ code: "UNLABELLED_BRANCH", targetId: edge.id });
   return warnings;
 }

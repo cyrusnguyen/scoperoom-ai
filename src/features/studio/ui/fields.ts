@@ -41,7 +41,8 @@ export function fieldErrors(kind: EntityKind, values: Fields): Record<string, st
   for (const spec of FIELDS[kind]) {
     const value = values[spec.name];
     if (value === undefined) continue;
-    if (spec.required && !value.trim()) errors[spec.name] = `Enter a ${spec.label.toLowerCase()}.`;
+    if (!value.isWellFormed() || value.includes("\u0000")) errors[spec.name] = "Enter valid text.";
+    else if (spec.required && !value.trim()) errors[spec.name] = `Enter a ${spec.label.toLowerCase()}.`;
     else if (spec.name === "assumptionNotes") {
       const notes = lines(value);
       if (notes.length > LIMITS.notes) errors[spec.name] = `Keep it to ${LIMITS.notes} assumptions.`;
@@ -58,5 +59,6 @@ export function updateCommand(kind: EntityKind, id: string, expectedEntityVersio
     return { commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion, payload: { nodeId: id, ...rest, ...(assumptionNotes === undefined ? {} : { assumptionNotes: lines(assumptionNotes) }) } } as GraphCommand;
   }
   if (kind === "FLOW") return { commandSchemaVersion: 1, command: "UPDATE_FLOW", expectedEntityVersion, payload: { flowId: id, ...changed } } as GraphCommand;
-  return { commandSchemaVersion: 1, command: "UPDATE_EDGE", expectedEntityVersion, payload: { edgeId: id, condition: changed.condition ?? "" } };
+  if (changed.condition === undefined) throw new Error("Missing edge condition.");
+  return { commandSchemaVersion: 1, command: "UPDATE_EDGE", expectedEntityVersion, payload: { edgeId: id, condition: changed.condition } };
 }

@@ -27,21 +27,45 @@ function draft(nodes: [label: string, kind: NodeRecord["kind"], x: number, y: nu
 test("draft checks describe an incomplete flow without blocking it", () => {
   assert.deepEqual(graphWarnings(draft([]).document, flowId), []);
   const { document } = draft([["Ask", "DECISION", 0, 0], ["Yes", "ACTION", 0, 160], ["Alone", "ACTION", 200, 0]], [[1, 2]]);
-  assert.deepEqual(graphWarnings(document, flowId).map((warning) => warning.code), ["NO_START", "NO_OUTCOME", "UNCONNECTED_STEP", "UNLABELLED_BRANCH"]);
+  assert.deepEqual(graphWarnings(document, flowId).map((warning) => warning.code), ["NO_START", "NO_OUTCOME", "UNCONNECTED_STEP", "UNCONNECTED_STEP", "UNCONNECTED_STEP", "UNLABELLED_BRANCH"]);
   const complete = draft([["Start", "START", 0, 0], ["Done", "OUTCOME", 0, 160]], [[1, 2]]);
   assert.deepEqual(graphWarnings(complete.document, flowId), []);
+});
+
+test("draft checks warn for branches disconnected from a start", () => {
+  const { document } = draft([["Start", "START", 0, 0], ["Done", "OUTCOME", 0, 160], ["First orphan", "ACTION", 200, 0], ["Second orphan", "ACTION", 200, 160]], [[1, 2], [3, 4]]);
+  assert.deepEqual(graphWarnings(document, flowId), [
+    { code: "UNCONNECTED_STEP", targetId: id(3) },
+    { code: "UNCONNECTED_STEP", targetId: id(4) },
+  ]);
 });
 
 test("the List reads top to bottom, and identical names are told apart by id", () => {
   const { document, layout } = draft([["Pay", "ACTION", 0, 320], ["Pay", "ACTION", 0, 160], ["Browse", "START", 0, 0]], [[3, 2], [2, 1]]);
   assert.deepEqual(stepsInOrder(document, layout, flowId).map((node) => node.id), [id(3), id(2), id(1)]);
-  assert.equal(stepName(document, id(1)), `Pay (${id(1).slice(0, 8)})`);
+  assert.equal(stepName(document, id(1)), `Pay (${id(1)})`);
   assert.equal(stepName(document, id(3)), "Browse");
   assert.equal(stepName(document, id(99)), "Removed step");
   assert.deepEqual(connectionsInOrder(document, layout, flowId).map((edge) => edge.fromId), [id(3), id(2)]);
   assert.equal(matchesStep(document.nodes[id(3)]!, "brow"), true);
   assert.equal(matchesStep(document.nodes[id(3)]!, id(3).slice(-4)), true);
   assert.equal(matchesStep(document.nodes[id(3)]!, "pay"), false);
+});
+
+test("the List uses a longer ID only when an eight-character duplicate would collide", () => {
+  const samePrefix = draft([["Pay", "ACTION", 0, 0], ["Pay", "ACTION", 0, 160]]).document;
+  assert.equal(stepName(samePrefix, id(1)), `Pay (${id(1)})`);
+  const differentPrefix = draft([["Pay", "ACTION", 0, 0], ["Pay", "ACTION", 0, 160]]).document;
+  const secondId = "a0000000-0000-4000-8000-000000000002";
+  differentPrefix.nodes[secondId] = { ...differentPrefix.nodes[id(2)]!, id: secondId };
+  delete differentPrefix.nodes[id(2)];
+  assert.equal(stepName(differentPrefix, id(1)), "Pay (00000000)");
+});
+
+test("the List reads LR flows left to right and breaks equal positions by name", () => {
+  const { document, layout } = draft([["Zebra", "ACTION", 100, 100], ["Alpha", "ACTION", 100, 100], ["Later", "ACTION", 200, 0]]);
+  layout.directions[flowId] = "LR";
+  assert.deepEqual(stepsInOrder(document, layout, flowId).map((node) => node.label), ["Alpha", "Zebra", "Later"]);
 });
 
 test("canvas select changes fold into one selection; edge and flow selections survive unrelated unselects", () => {
@@ -70,9 +94,12 @@ test("inspector fields validate on Save by code points and build a guarded updat
   assert.deepEqual(nodeFields(node), { label: "Pay", kind: "ACTION", actorLabel: "", description: "", assumptionNotes: "" });
   assert.deepEqual(fieldErrors("NODE", { label: " ", actorLabel: "x".repeat(101) }), { label: "Enter a name.", actorLabel: "Actor can be up to 100 characters (now 101)." });
   assert.deepEqual(fieldErrors("NODE", { label: "\u{1ec7}".repeat(160) }), {});
+  assert.deepEqual(fieldErrors("NODE", { label: "🚀".repeat(160) }), {});
+  assert.deepEqual(fieldErrors("NODE", { label: "bad\u0000text", description: "bad\ud800text" }), { label: "Enter valid text.", description: "Enter valid text." });
   assert.deepEqual(fieldErrors("NODE", { assumptionNotes: Array.from({ length: 21 }, () => "note").join("\n") }), { assumptionNotes: "Keep it to 20 assumptions." });
   assert.deepEqual(updateCommand("NODE", id(1), 3, { label: "Pay now", assumptionNotes: " one \n\n two " }), {
     commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: 3, payload: { nodeId: id(1), label: "Pay now", assumptionNotes: ["one", "two"] },
   });
   assert.deepEqual(updateCommand("EDGE", id(9), 2, { condition: "Paid" }), { commandSchemaVersion: 1, command: "UPDATE_EDGE", expectedEntityVersion: 2, payload: { edgeId: id(9), condition: "Paid" } });
+  assert.throws(() => updateCommand("EDGE", id(9), 2, {}), /Missing edge condition/);
 });

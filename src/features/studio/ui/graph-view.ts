@@ -21,8 +21,11 @@ export function stepsInOrder(document: ScopeDocument, layout: DraftLayout, flowI
 export function stepName(document: ScopeDocument, nodeId: string): string {
   const node = document.nodes[nodeId];
   if (!node) return "Removed step";
-  const twins = Object.values(document.nodes).some((other) => other.id !== node.id && other.flowId === node.flowId && other.label === node.label);
-  return twins ? `${node.label} (${node.id.slice(0, 8)})` : node.label;
+  const twins = Object.values(document.nodes).filter((other) => other.id !== node.id && other.flowId === node.flowId && other.label === node.label);
+  if (!twins.length) return node.label;
+  let length = 8;
+  while (length < node.id.length && twins.some((other) => other.id.slice(0, length) === node.id.slice(0, length))) length++;
+  return `${node.label} (${node.id.slice(0, length)})`;
 }
 
 /** Connections of one flow, ordered like their source steps, then target steps. */
