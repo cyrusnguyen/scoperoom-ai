@@ -107,7 +107,6 @@
   :root { --duration: 0ms; }
 }
 
-
 /* React Flow's own variables, mapped to ScopeRoom tokens. `.app-shell .react-flow` outranks the library's `.react-flow`. */
 .app-shell .react-flow {
   --xy-background-color-default: var(--canvas-background);

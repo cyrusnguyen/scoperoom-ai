@@ -300,7 +300,7 @@ function DraftChecks({ flowId }: { flowId: string }) {
     const select = (kind: "NODES" | "EDGE", id: string) => update(() => ({ selection: kind === "NODES" ? { kind, ids: [id] } : { kind, id } }));
     if (warning.code === "NO_START") return "No start step yet.";
     if (warning.code === "NO_OUTCOME") return "No outcome step yet.";
-    if (warning.code === "UNCONNECTED_STEP") return <><button type="button" className="text-link" onClick={() => select("NODES", warning.targetId)}>{stepName(draft.document, warning.targetId)}</button> isn’t connected.</>;
+    if (warning.code === "UNCONNECTED_STEP") return <><button type="button" className="text-link" onClick={() => select("NODES", warning.targetId)}>{stepName(draft.document, warning.targetId)}</button> isn&rsquo;t connected to a start.</>;
     const edge = draft.document.edges[warning.targetId]!;
     return <>A <button type="button" className="text-link" onClick={() => select("EDGE", edge.id)}>branch from {stepName(draft.document, edge.fromId)}</button> has no condition.</>;
   };

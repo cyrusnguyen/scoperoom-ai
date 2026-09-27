@@ -57,6 +57,8 @@ test("own saves that advance another record move its buffer only when nothing el
   assert.equal(follow(buffers, { f1: 9 })["FLOW:f1"]!.baseVersion, 7, "someone else also changed it: the next save must conflict");
   const inFlight = send(buffers, "FLOW:f1", "request-1");
   assert.equal(follow(inFlight, { f1: 8 })["FLOW:f1"]!.baseVersion, 7, "a buffer in flight is settled by its own acknowledgement");
+  const conflicted = refuse(send(buffers, "FLOW:f1", "request-2"), "FLOW:f1", true);
+  assert.equal(follow(conflicted, { f1: 8 })["FLOW:f1"]!.baseVersion, 7, "a conflict needs explicit review even after our next save");
 });
 
 

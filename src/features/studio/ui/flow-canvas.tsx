@@ -13,20 +13,20 @@ import { KIND_LABELS, reconnectCommand } from "./fields";
 import { useStudio } from "./studio-context";
 import { moveTargets, selectEdge, selectNodes, type SelectChange, type StudioUi } from "./studio-ui";
 
-type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction; connectable: boolean };
+type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction };
 type StepNode = Node<StepData, "step">;
 type FlowEdge = Edge<{ condition: string }, "flow">;
 type Point = { x: number; y: number };
 
 /** Fixed application-owned shapes (UI02); names are plain text, clamped here and complete in the inspector. */
-function StepCard({ data }: NodeProps<StepNode>) {
+function StepCard({ data, isConnectable }: NodeProps<StepNode>) {
   const across = data.direction === "LR";
   return <div className="step-node" data-kind={data.kind}>
-    <Handle type="target" position={across ? Position.Left : Position.Top} isConnectable={data.connectable} />
+    <Handle type="target" position={across ? Position.Left : Position.Top} isConnectable={isConnectable} />
     <span className="step-kind">{KIND_LABELS[data.kind]}</span>
     <span className="step-label">{data.label}</span>
     {data.actor && <span className="step-actor">{data.actor}</span>}
-    <Handle type="source" position={across ? Position.Right : Position.Bottom} isConnectable={data.connectable} />
+    <Handle type="source" position={across ? Position.Right : Position.Bottom} isConnectable={isConnectable} />
   </div>;
 }
 
@@ -54,6 +54,7 @@ export default function FlowCanvas({ flowId, preview }: { flowId: string; previe
   const { document, layout } = draft;
   const [dragging, setDragging] = useState<Record<string, Point>>({});
   const [note, setNote] = useState("");
+  const [measured, setMeasured] = useState<Record<string, { width: number; height: number }>>({});
   const interactive = !preview;
   const connectable = interactive && editable && !busy && !ui.pending;
   // The person's own placement stays on screen while it saves, awaits a retry, or waits for their conflict choice.
@@ -67,9 +68,9 @@ export default function FlowCanvas({ flowId, preview }: { flowId: string; previe
     const direction = preview?.direction ?? layout.directions[flowId] ?? "TB";
     return Object.values(document.nodes).filter((node) => node.flowId === flowId).map((node) => ({
       id: node.id, type: "step", position: preview?.positions[node.id] ?? dragging[node.id] ?? attempted[node.id] ?? { x: layout.positions[node.id]!.x, y: layout.positions[node.id]!.y },
-      data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction, connectable }, selected: selected.includes(node.id),
+      data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction }, selected: selected.includes(node.id), measured: measured[node.id],
     }));
-  }, [document, layout, flowId, ui.selection, connectable, preview, dragging, shown, interactive]);
+  }, [document, layout, flowId, ui.selection, preview, dragging, shown, interactive, measured]);
 
   const edges = useMemo<FlowEdge[]>(() => Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => ({
     id: edge.id, type: "flow", source: edge.fromId, target: edge.toId, data: { condition: edge.condition },
@@ -78,7 +79,19 @@ export default function FlowCanvas({ flowId, preview }: { flowId: string; previe
 
   const picks = (changes: (NodeChange<StepNode> | EdgeChange<FlowEdge>)[]): SelectChange[] =>
     changes.flatMap((change) => (change.type === "select" ? [{ id: change.id, selected: change.selected }] : []));
+  const measure = (changes: NodeChange<StepNode>[]) => setMeasured((current) => {
+    let next = current;
+    for (const change of changes) {
+      if (change.type !== "dimensions" || !change.dimensions) continue;
+      const previous = current[change.id];
+      if (previous?.width === change.dimensions.width && previous.height === change.dimensions.height) continue;
+      if (next === current) next = { ...current };
+      next[change.id] = change.dimensions;
+    }
+    return next;
+  });
   const onNodesChange = (changes: NodeChange<StepNode>[]) => {
+    measure(changes);
     const selection = picks(changes);
     if (selection.length) update((current) => ({ selection: selectNodes(current.selection, selection) }));
     // Only pointer drags move steps on screen; keyboard nudges (dragging: false) never become saves.
@@ -97,7 +110,8 @@ export default function FlowCanvas({ flowId, preview }: { flowId: string; previe
     if (selection.length) update((current) => ({ selection: selectEdge(current.selection, selection) }));
   };
   const connect = ({ source, target }: Connection) => {
-    if (source && target) void run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId: source, toId: target, condition: "" } });
+    if (!source || !target || !connectable) return;
+    void run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId: source, toId: target, condition: "" } });
   };
   const reconnect = async (edge: FlowEdge, { source, target }: Connection) => {
     if (!source || !target || !connectable) return;
@@ -121,7 +135,7 @@ export default function FlowCanvas({ flowId, preview }: { flowId: string; previe
 
   return <div className="canvas">
     <ReactFlow<StepNode, FlowEdge> key={preview ? `preview-${preview.direction}` : flowId} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
-      onNodesChange={interactive ? onNodesChange : undefined} onEdgesChange={interactive ? onEdgesChange : undefined}
+      onNodesChange={interactive ? onNodesChange : measure} onEdgesChange={interactive ? onEdgesChange : undefined}
       onNodeDoubleClick={interactive ? inspect : undefined} onNodeDragStop={interactive ? drop : undefined}
       onConnect={connect} onReconnect={reconnect} elementsSelectable={interactive}
       nodesDraggable={draggable} nodesConnectable={connectable} edgesReconnectable={connectable} deleteKeyCode={null}

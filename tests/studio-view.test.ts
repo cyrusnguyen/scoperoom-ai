@@ -27,7 +27,12 @@ function draft(nodes: [label: string, kind: NodeRecord["kind"], x: number, y: nu
 test("draft checks describe an incomplete flow without blocking it", () => {
   assert.deepEqual(graphWarnings(draft([]).document, flowId), []);
   const { document } = draft([["Ask", "DECISION", 0, 0], ["Yes", "ACTION", 0, 160], ["Alone", "ACTION", 200, 0]], [[1, 2]]);
-  assert.deepEqual(graphWarnings(document, flowId).map((warning) => warning.code), ["NO_START", "NO_OUTCOME", "UNCONNECTED_STEP", "UNCONNECTED_STEP", "UNCONNECTED_STEP", "UNLABELLED_BRANCH"]);
+  assert.deepEqual(graphWarnings(document, flowId), [
+    { code: "NO_START", targetId: flowId },
+    { code: "NO_OUTCOME", targetId: flowId },
+    { code: "UNCONNECTED_STEP", targetId: id(3) },
+    { code: "UNLABELLED_BRANCH", targetId: id(100) },
+  ]);
   const complete = draft([["Start", "START", 0, 0], ["Done", "OUTCOME", 0, 160]], [[1, 2]]);
   assert.deepEqual(graphWarnings(complete.document, flowId), []);
 });

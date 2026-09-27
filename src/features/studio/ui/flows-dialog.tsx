@@ -14,12 +14,15 @@ import { CommandRecovery, explain, formKeys, useCommandSubmit, useStudio, type R
 /** Header control naming the open flow; it opens the Flows dialog. Hidden until the project has a flow. */
 export function FlowSwitcher() {
   const { draft, ui } = useStudio();
-  const [open, setOpen] = useState(false);
   const flow = currentFlow(draft.document, ui.flowId);
-  if (!flow) return null;
+  return flow ? <FlowSwitcherControl title={flow.title} /> : null;
+}
+
+function FlowSwitcherControl({ title }: { title: string }) {
+  const [open, setOpen] = useState(false);
   return <>
-    <button type="button" className="button quiet small flow-switch" onClick={() => setOpen(true)} aria-haspopup="dialog" title={flow.title}>
-      <Icon name="flow" size={13} /><span>{flow.title}</span><Icon name="chevron" size={12} />
+    <button type="button" className="button quiet small flow-switch" onClick={() => setOpen(true)} aria-haspopup="dialog" title={title}>
+      <Icon name="flow" size={13} /><span>{title}</span><Icon name="chevron" size={12} />
     </button>
     {open && <FlowsDialog onClose={() => setOpen(false)} />}
   </>;

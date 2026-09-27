@@ -668,8 +668,6 @@ test.describe("Studio on a real draft", () => {
     await expect(saveButton(page)).toBeDisabled();
     await expect(page.locator(".studio-status")).toContainText("Unsaved changes");
     await expect(panel(page).getByLabel("To", { exact: true }).locator("option:checked")).toHaveText("Closed");
-    await panel(page).getByRole("button", { name: "Reconnect", exact: true }).click();
-    await expect(panel(page).getByRole("button", { name: "Apply my connection" })).toBeVisible();
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
     const reconnects: { key: string; body: string }[] = [];
@@ -678,7 +676,7 @@ test.describe("Studio on a real draft", () => {
       if (reconnects.length === 1) { await held; await route.fetch(); await route.abort("connectionreset"); }
       else await route.continue();
     });
-    await panel(page).getByRole("button", { name: "Apply my connection" }).click();
+    await panel(page).getByRole("button", { name: "Reconnect", exact: true }).click();
     await expect(page.locator(".studio-status")).toContainText("Saving");
     await panel(page).getByLabel("To", { exact: true }).selectOption({ label: "Reviewed" });
     release();
@@ -936,6 +934,20 @@ test.describe("Studio on a real draft", () => {
       await expect(page.locator(".studio-status")).toContainText("All changes saved");
       expect(writes).toBe(1);
     } finally { release(); }
+  });
+
+  test("a refused canvas connection reports failure in Studio status", async ({ page }) => {
+    await createFlowInUi(page, "Canvas connection");
+    await addStepInUi(page, "Start", "Start");
+    await addStepInUi(page, "End", "Outcome");
+    const draft = await draftOf(page, projectId);
+    const nodes = Object.fromEntries(Object.values(draft.document.nodes).map((node) => [node.label, node.id]));
+    await page.route("**/drafts/*/commands", (route) => route.fulfill({ status: 400, json: { error: { code: "INVALID_INPUT", message: "Connection refused" } } }));
+    await page.locator(`.react-flow__node[data-id="${nodes.Start}"] .react-flow__handle.source`).dragTo(
+      page.locator(`.react-flow__node[data-id="${nodes.End}"] .react-flow__handle.target`),
+    );
+    await expect(page.locator(".studio-status")).toContainText("Connection refused");
+    expect(Object.values((await draftOf(page, projectId)).document.edges)).toHaveLength(0);
   });
 
   test("a stale canvas reconnect retains mine and original for explicit inspector recovery", async ({ page }) => {

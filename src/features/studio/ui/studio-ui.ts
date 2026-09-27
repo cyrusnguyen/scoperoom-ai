@@ -66,7 +66,6 @@ export function studioDirtyCount(ui: StudioUi): number {
   return fields + (pending && !buffers.some((buffer) => buffer.sent && buffer.key === pending.key) ? 1 : 0);
 }
 
-
 /** Receipts prove both saved revisions even when their following read fails; older replays cannot lower the floor. */
 export function requireDraftRevision(floors: StudioUi["acknowledgedRevisions"], receipt: Pick<CommandResult, "draftId" | "documentRevision" | "layoutRevision">): StudioUi["acknowledgedRevisions"] {
   const previous = floors[receipt.draftId];
