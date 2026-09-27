@@ -42,6 +42,7 @@ export function anyDirty(store: UiStore): boolean {
   return Object.keys(store).some((projectId) => dirtyCount(store, projectId) > 0);
 }
 
+/** Discard local input only. A sent command may already have committed, so its receipt must remain recoverable. */
 export function discardDrafts(store: UiStore, projectId: string): UiStore {
   return { ...store, [projectId]: { ...uiFor(store, projectId), drafts: {}, buffers: {}, endpointBuffers: {} } };
 }

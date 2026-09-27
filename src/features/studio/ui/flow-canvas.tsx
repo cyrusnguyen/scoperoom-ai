@@ -7,9 +7,10 @@ import {
 } from "@xyflow/react";
 import type { Direction } from "@/features/drafts/contracts/draft-layout";
 import type { NodeKind } from "@/features/drafts/contracts/scope-document";
-import { KIND_LABELS } from "./fields";
+import { bufferKey, editFields, refuse, send, type Saved } from "./buffers";
+import { KIND_LABELS, reconnectCommand } from "./fields";
 import { useStudio } from "./studio-context";
-import { selectEdge, selectNodes, type SelectChange } from "./studio-ui";
+import { selectEdge, selectNodes, type SelectChange, type StudioUi } from "./studio-ui";
 
 type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction; connectable: boolean };
 type StepNode = Node<StepData, "step">;
@@ -47,7 +48,7 @@ const edgeTypes = { flow: FlowEdgeLine };
 export default function FlowCanvas({ flowId }: { flowId: string }) {
   const { draft, editable, busy, ui, update, run, inspect } = useStudio();
   const { document, layout } = draft;
-  const connectable = editable && !busy;
+  const connectable = editable && !busy && !ui.pending;
 
   const nodes = useMemo<StepNode[]>(() => {
     const selected = ui.selection?.kind === "NODES" ? ui.selection.ids : [];
@@ -76,8 +77,24 @@ export default function FlowCanvas({ flowId }: { flowId: string }) {
   const connect = ({ source, target }: Connection) => {
     if (source && target) void run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId: source, toId: target, condition: "" } });
   };
-  const reconnect = (edge: FlowEdge, { source, target }: Connection) => {
-    if (source && target) void run({ commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { edgeId: edge.id, fromId: source, toId: target } });
+  const reconnect = async (edge: FlowEdge, { source, target }: Connection) => {
+    if (!source || !target || !connectable) return;
+    const savedEdge = document.edges[edge.id];
+    if (!savedEdge) return;
+    const key = bufferKey("EDGE", edge.id);
+    const saved: Saved = { kind: "EDGE", id: edge.id, version: draft.documentRevision, fields: { fromId: savedEdge.fromId, toId: savedEdge.toId } };
+    const choose = (current: StudioUi) => editFields(current.endpointBuffers, saved, { fromId: source, toId: target });
+    const chosen = choose(ui)[key];
+    if (!chosen) return;
+    const requestKey = crypto.randomUUID();
+    update((current) => ({ endpointBuffers: chosen.conflict ? choose(current) : send(choose(current), key, requestKey), selection: { kind: "EDGE", id: edge.id } }));
+    // A second gesture can revise retained choices, but only the inspector can explicitly resolve a stale conflict.
+    if (chosen.conflict) { inspect(); return; }
+    const outcome = await run(reconnectCommand(edge.id, chosen.baseVersion, chosen.values), requestKey);
+    if (!outcome.ok) {
+      if (!outcome.uncertain) update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, outcome.code === "STALE_DOCUMENT_REVISION") }));
+      inspect();
+    }
   };
 
   return <div className="canvas">

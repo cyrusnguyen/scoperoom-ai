@@ -727,6 +727,92 @@ test.describe("Studio on a real draft", () => {
     expect(JSON.parse(requests[2]!.body).expectedDocumentRevision).toBe(before.documentRevision + 1);
   });
 
+  test("an uncertain List delete survives Stay, discard, project switch and exact receipt replay", async ({ page }) => {
+    const otherId = await createProjectViaApi(page, "Other project");
+    await page.reload();
+    await createFlowInUi(page, "Recovery");
+    await addStepInUi(page, "From", "Start");
+    await addStepInUi(page, "To", "Outcome");
+    let draft = await draftOf(page, projectId);
+    const nodes = Object.values(draft.document.nodes);
+    await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
+      payload: { flowId: nodes[0]!.flowId, fromId: nodes[0]!.id, toId: nodes[1]!.id, condition: "" } });
+    await page.reload();
+    await toolbar(page).getByRole("button", { name: "List" }).click();
+    const requests: { key: string; body: string }[] = [];
+    await page.route("**/drafts/*/commands", async (route) => {
+      requests.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
+      if (requests.length === 1) {
+        await route.fetch();
+        await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
+      } else await route.continue();
+    });
+    await page.getByRole("button", { name: /^Delete connection/ }).click();
+    await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toBeVisible();
+    const committed = await draftOf(page, projectId);
+    expect(Object.keys(committed.document.edges)).toHaveLength(0);
+    expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(true);
+    await page.locator("#projects-nav").getByRole("button", { name: "Other project", exact: true }).click();
+    const guard = modal(page, "Unsaved changes in Studio project");
+    await expect(guard).toContainText("unconfirmed change");
+    await guard.getByRole("button", { name: "Stay", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/app/projects/${projectId}$`));
+    await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toBeVisible();
+    await page.locator("#projects-nav").getByRole("button", { name: "Other project", exact: true }).click();
+    await guard.getByRole("button", { name: "Discard changes", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/app/projects/${otherId}$`));
+    await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toHaveCount(0);
+    await page.locator("#projects-nav").getByRole("button", { name: "Studio project", exact: true }).click();
+    await page.getByRole("button", { name: "Retry last change", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toHaveCount(0);
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
+    draft = await draftOf(page, projectId);
+    expect(draft.documentRevision).toBe(committed.documentRevision);
+    expect(Object.keys(draft.document.edges)).toHaveLength(0);
+    expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
+  });
+
+  test("a stale canvas reconnect retains mine and original for explicit inspector recovery", async ({ page }) => {
+    await createFlowInUi(page, "Canvas recovery");
+    await addStepInUi(page, "Start", "Start");
+    await addStepInUi(page, "Original");
+    await addStepInUi(page, "Mine");
+    await addStepInUi(page, "Remote");
+    let draft = await draftOf(page, projectId);
+    const nodes = Object.fromEntries(Object.values(draft.document.nodes).map((node) => [node.label, node.id]));
+    await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
+      payload: { flowId: Object.keys(draft.document.flows)[0]!, fromId: nodes.Start, toId: nodes.Original, condition: "" } });
+    await page.reload();
+    await expect(page.locator(".react-flow__edgeupdater-target")).toHaveCount(1);
+    draft = await draftOf(page, projectId);
+    const edge = Object.values(draft.document.edges)[0]!;
+    await command(page, projectId, draft.id, { command: "RECONNECT_EDGE", expectedDocumentRevision: draft.documentRevision,
+      payload: { edgeId: edge.id, fromId: nodes.Remote, toId: nodes.Original } });
+    const requests: Record<string, unknown>[] = [];
+    await page.route("**/drafts/*/commands", async (route) => { requests.push(route.request().postDataJSON()); await route.continue(); });
+    await page.locator(".react-flow__edgeupdater-target").dragTo(page.locator(`.react-flow__node[data-id="${nodes.Mine}"] .react-flow__handle.target`));
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0]).toMatchObject({ command: "RECONNECT_EDGE", expectedDocumentRevision: draft.documentRevision,
+      payload: { edgeId: edge.id, fromId: nodes.Start, toId: nodes.Mine } });
+    // Open through the normal inspector control if the stale gesture did not already open recovery.
+    await toolbar(page).getByRole("button", { name: "List" }).click();
+    await page.getByRole("list", { name: "Connections" }).getByRole("button", { name: /^Remote/ }).click();
+    if (!(await panel(page).isVisible())) await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    const conflict = panel(page).getByRole("alert");
+    await expect(conflict).toContainText("Saved connectionRemote");
+    await expect(conflict).toContainText("Your connectionStart");
+    await expect(conflict).toContainText("Before your editStart");
+    await expect(panel(page).getByLabel("To", { exact: true })).toHaveValue(nodes.Mine!);
+    expect(Object.values((await draftOf(page, projectId)).document.edges)[0]!.fromId).toBe(nodes.Remote);
+    expect(requests).toHaveLength(1);
+    await conflict.getByRole("button", { name: "Apply my connection", exact: true }).click();
+    await expect(page.getByRole("list", { name: "Connections" })).toContainText(/Start.*Mine/);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toMatchObject({ expectedDocumentRevision: draft.documentRevision + 1 });
+  });
+
   test("local Archive preserves typed Studio text for copying and explicit discard", async ({ page }) => {
     await createFlowInUi(page, "Review");
     await addStepInUi(page, "Keep", "Start");

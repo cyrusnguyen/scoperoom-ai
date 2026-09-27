@@ -266,8 +266,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     {dialog?.kind === "create" && <NewProjectDialog onClose={() => closeDialog()} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}
     {switchTarget && <Dialog title={`Unsaved changes in ${bootstrap?.project.name ?? "this project"}`} onClose={() => setDialog(null)} footer={<>
       <CancelFocus label="Stay" onClick={() => setDialog(null)} />
-      <button type="button" className="button danger" onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
-    </>}><p>{dirtyCount(store, projectId)} unsaved field(s).</p></Dialog>}
+      <button type="button" className="button danger" disabled={ui.pending?.inFlight} onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
+    </>}><p>{dirtyCount(store, projectId)} {ui.pending ? "unsaved edit(s) or unconfirmed change(s)." : "unsaved field(s)."}</p>{ui.pending && <p>The unconfirmed change will still be available to retry when you return. Discard only removes local edits; it cannot cancel a change already sent.</p>}</Dialog>}
     {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project}
       onClose={() => closeDialog(lifecycleDialog.project.id)} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}
   </div>;

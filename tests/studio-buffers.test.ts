@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acknowledge, changes, discard, edit, follow, isDirty, rebase, refuse, send, type Saved } from "../src/features/studio/ui/buffers.ts";
+import { acknowledge, changes, discard, edit, editFields, follow, isDirty, rebase, refuse, send, type Saved } from "../src/features/studio/ui/buffers.ts";
 
 const node: Saved = { kind: "NODE", id: "n1", version: 3, fields: { label: "Pay", description: "" } };
 const key = "NODE:n1";
@@ -57,4 +57,15 @@ test("own saves that advance another record move its buffer only when nothing el
   assert.equal(follow(buffers, { f1: 9 })["FLOW:f1"]!.baseVersion, 7, "someone else also changed it: the next save must conflict");
   const inFlight = send(buffers, "FLOW:f1", "request-1");
   assert.equal(follow(inFlight, { f1: 8 })["FLOW:f1"]!.baseVersion, 7, "a buffer in flight is settled by its own acknowledgement");
+});
+
+
+test("an endpoint pair changes atomically without dropping its captured revision between fields", () => {
+  const original: Saved = { kind: "EDGE", id: "e1", version: 7, fields: { fromId: "a", toId: "b" } };
+  const latest: Saved = { ...original, version: 8, fields: { fromId: "remote", toId: "b" } };
+  const first = edit({}, original, "fromId", "mine");
+  const next = editFields(first, latest, { fromId: "a", toId: "new-target" });
+  assert.equal(next["EDGE:e1"]!.baseVersion, 7);
+  assert.deepEqual(next["EDGE:e1"]!.original, original.fields);
+  assert.deepEqual(next["EDGE:e1"]!.values, { fromId: "a", toId: "new-target" });
 });

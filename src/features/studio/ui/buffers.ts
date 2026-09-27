@@ -43,9 +43,14 @@ function put(buffers: Buffers, buffer: EntityBuffer): Buffers {
 
 /** Records a typed value. The first edit captures the saved version and values; a buffer that matches them again disappears. */
 export function edit(buffers: Buffers, saved: Saved, field: string, value: string): Buffers {
+  return editFields(buffers, saved, { [field]: value });
+}
+
+/** A multi-field gesture is atomic: becoming briefly clean between fields must not recapture a newer base. */
+export function editFields(buffers: Buffers, saved: Saved, values: Fields): Buffers {
   const current = buffers[bufferKey(saved.kind, saved.id)]
     ?? { kind: saved.kind, id: saved.id, baseVersion: saved.version, original: saved.fields, values: { ...saved.fields }, sent: null, key: null, conflict: false };
-  return put(buffers, { ...current, values: { ...current.values, [field]: value } });
+  return put(buffers, { ...current, values: { ...current.values, ...values } });
 }
 
 /** Save pressed: remember what was sent and its key. An uncertain save retries exactly that request until it settles. */

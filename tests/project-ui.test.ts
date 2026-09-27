@@ -3,7 +3,7 @@ import test from "node:test";
 import { edit, send, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
-const closed = { rightOpen: false, rightMounted: false, drafts: {}, buffers: {}, endpointBuffers: {}, flowId: null, selection: null, view: null };
+const closed = { rightOpen: false, rightMounted: false, drafts: {}, pending: null, buffers: {}, endpointBuffers: {}, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("an unknown or absent project reads the closed default", () => {
@@ -72,4 +72,19 @@ test("endpoint choices count as unsaved and discard clears only their project", 
   assert.equal(dirtyCount(discarded, "a"), 0);
   assert.deepEqual(uiFor(discarded, "a").endpointBuffers, {});
   assert.equal(dirtyCount(discarded, "b"), 1);
+});
+
+
+test("an uncertain topology receipt guards navigation and survives explicit edit discard", () => {
+  const pending = { inFlight: false, draftId: "d1", key: "receipt-1", command: { commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: 3, payload: { edgeId: "e1" } } } as const;
+  let store = updateUi({}, "a", () => ({ pending }));
+  assert.equal(dirtyCount(store, "a"), 1);
+  assert.equal(anyDirty(store), true);
+  store = setDraft(store, "a", "name", "Local text");
+  const discarded = discardDrafts(store, "a");
+  assert.deepEqual(uiFor(discarded, "a").drafts, {});
+  assert.deepEqual(uiFor(discarded, "a").pending, pending);
+  assert.equal(dirtyCount(discarded, "a"), 1);
+  assert.equal(dirtyCount(discarded, "b"), 0);
+  assert.equal(anyDirty(updateUi(discarded, "a", () => ({ pending: null }))), false);
 });

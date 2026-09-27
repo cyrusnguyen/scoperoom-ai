@@ -1,3 +1,4 @@
+import type { GraphCommand } from "../../drafts/contracts/commands.ts";
 import type { DraftView } from "../../drafts/contracts/scope-document.ts";
 import { dirtyFields, isDirty, type Buffers } from "./buffers.ts";
 
@@ -5,9 +6,10 @@ import { dirtyFields, isDirty, type Buffers } from "./buffers.ts";
 // written to browser storage, and a project switch keeps it until the project is dropped or its edits discarded.
 export type Selection = { kind: "NODES"; ids: string[] } | { kind: "EDGE"; id: string } | { kind: "FLOW"; id: string } | null;
 export type StudioView = "canvas" | "list";
+export type PendingCommand = { draftId: string; command: GraphCommand; key: string; inFlight: boolean };
 // Endpoint buffers store document revisions in baseVersion and are sent only as RECONNECT_EDGE.
-export type StudioUi = { buffers: Buffers; endpointBuffers: Buffers; flowId: string | null; selection: Selection; view: StudioView | null };
-export const defaultStudioUi: StudioUi = { buffers: {}, endpointBuffers: {}, flowId: null, selection: null, view: null };
+export type StudioUi = { pending: PendingCommand | null; buffers: Buffers; endpointBuffers: Buffers; flowId: string | null; selection: Selection; view: StudioView | null };
+export const defaultStudioUi: StudioUi = { pending: null, buffers: {}, endpointBuffers: {}, flowId: null, selection: null, view: null };
 export type SelectChange = { id: string; selected: boolean };
 
 /** Folds React Flow node select/unselect changes into the selection. Edge or flow selections survive unselect-only batches. */
@@ -41,6 +43,9 @@ export function isNewer(candidate: DraftView, current: DraftView): boolean {
 
 /** Text edits and endpoint choices share leave-guard/status semantics, but use different commands. */
 export function studioDirtyCount(ui: StudioUi): number {
-  return [...Object.values(ui.buffers), ...Object.values(ui.endpointBuffers)]
-    .filter(isDirty).reduce((count, buffer) => count + Math.max(dirtyFields(buffer).length, 1), 0);
+  const buffers = [...Object.values(ui.buffers), ...Object.values(ui.endpointBuffers)];
+  const fields = buffers.filter(isDirty).reduce((count, buffer) => count + Math.max(dirtyFields(buffer).length, 1), 0);
+  // A topology command may have no text buffer; count its unresolved receipt until it settles.
+  const pending = ui.pending;
+  return fields + (pending && !buffers.some((buffer) => buffer.sent && buffer.key === pending.key) ? 1 : 0);
 }

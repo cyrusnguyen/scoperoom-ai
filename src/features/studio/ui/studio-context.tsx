@@ -8,7 +8,7 @@ import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
 import { acknowledge, follow, refuse } from "./buffers";
 import { reconnectCommand, updateCommand } from "./fields";
-import type { StudioUi } from "./studio-ui";
+import type { PendingCommand, StudioUi } from "./studio-ui";
 
 export type RunOutcome =
   | { ok: true; result: CommandResult }
@@ -39,8 +39,8 @@ export function useStudio(): Studio {
 const accessCodes = new Set(["FORBIDDEN", "CONFLICT", "NOT_FOUND", "DRAFT_REPLACED"]);
 
 /**
- * Commands and the authoritative draft for one open project. Keyed by project in the shell, so a switch drops its busy
- * state. The saved draft itself lives in the shell (`adopt` keeps only newer reads); typed text lives in `ui.buffers`.
+ * Commands for one open project. Buffers and unresolved receipts live in the shell per-project store, so remounting
+ * this provider cannot lose an exact retry. The saved draft also lives in the shell (`adopt` keeps only newer reads).
  */
 export function StudioProvider({ projectId, draft, role, archived, narrow, ui, update, adopt, onAccessChanged, onInspect, children }: {
   projectId: string; draft: DraftView; role: ProjectAccessRole; archived: boolean; narrow: boolean;
@@ -48,11 +48,15 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
   adopt: (view: DraftView) => void; onAccessChanged: () => void; onInspect: () => void; children: ReactNode;
 }) {
   const [busy, setBusy] = useState(false);
-  const [save, setSave] = useState<SaveState>({ state: "idle", message: "" });
+  const [save, setSave] = useState<SaveState>(ui.pending ? { state: "failed", message: "We could not confirm the last change. Retry it." } : { state: "idle", message: "" });
   const [refreshFailed, setRefreshFailed] = useState(false);
   const busyRef = useRef(false);
-  const pendingRef = useRef<{ command: GraphCommand; key: string } | null>(null);
-  const [pending, setPending] = useState<{ command: GraphCommand; key: string } | null>(null);
+  const pending = ui.pending;
+  const pendingRef = useRef(pending);
+  const setPending = useCallback((next: PendingCommand | null) => {
+    pendingRef.current = next;
+    update(() => ({ pending: next }));
+  }, [update]);
   const draftId = draft.id;
   const editable = !archived && (role === "OWNER" || role === "EDITOR");
 
@@ -75,6 +79,7 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
       return { ok: false, code: "UNCONFIRMED_CHANGE", message: "Retry the unconfirmed change before making another.", uncertain: false };
     }
     if (waiting) key = waiting.key;
+    const requestDraftId = waiting?.draftId ?? draftId;
     // A global retry can finish after the originating inspector unmounts. Settle only its exact sent request.
     const settleBuffers = (outcome: RunOutcome) => update((current) => {
       let buffers = current.buffers;
@@ -94,11 +99,11 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
     busyRef.current = true;
     setBusy(true);
     setSave({ state: "saving", message: "" });
+    setPending({ command, key, draftId: requestDraftId, inFlight: true });
     try {
-      const result = await apiMutate<CommandResult>(`/api/projects/${projectId}/drafts/${draftId}/commands`, key, command);
+      const result = await apiMutate<CommandResult>(`/api/projects/${projectId}/drafts/${requestDraftId}/commands`, key, command);
       if (sessionEnded(result)) return { ok: false, code: "UNAUTHENTICATED", message: "", uncertain: false };
       if (result.ok) {
-        pendingRef.current = null;
         setPending(null);
         await reload();
         setSave({ state: "saved", message: "" });
@@ -106,8 +111,7 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
         settleBuffers(outcome);
         return outcome;
       }
-      pendingRef.current = result.uncertain ? { command, key } : null;
-      setPending(pendingRef.current);
+      setPending(result.uncertain ? { command, key, draftId: requestDraftId, inFlight: false } : null);
       setSave({ state: "failed", message: result.uncertain ? "We couldn’t confirm the last change. Retry it." : result.message });
       if (accessCodes.has(result.code)) onAccessChanged();
       else if (!result.uncertain) await reload(); // a certain refusal (stale, invalid) often means newer saved data
@@ -118,9 +122,9 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
       busyRef.current = false;
       setBusy(false);
     }
-  }, [projectId, draftId, reload, onAccessChanged, editable, update]);
+  }, [projectId, draftId, reload, onAccessChanged, editable, update, setPending]);
 
-  const value = useMemo<Studio>(() => ({ projectId, draft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, reload, retry: pending ? () => run(pending.command, pending.key) : null, inspect: onInspect }),
+  const value = useMemo<Studio>(() => ({ projectId, draft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, reload, retry: pending && !pending.inFlight ? () => run(pending.command, pending.key) : null, inspect: onInspect }),
     [projectId, draft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, reload, pending, onInspect]);
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }
