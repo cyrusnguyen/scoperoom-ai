@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { Client } from "pg";
 import test from "node:test";
+import { parseCommandResult } from "../../src/features/drafts/contracts/commands.ts";
 import { dependencyPlan } from "../../src/features/drafts/domain/graph.ts";
-import { executeGraphCommand, getDraft } from "../../src/features/drafts/server/execute-command.ts";
+import { draftMutation, executeGraphCommand, getDraft } from "../../src/features/drafts/server/execute-command.ts";
 import { ProjectError } from "../../src/features/projects/server/errors.ts";
+import { recordEvent, requestHash } from "../../src/features/projects/server/access.ts";
 import { archiveProject, changeProjectMember, getProjectMembers, removeProjectMember } from "../../src/features/projects/server/management.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { canRun, withFixture, type Identity } from "./support/fixture.ts";
@@ -14,6 +17,27 @@ type Body = Record<string, unknown>;
 /** Sends one command as `who` with a fresh (or given) idempotency key. */
 const send = (who: Identity, projectId: string, draftId: string, body: Body, key = randomUUID()) =>
   executeGraphCommand(who, projectId, draftId, { commandSchemaVersion: 1, ...body, key });
+async function holdProjectLock(projectId: string) {
+  const holder = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
+  await holder.connect();
+  await holder.query("begin");
+  await holder.query("select id from app.project where id = $1 for update", [projectId]);
+  return holder;
+}
+
+async function waitForProjectLockWaiters(database: Client, expected: number) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const { rows: [row] } = await database.query<{ count: number }>(`
+      select count(*)::int as count from pg_stat_activity
+      where wait_event_type = 'Lock' and query like '%FROM app.project project%'`);
+    if (row!.count >= expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`Expected ${expected} command(s) waiting on the held project lock.`);
+}
+async function releaseHeldProjectLock(holder: Client) {
+  try { await holder.query("commit"); } finally { await holder.end(); }
+}
 
 /** A project whose draft holds one flow with the given steps, all created by `owner`. */
 async function seeded(project: (owner: Identity) => Promise<string>, owner: Identity, labels: string[]) {
@@ -65,25 +89,53 @@ test("cross-flow and dangling edges are refused with no write", { skip: !canRun 
 });
 
 test("concurrent saves to different nodes both persist; a stale same-node save is refused without overwriting", { skip: !canRun }, async () => {
-  await withFixture(async ({ user, project, join }) => {
+  await withFixture(async ({ user, project, join, database }) => {
     const owner = await user("Owner"); const editor = await user("Editor");
     const { projectId, draftId, nodeIds } = await seeded(project, owner, ["A", "B"]);
     await join(owner, projectId, editor);
     const label = (who: Identity, nodeId: string, text: string) => send(who, projectId, draftId, { command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId, label: text } });
-    await Promise.all([label(owner, nodeIds[0]!, "Owner's A"), label(editor, nodeIds[1]!, "Editor's B")]);
+    const independentStatusBefore = await getProjectStatus(owner, projectId);
+    const independentAuditsBefore = await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId]);
+    const independentReceiptsBefore = await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where scope_kind = 'PROJECT' and scope_id = $1", [projectId]);
+    let independentHolder = await holdProjectLock(projectId);
+    try {
+      const saves = Promise.all([label(owner, nodeIds[0]!, "Owner's A"), label(editor, nodeIds[1]!, "Editor's B")]);
+      await waitForProjectLockWaiters(database, 2);
+      await releaseHeldProjectLock(independentHolder); independentHolder = null!;
+      await saves;
+    } finally {
+      if (independentHolder) { await independentHolder.query("rollback"); await independentHolder.end(); }
+    }
     let draft = await getDraft(owner, projectId, draftId);
     assert.deepEqual(nodeIds.map((id) => draft.document.nodes[id]!.label), ["Owner's A", "Editor's B"]);
-
-    const race = await Promise.allSettled([
-      send(owner, projectId, draftId, { command: "UPDATE_NODE", expectedEntityVersion: 2, payload: { nodeId: nodeIds[0], label: "First" } }),
-      send(editor, projectId, draftId, { command: "UPDATE_NODE", expectedEntityVersion: 2, payload: { nodeId: nodeIds[0], label: "Second" } }),
-    ]);
+    assert.equal((await getProjectStatus(owner, projectId)).eventSequence, independentStatusBefore.eventSequence + 2);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId])).rows[0]!.count, independentAuditsBefore.rows[0]!.count + 2);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where scope_kind = 'PROJECT' and scope_id = $1", [projectId])).rows[0]!.count, independentReceiptsBefore.rows[0]!.count + 2);
+    const staleStatusBefore = await getProjectStatus(owner, projectId);
+    const staleAuditsBefore = await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId]);
+    const staleReceiptsBefore = await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where scope_kind = 'PROJECT' and scope_id = $1", [projectId]);
+    let staleHolder = await holdProjectLock(projectId);
+    let race: PromiseSettledResult<Awaited<ReturnType<typeof label>>>[];
+    try {
+      const pending = Promise.allSettled([
+        send(owner, projectId, draftId, { command: "UPDATE_NODE", expectedEntityVersion: 2, payload: { nodeId: nodeIds[0], label: "First" } }),
+        send(editor, projectId, draftId, { command: "UPDATE_NODE", expectedEntityVersion: 2, payload: { nodeId: nodeIds[0], label: "Second" } }),
+      ]);
+      await waitForProjectLockWaiters(database, 2);
+      await releaseHeldProjectLock(staleHolder); staleHolder = null!;
+      race = await pending;
+    } finally {
+      if (staleHolder) { await staleHolder.query("rollback"); await staleHolder.end(); }
+    }
     const won = race.findIndex((entry) => entry.status === "fulfilled");
     const lost = race[1 - won] as PromiseRejectedResult;
     assert(won >= 0 && code("STALE_ENTITY_VERSION")(lost.reason));
     assert.deepEqual((lost.reason as ProjectError).details, { entityId: nodeIds[0], currentVersion: 3 });
     draft = await getDraft(owner, projectId, draftId);
     assert.equal(draft.document.nodes[nodeIds[0]!]!.label, won === 0 ? "First" : "Second");
+    assert.equal((await getProjectStatus(owner, projectId)).eventSequence, staleStatusBefore.eventSequence + 1);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId])).rows[0]!.count, staleAuditsBefore.rows[0]!.count + 1);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where scope_kind = 'PROJECT' and scope_id = $1", [projectId])).rows[0]!.count, staleReceiptsBefore.rows[0]!.count + 1);
   });
 });
 
@@ -218,18 +270,33 @@ test("duplicating a flow saves fresh identities with copied positions", { skip: 
 });
 
 test("two topology commands at one revision: exactly one saves, the other is stale, nothing is half-applied", { skip: !canRun }, async () => {
-  await withFixture(async ({ user, project, join }) => {
+  await withFixture(async ({ user, project, join, database }) => {
     const owner = await user("Owner"); const editor = await user("Editor");
     const { projectId, draftId, flowId } = await seeded(project, owner, []);
     await join(owner, projectId, editor);
     const revision = (await getDraft(owner, projectId, draftId)).documentRevision;
     const add = (who: Identity, label: string) => send(who, projectId, draftId, { command: "ADD_NODE", expectedDocumentRevision: revision, payload: { flowId, kind: "ACTION", label, description: "", actorLabel: "" } });
-    const race = await Promise.allSettled([add(owner, "Owner step"), add(editor, "Editor step")]);
+    const topologyStatusBefore = await getProjectStatus(owner, projectId);
+    const topologyAuditsBefore = await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId]);
+    const topologyReceiptsBefore = await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where scope_kind = 'PROJECT' and scope_id = $1", [projectId]);
+    let topologyHolder = await holdProjectLock(projectId);
+    let race: PromiseSettledResult<Awaited<ReturnType<typeof add>>>[];
+    try {
+      const pending = Promise.allSettled([add(owner, "Owner step"), add(editor, "Editor step")]);
+      await waitForProjectLockWaiters(database, 2);
+      await releaseHeldProjectLock(topologyHolder); topologyHolder = null!;
+      race = await pending;
+    } finally {
+      if (topologyHolder) { await topologyHolder.query("rollback"); await topologyHolder.end(); }
+    }
     assert.equal(race.filter((entry) => entry.status === "fulfilled").length, 1);
     assert(code("STALE_DOCUMENT_REVISION")((race.find((entry) => entry.status === "rejected") as PromiseRejectedResult).reason));
     const draft = await getDraft(owner, projectId, draftId);
     assert.equal(Object.keys(draft.document.nodes).length, 1);
     assert.equal(Object.keys(draft.layout.positions).length, 1);
+    assert.equal((await getProjectStatus(owner, projectId)).eventSequence, topologyStatusBefore.eventSequence + 1);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId])).rows[0]!.count, topologyAuditsBefore.rows[0]!.count + 1);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where scope_kind = 'PROJECT' and scope_id = $1", [projectId])).rows[0]!.count, topologyReceiptsBefore.rows[0]!.count + 1);
   });
 });
 
@@ -260,5 +327,79 @@ test("event sequence exhaustion rejects before any draft, audit, or receipt writ
     assert.deepEqual([after.documentRevision, after.layoutRevision, after.document.nodes[nodeIds[0]!]!.label], [before.documentRevision, before.layoutRevision, "A"]);
     assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId])).rows[0]!.count, auditBefore.rows[0]!.count);
     assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where actor_id = $1", [await profileId(owner)])).rows[0]!.count, receiptsBefore.rows[0]!.count);
+  });
+});
+test("an invalid fresh result rolls back work, audit, and receipt", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database, profileId }) => {
+    const owner = await user();
+    const { projectId, draftId } = await seeded(project, owner, []);
+    const before = await getDraft(owner, projectId, draftId);
+    const profile = await profileId(owner);
+    const auditsBefore = await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId]);
+    const receiptsBefore = await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where actor_id = $1", [profile]);
+    const key = randomUUID();
+    await assert.rejects(
+      draftMutation(owner, projectId, draftId, key, "OVERSIZED_RESULT", requestHash("OVERSIZED_RESULT", { projectId, draftId }), parseCommandResult, async (tx, lockedProject, lockedDraft, actorId) => {
+        await tx.scopeDraft.update({ where: { id: lockedDraft.id }, data: { documentRevision: lockedDraft.documentRevision + 1 } });
+        await recordEvent(tx, lockedProject, actorId, "OVERSIZED_RESULT", [], {});
+        return { draftId: lockedDraft.id, documentRevision: lockedDraft.documentRevision + 1, layoutRevision: lockedDraft.layoutRevision, eventSequence: -1, createdIds: [], versions: {}, retiredIds: [] };
+      }),
+      code("UNAVAILABLE"),
+    );
+    const after = await getDraft(owner, projectId, draftId);
+    assert.deepEqual([after.documentRevision, after.layoutRevision], [before.documentRevision, before.layoutRevision]);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId])).rows[0]!.count, auditsBefore.rows[0]!.count);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where actor_id = $1", [profile])).rows[0]!.count, receiptsBefore.rows[0]!.count);
+  });
+});
+test("a command waiting on the project lock sees a committed downgrade before authoring", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, join, database, profileId }) => {
+    const owner = await user("Owner"); const editor = await user("Editor");
+    const { projectId, draftId, nodeIds } = await seeded(project, owner, ["A"]);
+    await join(owner, projectId, editor);
+    const editorId = await profileId(editor);
+    const before = await getDraft(owner, projectId, draftId);
+    const auditsBefore = await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId]);
+    const receiptsBefore = await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where actor_id = $1", [editorId]);
+    let holder = await holdProjectLock(projectId);
+    try {
+      const pending = assert.rejects(send(editor, projectId, draftId, { command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId: nodeIds[0], label: "Late editor" } }), code("FORBIDDEN"));
+      await waitForProjectLockWaiters(database, 1);
+      await holder.query("update app.project_membership set role = 'VIEWER' where project_id = $1 and profile_id = $2", [projectId, editorId]);
+      await releaseHeldProjectLock(holder); holder = null!;
+      await pending;
+    } finally {
+      if (holder) { await holder.query("rollback"); await holder.end(); }
+    }
+    assert.equal((await getDraft(owner, projectId, draftId)).document.nodes[nodeIds[0]!]!.label, before.document.nodes[nodeIds[0]!]!.label);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId])).rows[0]!.count, auditsBefore.rows[0]!.count);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where actor_id = $1", [editorId])).rows[0]!.count, receiptsBefore.rows[0]!.count);
+  });
+});
+
+test("a receipt retry waiting on the project lock sees a committed removal before replay", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, join, database, profileId }) => {
+    const owner = await user("Owner"); const editor = await user("Editor");
+    const { projectId, draftId, nodeIds } = await seeded(project, owner, ["A"]);
+    await join(owner, projectId, editor);
+    const editorId = await profileId(editor);
+    const key = randomUUID();
+    const body = { command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId: nodeIds[0], label: "Saved once" } };
+    await send(editor, projectId, draftId, body, key);
+    const auditsBefore = await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId]);
+    const receiptsBefore = await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where actor_id = $1", [editorId]);
+    let holder = await holdProjectLock(projectId);
+    try {
+      const pending = assert.rejects(send(editor, projectId, draftId, body, key), code("NOT_FOUND"));
+      await waitForProjectLockWaiters(database, 1);
+      await holder.query("update app.project_membership set active = false, version = version + 1, deactivated_sequence = 1 where project_id = $1 and profile_id = $2", [projectId, editorId]);
+      await releaseHeldProjectLock(holder); holder = null!;
+      await pending;
+    } finally {
+      if (holder) { await holder.query("rollback"); await holder.end(); }
+    }
+    assert.equal((await getDraft(owner, projectId, draftId)).document.nodes[nodeIds[0]!]!.label, "Saved once");
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId])).rows[0]!.count, auditsBefore.rows[0]!.count);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where actor_id = $1", [editorId])).rows[0]!.count, receiptsBefore.rows[0]!.count);
   });
 });

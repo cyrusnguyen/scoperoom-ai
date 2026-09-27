@@ -76,7 +76,7 @@ export async function draftMutation<T extends object>(
       if (role !== "OWNER" && role !== "EDITOR") throw new ProjectError("FORBIDDEN");
       requireActive(project);
       const draft = await lockDraft(tx, project, draftId);
-      const value = await work(tx, project, draft, profile.id);
+      const value = parseStored(await work(tx, project, draft, profile.id));
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, operation, hash, asJson(value));
       return { ...value, replayed: false };
     });
