@@ -170,6 +170,43 @@ test.describe("saved positions and arrangement", () => {
     expect((await draftOf(page, projectId)).layout.positions[start]).toEqual({ x: 50, y: 50, version: 5 });
   });
 
+  test("Arrange previews first, applies exactly the preview, and Cancel saves nothing", async ({ page }) => {
+    const toolbar = page.locator(".studio-toolbar");
+    const before = await draftOf(page, projectId);
+    await toolbar.getByRole("button", { name: "Arrange" }).click();
+    const dialog = page.getByRole("dialog", { name: "Arrange flow" });
+    await dialog.getByRole("button", { name: "Preview" }).click();
+    await expect(dialog.getByLabel("Arrangement preview")).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    expect((await draftOf(page, projectId)).layoutRevision).toBe(before.layoutRevision);
+
+    await toolbar.getByRole("button", { name: "Arrange" }).click();
+    await dialog.getByLabel("Direction").selectOption({ label: "Left to right" });
+    const previewed = page.waitForResponse((response) => response.url().endsWith("/arrangement-preview"));
+    await dialog.getByRole("button", { name: "Preview" }).click();
+    const preview = await (await previewed).json() as { positions: Record<string, { x: number; y: number }> };
+    await dialog.getByRole("button", { name: "Apply arrangement" }).click();
+    await expect(dialog).toBeHidden();
+    const after = await draftOf(page, projectId);
+    expect(after.layout.directions[seeded.flowId]).toBe("LR");
+    for (const nodeId of seeded.nodeIds) expect({ x: after.layout.positions[nodeId]!.x, y: after.layout.positions[nodeId]!.y }).toEqual(preview.positions[nodeId]);
+    expect(after.documentRevision).toBe(before.documentRevision);
+  });
+
+  test("an arrangement meets a newer move: Apply is refused and a new preview applies", async ({ page }) => {
+    await page.locator(".studio-toolbar").getByRole("button", { name: "Arrange" }).click();
+    const dialog = page.getByRole("dialog", { name: "Arrange flow" });
+    await dialog.getByRole("button", { name: "Preview" }).click();
+    await expect(dialog.getByRole("button", { name: "Apply arrangement" })).toBeVisible();
+    await moveViaApi(page, projectId, seeded, seeded.nodeIds[2]!, 640, 640);
+    await dialog.getByRole("button", { name: "Apply arrangement" }).click();
+    await expect(dialog.getByRole("alert")).toContainText("The flow changed since this preview");
+    await dialog.getByRole("button", { name: "Preview" }).click();
+    await dialog.getByRole("button", { name: "Apply arrangement" }).click();
+    await expect(dialog).toBeHidden();
+    expect((await draftOf(page, projectId)).layout.positions[seeded.nodeIds[2]!]).not.toEqual({ x: 640, y: 640, version: 2 });
+  });
+
   test("a pending move locks its steps; an unconfirmed move retries with the same key and saves once", async ({ page }) => {
     const [start, middle] = seeded.nodeIds;
     let release!: () => void;

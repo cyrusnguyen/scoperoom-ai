@@ -3,6 +3,7 @@
 import { useState, type KeyboardEvent } from "react";
 import { graphWarnings } from "@/features/drafts/domain/warnings";
 import { Icon } from "@/features/shell/ui/icon";
+import { ArrangeDialog } from "./arrange-dialog";
 import { INCLUSION_LABELS } from "./fields";
 import FlowCanvas from "./flow-canvas";
 import { FlowsDialog } from "./flows-dialog";
@@ -12,7 +13,7 @@ import { AddStepDialog, ConnectDialog, DeleteStepsDialog } from "./step-dialogs"
 import { CommandRecovery, useStudio } from "./studio-context";
 import { studioDirtyCount } from "./studio-ui";
 
-type StudioDialog = "add" | "connect" | "delete" | null;
+type StudioDialog = "add" | "connect" | "delete" | "arrange" | null;
 
 /** Delete and Backspace act on the graph only while focus is outside text controls and IME composition. */
 function typing(event: KeyboardEvent<HTMLElement>) {
@@ -53,6 +54,7 @@ export default function Studio() {
       {editable && <>
         <button type="button" className="button small" onClick={() => setDialog("add")} disabled={busy}><Icon name="plus" size={14} />Add step</button>
         <button type="button" className="button small" onClick={() => setDialog("connect")} disabled={busy || !stepCount}><Icon name="link" size={14} />Connect</button>
+        <button type="button" className="button quiet small" onClick={() => setDialog("arrange")} disabled={busy || !stepCount}><Icon name="grid" size={14} />Arrange</button>
       </>}
       <button type="button" className="button quiet small" onClick={showFlowDetails}>Flow details</button>
     </div>
@@ -63,6 +65,7 @@ export default function Studio() {
     <StudioStatus flowId={flow.id} />
     {editable && dialog === "add" && <AddStepDialog flowId={flow.id} onClose={() => setDialog(null)} onAdded={(nodeId) => { setDialog(null); update(() => ({ selection: { kind: "NODES", ids: [nodeId] } })); }} />}
     {editable && dialog === "connect" && <ConnectDialog flowId={flow.id} from={selectedSteps.length === 1 ? selectedSteps[0] : undefined} onClose={() => setDialog(null)} />}
+    {editable && dialog === "arrange" && <ArrangeDialog flowId={flow.id} onClose={() => setDialog(null)} />}
     {editable && dialog === "delete" && <DeleteStepsDialog flowId={flow.id} nodeIds={selectedSteps} onClose={() => setDialog(null)}
       onDeleted={() => { setDialog(null); update(() => ({ selection: null })); focusFlowTitle(); }} />}
   </section>{creation}</>;
