@@ -8,7 +8,7 @@ import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
 import { acknowledge, follow, refuse } from "./buffers";
 import { reconnectCommand, updateCommand } from "./fields";
-import type { SaveState, StudioUi } from "./studio-ui";
+import { afterDraftRead, requireDraftRevision, type SaveState, type StudioUi } from "./studio-ui";
 
 export type RunOutcome =
   | { ok: true; result: CommandResult }
@@ -57,7 +57,7 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
   const reload = useCallback(async () => {
     const result = await apiRead<DraftView>(`/api/projects/${projectId}/drafts/${draftId}`);
     if (sessionEnded(result)) return;
-    update(() => ({ refreshFailed: !result.ok }));
+    update((current) => result.ok ? afterDraftRead(current, result.data) : { refreshFailed: true });
     if (result.ok) adopt(result.data);
     else if (result.status === 404) onAccessChanged();
   }, [projectId, draftId, adopt, onAccessChanged, update]);
@@ -104,6 +104,7 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
       const result = await apiMutate<CommandResult>(`/api/projects/${projectId}/drafts/${requestDraftId}/commands`, key, command);
       if (sessionEnded(result)) return { ok: false, code: "UNAUTHENTICATED", message: "", uncertain: false };
       if (result.ok) {
+        update((current) => ({ acknowledgedRevisions: requireDraftRevision(current.acknowledgedRevisions, result.data) }));
         await reload();
         const outcome = { ok: true as const, result: result.data };
         settle(outcome);

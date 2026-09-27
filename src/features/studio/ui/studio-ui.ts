@@ -1,4 +1,4 @@
-import type { GraphCommand } from "../../drafts/contracts/commands.ts";
+import type { CommandResult, GraphCommand } from "../../drafts/contracts/commands.ts";
 import type { DraftView } from "../../drafts/contracts/scope-document.ts";
 import { dirtyFields, isDirty, type Buffers } from "./buffers.ts";
 
@@ -6,11 +6,12 @@ import { dirtyFields, isDirty, type Buffers } from "./buffers.ts";
 // written to browser storage, and a project switch keeps it until the project is dropped or its edits discarded.
 export type Selection = { kind: "NODES"; ids: string[] } | { kind: "EDGE"; id: string } | { kind: "FLOW"; id: string } | null;
 export type StudioView = "canvas" | "list";
+type RevisionFloor = Pick<DraftView, "documentRevision" | "layoutRevision">;
 export type SaveState = { state: "idle" | "saving" | "saved" | "failed"; message: string };
 export type PendingCommand = { draftId: string; command: GraphCommand; key: string; inFlight: boolean };
 // Endpoint buffers store document revisions in baseVersion and are sent only as RECONNECT_EDGE.
-export type StudioUi = { save: SaveState; refreshFailed: boolean; pending: PendingCommand | null; buffers: Buffers; endpointBuffers: Buffers; flowId: string | null; selection: Selection; view: StudioView | null };
-export const defaultStudioUi: StudioUi = { save: { state: "idle", message: "" }, refreshFailed: false, pending: null, buffers: {}, endpointBuffers: {}, flowId: null, selection: null, view: null };
+export type StudioUi = { acknowledgedRevisions: Record<string, RevisionFloor>; save: SaveState; refreshFailed: boolean; pending: PendingCommand | null; buffers: Buffers; endpointBuffers: Buffers; flowId: string | null; selection: Selection; view: StudioView | null };
+export const defaultStudioUi: StudioUi = { acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, pending: null, buffers: {}, endpointBuffers: {}, flowId: null, selection: null, view: null };
 export type SelectChange = { id: string; selected: boolean };
 
 /** Folds React Flow node select/unselect changes into the selection. Edge or flow selections survive unselect-only batches. */
@@ -49,4 +50,25 @@ export function studioDirtyCount(ui: StudioUi): number {
   // A topology command may have no text buffer; count its unresolved receipt until it settles.
   const pending = ui.pending;
   return fields + (pending && !buffers.some((buffer) => buffer.sent && buffer.key === pending.key) ? 1 : 0);
+}
+
+
+/** Receipts prove both saved revisions even when their following read fails; older replays cannot lower the floor. */
+export function requireDraftRevision(floors: StudioUi["acknowledgedRevisions"], receipt: Pick<CommandResult, "draftId" | "documentRevision" | "layoutRevision">): StudioUi["acknowledgedRevisions"] {
+  const previous = floors[receipt.draftId];
+  return { ...floors, [receipt.draftId]: {
+    documentRevision: Math.max(previous?.documentRevision ?? 0, receipt.documentRevision),
+    layoutRevision: Math.max(previous?.layoutRevision ?? 0, receipt.layoutRevision),
+  } };
+}
+
+/** Only a read covering every acknowledged revision can clear this draft's outstanding read failure/floor. */
+export function afterDraftRead(ui: StudioUi, view: Pick<DraftView, "id" | "documentRevision" | "layoutRevision">): Pick<StudioUi, "acknowledgedRevisions" | "refreshFailed"> {
+  const floor = ui.acknowledgedRevisions[view.id];
+  if (floor && (view.documentRevision < floor.documentRevision || view.layoutRevision < floor.layoutRevision)) {
+    return { acknowledgedRevisions: ui.acknowledgedRevisions, refreshFailed: true };
+  }
+  const acknowledgedRevisions = { ...ui.acknowledgedRevisions };
+  delete acknowledgedRevisions[view.id];
+  return { acknowledgedRevisions, refreshFailed: false };
 }

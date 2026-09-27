@@ -569,7 +569,7 @@ test.describe("Studio on a real draft", () => {
     expect((await draftOf(page, projectId)).document.nodes).toEqual({});
   });
 
-  test("switching projects with unsaved Studio text asks first, and Stay keeps the text", async ({ page }) => {
+  test("switching projects guards Studio edits and Discard clears a certain save failure", async ({ page }) => {
     await createProjectViaApi(page, "Other project");
     await page.reload();
     await createFlowInUi(page, "Intake");
@@ -584,6 +584,16 @@ test.describe("Studio on a real draft", () => {
     await expect(guard).toHaveCount(0);
     await expect(page).toHaveURL(new RegExp(`/app/projects/${projectId}$`));
     await expect(name).toHaveValue("Receive claim");
+    await page.route("**/drafts/*/commands", (route) => route.fulfill({ status: 400, json: { error: { code: "INVALID_INPUT", message: "Rejected Studio save" } } }));
+    await saveButton(page).click();
+    await expect(page.locator(".studio-status")).toContainText("Rejected Studio save");
+    await page.locator("#projects-nav").getByRole("button", { name: "Other project", exact: true }).click();
+    await guard.getByRole("button", { name: "Discard changes", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Other project" })).toBeVisible();
+    await page.locator("#projects-nav").getByRole("button", { name: "Studio project", exact: true }).click();
+    await expect(name).toHaveValue("Receive");
+    await expect(page.locator(".studio-status")).not.toContainText("Rejected Studio save");
+    await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toHaveCount(0);
   });
 
   test("deleting from the inspector returns keyboard focus to the surviving flow", async ({ page }) => {
@@ -839,6 +849,58 @@ test.describe("Studio on a real draft", () => {
       expect(saved.documentRevision).toBe(draft.documentRevision + 2);
       expect(Object.keys(saved.document.edges)).toHaveLength(0);
       expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
+    } finally { release(); }
+  });
+
+  test("a pre-command bootstrap and stale draft read cannot clear acknowledged refresh failure", async ({ page }) => {
+    await createFlowInUi(page, "Read ordering");
+    await addStepInUi(page, "Before", "Start");
+    await toolbar(page).getByRole("button", { name: "List" }).click();
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    await panel(page).getByRole("button", { name: /Project$/ }).click();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let captured = false;
+    let staleDraft!: DraftView;
+    await page.route(`**/projects/${projectId}/bootstrap`, async (route) => {
+      const response = await route.fetch();
+      staleDraft = (await response.json() as { draft: DraftView }).draft;
+      captured = true;
+      await held;
+      await route.fulfill({ response });
+    });
+    let mode: "failed" | "stale" | "fresh" = "failed";
+    let writes = 0;
+    await page.route("**/drafts/*/commands", async (route) => { writes += 1; await route.continue(); });
+    try {
+      await panel(page).getByLabel("Project name").fill("Metadata reread");
+      await saveButton(page).click();
+      await expect.poll(() => captured).toBe(true);
+      await page.route(`**/drafts/${staleDraft.id}`, async (route) => {
+        if (mode === "failed") await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Read unavailable" } } });
+        else if (mode === "stale") await route.fulfill({ json: staleDraft });
+        else await route.continue();
+      });
+      await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Before/ }).click();
+      await panel(page).getByLabel("Name", { exact: true }).fill("After");
+      await saveButton(page).click();
+      await expect(page.locator(".studio-status")).toContainText("Change saved. The latest draft could not load.");
+      release();
+      await expect(page.getByRole("heading", { level: 1, name: "Metadata reread" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Retry read", exact: true })).toBeVisible();
+      await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
+      mode = "stale";
+      const staleRead = page.waitForResponse((response) => response.url().endsWith(`/drafts/${staleDraft.id}`));
+      await page.getByRole("button", { name: "Retry read", exact: true }).click();
+      await staleRead;
+      await expect(page.getByRole("button", { name: "Retry read", exact: true })).toBeVisible();
+      await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
+      mode = "fresh";
+      await page.getByRole("button", { name: "Retry read", exact: true }).click();
+      await expect(page.getByRole("list", { name: "Steps" })).toContainText("After");
+      await expect(page.getByRole("button", { name: "Retry read", exact: true })).toHaveCount(0);
+      await expect(page.locator(".studio-status")).toContainText("All changes saved");
+      expect(writes).toBe(1);
     } finally { release(); }
   });
 

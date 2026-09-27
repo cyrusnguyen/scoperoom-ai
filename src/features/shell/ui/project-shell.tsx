@@ -11,7 +11,7 @@ import { expiryLabel } from "@/features/projects/ui/format";
 import ProjectDetails from "@/features/projects/ui/project-details";
 import Inspector from "@/features/studio/ui/inspector";
 import { StudioProvider } from "@/features/studio/ui/studio-context";
-import { isNewer, type StudioUi } from "@/features/studio/ui/studio-ui";
+import { afterDraftRead, isNewer, type StudioUi } from "@/features/studio/ui/studio-ui";
 import Dialog, { CancelFocus } from "./dialog";
 import { resolveDock } from "./dock";
 import LifecycleDialog, { type LifecycleKind } from "./lifecycle-dialog";
@@ -98,7 +98,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (id !== projectIdRef.current) return;
     if (result.ok) {
       setOpened((previous) => ({ projectId: id, bootstrap: keepNewerDraft(result.data, previous) }));
-      setStore((previous) => updateUi(previous, id, () => ({ refreshFailed: false })));
+      setStore((previous) => updateUi(previous, id, (current) => afterDraftRead(current, result.data.draft)));
     }
     else if (result.status === 404) { setOpened({ projectId: id, missing: true }); setStore((previous) => dropProject(previous, id)); }
     else setOpened({ projectId: id, error: result.message });

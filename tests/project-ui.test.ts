@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { edit, send, type Saved } from "../src/features/studio/ui/buffers.ts";
+import { afterDraftRead, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
 import { anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
-const closed = { save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, pending: null, buffers: {}, endpointBuffers: {}, flowId: null, selection: null, view: null };
+const closed = { acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, pending: null, buffers: {}, endpointBuffers: {}, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("an unknown or absent project reads the closed default", () => {
@@ -87,4 +88,31 @@ test("an uncertain topology receipt guards navigation and survives explicit edit
   assert.equal(dirtyCount(discarded, "a"), 1);
   assert.equal(dirtyCount(discarded, "b"), 0);
   assert.equal(anyDirty(updateUi(discarded, "a", () => ({ pending: null }))), false);
+});
+
+
+test("discard clears a certain command failure but preserves an unresolved receipt's status", () => {
+  const failed = { state: "failed", message: "Command refused" } as const;
+  const clean = discardDrafts(updateUi({}, "a", () => ({ save: failed })), "a");
+  assert.deepEqual(uiFor(clean, "a").save, { state: "idle", message: "" });
+  const pending = { inFlight: false, draftId: "d1", key: "receipt-1", command: { commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: 3, payload: { edgeId: "e1" } } } as const;
+  const unresolved = discardDrafts(updateUi({}, "a", () => ({ save: failed, pending })), "a");
+  assert.deepEqual(uiFor(unresolved, "a").save, failed);
+  assert.deepEqual(uiFor(unresolved, "a").pending, pending);
+});
+
+
+test("reads must cover both acknowledged revision floors and clear only the qualifying draft", () => {
+  let floors = requireDraftRevision({}, { draftId: "d1", documentRevision: 5, layoutRevision: 7 });
+  floors = requireDraftRevision(floors, { draftId: "d1", documentRevision: 4, layoutRevision: 6 });
+  floors = requireDraftRevision(floors, { draftId: "d2", documentRevision: 3, layoutRevision: 2 });
+  assert.deepEqual(floors.d1, { documentRevision: 5, layoutRevision: 7 }, "replayed older receipts never lower either floor");
+  const ui = { ...defaultUi, acknowledgedRevisions: floors, refreshFailed: true };
+  for (const view of [{ id: "d1", documentRevision: 4, layoutRevision: 7 }, { id: "d1", documentRevision: 5, layoutRevision: 6 }]) {
+    assert.deepEqual(afterDraftRead(ui, view), { acknowledgedRevisions: floors, refreshFailed: true });
+  }
+  const read = afterDraftRead(ui, { id: "d1", documentRevision: 5, layoutRevision: 7 });
+  assert.equal(read.refreshFailed, false);
+  assert.deepEqual(read.acknowledgedRevisions, { d2: floors.d2 });
+  assert.deepEqual(ui.acknowledgedRevisions, floors, "the original per-project state is immutable");
 });
