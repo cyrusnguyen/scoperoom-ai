@@ -22,7 +22,7 @@ export type ProjectStatusView = {
 
 export const PROJECT_LIST_LIMIT = 100;
 export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const keyPattern = /^[\x21-\x7e]{16,128}$/;
+export const keyPattern = /^[\x21-\x7e]{16,128}$/;
 
 function invalidInput(): never {
   throw new Error("INVALID_INPUT");

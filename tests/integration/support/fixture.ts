@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { createClient } from "@supabase/supabase-js";
+import { acceptInvitation, issueInvitation } from "../../../src/features/projects/server/invitations.ts";
 import { createProject, listProjects } from "../../../src/features/projects/server/projects.ts";
 import { requireEnv } from "../../support/env.ts";
 
@@ -13,6 +14,8 @@ export type Fixture = {
   profileId: (identity: Identity) => Promise<string>;
   entitle: (identity: Identity, maxOwnedProjects?: number) => Promise<void>;
   project: (owner: Identity, name?: string) => Promise<string>;
+  /** Invites `member` with `role` and accepts through the real services. */
+  join: (owner: Identity, projectId: string, member: Identity, role?: "EDITOR" | "REVIEWER" | "VIEWER") => Promise<void>;
 };
 
 export async function withFixture(run: (fixture: Fixture) => Promise<void>) {
@@ -48,6 +51,10 @@ export async function withFixture(run: (fixture: Fixture) => Promise<void>) {
         const { rows: [entitled] } = await database.query<{ count: number }>("select count(*)::int as count from app.pilot_entitlement where profile_id = $1", [await profileId(owner)]);
         if (!entitled!.count) await entitle(owner);
         return (await createProject(owner, { name, key: randomUUID() })).id;
+      },
+      join: async (owner, projectId, member, role = "EDITOR") => {
+        const issued = await issueInvitation(owner, projectId, { verifiedEmail: member.verifiedEmail, role, key: randomUUID() });
+        await acceptInvitation(member, { token: issued.url!.split("/").at(-1)!, key: randomUUID() });
       },
     });
   } finally {

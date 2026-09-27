@@ -18,6 +18,7 @@ The [tracker](progress-tracker.md) distinguishes planned architecture from obser
 
 - `src/app`: thin Next routes and authorized server composition; one active App Router root.
 - `src/features/<feature>/{contracts,domain,server,ui}`: keep related changes together.
+- `src/features/drafts`: saved document/layout contracts, pure graph transforms and the command dispatcher; manual graph writes pass through the dispatcher.
 - `src/client`: shared browser transport/auth/providers; feature hooks stay with their UI.
 - `src/features/shell/ui` (the `/app` shell), `src/client` (browser fetch helper) and `src/styles/tokens.css`: shared presentation and tokens with safe props.
 - `src/contracts`: runtime-neutral common wire schemas.
@@ -25,7 +26,7 @@ The [tracker](progress-tracker.md) distinguishes planned architecture from obser
 - `src/trigger`: thin durable tasks; feature services stay usable without Next request state.
 - Root configs, `.github/workflows`, `scripts`, `prisma`, `supabase` and optional Dockerfile: development/deployment tooling, outside application source.
 
-UI may render on the server; browser helpers are not a home for every component. Enforce resolved imports against secret leaks and worker→Next coupling. Install packages/create folders with actual consumers. [Full source map](../../.codex/docs/implementation/v1.5/02-architecture-and-agent-playbook.md#source-layout-and-runtime-boundaries).
+UI may render on the server; browser helpers are not a home for every component. Enforce resolved imports against secret leaks and worker→Next coupling. Install packages/create folders with actual consumers. [Full source map](../../.codex/docs/implementation/v1.6/02-architecture-and-agent-playbook.md#source-layout-and-runtime-boundaries).
 
 ## Invariants
 
@@ -37,5 +38,5 @@ Freeze copies an exact saved candidate. Publication advances the baseline while 
 
 Every protected read/write checks current access. Matching safe receipts replay before new-operation capability/version checks. AI stores exact input and durable intent, uses bounded fenced attempts and produces one reviewed application; it never approves.
 
-Vercel owns native web deployments; GitHub checks gate production and pair compatible schema/workers. [Release](../../.codex/docs/implementation/v1.5/delivery/03-ci-cd-and-release.md) and [data contracts](../../.codex/docs/implementation/v1.5/data/01-relational-model.md) own details.
+Vercel owns native web deployments; GitHub checks gate production and pair compatible schema/workers. [Release](../../.codex/docs/implementation/v1.6/delivery/03-ci-cd-and-release.md) and [data contracts](../../.codex/docs/implementation/v1.6/data/01-relational-model.md) own details.
 

@@ -19,5 +19,5 @@ Initial use is personal/demo with synthetic data and invited users. Project crea
 
 Success means independent users complete both workflow-first and scope-first journeys, acknowledged work survives refresh, exact approval retains newer draft changes, stale/unauthorized writes fail safely and each exposed interaction is accessible. Examples describe intended checks; they are not executed implementation tests.
 
-Detailed scope and all acceptance cases: [specification](../../.codex/docs/implementation/v1.5/PROJECT-SPEC.md), [decisions](../../.codex/docs/implementation/v1.5/01-requirements-and-decisions.md), [stage plan](../../.codex/docs/implementation/v1.5/README.md).
+Detailed scope and all acceptance cases: [specification](../../.codex/docs/implementation/v1.6/PROJECT-SPEC.md), [decisions](../../.codex/docs/implementation/v1.6/01-requirements-and-decisions.md), [stage plan](../../.codex/docs/implementation/v1.6/README.md).
 

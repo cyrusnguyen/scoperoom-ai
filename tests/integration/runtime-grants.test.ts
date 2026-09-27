@@ -35,3 +35,19 @@ test("runtime roles cannot change project ownership or identity columns", { skip
     await admin.end();
   }
 });
+
+test("the web runtime may update only draft content, positions and their revisions; the worker none", { skip: !canRun }, async () => {
+  const admin = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
+  await admin.connect();
+  try {
+    const { rows } = await admin.query<{ role: string; col: string }>(`
+      select r.role, c.col
+      from (values ('app_web'), ('app_worker')) as r(role)
+      cross join (select attname::text as col from pg_attribute where attrelid = 'app.scope_draft'::regclass and attnum > 0 and not attisdropped) as c
+      where has_column_privilege(r.role, 'app.scope_draft', c.col, 'UPDATE')
+      order by r.role, c.col`);
+    assert.deepEqual(rows, ["document_json", "document_revision", "layout_json", "layout_revision", "updated_at"].map((col) => ({ role: "app_web", col })));
+  } finally {
+    await admin.end();
+  }
+});

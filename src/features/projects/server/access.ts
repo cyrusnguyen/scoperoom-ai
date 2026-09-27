@@ -27,7 +27,7 @@ export type ProjectRow = {
 type RawProject = {
   id: string; owner_id: string; name: string; status: string; version: number; settings_version: number;
   approval_policy_version: number; membership_version: number; designated_approver_id: string | null;
-  current_draft_id: string | null; realtime_epoch: string; event_sequence: bigint; role: string | null;
+  current_draft_id: string | null; realtime_epoch: string; event_sequence: bigint;
 };
 
 export function requestHash(operation: string, input: unknown) {
@@ -65,22 +65,30 @@ export async function lockActor(tx: Transaction, profileId: string, authUserId: 
   if (rows.length !== 1) throw new ProjectError("FORBIDDEN");
 }
 
-function projectQuery(profileId: string, projectId: string, lock: boolean) {
+function projectQuery(projectId: string, lock: boolean) {
   return Prisma.sql`
     SELECT project.id, project.owner_id, project.name, project.status::text AS status, project.version, project.settings_version,
       project.approval_policy_version, project.membership_version, project.designated_approver_id, project.current_draft_id,
-      project.realtime_epoch::text AS realtime_epoch, project.event_sequence,
-      CASE WHEN project.owner_id = ${profileId}::uuid THEN 'OWNER' ELSE membership.role::text END AS role
+      project.realtime_epoch::text AS realtime_epoch, project.event_sequence
     FROM app.project project
-    LEFT JOIN app.project_membership membership
-      ON membership.project_id = project.id AND membership.profile_id = ${profileId}::uuid AND membership.active
     WHERE project.id = ${projectId}::uuid AND project.status IN ('ACTIVE'::app.project_status, 'ARCHIVED'::app.project_status)
     ${lock ? Prisma.sql`FOR UPDATE OF project` : Prisma.empty}`;
 }
 
-function toProjectRow(row: RawProject | undefined): ProjectRow {
+function accessRole(role: string | undefined): ProjectAccessRole | null {
+  return role === "OWNER" || role === "EDITOR" || role === "REVIEWER" || role === "VIEWER" ? role : null;
+}
+
+async function projectRole(tx: Transaction, project: Pick<ProjectRow, "id" | "ownerId">, profileId: string): Promise<ProjectAccessRole | null> {
+  if (project.ownerId === profileId) return "OWNER";
+  const [membership] = await tx.$queryRaw<{ role: string }[]>`
+    SELECT role::text AS role FROM app.project_membership
+    WHERE project_id = ${project.id}::uuid AND profile_id = ${profileId}::uuid AND active`;
+  return accessRole(membership?.role);
+}
+
+function toProjectRow(row: RawProject | undefined, role: ProjectAccessRole | null): ProjectRow {
   if (!row || (row.status !== "ACTIVE" && row.status !== "ARCHIVED")) throw new ProjectError("NOT_FOUND");
-  const role = row.role === "OWNER" || row.role === "EDITOR" || row.role === "REVIEWER" || row.role === "VIEWER" ? row.role : null;
   return {
     id: row.id, ownerId: row.owner_id, name: row.name, status: row.status, version: row.version, settingsVersion: row.settings_version,
     approvalPolicyVersion: row.approval_policy_version, membershipVersion: row.membership_version, designatedApproverId: row.designated_approver_id,
@@ -90,12 +98,14 @@ function toProjectRow(row: RawProject | undefined): ProjectRow {
 
 /** Reads the project and the caller's role without row locks (read snapshots, and before a capacity lock). */
 export async function readProject(tx: Transaction, profileId: string, projectId: string) {
-  return toProjectRow((await tx.$queryRaw<RawProject[]>(projectQuery(profileId, projectId, false)))[0]);
+  const project = toProjectRow((await tx.$queryRaw<RawProject[]>(projectQuery(projectId, false)))[0], null);
+  return { ...project, role: await projectRole(tx, project, profileId) };
 }
 
-/** Lock order 3: the project row, for mutations only. */
+/** Lock order 3: first lock the project, then read membership in a fresh READ COMMITTED statement. */
 export async function lockProject(tx: Transaction, profileId: string, projectId: string) {
-  return toProjectRow((await tx.$queryRaw<RawProject[]>(projectQuery(profileId, projectId, true)))[0]);
+  const project = toProjectRow((await tx.$queryRaw<RawProject[]>(projectQuery(projectId, true)))[0], null);
+  return { ...project, role: await projectRole(tx, project, profileId) };
 }
 
 /** Lock order 2: the owner capacity guard shared by project creation and restore. Operators lock the same row. */
@@ -130,6 +140,7 @@ export function requireActive(project: ProjectRow) {
 
 /** Assigns the next per-project event sequence (under the project lock) and writes its audit event. */
 export async function recordEvent(tx: Transaction, project: Pick<ProjectRow, "id" | "eventSequence">, actorId: string, action: string, entityRefs: Prisma.InputJsonValue, metadata: Prisma.InputJsonValue) {
+  if (project.eventSequence >= BigInt(Number.MAX_SAFE_INTEGER)) throw new ProjectError("VERSION_EXHAUSTED");
   const sequence = project.eventSequence + BigInt(1);
   await tx.$executeRaw`UPDATE app.project SET event_sequence = ${sequence}::bigint, updated_at = CURRENT_TIMESTAMP WHERE id = ${project.id}::uuid`;
   await tx.auditEvent.create({ data: { projectId: project.id, sequence, actorId, action, entityRefs, metadata } });
