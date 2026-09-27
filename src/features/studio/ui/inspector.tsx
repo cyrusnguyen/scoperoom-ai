@@ -188,25 +188,39 @@ function ManySteps({ ids }: { ids: string[] }) {
 
 /** Reconnect guards the document revision (topology), so it is a separate action from editing the condition text. */
 function Endpoints({ edge }: { edge: EdgeRecord }) {
-  const { draft, editable, busy, ui, update } = useStudio();
+  const { draft, editable, busy, ui, update, refreshFailed } = useStudio();
   const submitCommand = useCommandSubmit();
   const key = bufferKey("EDGE", edge.id);
   const saved: Saved = { kind: "EDGE", id: edge.id, version: draft.documentRevision, fields: { fromId: edge.fromId, toId: edge.toId } };
   const buffer = ui.endpointBuffers[key];
-  const values = buffer ? { ...saved.fields, ...changes(buffer) } : saved.fields;
+  const values = buffer?.values ?? saved.fields;
   const [message, setMessage] = useState("");
   const steps = Object.values(draft.document.nodes).filter((node) => node.flowId === edge.flowId);
-  const reconnect = async (event: SubmitEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (busy || !editable || !buffer) return;
-    const target = buffer.sent ? buffer : rebase(ui.endpointBuffers, saved)[key];
-    if (!target) { update((current) => ({ endpointBuffers: rebase(current.endpointBuffers, saved) })); setMessage("Endpoints already match the saved connection."); return; }
+  const submit = async (target: EntityBuffer) => {
+    if (busy || !editable || target.conflict) return;
     const requestKey = target.key ?? crypto.randomUUID();
-    if (!target.sent) update((current) => ({ endpointBuffers: send(rebase(current.endpointBuffers, saved), key, requestKey) }));
+    if (!target.sent) update((current) => ({ endpointBuffers: send(current.endpointBuffers, key, requestKey) }));
     const fields = target.sent ? { ...target.original, ...target.sent } : target.values;
     const outcome = await submitCommand(reconnectCommand(edge.id, target.baseVersion, fields), requestKey);
-    if (!outcome.ok && !outcome.uncertain) update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, false) }));
-    setMessage(outcome.ok ? "Connection moved." : outcome.uncertain ? "" : explain(outcome));
+    if (!outcome.ok && !outcome.uncertain) update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, outcome.code === "STALE_DOCUMENT_REVISION") }));
+    setMessage(outcome.ok ? "Connection moved." : outcome.uncertain || outcome.code === "STALE_DOCUMENT_REVISION" ? "" : explain(outcome));
+  };
+  const reconnect = (event: SubmitEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (buffer) void submit(buffer);
+  };
+  const keepSaved = () => { update((current) => ({ endpointBuffers: discard(current.endpointBuffers, key) })); setMessage(""); };
+  const applyMine = () => {
+    if (!buffer?.conflict || busy || !editable || refreshFailed || saved.version <= buffer.baseVersion) return;
+    // This deliberate action is the only rebase. Keep the whole chosen pair, including its unchanged endpoint.
+    if (buffer.values.fromId === saved.fields.fromId && buffer.values.toId === saved.fields.toId) { keepSaved(); return; }
+    const target = { ...buffer, baseVersion: saved.version, original: saved.fields, conflict: false };
+    update((current) => ({ endpointBuffers: { ...current.endpointBuffers, [key]: target } }));
+    void submit(target);
+  };
+  const copyMine = async () => {
+    try { await navigator.clipboard.writeText(endpointText(values)); setMessage("Copied your connection."); }
+    catch { setMessage("Copy failed. Select the connection text instead."); }
   };
   const remove = async () => {
     if (busy || !editable) return;
@@ -227,12 +241,23 @@ function Endpoints({ edge }: { edge: EdgeRecord }) {
   </div>;
   return <section className="detail-section" aria-labelledby="inspector-ends">
     <h3 id="inspector-ends">Endpoints</h3>
+    {buffer?.conflict && <div className="inline-note" role="alert">
+      <p>The flow changed while you were working. Your connection is kept; nothing was overwritten.</p>
+      <dl className="conflict-list">{[
+        { label: "Saved connection", fields: saved.fields }, { label: "Your connection", fields: buffer.values }, { label: "Before your edit", fields: buffer.original },
+      ].map(({ label, fields }) => <div key={label}><dt>{label}</dt><dd>{stepName(draft.document, fields.fromId!)} {"\u2192"} {stepName(draft.document, fields.toId!)}</dd></div>)}</dl>
+      <div className="view-actions">
+        <button type="button" className="button primary small" onClick={applyMine} disabled={busy || refreshFailed || saved.version <= buffer.baseVersion}>Apply my connection</button>
+        <button type="button" className="button small" onClick={keepSaved} disabled={busy}>Keep saved connection</button>
+        <button type="button" className="button quiet small" onClick={() => void copyMine()}>Copy my connection</button>
+      </div>
+    </div>}
     <form onSubmit={reconnect} onKeyDown={formKeys}>
       {picker("fromId", "From")}
       {picker("toId", "To")}
       <div className="view-actions">
-        <button type="submit" className="button small" disabled={busy || !buffer}>{buffer?.sent ? "Retry reconnect" : "Reconnect"}</button>
-        {buffer && <button type="button" className="button quiet small" disabled={busy || Boolean(buffer.sent)} onClick={() => update((current) => ({ endpointBuffers: discard(current.endpointBuffers, key) }))}>Discard endpoint changes</button>}
+        <button type="submit" className="button small" disabled={busy || !buffer || buffer.conflict}>{buffer?.sent ? "Retry reconnect" : "Reconnect"}</button>
+        {buffer && !buffer.conflict && <button type="button" className="button quiet small" disabled={busy || Boolean(buffer.sent)} onClick={keepSaved}>Discard endpoint changes</button>}
         <button type="button" className="button danger small" onClick={() => void remove()} disabled={busy}>Delete connection</button>
       </div>
     </form>

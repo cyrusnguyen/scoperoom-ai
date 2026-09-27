@@ -624,6 +624,8 @@ test.describe("Studio on a real draft", () => {
     await expect(saveButton(page)).toBeDisabled();
     await expect(page.locator(".studio-status")).toContainText("Unsaved changes");
     await expect(panel(page).getByLabel("To", { exact: true }).locator("option:checked")).toHaveText("Closed");
+    await panel(page).getByRole("button", { name: "Reconnect", exact: true }).click();
+    await expect(panel(page).getByRole("button", { name: "Apply my connection" })).toBeVisible();
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
     const reconnects: { key: string; body: string }[] = [];
@@ -632,7 +634,7 @@ test.describe("Studio on a real draft", () => {
       if (reconnects.length === 1) { await held; await route.fetch(); await route.abort("connectionreset"); }
       else await route.continue();
     });
-    await panel(page).getByRole("button", { name: "Reconnect" }).click();
+    await panel(page).getByRole("button", { name: "Apply my connection" }).click();
     await expect(page.locator(".studio-status")).toContainText("Saving");
     await panel(page).getByLabel("To", { exact: true }).selectOption({ label: "Reviewed" });
     release();
@@ -658,6 +660,71 @@ test.describe("Studio on a real draft", () => {
     await panel(page).getByRole("button", { name: "Delete connection", exact: true }).click();
     await expect(panel(page).getByRole("heading", { name: "Project", exact: true })).toBeVisible();
     expect(Object.keys((await draftOf(page, projectId)).document.edges)).toHaveLength(0);
+  });
+
+  test("endpoint edits conflict with a remote reconnect and require explicit inspected revision", async ({ page }) => {
+    await createFlowInUi(page, "Connections");
+    await addStepInUi(page, "Start", "Start");
+    await addStepInUi(page, "Original");
+    await addStepInUi(page, "Mine");
+    await addStepInUi(page, "Remote");
+    let draft = await draftOf(page, projectId);
+    const nodes = Object.fromEntries(Object.values(draft.document.nodes).map((node) => [node.label, node.id]));
+    const flowId = Object.keys(draft.document.flows)[0]!;
+    await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
+      payload: { flowId, fromId: nodes.Start, toId: nodes.Original, condition: "" } });
+    await page.reload();
+    await toolbar(page).getByRole("button", { name: "List" }).click();
+    await page.getByRole("list", { name: "Connections" }).getByRole("button", { name: /^Start/ }).click();
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    await panel(page).getByLabel("To", { exact: true }).selectOption(nodes.Mine!);
+    const before = await draftOf(page, projectId);
+    const edge = Object.values(before.document.edges)[0]!;
+    await command(page, projectId, before.id, { command: "RECONNECT_EDGE", expectedDocumentRevision: before.documentRevision,
+      payload: { edgeId: edge.id, fromId: nodes.Remote, toId: nodes.Original } });
+    // A stale condition save refreshes the authorized draft while the endpoint choice stays local.
+    await panel(page).getByLabel("Condition").fill("My condition");
+    await saveButton(page).click();
+    await expect(panel(page).getByRole("button", { name: "Keep saved value" })).toBeVisible();
+    await panel(page).getByRole("button", { name: "Keep saved value" }).click();
+    const requests: { key: string; body: string }[] = [];
+    await page.route("**/drafts/*/commands", async (route) => {
+      requests.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
+      if (requests.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
+      else await route.continue();
+    });
+    let readBlocked = true;
+    await page.route(`**/drafts/${before.id}`, (route) => readBlocked
+      ? route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Read unavailable" } } }) : route.continue());
+    await panel(page).getByRole("button", { name: "Reconnect", exact: true }).click();
+    await expect(page.locator(".studio-status").getByRole("button", { name: "Retry last change" })).toBeVisible();
+    expect(JSON.parse(requests[0]!.body)).toMatchObject({ expectedDocumentRevision: before.documentRevision,
+      payload: { edgeId: edge.id, fromId: nodes.Start, toId: nodes.Mine } });
+    // Retry from outside the inspector must preserve the stale conflict in the project store.
+    await panel(page).getByRole("button", { name: /Project$/ }).click();
+    await page.locator(".studio-status").getByRole("button", { name: "Retry last change" }).click();
+    await expect.poll(() => requests.length).toBe(2);
+    expect(requests[1]).toEqual(requests[0]);
+    await expect(page.locator(".studio-status").getByRole("button", { name: "Retry last change" })).toHaveCount(0);
+    await page.getByRole("list", { name: "Connections" }).getByRole("button", { name: /^Remote/ }).click();
+    const conflict = panel(page).getByRole("alert");
+    await expect(conflict).toContainText("Saved connectionRemote");
+    await expect(conflict).toContainText("Your connectionStart");
+    await expect(conflict).toContainText("Before your editStart");
+    await expect(panel(page).getByRole("button", { name: "Reconnect", exact: true })).toBeDisabled();
+    expect(Object.values((await draftOf(page, projectId)).document.edges)[0]!.fromId).toBe(nodes.Remote);
+    expect(requests).toHaveLength(2);
+    await expect(conflict.getByRole("button", { name: "Apply my connection" })).toBeDisabled();
+    readBlocked = false;
+    await page.getByRole("button", { name: "Retry read", exact: true }).click();
+    await expect(conflict.getByRole("button", { name: "Apply my connection" })).toBeEnabled();
+    await conflict.getByRole("button", { name: "Apply my connection" }).click();
+    await expect(page.getByRole("list", { name: "Connections" })).toContainText(/Start.*Mine/);
+    draft = await draftOf(page, projectId);
+    expect(Object.values(draft.document.edges)[0]).toMatchObject({ fromId: nodes.Start, toId: nodes.Mine });
+    expect(requests).toHaveLength(3);
+    expect(requests[2]!.key).not.toBe(requests[1]!.key);
+    expect(JSON.parse(requests[2]!.body).expectedDocumentRevision).toBe(before.documentRevision + 1);
   });
 
   test("local Archive preserves typed Studio text for copying and explicit discard", async ({ page }) => {

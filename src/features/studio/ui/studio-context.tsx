@@ -87,7 +87,7 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
       for (const [bufferKey, buffer] of Object.entries(endpointBuffers)) {
         if (!buffer.sent || buffer.key !== key || JSON.stringify(reconnectCommand(buffer.id, buffer.baseVersion, { ...buffer.original, ...buffer.sent })) !== JSON.stringify(command)) continue;
         if (outcome.ok) endpointBuffers = acknowledge(endpointBuffers, bufferKey, outcome.result.documentRevision);
-        else if (!outcome.uncertain) endpointBuffers = refuse(endpointBuffers, bufferKey, false);
+        else if (!outcome.uncertain) endpointBuffers = refuse(endpointBuffers, bufferKey, outcome.code === "STALE_DOCUMENT_REVISION");
       }
       return { buffers: outcome.ok ? follow(buffers, outcome.result.versions) : buffers, endpointBuffers };
     });
