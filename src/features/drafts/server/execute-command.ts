@@ -17,7 +17,7 @@ const COMMAND_OPERATION = "DRAFT_COMMAND_V1";
 export type LockedDraft = { id: string; documentRevision: number; layoutRevision: number; draft: Draft };
 
 /** A stored draft that fails its own schema is a server fault, never something to repair or show. */
-function storedDraft(document: unknown, layout: unknown): Draft {
+export function storedDraft(document: unknown, layout: unknown): Draft {
   try { return parseDraftPair(document, layout); } catch { throw new ProjectError("UNAVAILABLE"); }
 }
 
