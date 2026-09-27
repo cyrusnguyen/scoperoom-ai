@@ -24,8 +24,8 @@ export default function Dialog({ title, onClose, children, footer }: { title: st
 }
 
 /** showModal() focuses the first control; a confirmation moves initial focus to its safe choice instead (this effect runs after showModal). */
-export function CancelFocus({ id, label, onClick }: { id?: string; label: string; onClick: () => void }) {
+export function CancelFocus({ id, label, onClick, disabled }: { id?: string; label: string; onClick: () => void; disabled?: boolean }) {
   const ref = useRef<HTMLButtonElement>(null);
   useEffect(() => { ref.current?.focus(); }, []);
-  return <button ref={ref} id={id} type="button" className="button quiet" onClick={onClick}>{label}</button>;
+  return <button ref={ref} id={id} type="button" className="button quiet" onClick={onClick} disabled={disabled}>{label}</button>;
 }

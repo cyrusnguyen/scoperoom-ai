@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiMutate } from "@/client/api";
+import { apiMutate, sessionEnded } from "@/client/api";
 import type { ProjectMemberRole } from "@/features/projects/contracts/invitation";
 
 type Acceptance = { projectId: string; role: ProjectMemberRole; replayed: boolean };
@@ -17,6 +17,8 @@ export default function InviteAcceptance({ token, signOut }: { token: string; si
     setMessage("Checking this invitation…");
     const result = await apiMutate<Acceptance>("/api/invitations/accept", key, { token });
     if (result.ok) { router.replace(`/app/projects/${result.data.projectId}`); return; }
+    // An ended session signs in again and comes back to this invitation (the same continuation the page's own redirect uses).
+    if (sessionEnded(result, `/login?continue=${encodeURIComponent(`/invite/${token}`)}`)) return;
     setState(result.uncertain ? "uncertain" : "denied");
     setMessage(result.uncertain ? "We could not confirm access. Retry uses the same invitation request." : result.message);
   }, [key, router, token]);

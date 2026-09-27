@@ -37,8 +37,8 @@ export function apiMutate<T>(url: string, key: string, body: Record<string, unkn
  * A 401 means the session ended: a full load of sign-in drops every private value held in memory.
  * Router navigation would keep that state, and `replace` also keeps the ended page out of Back history.
  */
-export function sessionEnded(result: ApiResult<unknown>): boolean {
+export function sessionEnded(result: ApiResult<unknown>, to = "/login"): boolean {
   if (result.ok || result.status !== 401) return false;
-  window.location.replace("/login");
+  window.location.replace(to);
   return true;
 }

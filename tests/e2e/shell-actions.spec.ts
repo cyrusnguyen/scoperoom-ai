@@ -219,6 +219,40 @@ test.describe("shell actions", () => {
     expect(bootstrapReads).toBeGreaterThan(readsBeforeDialog);
   });
 
+  test("a lifecycle dialog stays open while its request is in flight, so an uncertain result keeps its key for Retry", async ({ page }) => {
+    await signIn(page, admin, users, "Actions Test");
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const keys: string[] = [];
+    await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: group([item(ids.alpha, "Alpha plan")]), shared: group(), archived: group(), capacity: capacity(1, 10) } }));
+    await page.route("**/api/invitations", (route) => route.fulfill({ json: noInvites }));
+    await page.route(`**/api/projects/${ids.alpha}/status`, (route) => route.fulfill({ json: status(1) }));
+    await page.route(`**/api/projects/${ids.alpha}/archive`, async (route) => {
+      keys.push(route.request().headers()["idempotency-key"]!);
+      if (keys.length === 1) { await held; return route.abort("failed"); }
+      await route.fulfill({ json: { ...status(2, "ARCHIVED"), replayed: false } });
+    });
+    await page.goto("/app");
+    await sidebar(page).getByRole("button", { name: "Actions for Alpha plan" }).click();
+    await page.getByRole("menuitem", { name: "Archive…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Archive Alpha plan?" });
+    await dialog.getByLabel("Reason").fill("Pilot finished");
+    await dialog.getByRole("button", { name: "Archive" }).click();
+    await expect(dialog.getByRole("button", { name: "Working…" })).toBeDisabled();
+    // Twice: Chrome lets a page cancel only the first Esc without a user activation in between.
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    release();
+    await expect(dialog.getByRole("alert")).toHaveText("We could not confirm this change. Retry uses the same request.");
+    await dialog.getByRole("button", { name: "Retry" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(notice(page)).toHaveText("Archived Alpha plan.");
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
   test("a session that ends when an archive is confirmed sends the browser to sign-in", async ({ page, context }) => {
     await signIn(page, admin, users, "Actions Test");
     await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: group([item(ids.alpha, "Alpha plan")]), shared: group(), archived: group(), capacity: capacity(1, 10) } }));

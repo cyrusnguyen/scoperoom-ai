@@ -70,8 +70,10 @@ export default function LifecycleDialog({ kind, project, onClose, onDone }: { ki
   };
 
   const ready = !needsVersion || version !== null;
-  return <Dialog title={`${verb} ${project.name}?`} onClose={onClose} footer={<>
-    {kind === "archive" ? <button id="lifecycle-cancel" type="button" className="button quiet" onClick={onClose}>Cancel</button> : <CancelFocus id="lifecycle-cancel" label="Cancel" onClick={onClose} />}
+  // Closing while the request is in flight would drop its key, its uncertain result and the Retry path.
+  const close = busy ? () => {} : onClose;
+  return <Dialog title={`${verb} ${project.name}?`} onClose={close} footer={<>
+    {kind === "archive" ? <button id="lifecycle-cancel" type="button" className="button quiet" onClick={close} disabled={busy}>Cancel</button> : <CancelFocus id="lifecycle-cancel" label="Cancel" onClick={close} disabled={busy} />}
     <button type="submit" form="lifecycle-form" className={`button ${tone}`} disabled={busy || !ready || (kind === "archive" && !reason.trim())}>{busy ? "Working…" : uncertain ? "Retry" : verb}</button>
   </>}>
     <form id="lifecycle-form" onSubmit={submit}>

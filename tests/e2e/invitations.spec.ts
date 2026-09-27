@@ -263,6 +263,27 @@ test.describe("project invitations", () => {
     expect(keys).toHaveLength(2);
     expect(keys[1]).toBe(keys[0]);
   });
+  test("a session that ends during acceptance returns to sign-in with the invitation as its continuation", async ({ page, context }) => {
+    await signIn(page, admin, users, "invite session end");
+    const token = "A".repeat(20) + "b-c_" + "9".repeat(19);
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let accepts = 0;
+    await page.route("**/api/invitations/accept", async (route) => {
+      accepts += 1;
+      await held;
+      await route.fulfill({ status: 401, json: { error: { code: "UNAUTHENTICATED", message: "Sign in to continue.", requestId: "00000000-0000-4000-8000-000000000000", retryable: false } } });
+    });
+    await page.goto(`/invite/${token}`);
+    await expect.poll(() => accepts).toBe(1);
+    await context.clearCookies(); // a real session end: a valid cookie would send /login straight back into the app
+    release();
+    await expect(page).toHaveURL(/\/login\?continue=/);
+    expect(new URL(page.url()).searchParams.get("continue")).toBe(`/invite/${token}`);
+    await expect(page.getByLabel("Email address")).toBeVisible();
+    await expect(page.locator('input[name="continue"]')).toHaveValue(`/invite/${token}`);
+    await expect(page.getByRole("button", { name: "Use another account" })).toHaveCount(0);
+  });
   test("an expired access session refreshes on an invitation route before acceptance", async ({ page }) => {
     test.setTimeout(60_000);
     const fixture = await createFixture(page, database, admin, users);
