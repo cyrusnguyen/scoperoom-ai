@@ -5,7 +5,7 @@ The [tracker](progress-tracker.md) distinguishes planned architecture from obser
 | Layer | Responsibility |
 | --- | --- |
 | Next.js / React / TypeScript | One modular application, thin routes and feature services |
-| React Flow / shared tokens | Controlled graph view, forms and accessible workspace |
+| React Flow / shared tokens | Controlled graph view, forms and accessible project shell |
 | Supabase Auth | Verified identity/session; backend services decide project capability |
 | Supabase PostgreSQL / Prisma | Saved document and layout, authority, evidence, snapshots, jobs, receipts and audit |
 | Supabase Realtime | Private presence, temporary motion and minimal committed-change hints |
@@ -19,7 +19,7 @@ The [tracker](progress-tracker.md) distinguishes planned architecture from obser
 - `src/app`: thin Next routes and authorized server composition; one active App Router root.
 - `src/features/<feature>/{contracts,domain,server,ui}`: keep related changes together.
 - `src/client`: shared browser transport/auth/providers; feature hooks stay with their UI.
-- `src/components/{ui,workspace}` and `src/styles`: shared presentation/tokens with safe props.
+- `src/features/shell/ui` (the `/app` shell), `src/client` (browser fetch helper) and `src/styles/tokens.css`: shared presentation and tokens with safe props.
 - `src/contracts`: runtime-neutral common wire schemas.
 - `src/server`: trusted shared Node infrastructure; `src/server/web` isolates Next request/session wrappers.
 - `src/trigger`: thin durable tasks; feature services stay usable without Next request state.
