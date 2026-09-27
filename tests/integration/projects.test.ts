@@ -29,6 +29,25 @@ test("a named project is owned by its creator, replays by key and needs nothing 
   });
 });
 
+test("an invalid saved draft makes an authorized bootstrap unavailable", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user();
+    const projectId = await project(owner);
+    const draftId = (await getProjectStatus(owner, projectId)).currentDraftId;
+    const { rows: [saved] } = await database.query<{ documentJson: unknown }>(
+      'select document_json as "documentJson" from app.scope_draft where id = $1 and project_id = $2',
+      [draftId, projectId],
+    );
+    if (!saved) throw new Error("Draft missing.");
+    try {
+      await database.query("update app.scope_draft set document_json = $1::jsonb where id = $2", [JSON.stringify({}), draftId]);
+      await assert.rejects(getProjectBootstrap(owner, projectId), code("UNAVAILABLE"));
+    } finally {
+      await database.query("update app.scope_draft set document_json = $1::jsonb where id = $2", [JSON.stringify(saved.documentJson), draftId]);
+    }
+    assert.deepEqual((await getProjectBootstrap(owner, projectId)).draft.document, saved.documentJson);
+  });
+});
 test("owning a project requires an active entitlement; accepting never does", { skip: !canRun }, async () => {
   await withFixture(async ({ user }) => {
     const person = await user();
