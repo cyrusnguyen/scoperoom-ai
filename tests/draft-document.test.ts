@@ -45,6 +45,13 @@ test("the empty draft and a small valid flow both parse", () => {
   assert.deepEqual(parsed.layout.positions[endId], { x: 0, y: 160, version: 1 });
 });
 
+test("a DATA_STORE node parses like any other kind, and an unknown kind is rejected", () => {
+  const draft = stored();
+  at(draft.document, "nodes", startId).kind = "DATA_STORE";
+  assert.equal(parseDraftPair(draft.document, draft.layout).document.nodes[startId]!.kind, "DATA_STORE");
+  rejects((bad) => { at(bad.document, "nodes", startId).kind = "TABLE"; });
+});
+
 test("unknown or missing properties, and unsupported schema versions, are rejected", () => {
   rejects((draft) => { draft.document.extra = true; });
   rejects((draft) => { delete at(draft.document, "nodes", startId).actorLabel; });

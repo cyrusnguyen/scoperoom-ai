@@ -2,10 +2,10 @@
 
 import { useMemo, useState } from "react";
 import {
-  Background, BaseEdge, Controls, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow,
+  Background, BaseEdge, ConnectionMode, Controls, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow,
   type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
 } from "@xyflow/react";
-import type { Direction } from "@/features/drafts/contracts/draft-layout";
+import { STEP_SIZE, type Direction } from "@/features/drafts/contracts/draft-layout";
 import { MAX_MOVE_NODES } from "@/features/drafts/contracts/positions";
 import type { NodeKind } from "@/features/drafts/contracts/scope-document";
 import { bufferKey, editFields, refuse, send, type Saved } from "./buffers";
@@ -18,22 +18,50 @@ type StepNode = Node<StepData, "step">;
 type FlowEdge = Edge<{ condition: string }, "flow">;
 type Point = { x: number; y: number };
 
+// Every step keeps all four sides connectable (UI02); which one is first of its type per direction decides the
+// default, unsaved routing a plain (handle-less) connection draws, matching the earlier single-handle behaviour.
+const HANDLE_ORDER: Record<Direction, { position: Position; type: "source" | "target" }[]> = {
+  TB: [
+    { position: Position.Top, type: "target" }, { position: Position.Bottom, type: "source" },
+    { position: Position.Left, type: "target" }, { position: Position.Right, type: "source" },
+  ],
+  LR: [
+    { position: Position.Left, type: "target" }, { position: Position.Right, type: "source" },
+    { position: Position.Top, type: "target" }, { position: Position.Bottom, type: "source" },
+  ],
+};
+
+/** The DECISION diamond and DATA_STORE cylinder: an SVG that stretches to the node's exact box (UI02). */
+function KindShape({ kind }: { kind: NodeKind }) {
+  if (kind === "DECISION") return <svg className="step-shape" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+    <polygon className="step-shape-fill" points="50,4 96,50 50,96 4,50" />
+  </svg>;
+  if (kind === "DATA_STORE") return <svg className="step-shape" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+    <path className="step-shape-fill" d="M6,18 A44,14 0 0 1 94,18 L94,82 A44,14 0 0 1 6,82 Z" />
+    <path className="step-shape-lid" d="M6,18 A44,14 0 0 0 94,18" />
+  </svg>;
+  return null;
+}
+
 /** Fixed application-owned shapes (UI02); names are plain text, clamped here and complete in the inspector. */
 function StepCard({ data, isConnectable }: NodeProps<StepNode>) {
-  const across = data.direction === "LR";
   return <div className="step-node" data-kind={data.kind}>
-    <Handle type="target" position={across ? Position.Left : Position.Top} isConnectable={isConnectable} />
-    <span className="step-kind">{KIND_LABELS[data.kind]}</span>
-    <span className="step-label">{data.label}</span>
-    {data.actor && <span className="step-actor">{data.actor}</span>}
-    <Handle type="source" position={across ? Position.Right : Position.Bottom} isConnectable={isConnectable} />
+    <KindShape kind={data.kind} />
+    {HANDLE_ORDER[data.direction].map(({ position, type }) => (
+      <Handle key={position} id={position} type={type} position={position} isConnectable={isConnectable} />
+    ))}
+    <div className="step-body">
+      <span className="step-kind">{KIND_LABELS[data.kind]}</span>
+      <span className="step-label">{data.label}</span>
+      {data.actor && <span className="step-actor">{data.actor}</span>}
+    </div>
   </div>;
 }
 
 function FlowEdgeLine({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, data }: EdgeProps<FlowEdge>) {
   const [path, labelX, labelY] = getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, borderRadius: 14, offset: 28 });
   return <>
-    <BaseEdge id={id} path={path} markerEnd={markerEnd} />
+    <BaseEdge id={id} path={path} markerEnd={markerEnd} interactionWidth={20} />
     {data?.condition && <EdgeLabelRenderer>
       <div className="edge-label" style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}>{data.condition}</div>
     </EdgeLabelRenderer>}
@@ -42,6 +70,7 @@ function FlowEdgeLine({ id, sourceX, sourceY, targetX, targetY, sourcePosition, 
 
 const nodeTypes = { step: StepCard };
 const edgeTypes = { flow: FlowEdgeLine };
+const defaultEdgeOptions = { type: "flow" as const };
 
 /**
  * Controlled React Flow view of one flow's saved document and layout. Selection, pan, zoom and measurement stay local
@@ -66,15 +95,19 @@ export default function FlowCanvas({ flowId, preview }: { flowId: string; previe
     const selected = interactive && ui.selection?.kind === "NODES" ? ui.selection.ids : [];
     const attempted: Record<string, Point> = Object.fromEntries((shown?.command.items ?? []).map(({ nodeId, x, y }) => [nodeId, { x, y }]));
     const direction = preview?.direction ?? layout.directions[flowId] ?? "TB";
-    return Object.values(document.nodes).filter((node) => node.flowId === flowId).map((node) => ({
-      id: node.id, type: "step", position: preview?.positions[node.id] ?? dragging[node.id] ?? attempted[node.id] ?? { x: layout.positions[node.id]!.x, y: layout.positions[node.id]!.y },
-      data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction }, selected: selected.includes(node.id), measured: measured[node.id],
-    }));
+    return Object.values(document.nodes).filter((node) => node.flowId === flowId).map((node) => {
+      const size = STEP_SIZE[node.kind];
+      return {
+        id: node.id, type: "step", width: size.width, height: size.height,
+        position: preview?.positions[node.id] ?? dragging[node.id] ?? attempted[node.id] ?? { x: layout.positions[node.id]!.x, y: layout.positions[node.id]!.y },
+        data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction }, selected: selected.includes(node.id), measured: measured[node.id],
+      };
+    });
   }, [document, layout, flowId, ui.selection, preview, dragging, shown, interactive, measured]);
 
   const edges = useMemo<FlowEdge[]>(() => Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => ({
     id: edge.id, type: "flow", source: edge.fromId, target: edge.toId, data: { condition: edge.condition },
-    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 }, selected: interactive && ui.selection?.kind === "EDGE" && ui.selection.id === edge.id,
+    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: "var(--foreground-subtle)" }, selected: interactive && ui.selection?.kind === "EDGE" && ui.selection.id === edge.id,
   })), [document, flowId, ui.selection, interactive]);
 
   const picks = (changes: (NodeChange<StepNode> | EdgeChange<FlowEdge>)[]): SelectChange[] =>
@@ -135,6 +168,7 @@ export default function FlowCanvas({ flowId, preview }: { flowId: string; previe
 
   return <div className="canvas">
     <ReactFlow<StepNode, FlowEdge> key={preview ? `preview-${preview.direction}` : flowId} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+      defaultEdgeOptions={defaultEdgeOptions} connectionMode={ConnectionMode.Loose}
       onNodesChange={interactive ? onNodesChange : measure} onEdgesChange={interactive ? onEdgesChange : undefined}
       onNodeDoubleClick={interactive ? inspect : undefined} onNodeDragStop={interactive ? drop : undefined}
       onConnect={connect} onReconnect={reconnect} elementsSelectable={interactive}

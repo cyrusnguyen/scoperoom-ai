@@ -4,7 +4,7 @@ import { id, invalid, keys, object, oneOf, records, text, utf8Bytes, version } f
 // ScopeDocument storage schema v3 (Data02). Stage 03 activates flows, nodes and edges only: the other collections
 // must stay empty, and confirmation, verification and source references stay unset, until the stages whose
 // validators own them (07–09) widen this parser.
-export const NODE_KINDS = ["START", "ACTION", "DECISION", "OUTCOME"] as const;
+export const NODE_KINDS = ["START", "ACTION", "DECISION", "OUTCOME", "DATA_STORE"] as const;
 export const CLASSIFICATIONS = ["USER_JOURNEY", "BUSINESS_PROCESS"] as const;
 export const INCLUSIONS = ["INCLUDED", "EXCLUDED", "UNDECIDED"] as const;
 export const ORIGINS = ["HUMAN", "AI_EXTRACTED", "AI_SUGGESTED", "IMPORTED"] as const;

@@ -62,16 +62,16 @@ test("one stale item refuses the whole group; a deleted node refuses a late move
 });
 
 test("arrangement is deterministic, uses fixed sizes, and ignores stored key order", () => {
-  const draft = saved(4, ["START", "ACTION", "DECISION", "OUTCOME"]);
+  const draft = saved(5, ["START", "ACTION", "DECISION", "DATA_STORE", "OUTCOME"]);
   const first = arrange(draft.document, flowId, "TB");
   const reversed = { ...draft.document, nodes: Object.fromEntries(Object.entries(draft.document.nodes).reverse()), edges: Object.fromEntries(Object.entries(draft.document.edges).reverse()) };
   assert.deepEqual(arrange(reversed, flowId, "TB"), first);
-  assert.deepEqual(Object.keys(first).sort(), [id(1), id(2), id(3), id(4)]);
+  assert.deepEqual(Object.keys(first).sort(), [id(1), id(2), id(3), id(4), id(5)]);
   assert(Object.values(first).every(({ x, y }) => Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0));
-  const ys = [1, 2, 3, 4].map((n) => first[id(n)]!.y);
+  const ys = [1, 2, 3, 4, 5].map((n) => first[id(n)]!.y);
   assert.deepEqual([...ys].sort((a, b) => a - b), ys, "a chain runs top to bottom");
   const across = arrange(draft.document, flowId, "LR");
-  const xs = [1, 2, 3, 4].map((n) => across[id(n)]!.x);
+  const xs = [1, 2, 3, 4, 5].map((n) => across[id(n)]!.x);
   assert.deepEqual([...xs].sort((a, b) => a - b), xs, "and left to right in LR");
 });
 

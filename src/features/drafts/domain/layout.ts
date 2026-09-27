@@ -1,7 +1,7 @@
 import { Graph, layout as dagreLayout, type EdgeLabel, type GraphLabel, type NodeLabel } from "@dagrejs/dagre";
-import { COORDINATE_LIMIT, type Direction, type DraftLayout, type SavedPosition } from "../contracts/draft-layout.ts";
+import { COORDINATE_LIMIT, STEP_SIZE, type Direction, type DraftLayout, type SavedPosition } from "../contracts/draft-layout.ts";
 import type { MoveNodes } from "../contracts/positions.ts";
-import { parseDraftPair, type NodeKind, type ScopeDocument } from "../contracts/scope-document.ts";
+import { parseDraftPair, type ScopeDocument } from "../contracts/scope-document.ts";
 import { bump, GraphError, type Draft } from "./graph.ts";
 
 // Saved geometry (Data02 "Saved layout and position invariants", "Exact arrangement preview"). Moves and arrangements
@@ -9,10 +9,6 @@ import { bump, GraphError, type Draft } from "./graph.ts";
 
 /** Identifies the complete geometry contract below: library version, fixed sizes, spacing and rounding. */
 export const ALGORITHM_VERSION = "dagre-3.1.1/fixed-sizes-v1";
-/** Application-owned step sizes. Browser measurements, fonts and label length never take part in an arrangement. */
-export const STEP_SIZE: Record<NodeKind, { width: number; height: number }> = {
-  START: { width: 200, height: 72 }, ACTION: { width: 200, height: 96 }, DECISION: { width: 200, height: 96 }, OUTCOME: { width: 200, height: 72 },
-};
 
 export type Placed = { layout: DraftLayout; positions: Record<string, SavedPosition>; changed: boolean };
 

@@ -25,6 +25,15 @@ test("each command family parses to exactly the fields it names", () => {
   for (const command of commands) assert.deepEqual(parseGraphCommand(command), command);
 });
 
+test("ADD_NODE and UPDATE_NODE accept the DATA_STORE kind and still reject an unknown one", () => {
+  const add = { commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision: 1, payload: { flowId, kind: "DATA_STORE", label: "Orders table", description: "", actorLabel: "" } };
+  assert.deepEqual(parseGraphCommand(add), add);
+  const update = { commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId, kind: "DATA_STORE" } };
+  assert.deepEqual(parseGraphCommand(update), update);
+  invalid({ ...add, payload: { ...add.payload, kind: "TABLE" } });
+  invalid({ ...update, payload: { ...update.payload, kind: "TABLE" } });
+});
+
 test("guards are required and belong to the command family", () => {
   invalid({ commandSchemaVersion: 1, command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Pay", description: "", actorLabel: "" } });
   invalid({ commandSchemaVersion: 1, command: "ADD_NODE", expectedEntityVersion: 1, payload: { flowId, kind: "ACTION", label: "Pay", description: "", actorLabel: "" } });

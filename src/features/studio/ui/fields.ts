@@ -4,7 +4,8 @@ import type { EntityKind, Fields } from "./buffers.ts";
 
 // Form fields for the inspector and the Studio dialogs. Limits come from the draft contract, counted in code points,
 // and are checked on Save — never by truncating what was typed (no `maxLength`: it silently cuts pasted text).
-export const KIND_LABELS = { START: "Start", ACTION: "Step", DECISION: "Decision", OUTCOME: "Outcome" } as const;
+// OUTCOME keeps "Outcome" (not "End"): existing e2e specs select the Add step "Shape" option by this label.
+export const KIND_LABELS = { START: "Start", ACTION: "Step", DECISION: "Decision", OUTCOME: "Outcome", DATA_STORE: "Data store" } as const;
 export const INCLUSION_LABELS = { INCLUDED: "Included", EXCLUDED: "Excluded", UNDECIDED: "Exploratory" } as const;
 export const CLASSIFICATION_LABELS = { USER_JOURNEY: "User journey", BUSINESS_PROCESS: "Business process" } as const;
 

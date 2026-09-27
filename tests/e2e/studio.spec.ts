@@ -943,8 +943,9 @@ test.describe("Studio on a real draft", () => {
     const draft = await draftOf(page, projectId);
     const nodes = Object.fromEntries(Object.values(draft.document.nodes).map((node) => [node.label, node.id]));
     await page.route("**/drafts/*/commands", (route) => route.fulfill({ status: 400, json: { error: { code: "INVALID_INPUT", message: "Connection refused" } } }));
-    await page.locator(`.react-flow__node[data-id="${nodes.Start}"] .react-flow__handle.source`).dragTo(
-      page.locator(`.react-flow__node[data-id="${nodes.End}"] .react-flow__handle.target`),
+    // Four handles per step (UI02) are all connectable; the bottom/top pair is the default TB routing.
+    await page.locator(`.react-flow__node[data-id="${nodes.Start}"] .react-flow__handle[data-handleid="bottom"]`).dragTo(
+      page.locator(`.react-flow__node[data-id="${nodes.End}"] .react-flow__handle[data-handleid="top"]`),
     );
     await expect(page.locator(".studio-status")).toContainText("Connection refused");
     expect(Object.values((await draftOf(page, projectId)).document.edges)).toHaveLength(0);
@@ -968,7 +969,7 @@ test.describe("Studio on a real draft", () => {
       payload: { edgeId: edge.id, fromId: nodes.Remote, toId: nodes.Original } });
     const requests: Record<string, unknown>[] = [];
     await page.route("**/drafts/*/commands", async (route) => { requests.push(route.request().postDataJSON()); await route.continue(); });
-    await page.locator(".react-flow__edgeupdater-target").dragTo(page.locator(`.react-flow__node[data-id="${nodes.Mine}"] .react-flow__handle.target`));
+    await page.locator(".react-flow__edgeupdater-target").dragTo(page.locator(`.react-flow__node[data-id="${nodes.Mine}"] .react-flow__handle[data-handleid="top"]`));
     await expect.poll(() => requests.length).toBe(1);
     expect(requests[0]).toMatchObject({ command: "RECONNECT_EDGE", expectedDocumentRevision: draft.documentRevision,
       payload: { edgeId: edge.id, fromId: nodes.Start, toId: nodes.Mine } });
@@ -1193,7 +1194,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await expect(node).toHaveClass(/selected/);
     await expect(panel(page)).toHaveCount(0);
     const before = await node.getAttribute("style");
-    await node.dragTo(node, { sourcePosition: { x: 50, y: 30 }, targetPosition: { x: 150, y: 60 }, steps: 5 });
+    await node.dragTo(node, { sourcePosition: { x: 30, y: 30 }, targetPosition: { x: 90, y: 90 }, steps: 5 });
     // The lost acknowledgement keeps the attempted placement on screen with a same-key Retry.
     await expect(page.locator(".placement-note")).toContainText("We couldn’t confirm the new position.");
     await expect(node).not.toHaveAttribute("style", before!);
@@ -1212,7 +1213,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     const node = page.locator(`.react-flow__node[data-id="${start}"]`);
     await expect(node).toBeVisible();
     const before = await node.getAttribute("style");
-    await node.dragTo(node, { sourcePosition: { x: 50, y: 30 }, targetPosition: { x: 150, y: 60 }, steps: 5 });
+    await node.dragTo(node, { sourcePosition: { x: 30, y: 30 }, targetPosition: { x: 90, y: 90 }, steps: 5 });
     await expect(node).toHaveAttribute("style", before!);
     expect(writes).toBe(0);
   });

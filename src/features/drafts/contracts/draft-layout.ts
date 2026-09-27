@@ -1,3 +1,4 @@
+import type { NodeKind } from "./scope-document.ts";
 import { invalid, keys, object, oneOf, version } from "./strict.ts";
 
 // Saved layout (Data02 "Saved layout and position invariants"): the only geometry PostgreSQL stores.
@@ -9,6 +10,13 @@ export type DraftLayout = { schemaVersion: 1; positions: Record<string, SavedPos
 
 export const COORDINATE_LIMIT = 100_000;
 export const LAYOUT_BYTE_LIMIT = 256 * 1024;
+
+/** Application-owned, client-safe step sizes (UI02): Dagre (server-only) and the canvas both read these, so a saved
+ * arrangement always matches what is drawn. Browser measurements, fonts and label length never take part. */
+export const STEP_SIZE: Record<NodeKind, { width: number; height: number }> = {
+  START: { width: 120, height: 120 }, OUTCOME: { width: 120, height: 120 },
+  ACTION: { width: 200, height: 88 }, DECISION: { width: 220, height: 120 }, DATA_STORE: { width: 180, height: 110 },
+};
 
 export function coordinate(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > COORDINATE_LIMIT) invalid();

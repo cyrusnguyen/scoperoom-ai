@@ -37,6 +37,11 @@ test("draft checks describe an incomplete flow without blocking it", () => {
   assert.deepEqual(graphWarnings(complete.document, flowId), []);
 });
 
+test("a DATA_STORE step behaves like an ordinary step: no warning for it, and none about it", () => {
+  const { document } = draft([["Start", "START", 0, 0], ["Orders", "DATA_STORE", 0, 160], ["Done", "OUTCOME", 0, 320]], [[1, 2], [2, 3]]);
+  assert.deepEqual(graphWarnings(document, flowId), []);
+});
+
 test("draft checks warn for branches disconnected from a start", () => {
   const { document } = draft([["Start", "START", 0, 0], ["Done", "OUTCOME", 0, 160], ["First orphan", "ACTION", 200, 0], ["Second orphan", "ACTION", 200, 160]], [[1, 2], [3, 4]]);
   assert.deepEqual(graphWarnings(document, flowId), [
