@@ -76,3 +76,7 @@ test("a stored result rejects values larger than the safe receipt limit", () => 
   const versions = Object.fromEntries(ids.map((entry) => [entry, 1]));
   assert.throws(() => parseCommandResult({ draftId: flowId, documentRevision: 1, layoutRevision: 1, eventSequence: 0, createdIds: ids, versions, retiredIds: ids }), /INVALID_INPUT/);
 });
+
+test("text rejects a null character before a command reaches persistence", () => {
+  invalid({ commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision: 1, payload: { flowId, kind: "ACTION", label: "Cannot\u0000store", description: "", actorLabel: "" } });
+});

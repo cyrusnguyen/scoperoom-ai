@@ -7,7 +7,7 @@ import {
 } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { parseCommandResult, parseGraphCommand, type CommandResult, type GraphCommand } from "../contracts/commands.ts";
-import { parseDraftPair, type DraftView } from "../contracts/scope-document.ts";
+import { LIMITS, parseDraftPair, type DraftView } from "../contracts/scope-document.ts";
 import { MAX_VERSION } from "../contracts/strict.ts";
 import { applyGraphCommand, GraphError, type Applied, type Draft } from "../domain/graph.ts";
 
@@ -34,6 +34,15 @@ export function nextRevision(value: number): number {
 
 export const asJson = (value: unknown) => value as Prisma.InputJsonValue;
 
+/** PostgreSQL checks JSONB's formatted text, which is larger than compact JSON.stringify output. */
+async function requireStoredSize(tx: Transaction, document: unknown, layout: unknown) {
+  const [size] = await tx.$queryRaw<Array<{ documentBytes: number; layoutBytes: number }>>`
+    SELECT octet_length(${JSON.stringify(document)}::jsonb::text)::integer AS "documentBytes",
+           octet_length(${JSON.stringify(layout)}::jsonb::text)::integer AS "layoutBytes"`;
+  if (!size || size.documentBytes > LIMITS.documentBytes || size.layoutBytes > LIMITS.layoutBytes) {
+    throw new ProjectError("LIMIT_EXCEEDED");
+  }
+}
 async function requireReadableDraft(tx: Transaction, projectId: string, draftId: string) {
   const draft = await tx.scopeDraft.findFirst({ where: { id: draftId, projectId }, select: { id: true } });
   if (!draft) throw new ProjectError("NOT_FOUND");
@@ -106,6 +115,7 @@ export async function executeGraphCommand(identity: ProjectIdentity, projectId: 
     }
     const documentRevision = nextRevision(draft.documentRevision);
     const layoutRevision = applied.layoutChanged ? nextRevision(draft.layoutRevision) : draft.layoutRevision;
+    await requireStoredSize(tx, applied.document, applied.layout);
     await tx.scopeDraft.update({ where: { id: draft.id }, data: { documentJson: asJson(applied.document), layoutJson: asJson(applied.layout), documentRevision, layoutRevision }, select: { id: true } });
     const sequence = await recordEvent(tx, project, actorId, "DRAFT_COMMAND_SAVED", auditRefs(applied), { command: command.command, documentRevision, layoutRevision });
     return { draftId: draft.id, documentRevision, layoutRevision, eventSequence: Number(sequence), createdIds: applied.createdIds, versions: applied.versions, retiredIds: applied.retiredIds };

@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import test from "node:test";
 import { parseCommandResult } from "../../src/features/drafts/contracts/commands.ts";
+import { LIMITS } from "../../src/features/drafts/contracts/scope-document.ts";
+import { utf8Bytes } from "../../src/features/drafts/contracts/strict.ts";
 import { dependencyPlan } from "../../src/features/drafts/domain/graph.ts";
 import { draftMutation, executeGraphCommand, getDraft } from "../../src/features/drafts/server/execute-command.ts";
 import { ProjectError } from "../../src/features/projects/server/errors.ts";
@@ -55,6 +57,29 @@ async function seeded(project: (owner: Identity) => Promise<string>, owner: Iden
   return { projectId, draftId, flowId, nodeIds };
 }
 
+const retiredId = (index: number) => `00000000-0000-4000-8000-${(0x100000 + index).toString(16).padStart(12, "0")}`;
+
+async function jsonbTextBytes(database: Client, value: unknown) {
+  const { rows: [row] } = await database.query<{ bytes: number }>("select octet_length($1::jsonb::text)::int as bytes", [JSON.stringify(value)]);
+  return row!.bytes;
+}
+
+/** Builds a valid document just below the database CHECK without issuing thousands of commands. */
+async function documentAtStoredSize(database: Client, value: Awaited<ReturnType<typeof getDraft>>["document"], target: number) {
+  const document = structuredClone(value);
+  document.retiredEntityIds = [retiredId(0)];
+  const first = await jsonbTextBytes(database, document);
+  document.retiredEntityIds.push(retiredId(1));
+  const second = await jsonbTextBytes(database, document);
+  const count = 1 + Math.floor((target - first) / (second - first));
+  document.retiredEntityIds = Array.from({ length: count }, (_, index) => retiredId(index));
+  const size = await jsonbTextBytes(database, document);
+  assert(size <= target && target - size <= 8_000, "retired-id sizing should leave room for projectGoal padding");
+  document.projectGoal = "x".repeat(target - size);
+  assert.equal(await jsonbTextBytes(database, document), target);
+  return document;
+}
+
 test("an incomplete flow saves content and positions together and reloads intact", { skip: !canRun }, async () => {
   await withFixture(async ({ user, project }) => {
     const owner = await user("Studio Owner");
@@ -88,6 +113,45 @@ test("cross-flow and dangling edges are refused with no write", { skip: !canRun 
   });
 });
 
+test("a null character is INVALID_INPUT before it creates a document, audit, sequence, or receipt effect", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database, profileId }) => {
+    const owner = await user();
+    const { projectId, draftId, nodeIds } = await seeded(project, owner, ["A"]);
+    const before = await getDraft(owner, projectId, draftId);
+    const profile = await profileId(owner);
+    const audits = await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId]);
+    const receipts = await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where actor_id = $1", [profile]);
+    const status = await getProjectStatus(owner, projectId);
+    await assert.rejects(send(owner, projectId, draftId, { command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId: nodeIds[0], label: "Bad\u0000label" } }), code("INVALID_INPUT"));
+    const after = await getDraft(owner, projectId, draftId);
+    assert.deepEqual(after, before);
+    assert.equal((await getProjectStatus(owner, projectId)).eventSequence, status.eventSequence);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId])).rows[0]!.count, audits.rows[0]!.count);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where actor_id = $1", [profile])).rows[0]!.count, receipts.rows[0]!.count);
+  });
+});
+
+test("a JSONB-size excess is LIMIT_EXCEEDED before it creates a draft, audit, sequence, or receipt effect", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database, profileId }) => {
+    const owner = await user();
+    const { projectId, draftId, nodeIds } = await seeded(project, owner, ["A"]);
+    const current = await getDraft(owner, projectId, draftId);
+    const document = await documentAtStoredSize(database, current.document, LIMITS.documentBytes - 100);
+    assert(utf8Bytes(document) < LIMITS.documentBytes, "the compact document contract still accepts the fixture");
+    await database.query("update app.scope_draft set document_json = $1::jsonb where id = $2", [JSON.stringify(document), draftId]);
+    const before = await getDraft(owner, projectId, draftId);
+    const profile = await profileId(owner);
+    const audits = await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId]);
+    const receipts = await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where actor_id = $1", [profile]);
+    const status = await getProjectStatus(owner, projectId);
+    await assert.rejects(send(owner, projectId, draftId, { command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId: nodeIds[0], label: "B".repeat(160) } }), code("LIMIT_EXCEEDED"));
+    const after = await getDraft(owner, projectId, draftId);
+    assert.deepEqual(after, before);
+    assert.equal((await getProjectStatus(owner, projectId)).eventSequence, status.eventSequence);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1", [projectId])).rows[0]!.count, audits.rows[0]!.count);
+    assert.equal((await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where actor_id = $1", [profile])).rows[0]!.count, receipts.rows[0]!.count);
+  });
+});
 test("concurrent saves to different nodes both persist; a stale same-node save is refused without overwriting", { skip: !canRun }, async () => {
   await withFixture(async ({ user, project, join, database }) => {
     const owner = await user("Owner"); const editor = await user("Editor");

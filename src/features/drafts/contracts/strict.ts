@@ -22,7 +22,7 @@ export function keys(value: Record<string, unknown>, required: readonly string[]
 
 /** Plain text bounded in Unicode code points; lone surrogates are rejected. `required` also rejects blank text. */
 export function text(value: unknown, max: number, required = false): string {
-  if (typeof value !== "string" || !value.isWellFormed() || [...value].length > max || (required && !value.trim())) invalid();
+  if (typeof value !== "string" || !value.isWellFormed() || value.includes("\u0000") || [...value].length > max || (required && !value.trim())) invalid();
   return value;
 }
 

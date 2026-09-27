@@ -98,14 +98,15 @@ test("a JSON __proto__ key is an ordinary rejected key, never a prototype change
 });
 
 test("an otherwise valid document above the byte cap is rejected before persistence", () => {
-  const document = stored().document;
+  const { document, layout } = stored();
+  assert.doesNotThrow(() => parseDraftPair(document, layout));
   const retiredCount = 60_000;
   document.retiredEntityIds = Array.from({ length: retiredCount }, (_, index) =>
     `00000000-0000-4000-8000-${(index + 10_000).toString(16).padStart(12, "0")}`,
   );
   assert.ok(utf8Bytes(document) > LIMITS.documentBytes);
   assert.equal(parseDocument(document).retiredEntityIds.length, retiredCount);
-  assert.throws(() => parseDraftPair(document, emptyDraft().layout), /INVALID_INPUT/);
+  assert.throws(() => parseDraftPair(document, layout), /INVALID_INPUT/);
 });
 
 test("ids must use lowercase UUID hex", () => {
