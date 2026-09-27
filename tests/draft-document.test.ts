@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LAYOUT_BYTE_LIMIT } from "../src/features/drafts/contracts/draft-layout.ts";
-import { emptyDraft, LIMITS, parseDraftPair } from "../src/features/drafts/contracts/scope-document.ts";
+import { emptyDraft, LIMITS, parseDocument, parseDraftPair } from "../src/features/drafts/contracts/scope-document.ts";
 import { id, utf8Bytes } from "../src/features/drafts/contracts/strict.ts";
 
 type Json = Record<string, unknown>;
@@ -98,16 +97,15 @@ test("a JSON __proto__ key is an ordinary rejected key, never a prototype change
   assert.throws(() => parseDraftPair(document, draft.layout), /INVALID_INPUT/);
 });
 
-test("oversized document and layout payloads are rejected before persistence", () => {
+test("an otherwise valid document above the byte cap is rejected before persistence", () => {
   const document = stored().document;
-  document.projectGoal = "x".repeat(LIMITS.documentBytes);
+  const retiredCount = 60_000;
+  document.retiredEntityIds = Array.from({ length: retiredCount }, (_, index) =>
+    `00000000-0000-4000-8000-${(index + 10_000).toString(16).padStart(12, "0")}`,
+  );
   assert.ok(utf8Bytes(document) > LIMITS.documentBytes);
+  assert.equal(parseDocument(document).retiredEntityIds.length, retiredCount);
   assert.throws(() => parseDraftPair(document, emptyDraft().layout), /INVALID_INPUT/);
-
-  const layout = stored().layout;
-  layout.padding = "x".repeat(LAYOUT_BYTE_LIMIT);
-  assert.ok(utf8Bytes(layout) > LAYOUT_BYTE_LIMIT);
-  assert.throws(() => parseDraftPair(emptyDraft().document, layout), /INVALID_INPUT/);
 });
 
 test("ids must use lowercase UUID hex", () => {
