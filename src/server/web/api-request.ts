@@ -67,19 +67,19 @@ export async function readRoute(request: Request, run: (user: VerifiedIdentity) 
   try { return apiResponse(await run(user), 200, requestId); } catch (error) { return apiFailure(error, requestId); }
 }
 
-/** Authenticated mutation: exact same-origin, bounded JSON object body, Idempotency-Key header passed to the validator as `key`. */
+/** Authenticated mutation: exact same-origin, bounded JSON object body (4 KiB unless `bodyLimit` says otherwise), Idempotency-Key header passed to the validator as `key`. */
 export async function mutationRoute(
   request: Request,
   run: (user: VerifiedIdentity, input: Record<string, unknown>) => Promise<{ replayed?: boolean }>,
-  options: { createdStatus?: number } = {},
+  options: { createdStatus?: number; bodyLimit?: number } = {},
 ) {
   const requestId = requestIdFor(request);
   if (request.headers.get("origin") !== readProcessEnv().appUrl) return apiError("INVALID_REQUEST", "This request could not be accepted.", 403, requestId);
   const user = await verifiedIdentity();
   if (!user) return unauthenticated(requestId);
-  const body = await boundedJsonBody(request);
+  const body = await boundedJsonBody(request, options.bodyLimit);
   const key = request.headers.get("idempotency-key");
-  if (!body || typeof body !== "object" || Array.isArray(body) || !key) return apiError("INVALID_INPUT", projectErrors.INVALID_INPUT.message, 400, requestId);
+  if (!body || typeof body !== "object" || Array.isArray(body) || Object.hasOwn(body, "key") || !key) return apiError("INVALID_INPUT", projectErrors.INVALID_INPUT.message, 400, requestId);
   try {
     const result = await run(user, { ...(body as Record<string, unknown>), key });
     return apiResponse(result, options.createdStatus && !result.replayed ? options.createdStatus : 200, requestId);
