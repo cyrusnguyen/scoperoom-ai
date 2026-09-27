@@ -1,9 +1,12 @@
 // Per-project UI store (UI00 "Per-project UI state"), held in memory above the keyed project subtree.
 // Unsaved field values live here, so closing the panel or navigating away never drops them silently.
-export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; drafts: Record<string, string> };
+import { dirtyFields, isDirty } from "../../studio/ui/buffers.ts";
+import { defaultStudioUi, type StudioUi } from "../../studio/ui/studio-ui.ts";
+
+export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; drafts: Record<string, string> } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
-export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, drafts: {} };
+export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, drafts: {}, ...defaultStudioUi };
 
 export function uiFor(store: UiStore, projectId: string | undefined): ProjectUi {
   return (projectId && store[projectId]) || defaultUi;
@@ -24,16 +27,25 @@ export function setDraft(store: UiStore, projectId: string, key: string, value: 
   return { ...store, [projectId]: { ...current, drafts } };
 }
 
+/** Applies a change computed from the project's current UI state, so async callers never write a stale copy. */
+export function updateUi(store: UiStore, projectId: string, change: (ui: ProjectUi) => Partial<ProjectUi>): UiStore {
+  const current = uiFor(store, projectId);
+  return { ...store, [projectId]: { ...current, ...change(current) } };
+}
+
+/** Unsaved Details fields plus unsaved Studio fields (an unconfirmed save or an open conflict counts as one). */
 export function dirtyCount(store: UiStore, projectId: string | undefined): number {
-  return Object.keys(uiFor(store, projectId).drafts).length;
+  const ui = uiFor(store, projectId);
+  const studio = Object.values(ui.buffers).filter(isDirty).reduce((count, buffer) => count + Math.max(dirtyFields(buffer).length, 1), 0);
+  return Object.keys(ui.drafts).length + studio;
 }
 
 export function anyDirty(store: UiStore): boolean {
-  return Object.values(store).some((ui) => Object.keys(ui.drafts).length > 0);
+  return Object.keys(store).some((projectId) => dirtyCount(store, projectId) > 0);
 }
 
 export function discardDrafts(store: UiStore, projectId: string): UiStore {
-  return { ...store, [projectId]: { ...uiFor(store, projectId), drafts: {} } };
+  return { ...store, [projectId]: { ...uiFor(store, projectId), drafts: {}, buffers: {} } };
 }
 
 /** Access loss or leaving: forget everything held for that project. */
