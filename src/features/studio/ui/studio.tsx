@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { graphWarnings } from "@/features/drafts/domain/warnings";
 import { Icon } from "@/features/shell/ui/icon";
 import { INCLUSION_LABELS } from "./fields";
@@ -8,20 +8,39 @@ import FlowCanvas from "./flow-canvas";
 import { FlowsDialog } from "./flows-dialog";
 import GraphList from "./graph-list";
 import { currentFlow, recordOf } from "./graph-view";
+import { AddStepDialog, ConnectDialog, DeleteStepsDialog } from "./step-dialogs";
 import { CommandRecovery, useStudio } from "./studio-context";
 
-/** The centre of the editor: the open flow as a canvas or an ordered List, and its status. The toolbox arrives next. */
+type StudioDialog = "add" | "connect" | "delete" | null;
+
+/** Delete and Backspace act on the graph only while focus is outside text controls and IME composition. */
+function typing(event: KeyboardEvent<HTMLElement>) {
+  const target = event.target as HTMLElement;
+  return event.nativeEvent.isComposing || target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+/** The centre of the editor: the open flow, its toolbox and status. */
 export default function Studio() {
-  const { draft, narrow, ui, update, inspect } = useStudio();
+  const { draft, editable, busy, narrow, ui, update, inspect } = useStudio();
   const [creating, setCreating] = useState(false);
+  const [dialog, setDialog] = useState<StudioDialog>(null);
+  // Keep this mount stable when the first flow changes the centre from empty to populated.
   const creation = creating && <FlowsDialog key="new-flow" creating onClose={() => setCreating(false)} />;
   const flow = currentFlow(draft.document, ui.flowId);
   if (!flow) return <><NoFlows onCreate={() => setCreating(true)} />{creation}</>;
 
   const view = ui.view ?? (narrow ? "list" : "canvas");
+  const selectedSteps = ui.selection?.kind === "NODES" ? ui.selection.ids : [];
+  const stepCount = Object.values(draft.document.nodes).filter((node) => node.flowId === flow.id).length;
+  const focusFlowTitle = () => requestAnimationFrame(() => document.getElementById("studio-flow-title")?.focus());
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if ((event.key !== "Delete" && event.key !== "Backspace") || typing(event) || !editable || busy || !selectedSteps.length || dialog) return;
+    event.preventDefault();
+    setDialog("delete");
+  };
   const showFlowDetails = () => { update(() => ({ selection: { kind: "FLOW", id: flow.id } })); inspect(); };
 
-  return <><section className="studio" aria-labelledby="studio-flow-title">
+  return <><section className="studio" aria-labelledby="studio-flow-title" onKeyDown={onKeyDown}>
     <div className="studio-toolbar">
       <h2 id="studio-flow-title" className="studio-flow-title" tabIndex={-1} title={flow.title}>{flow.title}</h2>
       <span className="badge" data-inclusion={flow.inclusion}>{INCLUSION_LABELS[flow.inclusion]}</span>
@@ -30,12 +49,20 @@ export default function Studio() {
         <button type="button" aria-pressed={view === "canvas"} onClick={() => update(() => ({ view: "canvas" }))}><Icon name="flow" size={14} />Canvas</button>
         <button type="button" aria-pressed={view === "list"} onClick={() => update(() => ({ view: "list" }))}><Icon name="list" size={14} />List</button>
       </div>
+      {editable && <>
+        <button type="button" className="button small" onClick={() => setDialog("add")} disabled={busy}><Icon name="plus" size={14} />Add step</button>
+        <button type="button" className="button small" onClick={() => setDialog("connect")} disabled={busy || !stepCount}><Icon name="link" size={14} />Connect</button>
+      </>}
       <button type="button" className="button quiet small" onClick={showFlowDetails}>Flow details</button>
     </div>
     <div className="studio-stage">
-      {view === "canvas" ? <FlowCanvas flowId={flow.id} /> : <GraphList flowId={flow.id} />}
+      {view === "canvas" ? <FlowCanvas flowId={flow.id} /> : <GraphList flowId={flow.id} onDeleteSelected={() => setDialog("delete")} />}
     </div>
     <StudioStatus flowId={flow.id} />
+    {editable && dialog === "add" && <AddStepDialog flowId={flow.id} onClose={() => setDialog(null)} onAdded={(nodeId) => { setDialog(null); update(() => ({ selection: { kind: "NODES", ids: [nodeId] } })); }} />}
+    {editable && dialog === "connect" && <ConnectDialog flowId={flow.id} from={selectedSteps.length === 1 ? selectedSteps[0] : undefined} onClose={() => setDialog(null)} />}
+    {editable && dialog === "delete" && <DeleteStepsDialog flowId={flow.id} nodeIds={selectedSteps} onClose={() => setDialog(null)}
+      onDeleted={() => { setDialog(null); update(() => ({ selection: null })); focusFlowTitle(); }} />}
   </section>{creation}</>;
 }
 
