@@ -936,6 +936,20 @@ test.describe("Studio on a real draft", () => {
     } finally { release(); }
   });
 
+  test("a refused canvas connection reports failure in Studio status", async ({ page }) => {
+    await createFlowInUi(page, "Canvas connection");
+    await addStepInUi(page, "Start", "Start");
+    await addStepInUi(page, "End", "Outcome");
+    const draft = await draftOf(page, projectId);
+    const nodes = Object.fromEntries(Object.values(draft.document.nodes).map((node) => [node.label, node.id]));
+    await page.route("**/drafts/*/commands", (route) => route.fulfill({ status: 400, json: { error: { code: "INVALID_INPUT", message: "Connection refused" } } }));
+    await page.locator(`.react-flow__node[data-id="${nodes.Start}"] .react-flow__handle.source`).dragTo(
+      page.locator(`.react-flow__node[data-id="${nodes.End}"] .react-flow__handle.target`),
+    );
+    await expect(page.locator(".studio-status")).toContainText("Connection refused");
+    expect(Object.values((await draftOf(page, projectId)).document.edges)).toHaveLength(0);
+  });
+
   test("a stale canvas reconnect retains mine and original for explicit inspector recovery", async ({ page }) => {
     await createFlowInUi(page, "Canvas recovery");
     await addStepInUi(page, "Start", "Start");

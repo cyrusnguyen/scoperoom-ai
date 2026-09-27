@@ -87,7 +87,8 @@ export default function FlowCanvas({ flowId }: { flowId: string }) {
     if (selection.length) update((current) => ({ selection: selectEdge(current.selection, selection) }));
   };
   const connect = ({ source, target }: Connection) => {
-    if (source && target) void run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId: source, toId: target, condition: "" } });
+    if (!source || !target || !connectable) return;
+    void run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId: source, toId: target, condition: "" } });
   };
   const reconnect = async (edge: FlowEdge, { source, target }: Connection) => {
     if (!source || !target || !connectable) return;
