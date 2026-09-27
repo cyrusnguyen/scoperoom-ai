@@ -38,12 +38,15 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
   const focusAfter = useRef<string | null>(null);
 
   useEffect(() => {
-    // After each render: once the pending target is enabled again, focus it. An uncertain result focuses Retry change instead.
+    // After each render: once the pending target is enabled again, focus it, but only if focus was lost (the button that
+    // started the change unmounted or was disabled); never pull focus from where the user moved it meanwhile.
+    // An uncertain result focuses Retry change instead.
     if (!focusAfter.current || busy) return;
     const element = document.getElementById(retry ? "details-retry" : focusAfter.current) as HTMLButtonElement | null;
     if (!element || element.disabled) return;
     focusAfter.current = null;
-    element.focus();
+    const active = document.activeElement;
+    if (!active || active === document.body) element.focus();
   });
 
   const load = useCallback(async (signal?: AbortSignal) => {

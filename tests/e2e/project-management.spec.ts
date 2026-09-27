@@ -274,6 +274,35 @@ test.describe("project details", () => {
     expect(keys).toHaveLength(3);
   });
 
+  test("a settling Details save never pulls focus from a field the user moved to meanwhile", async ({ page }) => {
+    let status = { ...baseStatus };
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await mockOwnerLists(page);
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { project: { ...project, status: "ACTIVE", role: "OWNER" }, draft } }));
+    await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
+    await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner] } }));
+    await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
+      await held;
+      status = { ...status, settingsVersion: status.settingsVersion + 1 };
+      await route.fulfill({ json: { ...status, replayed: false } });
+    });
+    const panel = page.locator("#right-panel");
+    const email = panel.getByLabel("Verified email");
+
+    await page.goto(`/app/projects/${project.id}`);
+    await page.getByRole("button", { name: "Inspect" }).click();
+    await panel.getByLabel("Project name").fill("Renamed while typing");
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await email.click();
+    await page.keyboard.type("casey@exa");
+    release();
+    await expect(panel.getByText("Project name updated.")).toBeVisible();
+    await expect(email).toBeFocused();
+    await page.keyboard.type("mple.test");
+    await expect(email).toHaveValue("casey@example.test");
+  });
+
   test("an unsaved edit does not linger as dirty after the project is archived", async ({ page }) => {
     let status = { ...baseStatus };
     await mockOwnerLists(page);

@@ -110,6 +110,7 @@ test.describe("project creation", () => {
     const dialog = await openNewProject(page, (route) => route.fulfill({ status: 422, json: { error: { code: "OWNED_PROJECT_LIMIT", message, requestId: "00000000-0000-4000-8000-000000000000", retryable: false, details: { activeOwned: 10, maxOwned: 10 } } } }));
     await dialog.getByRole("button", { name: "Create" }).click();
     await expect(dialog.getByRole("alert")).toHaveText(message);
+    expect(await dialog.locator(".error-message").evaluate((element) => getComputedStyle(element).fontSize)).toBe("12px");
     await expect(dialog.getByLabel("Project name")).toBeEnabled();
     await expect(dialog.getByLabel("Project name")).toHaveValue(project.name);
     await dialog.getByRole("button", { name: "Cancel" }).click();
