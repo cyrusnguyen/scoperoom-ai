@@ -36,7 +36,7 @@ export async function signIn(formData: FormData) {
     redirect(withContinuation(`/login?error=${result.reason}`, continuation));
   }
   await clearPendingEmail();
-  redirect(continuation ?? "/");
+  redirect(continuation ?? "/app");
 }
 
 export async function signUp(formData: FormData) {
@@ -69,7 +69,7 @@ export async function verifyEmailCode(formData: FormData) {
   const result = await createAuthHandler(await createAuthClient()).verifyEmail(email, code);
   if (!result.ok) redirect(verifyPath(`error=${result.reason}`, continuation));
   await clearPendingEmail();
-  redirect(continuation ?? "/");
+  redirect(continuation ?? "/app");
 }
 
 export async function resendVerificationCode(formData: FormData) {

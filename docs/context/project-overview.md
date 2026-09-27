@@ -15,7 +15,7 @@ ScopeRoom helps small teams and stakeholders turn vague ideas into editable work
 
 P0 is the first complete releasable MVP/pilot. It includes access, manual and AI-assisted flow/scope editing, real online collaboration, evidence/decisions/selected examples, review/history/requests, native/PNG/handoff and operational recovery. The manual agreement path works without AI.
 
-Initial use is personal/demo with synthetic data and invited users. Workspace creation is entitled, not public unlimited signup. Real private/customer information requires additional provider/privacy/restore evidence. P1/P2 enhancements are optional and not prerequisites for releasing complete P0.
+Initial use is personal/demo with synthetic data and invited users. Project creation is entitled, not public unlimited signup. Real private/customer information requires additional provider/privacy/restore evidence. P1/P2 enhancements are optional and not prerequisites for releasing complete P0.
 
 Success means independent users complete both workflow-first and scope-first journeys, acknowledged work survives refresh, exact approval retains newer draft changes, stale/unauthorized writes fail safely and each exposed interaction is accessible. Examples describe intended checks; they are not executed implementation tests.
 

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { requireEnv } from "../support/env.ts";
+import { cleanupUsers, neutralizeStrayOverlays, openDatabase } from "./support";
 
 const authUrl = process.env.E2E_SUPABASE_URL;
 const secretKey = process.env.E2E_SUPABASE_SECRET_KEY;
@@ -10,13 +11,20 @@ const email = `canvas-${randomUUID()}@example.test`;
 let admin: SupabaseClient;
 let userId: string;
 
+/** Deleting only the Auth user leaves its app profile behind as an orphan (auth_user_id set null), so remove both. */
+async function removeAccount(authUserId: string, page?: Page) {
+  if (!process.env.E2E_DATABASE_URL) { await admin.auth.admin.deleteUser(authUserId); return; }
+  const database = await openDatabase();
+  try { await cleanupUsers(database, admin, [authUserId], page); } finally { await database.end(); }
+}
+
 test("anonymous visitors reach login before the canvas", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByRole("heading", { name: "Sign in to ScopeRoom" })).toBeVisible();
   await expect(page.getByLabel("Email address")).toBeVisible();
   await expect(page.getByLabel("Password")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Blank canvas" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "No project open" })).toHaveCount(0);
   const centerOffset = await page.locator(".login-card").evaluate((card) => {
     const box = card.getBoundingClientRect();
     return Math.abs(box.left + box.width / 2 - window.innerWidth / 2);
@@ -30,6 +38,19 @@ test("confirmation link drops the temporary auth code before sign-in", async ({ 
   await page.goto("/login?code=temporary");
   await expect(page).toHaveURL(/\/login\?status=confirmed$/);
   await expect(page.getByRole("status")).toHaveText("Email confirmed. Sign in to continue.");
+});
+test("sign-in and sign-up fit a 390 px screen and show a visible keyboard focus ring", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const path of ["/login", "/signup"]) {
+    await page.goto(path);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), `${path} fits 390 px`).toBe(true);
+    await page.keyboard.press("Tab");
+    const outline = await page.evaluate(() => {
+      const element = document.activeElement;
+      return element && element !== document.body ? getComputedStyle(element).outlineStyle : "none";
+    });
+    expect(outline, `${path} first Tab stop shows a focus ring`).not.toBe("none");
+  }
 });
 test("signup and pending verification handle direct visits and email changes", async ({ page }) => {
   await page.goto("/signup");
@@ -87,7 +108,7 @@ test.describe("local Supabase Auth", () => {
   });
 
   test.afterAll(async () => {
-    if (userId) await admin.auth.admin.deleteUser(userId);
+    if (userId) await removeAccount(userId);
   });
 
   test("blank signup name creates no Supabase identity", async ({ page }) => {
@@ -203,14 +224,14 @@ test.describe("local Supabase Auth", () => {
 
       await page.getByLabel("Verification code").fill(code!);
       await page.getByRole("button", { name: "Verify email" }).click();
-      await expect(page).toHaveURL(/\/$/);
-      await expect(page.getByRole("heading", { name: "Blank canvas" })).toBeVisible();
+      await expect(page).toHaveURL(/\/app$/);
+      await expect(page.getByRole("heading", { level: 1, name: "No project open" })).toBeVisible();
       const { data: verified } = await admin.auth.admin.getUserById(pending!.id);
       expect(verified.user?.email_confirmed_at).toBeTruthy();
     } finally {
       const { data: users } = await admin.auth.admin.listUsers();
       const created = users.users.find((user) => user.email === signupEmail);
-      if (created) await admin.auth.admin.deleteUser(created.id);
+      if (created) await removeAccount(created.id, page);
     }
   });
 
@@ -225,25 +246,25 @@ test.describe("local Supabase Auth", () => {
     await expect(page).toHaveURL(/\/login$/);
   });
 
-  test("account sign-in opens the canvas and sign-out closes access", async ({ page }) => {
+  test("account sign-in opens the projects shell and sign-out closes access", async ({ page }) => {
+    await neutralizeStrayOverlays(page);
     await page.goto("/login");
     await page.getByLabel("Email address").fill(email);
     await page.getByLabel("Password").fill(password);
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByRole("heading", { name: "Blank canvas" })).toBeVisible();
-    await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible();
-    await expect(page.getByText("No project is connected yet.")).toBeVisible();
+    await expect(page).toHaveURL(/\/app$/);
+    await expect(page.getByRole("heading", { level: 1, name: "No project open" })).toBeVisible();
+    await expect(page.locator("#projects-nav")).toBeVisible();
     expect(await page.locator("body").evaluate((body) => getComputedStyle(body).backgroundColor)).toBe("rgb(25, 28, 26)");
-    await page.goto("/");
+    await page.goto("/app");
+    await expect(page.getByRole("heading", { level: 1, name: "No project open" })).toBeVisible();
     await page.keyboard.press("Tab");
-    await expect(page.getByRole("link", { name: "Skip to main content" })).toBeFocused();
+    await expect(page.getByRole("link", { name: "Skip to editor" })).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("main")).toBeFocused();
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(page.getByRole("heading", { name: "Your projects" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Project details" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "No project open" })).toBeVisible();
     const dimensions = await page.evaluate(() => ({
       content: document.documentElement.scrollWidth,
       viewport: document.documentElement.clientWidth,

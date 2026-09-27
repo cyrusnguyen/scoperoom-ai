@@ -2,13 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiMutate, sessionEnded } from "@/client/api";
+import type { ProjectMemberRole } from "@/features/projects/contracts/invitation";
 
-type Acceptance = { projectId: string; role: "EDITOR" | "REVIEWER" | "VIEWER"; replayed: boolean };
-type ErrorBody = { error?: { message?: string } };
-
-async function problem(response: Response) {
-  try { return (await response.json() as ErrorBody).error?.message; } catch { return undefined; }
-}
+type Acceptance = { projectId: string; role: ProjectMemberRole; replayed: boolean };
 
 export default function InviteAcceptance({ token, signOut }: { token: string; signOut: () => Promise<void> }) {
   const router = useRouter();
@@ -18,28 +15,12 @@ export default function InviteAcceptance({ token, signOut }: { token: string; si
   const accept = useCallback(async () => {
     setState("loading");
     setMessage("Checking this invitation…");
-    try {
-      const response = await fetch("/api/invitations/accept", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Idempotency-Key": key },
-        body: JSON.stringify({ token }),
-      });
-      if (!response.ok) {
-        if (response.status >= 500) {
-          setState("uncertain");
-          setMessage("We could not confirm access. Retry uses the same invitation request.");
-        } else {
-          setState("denied");
-          setMessage((await problem(response)) ?? "This invitation is unavailable for this account.");
-        }
-        return;
-      }
-      const accepted = await response.json() as Acceptance;
-      router.replace(`/app/projects/${accepted.projectId}`);
-    } catch {
-      setState("uncertain");
-      setMessage("We could not confirm access. Retry uses the same invitation request.");
-    }
+    const result = await apiMutate<Acceptance>("/api/invitations/accept", key, { token });
+    if (result.ok) { router.replace(`/app/projects/${result.data.projectId}`); return; }
+    // An ended session signs in again and comes back to this invitation (the same continuation the page's own redirect uses).
+    if (sessionEnded(result, `/login?continue=${encodeURIComponent(`/invite/${token}`)}`)) return;
+    setState(result.uncertain ? "uncertain" : "denied");
+    setMessage(result.uncertain ? "We could not confirm access. Retry uses the same invitation request." : result.message);
   }, [key, router, token]);
 
   useEffect(() => { const timer = window.setTimeout(() => { void accept(); }, 0); return () => window.clearTimeout(timer); }, [accept]); // The key is deliberately held for an uncertain retry.

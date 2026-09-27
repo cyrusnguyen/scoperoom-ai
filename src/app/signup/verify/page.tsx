@@ -16,7 +16,7 @@ export default async function VerifyPage({ searchParams }: VerifyPageProps) {
   if (authConfig()) {
     const supabase = await createAuthClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (user?.email_confirmed_at && !user.is_anonymous) redirect(continuation ?? "/");
+    if (user?.email_confirmed_at && !user.is_anonymous) redirect(continuation ?? "/app");
   }
   const email = await getPendingEmail();
   if (!email) redirect(`/signup${continuation ? `?continue=${encodeURIComponent(continuation)}` : ""}`);

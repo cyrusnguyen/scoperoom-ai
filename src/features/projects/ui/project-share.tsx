@@ -1,55 +1,46 @@
 "use client";
 
 import { useCallback, useEffect, useState, type SubmitEvent } from "react";
+import { apiMutate, apiRead, sessionEnded } from "@/client/api";
+import { projectMemberRoles, type ProjectMemberRole } from "../contracts/invitation";
+import { roleLabel } from "./format";
 
-type Role = "OWNER" | "EDITOR" | "REVIEWER" | "VIEWER";
-type Invitation = { id: string; verifiedEmail: string; role: Exclude<Role, "OWNER">; expiresAt: string; status: string; version: number };
+type Invitation = { id: string; verifiedEmail: string; role: ProjectMemberRole; expiresAt: string; status: string; version: number };
 type Issue = Invitation & { url?: string; linkUnavailable: boolean; replayed: boolean };
-type ApiError = { error?: { message?: string } };
 
-async function errorMessage(response: Response, fallback: string) {
-  try { return (await response.json() as ApiError).error?.message || fallback; } catch { return fallback; }
-}
-
-function roleLabel(role: Role) { return role[0] + role.slice(1).toLowerCase(); }
-
-export default function ProjectShare({ projectId, role }: { projectId: string; role: Role }) {
-  const [open, setOpen] = useState(false);
-  const [email, setEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<Invitation["role"]>("EDITOR");
+/**
+ * Details → Invite (owner of an ACTIVE project). The one-time link is held in memory only. A lost response can be replayed
+ * for the invitation's metadata but never its link, so the owner is offered Revoke and reissue.
+ */
+export default function ProjectShare({ projectId, email, onEmailChange }: { projectId: string; email: string; onEmailChange: (value: string) => void }) {
+  const [inviteRole, setInviteRole] = useState<ProjectMemberRole>("EDITOR");
   const [key, setKey] = useState("");
   const [issuing, setIssuing] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageError, setMessageError] = useState(false);
   const [issued, setIssued] = useState<Issue | null>(null);
   const [invitations, setInvitations] = useState<Invitation[] | null>(null);
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [revokeKeys, setRevokeKeys] = useState<Record<string, string>>({});
 
-  const refresh = useCallback(async (clearMessage = true) => {
-    try {
-      const response = await fetch(`/api/projects/${projectId}/invitations`, { cache: "no-store" });
-      if (!response.ok) throw new Error(await errorMessage(response, "Invitation details are unavailable."));
-      const body = await response.json() as { invitations: Invitation[] };
-      setInvitations(body.invitations);
-      setRefreshFailed(false);
-      if (clearMessage) setMessage("");
-      return true;
-    } catch (error) {
-      setInvitations(null);
-      setRefreshFailed(true);
-      setMessage(error instanceof Error ? error.message : "Invitation details are unavailable.");
-      return false;
-    }
+  const refresh = useCallback(async (clearMessage = true, signal?: AbortSignal) => {
+    const result = await apiRead<{ invitations: Invitation[] }>(`/api/projects/${projectId}/invitations`, signal);
+    if (signal?.aborted) return false;
+    if (sessionEnded(result)) return false;
+    if (!result.ok) { setInvitations(null); setRefreshFailed(true); setMessage(result.message); setMessageError(true); return false; }
+    setInvitations(result.data.invitations);
+    setRefreshFailed(false);
+    if (clearMessage) { setMessage(""); setMessageError(false); }
+    return true;
   }, [projectId]);
 
   useEffect(() => {
-    if (!open || role !== "OWNER") return;
-    const timer = window.setTimeout(() => { void refresh(); }, 0);
-    return () => window.clearTimeout(timer);
-  }, [open, refresh, role]);
-
-  if (role !== "OWNER") return null;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => { void refresh(true, controller.signal); }, 0);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [refresh]);
 
   const issue = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -58,32 +49,26 @@ export default function ProjectShare({ projectId, role }: { projectId: string; r
     setIssuing(true);
     setUncertain(false);
     setMessage("");
-    try {
-      const response = await fetch(`/api/projects/${projectId}/invitations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Idempotency-Key": requestKey },
-        body: JSON.stringify({ verifiedEmail: email, role: inviteRole }),
-      });
-      if (!response.ok) {
-        setMessage(await errorMessage(response, "We could not create this invitation."));
-        setUncertain(response.status >= 500);
-        if (response.status < 500) setKey("");
-        return;
-      }
-      const next = await response.json() as Issue;
-      setIssued(next);
-      setKey("");
-      setUncertain(false);
-      const confirmation = next.linkUnavailable ? "The invitation was already created, but its one-time link is no longer available." : next.replayed ? "This invitation was already created." : "Invitation created.";
-      // Confirm with the link, so a Copy result reported during the list refresh is not overwritten.
-      setMessage(confirmation);
-      if (!await refresh(false)) setMessage((current) => `${confirmation} ${current}`);
-    } catch {
-      setUncertain(true);
-      setMessage("We could not confirm invitation creation. Retry uses the same invitation request.");
-    } finally {
-      setIssuing(false);
+    setMessageError(false);
+    const result = await apiMutate<Issue>(`/api/projects/${projectId}/invitations`, requestKey, { verifiedEmail: email, role: inviteRole });
+    setIssuing(false);
+    if (sessionEnded(result)) return;
+    if (!result.ok) {
+      setUncertain(result.uncertain);
+      setMessage(result.status === 0 ? "We could not confirm invitation creation. Retry uses the same invitation request." : result.message);
+      setMessageError(true);
+      if (!result.uncertain) setKey("");
+      return;
     }
+    const next = result.data;
+    setIssued(next);
+    setKey("");
+    onEmailChange("");
+    const confirmation = next.linkUnavailable ? "The invitation was already created, but its one-time link is no longer available." : next.replayed ? "This invitation was already created." : "Invitation created.";
+    // Confirm with the link, so a Copy result reported during the list refresh is not overwritten.
+    setMessage(confirmation);
+    setMessageError(false);
+    if (!await refresh(false)) setMessage((current) => `${confirmation} ${current}`);
   };
 
   const copy = async () => {
@@ -91,76 +76,91 @@ export default function ProjectShare({ projectId, role }: { projectId: string; r
     try {
       await navigator.clipboard.writeText(issued.url);
       setMessage("Invitation link copied.");
+      setMessageError(false);
     } catch {
       setMessage("Copy did not complete. Select the link and copy it manually.");
+      setMessageError(true);
     }
   };
 
+  const setRevokeKey = (id: string, key?: string) => setRevokeKeys((current) => {
+    const next = { ...current };
+    if (key) next[id] = key;
+    else delete next[id];
+    return next;
+  });
+
+  /** An uncertain result keeps this row's key for Retry; a CONFLICT re-reads the list before the row's button re-enables. */
   const revoke = async (invitation: Invitation) => {
-    const requestKey = crypto.randomUUID();
+    const key = revokeKeys[invitation.id] ?? crypto.randomUUID();
+    setRevokeKey(invitation.id, key);
     setRevoking(invitation.id);
     setMessage("");
-    try {
-      const response = await fetch(`/api/projects/${projectId}/invitations/${invitation.id}/revoke`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Idempotency-Key": requestKey },
-        body: JSON.stringify({ expectedVersion: invitation.version }),
-      });
-      if (!response.ok) {
-        setMessage(await errorMessage(response, "We could not revoke this invitation."));
-        return;
-      }
-      setIssued((current) => current?.id === invitation.id ? null : current);
-      const refreshed = await refresh(false);
-      const confirmation = "Invitation revoked. You can create a replacement invitation.";
-      setMessage((current) => refreshed ? confirmation : `${confirmation} ${current}`);
-    } catch {
-      setMessage("We could not confirm that invitation was revoked. Refresh before trying again.");
-    } finally {
+    setMessageError(false);
+    const result = await apiMutate(`/api/projects/${projectId}/invitations/${invitation.id}/revoke`, key, { expectedVersion: invitation.version });
+    if (sessionEnded(result)) { setRevoking(null); return; }
+    if (!result.ok && result.uncertain) {
       setRevoking(null);
+      setMessage("We could not confirm that invitation was revoked. Retry uses the same request.");
+      setMessageError(true);
+      return;
     }
+    setRevokeKey(invitation.id);
+    if (!result.ok) {
+      setMessage(result.message);
+      setMessageError(true);
+      if (result.code === "CONFLICT") await refresh(false);
+      setRevoking(null);
+      return;
+    }
+    setRevoking(null);
+    setIssued((current) => current?.id === invitation.id ? null : current);
+    const confirmation = "Invitation revoked. You can create a replacement invitation.";
+    const refreshed = await refresh(false);
+    setMessage((current) => refreshed ? confirmation : `${confirmation} ${current}`);
+    setMessageError(!refreshed);
   };
 
   const pending = invitations?.filter((invitation) => invitation.status === "PENDING") ?? [];
-  return (
-    <section className="share-project" aria-labelledby="share-title">
-      <button className="context-share-button" type="button" aria-expanded={open} aria-controls="share-panel" onClick={() => setOpen((value) => !value)}>Share project</button>
-      {open && <div id="share-panel" className="share-panel">
-        <h3 id="share-title">Share this project</h3>
-        <p className="share-notice">Editors can edit this whole project. Invitation links are one-time and expire after seven days.</p>
-        <form className="share-form" onSubmit={issue}>
-          <label htmlFor="invite-email">Verified email</label>
-          <input id="invite-email" name="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} disabled={issuing || uncertain} autoComplete="email" required maxLength={254} />
-          <label htmlFor="invite-role">Project role</label>
-          <select id="invite-role" value={inviteRole} onChange={(event) => setInviteRole(event.target.value as Invitation["role"])} disabled={issuing || uncertain}>
-            {(["EDITOR", "REVIEWER", "VIEWER"] as const).map((value) => <option key={value} value={value}>{roleLabel(value)}</option>)}
-          </select>
-          <div className="share-actions">
-            <button className="context-share-button" type="submit" disabled={issuing}>{issuing ? "Creating..." : uncertain ? "Retry invitation" : "Create invitation"}</button>
-            {(uncertain || issued) && <button className="text-button" type="button" disabled={issuing} onClick={() => { setIssued(null); setKey(""); setUncertain(false); setMessage(""); }}>Cancel</button>}
-          </div>
-        </form>
-        {issued?.url && <div className="invite-link">
-          <label htmlFor="invite-link">One-time invitation link</label>
-          <input id="invite-link" value={issued.url} readOnly onFocus={(event) => event.currentTarget.select()} aria-describedby="invite-link-help" />
-          <button className="text-button" type="button" onClick={() => void copy()}>Copy link</button>
-          <p id="invite-link-help">Select this link to copy it manually if needed. It is not shown again after reload.</p>
-        </div>}
-        {issued?.linkUnavailable && <div className="invite-recovery">
-          <p>Revoke this invitation before creating a replacement. The original link cannot be recovered.</p>
-          <button className="text-button" type="button" onClick={() => void revoke(issued)} disabled={revoking === issued.id}>Revoke and reissue</button>
-        </div>}
-        <p className="share-message" role="status" aria-live="polite">{message}</p>
-        <div className="pending-invitations">
-          <div className="workspace-list-heading"><h4>Pending invitations</h4><button className="text-button" type="button" onClick={() => void refresh()} disabled={Boolean(revoking)}>Refresh</button></div>
-          {invitations === null ? <p>{refreshFailed ? "Invitation details could not be refreshed. Use Refresh to retry." : "Loading invitation details..."}</p> : pending.length ? <ul>
-            {pending.map((invitation) => <li key={invitation.id}>
-              <span><strong>{invitation.verifiedEmail}</strong><small>{roleLabel(invitation.role)} - expires {new Date(invitation.expiresAt).toLocaleDateString()}</small></span>
-              <button className="text-button" type="button" onClick={() => void revoke(invitation)} disabled={revoking === invitation.id}>{revoking === invitation.id ? "Revoking..." : "Revoke"}</button>
-            </li>)}
-          </ul> : <p>No pending invitations.</p>}
-        </div>
-      </div>}
-    </section>
-  );
+  return <section className="detail-section" aria-labelledby="share-title">
+    <h3 id="share-title">Invite</h3>
+    <p className="muted">Editors can edit this whole project. Invitation links are one-time and expire after seven days.</p>
+    <form onSubmit={issue}>
+      <div className="field">
+        <label htmlFor="invite-email">Verified email</label>
+        <input id="invite-email" name="email" type="email" value={email} onChange={(event) => onEmailChange(event.target.value)} disabled={issuing || uncertain} autoComplete="email" required maxLength={254} />
+      </div>
+      <div className="field">
+        <label htmlFor="invite-role">Project role</label>
+        <select id="invite-role" value={inviteRole} onChange={(event) => setInviteRole(event.target.value as ProjectMemberRole)} disabled={issuing || uncertain}>
+          {projectMemberRoles.map((value) => <option key={value} value={value}>{roleLabel(value)}</option>)}
+        </select>
+      </div>
+      <div className="view-actions">
+        <button type="submit" className="button small" disabled={issuing}>{issuing ? "Creating..." : uncertain ? "Retry invitation" : "Create invitation"}</button>
+        {(uncertain || issued) && <button type="button" className="button quiet small" disabled={issuing} onClick={() => { setIssued(null); setKey(""); setUncertain(false); setMessage(""); }}>Cancel</button>}
+      </div>
+    </form>
+    {issued?.url && <div className="field invite-link">
+      <label htmlFor="invite-link">One-time invitation link</label>
+      <input id="invite-link" value={issued.url} readOnly onFocus={(event) => event.currentTarget.select()} aria-describedby="invite-link-help" />
+      <div className="view-actions"><button type="button" className="button small" onClick={() => void copy()}>Copy link</button></div>
+      <small id="invite-link-help">Select this link to copy it manually if needed. It is not shown again after reload.</small>
+    </div>}
+    {issued?.linkUnavailable && <div className="inline-note">
+      <p>Revoke this invitation before creating a replacement. The original link cannot be recovered.</p>
+      <div className="view-actions"><button type="button" className="button small" onClick={() => void revoke(issued)} disabled={revoking === issued.id}>{revokeKeys[issued.id] && revoking !== issued.id ? "Retry revoke and reissue" : "Revoke and reissue"}</button></div>
+    </div>}
+    <p className="muted" role={messageError ? "alert" : "status"} aria-live="polite">{message}</p>
+    <div className="section-heading">
+      <h4>Pending invitations</h4>
+      <button type="button" className="button quiet small" onClick={() => void refresh()} disabled={Boolean(revoking)}>Refresh</button>
+    </div>
+    {invitations === null ? <p className="muted">{refreshFailed ? "Invitation details could not be refreshed. Use Refresh to retry." : "Loading invitation details..."}</p>
+    : pending.length ? <ul className="item-list">{pending.map((invitation) => <li key={invitation.id} className="item-row">
+      <span><strong>{invitation.verifiedEmail}</strong><small>{roleLabel(invitation.role)} · expires {new Date(invitation.expiresAt).toLocaleDateString()}</small></span>
+      <button type="button" className="button quiet small" onClick={() => void revoke(invitation)} disabled={revoking === invitation.id}>{revoking === invitation.id ? "Revoking..." : revokeKeys[invitation.id] ? "Retry revoke" : "Revoke"}</button>
+    </li>)}</ul>
+    : <p className="muted">No pending invitations.</p>}
+  </section>;
 }
