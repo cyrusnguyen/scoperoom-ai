@@ -1,4 +1,5 @@
 import { Prisma } from "../../../../prisma/generated/client.ts";
+import { emptyDraft } from "../../drafts/contracts/scope-document.ts";
 import {
   PROJECT_LIST_LIMIT, type CreatedProject, type CreateProjectInput, type ProjectAccessRole, type ProjectBootstrap, type ProjectGroup,
   type ProjectIdentity, type ProjectListItem, type ProjectLists, type ProjectStatusView, uuid, validateProjectCreateInput,
@@ -11,13 +12,6 @@ import { ProjectError } from "./errors.ts";
 
 const CREATE_OPERATION = "CREATE_PROJECT_V2";
 
-const emptyDocument = {
-  schemaVersion: 3, projectGoal: "",
-  flows: {}, nodes: {}, edges: {}, requirements: {}, traceLinks: {},
-  scenarios: {}, questions: {}, decisions: {}, dependencies: {}, waivers: {},
-  retiredEntityIds: [],
-} as const;
-const emptyLayout = { schemaVersion: 1, positions: {}, directions: {} } as const;
 
 export async function createProject(identity: ProjectIdentity, input: unknown): Promise<CreatedProject> {
   let validated: CreateProjectInput;
@@ -39,7 +33,8 @@ export async function createProject(identity: ProjectIdentity, input: unknown): 
       }
       await assertOwnerCapacity(tx, profile.id);
       const project = await tx.project.create({ data: { ownerId: profile.id, name: validated.name, eventSequence: BigInt(1) }, select: { id: true, name: true } });
-      const draft = await tx.scopeDraft.create({ data: { projectId: project.id, createdBy: profile.id, documentJson: emptyDocument, layoutJson: emptyLayout }, select: { id: true } });
+      const empty = emptyDraft();
+      const draft = await tx.scopeDraft.create({ data: { projectId: project.id, createdBy: profile.id, documentJson: empty.document, layoutJson: empty.layout }, select: { id: true } });
       await tx.project.update({ where: { id: project.id }, data: { currentDraftId: draft.id } });
       await tx.auditEvent.create({ data: { projectId: project.id, sequence: BigInt(1), actorId: profile.id, action: "PROJECT_CREATED", entityRefs: [{ kind: "PROJECT", id: project.id }], metadata: {} } });
       await saveReceipt(tx, profile.id, "USER", profile.id, validated.key, CREATE_OPERATION, hash, { id: project.id, name: project.name });
