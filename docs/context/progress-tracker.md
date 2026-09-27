@@ -1,8 +1,17 @@
 # Progress tracker
 
-Last updated: 2026-09-27. Stages 01, 02 and 02R are merged through PR #12. The product is project-only. Stage 03.1 is locally implemented, reviewed and verified on an unpushed branch, awaiting user approval to push and open a PR. The v1.6 handbook is current; v1.5 is superseded.
+Last updated: 2026-09-28. Stages 01, 02, 02R and 03.1 are merged through PR #13. The product is project-only. Stage 03.2 passed its final local gates on an unpushed branch and awaits user approval to push or open a PR. The v1.6 handbook is current; v1.5 is superseded.
 
-## Stage 03.1 — graph commands (local, awaiting approval)
+## Stage 03.2 — Studio canvas, toolbox and inspector (local, unpushed)
+
+- Branch feat/stage-03-2-studio-ui-20260927 in .worktrees/stage-03-2-studio-ui-20260927 from main at da96d24 (PR #13 merged), 19 code commits, including the main worktree's five uncommitted plan files as untracked reference. Atlas Projects remains untouched. No push or PR.
+- Implemented: React Flow 12.11.6 controlled canvas and ordered keyboard List, a Flows menu, Add/Connect/Delete toolbox, and the shared Details inspector. The project bootstrap returns a parsed draft. One command runs per tab, followed by an authoritative draft read. Per-project buffers retain local text, exact uncertain retries, conflicts, and removed-item copy/discard recovery. A concurrent edge reconnect now gets a stale conflict and explicit comparison before reapply.
+- Deferred to 03.3: drag, saved position form, arrangement and position undo. Other people's changes appear after this person's next save, refusal or reload until Stage 04 adds live delivery. No schema, migration, hosted or deployment change.
+- Final local gates at c643665 on Node v24.21.0: lint and typecheck passed with no warnings; unit 106/106 and guarded local integration 60/60 passed, zero skipped; production build passed with two workers; full Chromium passed 110/110 with zero skips in two consecutive runs on the same commit. No hex color outside tokens.css. Per-task, whole-branch and scoped security reviews completed; all confirmed findings were fixed and re-reviewed.
+- Manual Windows IME and NVDA checks could not run because those tools were unavailable in this session; actual 200% browser zoom could not run because the visible-browser tool failed to initialize. Chromium covers synthetic IME composition and effective narrow editor layouts at 390, 900 and 1250 px. Hosted Supabase, deployment, GitHub CI and browsers beyond Chromium remain unverified; CI evidence awaits an approved push.
+- Next action: ask the user to approve pushing this branch or opening the Stage 03.2 PR; do neither before approval. Stage 03.3 follows after this stage is accepted.
+
+## Stage 03.1 — graph commands (merged, PR #13)
 
 - Branch `feat/stage-03-1-graph-commands` in `.worktrees/stage-03-1-graph-commands`, based on merged PR #12 (`5f80bb3`), includes the pre-existing uncommitted context changes. `docs/superpowers/` remains untracked and excluded from commits. The Atlas Projects worktree was the project-only UI reference and was left untouched.
 - Implemented strict ScopeDocument v3 and DraftLayout v1 contracts, eleven typed graph commands, pure graph transforms and exact dependency plans, a transactional command dispatcher, PROJECT-scoped receipts, audit events and event sequences. GET draft returns editable or archived status; POST draft commands has a 64 KiB request limit. The app_web role receives only the five required draft update columns.
@@ -10,7 +19,7 @@ Last updated: 2026-09-27. Stages 01, 02 and 02R are merged through PR #12. The p
 - Stage 03.1 has no new graph UI; Stage 03.2 owns manual studio UI, and Stage 03.3 owns MOVE_NODES and ARRANGE_FLOW. Draft document, layout, flows and dependency-preview read routes remain for their first consumers. The baseline pointer remains absent because Stage 02R has no baseline snapshot ID column.
 - Final local gates at `2838780` on Node v24.21.0: Prisma validate, lint, typecheck and production build passed; unit 85/85, guarded local database integration 59/59, and full Chromium 58/58, all with zero failures or skips. Chromium used the restarted isolated app on 127.0.0.1:3101 with `SCOPEROOM_E2E=1`. Migration `20260927000000_draft_commands` applied to local E2 without reset; hosted migration and deployment were untouched.
 - Each of five implementation tasks passed independent review. A security audit found a stale membership role possible after a project lock wait; `a3ac2c0` fixed it with deterministic regressions and passed scoped security re-review. Whole-branch review found two persistence boundary defects and one ineffective byte-cap test; `2838780` fixed all three, and the scoped re-review found no new Critical or Important issue.
-- Remaining verification: hosted migration and deployment, migration replay, GitHub CI and browsers beyond Chromium. Next action: request approval before pushing this branch or opening the Stage 03.1 PR; Stage 03.2 follows only after 03.1 merges.
+- Local limitations at handoff: hosted migration and deployment, migration replay, and browsers beyond Chromium were not verified. Merged in PR #13; Stage 03.2 follows.
 
 ## Stage 02R.2 — shell UI (merged, PR #12)
 
@@ -113,4 +122,4 @@ The user-reported Gmail address was already confirmed in hosted `auth.users` bef
 
 ## Remaining deployment check
 
-ScopeRoom has not been deployed to Vercel. Supabase's hosted Site URL is still localhost, so a production redirect cannot be verified yet. At deployment, set the exact HTTPS production origin in Supabase Site URL and allow `<production-origin>/login`; set matching Vercel public environment variables, then repeat a fresh delivered-email signup and redirect test. PR #5, PR #6, and PR #7 are merged. PR #8 and PR #9 merged the Stage 02 management slice; PR #11 and PR #12 merged the project-only redesign. Stage 03.1 has been verified locally but has not been pushed.
+ScopeRoom has not been deployed to Vercel. Supabase's hosted Site URL is still localhost, so a production redirect cannot be verified yet. At deployment, set the exact HTTPS production origin in Supabase Site URL and allow `<production-origin>/login`; set matching Vercel public environment variables, then repeat a fresh delivered-email signup and redirect test. PR #5, PR #6, and PR #7 are merged. PR #8 and PR #9 merged the Stage 02 management slice; PR #11 and PR #12 merged the project-only redesign. Stage 03.1 merged in PR #13. Stage 03.2 passed local automated gates and awaits user approval before a push or PR.

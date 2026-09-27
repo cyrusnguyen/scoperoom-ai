@@ -10,7 +10,7 @@ The shell (`src/features/shell/ui/project-shell.tsx`) lives in the `/app` layout
 
 ## Incremental integration
 
-Access connects the project shell; manual Studio connects toolbox, forms and saved positions; Realtime adds presence, motion and recovery; exchange adds import and export; durable AI adds conversation and proposals in the right panel's AI tab. Scope, selected checks, agreement and requests extend the same panels. A stage verifies its own reachable controls, not only backend functions.
+Access connects the project shell. Manual Studio (Stage 03.2) renders the open flow in `src/features/studio/ui` as a controlled React Flow canvas or an ordered List, with a toolbox (Add step, Connect), a Flows menu in the editor header and the right panel's Details tab as the one inspector; every change is a draft command and the saved draft is re-read after it. Typed inspector text lives in the per-project store's `buffers` until it is acknowledged; conflicts compare saved and typed values. Saved positions and arrangement arrive in 03.3; Realtime adds presence, motion and recovery; exchange adds import and export; durable AI adds conversation and proposals in the right panel's AI tab. Scope, selected checks, agreement and requests extend the same panels. A stage verifies its own reachable controls, not only backend functions.
 
 Unavailable future actions are hidden; simulated screens never claim real saved, approved or collaboration state. The final UI pass verifies cross-feature behavior rather than postponing basic accessibility.
 

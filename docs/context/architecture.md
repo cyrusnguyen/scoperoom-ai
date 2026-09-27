@@ -19,6 +19,7 @@ The [tracker](progress-tracker.md) distinguishes planned architecture from obser
 - `src/app`: thin Next routes and authorized server composition; one active App Router root.
 - `src/features/<feature>/{contracts,domain,server,ui}`: keep related changes together.
 - `src/features/drafts`: saved document/layout contracts, pure graph transforms and the command dispatcher; manual graph writes pass through the dispatcher.
+- `src/features/studio/ui`: the Studio (canvas, List, toolbox, Flows menu, inspector) and its `StudioProvider`; it reads the draft from the shell's project bootstrap and writes only through draft commands.
 - `src/client`: shared browser transport/auth/providers; feature hooks stay with their UI.
 - `src/features/shell/ui` (the `/app` shell), `src/client` (browser fetch helper) and `src/styles/tokens.css`: shared presentation and tokens with safe props.
 - `src/contracts`: runtime-neutral common wire schemas.
