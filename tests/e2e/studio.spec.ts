@@ -112,6 +112,79 @@ test.describe("Studio on a real draft", () => {
     expect(Object.keys((await draftOf(page, projectId)).document.flows)).toEqual(Object.keys(original.document.flows));
   });
 
+  test("central recovery settles create, duplicate and delete dialogs in a populated project", async ({ page }) => {
+    await createFlowInUi(page, "Existing");
+    const attempts = new Map<string, { key: string; body: string }[]>();
+    await page.route("**/commands", async (route) => {
+      const command = route.request().postDataJSON().command as string;
+      const requests = attempts.get(command) ?? [];
+      requests.push({ key: route.request().headers()["idempotency-key"], body: route.request().postData()! });
+      attempts.set(command, requests);
+      const response = await route.fetch();
+      if (requests.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
+      else await route.fulfill({ response });
+    });
+    await page.locator(".flow-switch").click();
+    await modal(page, "Flows").getByRole("button", { name: "New flow" }).click();
+    const form = modal(page, "New flow");
+    await form.getByLabel("Title").fill("Second");
+    await form.getByRole("button", { name: "Create flow" }).click();
+    await form.getByRole("button", { name: "Retry last change" }).click();
+    await expect(form).toHaveCount(0);
+    await expect(page.locator("#studio-flow-title")).toHaveText("Second");
+    expect(Object.keys((await draftOf(page, projectId)).document.flows)).toHaveLength(2);
+    await page.locator(".flow-switch").click();
+    const flows = modal(page, "Flows");
+    await flows.getByRole("button", { name: "Duplicate Second" }).click();
+    await flows.getByRole("button", { name: "Retry last change" }).click();
+    await expect(flows).toHaveCount(0);
+    await expect(page.locator("#studio-flow-title")).toHaveText("Copy of Second");
+    await page.locator(".flow-switch").click();
+    await flows.getByRole("button", { name: /^Delete Copy of Second/ }).click();
+    const confirmation = modal(page, "Delete Copy of Second?");
+    await confirmation.getByRole("button", { name: "Delete flow", exact: true }).click();
+    await confirmation.getByRole("button", { name: "Retry last change" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(Object.values((await draftOf(page, projectId)).document.flows).map((flow) => flow.title).sort()).toEqual(["Existing", "Second"]);
+    for (const requests of attempts.values()) { expect(requests).toHaveLength(2); expect(requests[1]).toEqual(requests[0]); }
+  });
+
+  for (const { populated, uncertain } of [{ populated: false, uncertain: false }, { populated: true, uncertain: false }, { populated: true, uncertain: true }]) test(`flow creation preserves newer typed fields after acknowledgement (populated: ${populated}, uncertain: ${uncertain})`, async ({ page }) => {
+    if (populated) { await createFlowInUi(page, "Existing"); await page.locator(".flow-switch").click(); }
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let writes = 0;
+    await page.route("**/commands", async (route) => {
+      writes++;
+      const response = await route.fetch();
+      if (writes === 1) await gate;
+      if (writes === 1 && uncertain) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
+      else await route.fulfill({ response });
+    });
+    await page.getByRole("button", { name: "New flow", exact: true }).click();
+    const form = modal(page, "New flow");
+    await form.getByLabel("Title").fill("Submitted title");
+    await form.getByRole("button", { name: "Create flow" }).click();
+    await expect(form.getByRole("button", { name: /^Creating/ })).toBeDisabled();
+    await form.getByLabel("Title").fill("Newer title");
+    await form.getByLabel("Type").selectOption("BUSINESS_PROCESS");
+    await form.getByLabel("Scope").selectOption("INCLUDED");
+    release();
+    if (uncertain) await form.getByRole("button", { name: "Retry last change" }).click();
+    await expect(form.getByRole("status")).toContainText("Your newer values are unsaved");
+    await expect(form.getByLabel("Title")).toHaveValue("Newer title");
+    await expect(form.getByLabel("Type")).toHaveValue("BUSINESS_PROCESS");
+    await expect(form.getByLabel("Scope")).toHaveValue("INCLUDED");
+    const saved = Object.values((await draftOf(page, projectId)).document.flows).find((flow) => flow.title === "Submitted title")!;
+    expect(saved.classification).toBe("USER_JOURNEY");
+    expect(saved.inclusion).toBe("UNDECIDED");
+    expect(writes).toBe(uncertain ? 2 : 1);
+    await form.getByRole("button", { name: "Create flow" }).click();
+    await expect(form).toHaveCount(0);
+    await expect(page.locator("#studio-flow-title")).toHaveText("Newer title");
+    expect(writes).toBe(uncertain ? 3 : 2);
+  });
+
 });
 
 test.describe("Studio read-only and narrow states (mocked project)", () => {
@@ -269,6 +342,12 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await expect(list).toHaveAttribute("aria-pressed", "true");
     expect((await list.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     expect((await toolbar(page).getByRole("button", { name: "Flow details" }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await toolbar(page).getByRole("button", { name: "Canvas", exact: true }).click();
+    for (const name of ["Zoom In", "Zoom Out", "Fit View"]) {
+      const box = await page.getByRole("button", { name, exact: true }).boundingBox();
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+      expect(box!.width).toBeGreaterThanOrEqual(44);
+    }
     expect(await pageFits(page)).toBe(true);
   });
 

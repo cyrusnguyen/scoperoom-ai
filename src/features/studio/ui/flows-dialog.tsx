@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, type SubmitEvent } from "react";
+import { useRef, useState, type SubmitEvent } from "react";
+import type { GraphCommand } from "@/features/drafts/contracts/commands";
 import { CLASSIFICATIONS, INCLUSIONS, LIMITS, type Classification, type Inclusion } from "@/features/drafts/contracts/scope-document";
 import { dependencyPlan } from "@/features/drafts/domain/graph";
 import Dialog from "@/features/shell/ui/dialog";
 import { Icon } from "@/features/shell/ui/icon";
 import { CLASSIFICATION_LABELS, fieldErrors, INCLUSION_LABELS } from "./fields";
 import { currentFlow, flowsInOrder } from "./graph-view";
-import { CommandRecovery, explain, formKeys, useCommandSubmit, useStudio } from "./studio-context";
+import { CommandRecovery, explain, formKeys, useCommandSubmit, useStudio, type RunOutcome } from "./studio-context";
 
 /** Header control naming the open flow; it opens the Flows dialog. Hidden until the project has a flow. */
 export function FlowSwitcher() {
@@ -24,6 +25,8 @@ export function FlowSwitcher() {
 }
 
 type Mode = "list" | "create" | "delete";
+type FlowValues = { title: string; classification: string; inclusion: string };
+type Submitted = { command: GraphCommand; values?: FlowValues };
 
 /**
  * The flow menu (UI02): open, create, duplicate and delete flows, with a local inclusion filter. Flows stay exploratory
@@ -34,7 +37,11 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   const submitCommand = useCommandSubmit();
   const [mode, setMode] = useState<Mode>(creating ? "create" : "list");
   const [filter, setFilter] = useState<"ALL" | Inclusion>("ALL");
-  const [values, setValues] = useState({ title: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" });
+  const [values, setValues] = useState<FlowValues>({ title: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" });
+  const currentValues = useRef(values);
+  const submitted = useRef<Submitted | null>(null);
+  const [notice, setNotice] = useState("");
+  const changeValues = (next: FlowValues) => { currentValues.current = next; setValues(next); };
   const [titleError, setTitleError] = useState("");
   const [message, setMessage] = useState("");
   const { document } = draft;
@@ -49,31 +56,54 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     requestAnimationFrame(() => (window.document.getElementById("studio-flow-title") ?? window.document.querySelector<HTMLElement>("#editor-main h1"))?.focus());
   };
 
+  // Direct acknowledgements and receipt recovery finish the same initiating action.
+  const settle = (outcome: RunOutcome, action = submitted.current) => {
+    if (!action) return;
+    if (!outcome.ok) {
+      if (!outcome.uncertain) submitted.current = null;
+      setMessage(action.command.command === "DELETE_FLOW" && outcome.code === "STALE_DOCUMENT_REVISION"
+        ? "The flow changed. Review what will be removed, then delete again." : explain(outcome));
+      return;
+    }
+    submitted.current = null;
+    setMessage("");
+    if (action.values && JSON.stringify(currentValues.current) !== JSON.stringify(action.values)) {
+      // The saved flow used the submitted values. Later typing remains an explicit, unsaved next creation.
+      update(() => ({ flowId: outcome.result.createdIds[0]!, selection: null }));
+      setNotice("Flow created. Your newer values are unsaved. Create another flow to save them.");
+      return;
+    }
+    open(action.command.command === "DELETE_FLOW" ? null : outcome.result.createdIds[0]!);
+  };
+  const send = async (command: GraphCommand, sentValues?: FlowValues) => {
+    if (submitted.current && JSON.stringify(command) !== JSON.stringify(submitted.current.command)) {
+      setMessage("Retry the unconfirmed change before making another.");
+      return;
+    }
+    const action = submitted.current ?? { command, values: sentValues };
+    submitted.current = action;
+    setNotice("");
+    settle(await submitCommand(action.command), action);
+  };
   const create = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (busy || !editable) return;
     const error = fieldErrors("FLOW", { title: values.title }).title ?? "";
     setTitleError(error);
     if (error) { window.document.getElementById("new-flow-title")?.focus(); return; }
-    const outcome = await submitCommand({
+    await send({
       commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision: draft.documentRevision,
       payload: { title: values.title, purpose: "", classification: values.classification as Classification, inclusion: values.inclusion as Inclusion },
-    });
-    if (outcome.ok) open(outcome.result.createdIds[0]!);
-    else setMessage(explain(outcome));
+    }, values);
   };
   const duplicate = async () => {
     if (!current || busy || !editable) return;
-    const outcome = await submitCommand({ commandSchemaVersion: 1, command: "DUPLICATE_FLOW", expectedDocumentRevision: draft.documentRevision, payload: { flowId: current.id } });
-    if (outcome.ok) open(outcome.result.createdIds[0]!);
-    else setMessage(explain(outcome));
+    await send({ commandSchemaVersion: 1, command: "DUPLICATE_FLOW", expectedDocumentRevision: draft.documentRevision, payload: { flowId: current.id } });
   };
   const remove = async () => {
     if (!current || busy || !editable) return;
     const plan = dependencyPlan(document, current.id);
-    const outcome = await submitCommand({ commandSchemaVersion: 1, command: "DELETE_FLOW", expectedDocumentRevision: draft.documentRevision, payload: { flowId: current.id, removeNodeIds: plan.nodeIds, removeEdgeIds: plan.edgeIds } });
-    if (outcome.ok) open(null);
-    else setMessage(outcome.code === "STALE_DOCUMENT_REVISION" ? "The flow changed. Review what will be removed, then delete again." : explain(outcome));
+    await send({ commandSchemaVersion: 1, command: "DELETE_FLOW", expectedDocumentRevision: draft.documentRevision, payload: { flowId: current.id, removeNodeIds: plan.nodeIds, removeEdgeIds: plan.edgeIds } });
   };
 
   if (editable && mode === "create") {
@@ -81,25 +111,26 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
       <button type="button" className="button quiet" onClick={() => (flows.length ? setMode("list") : onClose())} disabled={busy}>Cancel</button>
       <button type="submit" form="new-flow-form" className="button primary" disabled={busy || full}>{busy ? "Creating…" : "Create flow"}</button>
     </>}>
-      <CommandRecovery />
+      <CommandRecovery onSettled={settle} />
       <form id="new-flow-form" onSubmit={create} onKeyDown={formKeys} noValidate>
         <div className="field">
           <label htmlFor="new-flow-title">Title</label>
-          <input id="new-flow-title" value={values.title} onChange={(event) => setValues({ ...values, title: event.target.value })} aria-invalid={Boolean(titleError)} aria-describedby={titleError ? "new-flow-title-error" : undefined} />
+          <input id="new-flow-title" value={values.title} onChange={(event) => changeValues({ ...values, title: event.target.value })} aria-invalid={Boolean(titleError)} aria-describedby={titleError ? "new-flow-title-error" : undefined} />
           {titleError && <small id="new-flow-title-error" className="field-error">{titleError}</small>}
         </div>
         <div className="field">
           <label htmlFor="new-flow-type">Type</label>
-          <select id="new-flow-type" value={values.classification} onChange={(event) => setValues({ ...values, classification: event.target.value })}>
+          <select id="new-flow-type" value={values.classification} onChange={(event) => changeValues({ ...values, classification: event.target.value })}>
             {CLASSIFICATIONS.map((value) => <option key={value} value={value}>{CLASSIFICATION_LABELS[value]}</option>)}
           </select>
         </div>
         <div className="field">
           <label htmlFor="new-flow-scope">Scope</label>
-          <select id="new-flow-scope" value={values.inclusion} onChange={(event) => setValues({ ...values, inclusion: event.target.value })}>
+          <select id="new-flow-scope" value={values.inclusion} onChange={(event) => changeValues({ ...values, inclusion: event.target.value })}>
             {INCLUSIONS.map((value) => <option key={value} value={value}>{INCLUSION_LABELS[value]}</option>)}
           </select>
         </div>
+        {notice && <p className="muted" role="status">{notice}</p>}
         {full && <p className="muted">A project can have up to {LIMITS.flows} flows.</p>}
         {message && <p className="error-message" role="alert">{message}</p>}
       </form>
@@ -112,14 +143,14 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
       <button type="button" className="button quiet" onClick={() => setMode("list")} disabled={busy}>Cancel</button>
       <button type="button" className="button danger" onClick={() => void remove()} disabled={busy}>{busy ? "Deleting…" : "Delete flow"}</button>
     </>}>
-      <CommandRecovery />
+      <CommandRecovery onSettled={settle} />
       <p>This removes the flow, its {plan.nodeIds.length} {plan.nodeIds.length === 1 ? "step" : "steps"} and {plan.edgeIds.length} {plan.edgeIds.length === 1 ? "connection" : "connections"} from the draft.</p>
       {message && <p className="error-message" role="alert">{message}</p>}
     </Dialog>;
   }
 
   return <Dialog title="Flows" onClose={busy ? () => {} : onClose} footer={<button type="button" className="button quiet" onClick={onClose} disabled={busy}>Close</button>}>
-    <CommandRecovery />
+    <CommandRecovery onSettled={settle} />
     <div className="form-row">
       <label htmlFor="flow-filter">Show</label>
       <select id="flow-filter" value={filter} onChange={(event) => setFilter(event.target.value as "ALL" | Inclusion)}>

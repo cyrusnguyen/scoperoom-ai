@@ -120,10 +120,10 @@ export function formKeys(event: KeyboardEvent<HTMLFormElement>) {
 }
 
 /** A single pending request can be recovered even after its originating dialog or List unmounts. */
-export function CommandRecovery() {
+export function CommandRecovery({ onSettled }: { onSettled?: (outcome: RunOutcome) => void } = {}) {
   const { retry, reload, busy, save, refreshFailed } = useStudio();
   return <>
-    {retry && <button type="button" className="button small" disabled={busy} onClick={() => void retry()}>Retry last change</button>}
+    {retry && <button type="button" className="button small" disabled={busy} onClick={async () => { const outcome = await retry(); onSettled?.(outcome); }}>Retry last change</button>}
     {refreshFailed && <>
       <span className="status-error" role="alert">{save.state === "saved" ? "Change saved. " : ""}The latest draft could not load.</span>
       <button type="button" className="button small" disabled={busy} onClick={() => void reload()}>Retry read</button>

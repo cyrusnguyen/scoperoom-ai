@@ -13,13 +13,15 @@ import { CommandRecovery, useStudio } from "./studio-context";
 /** The centre of the editor: the open flow as a canvas or an ordered List, and its status. The toolbox arrives next. */
 export default function Studio() {
   const { draft, narrow, ui, update, inspect } = useStudio();
+  const [creating, setCreating] = useState(false);
+  const creation = creating && <FlowsDialog key="new-flow" creating onClose={() => setCreating(false)} />;
   const flow = currentFlow(draft.document, ui.flowId);
-  if (!flow) return <NoFlows />;
+  if (!flow) return <><NoFlows onCreate={() => setCreating(true)} />{creation}</>;
 
   const view = ui.view ?? (narrow ? "list" : "canvas");
   const showFlowDetails = () => { update(() => ({ selection: { kind: "FLOW", id: flow.id } })); inspect(); };
 
-  return <section className="studio" aria-labelledby="studio-flow-title">
+  return <><section className="studio" aria-labelledby="studio-flow-title">
     <div className="studio-toolbar">
       <h2 id="studio-flow-title" className="studio-flow-title" tabIndex={-1} title={flow.title}>{flow.title}</h2>
       <span className="badge" data-inclusion={flow.inclusion}>{INCLUSION_LABELS[flow.inclusion]}</span>
@@ -34,21 +36,19 @@ export default function Studio() {
       {view === "canvas" ? <FlowCanvas flowId={flow.id} /> : <GraphList flowId={flow.id} />}
     </div>
     <StudioStatus flowId={flow.id} />
-  </section>;
+  </section>{creation}</>;
 }
 
-function NoFlows() {
+function NoFlows({ onCreate }: { onCreate: () => void }) {
   const { archived, editable } = useStudio();
-  const [creating, setCreating] = useState(false);
   if (archived) return <div className="empty-state"><h2>This archived project has no flows.</h2></div>;
   return <div className="empty-state">
     <h2>No flows yet</h2>
     {editable ? <>
       <p>Create a flow to map a journey or process. Requirements and approval can come later.</p>
-      <div className="view-actions"><button type="button" className="button primary" onClick={() => setCreating(true)}>New flow</button></div>
+      <div className="view-actions"><button type="button" className="button primary" onClick={onCreate}>New flow</button></div>
     </> : <p>Only the owner and editors can add flows.</p>}
     <CommandRecovery />
-    {creating && <FlowsDialog creating onClose={() => setCreating(false)} />}
   </div>;
 }
 

@@ -64,5 +64,5 @@ button.item-row { width: 100%; border: 0; border-bottom: var(--panel-border); ba
   .studio-flow-title { max-width: 100%; flex-basis: 100%; }
   .studio button, .studio .button.small, .editor-header .flow-switch, .segmented button, .step-open { min-height: 44px; }
   .step-check { display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
-  .react-flow__controls-button { min-width: 44px; }
+  .studio .react-flow__controls-button { min-width: 44px; min-height: 44px; }
 }
