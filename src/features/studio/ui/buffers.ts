@@ -93,7 +93,7 @@ export function follow(buffers: Buffers, versions: Record<string, number>): Buff
   const next = { ...buffers };
   for (const [key, buffer] of Object.entries(buffers)) {
     const version = versions[buffer.id];
-    if (version !== undefined && !buffer.sent && buffer.baseVersion === version - 1) next[key] = { ...buffer, baseVersion: version };
+    if (version !== undefined && !buffer.sent && !buffer.conflict && buffer.baseVersion === version - 1) next[key] = { ...buffer, baseVersion: version };
   }
   return next;
 }

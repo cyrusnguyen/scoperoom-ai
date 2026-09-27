@@ -668,8 +668,6 @@ test.describe("Studio on a real draft", () => {
     await expect(saveButton(page)).toBeDisabled();
     await expect(page.locator(".studio-status")).toContainText("Unsaved changes");
     await expect(panel(page).getByLabel("To", { exact: true }).locator("option:checked")).toHaveText("Closed");
-    await panel(page).getByRole("button", { name: "Reconnect", exact: true }).click();
-    await expect(panel(page).getByRole("button", { name: "Apply my connection" })).toBeVisible();
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
     const reconnects: { key: string; body: string }[] = [];
@@ -678,7 +676,7 @@ test.describe("Studio on a real draft", () => {
       if (reconnects.length === 1) { await held; await route.fetch(); await route.abort("connectionreset"); }
       else await route.continue();
     });
-    await panel(page).getByRole("button", { name: "Apply my connection" }).click();
+    await panel(page).getByRole("button", { name: "Reconnect", exact: true }).click();
     await expect(page.locator(".studio-status")).toContainText("Saving");
     await panel(page).getByLabel("To", { exact: true }).selectOption({ label: "Reviewed" });
     release();

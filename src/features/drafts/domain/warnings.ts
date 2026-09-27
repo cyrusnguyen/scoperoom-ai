@@ -17,7 +17,7 @@ export function graphWarnings(document: ScopeDocument, flowId: string): GraphWar
   for (const nodeId of reachable) {
     for (const edge of edges) if (edge.fromId === nodeId && !reachable.has(edge.toId)) reachable.add(edge.toId);
   }
-  for (const node of nodes) if (!connected.has(node.id) || !reachable.has(node.id)) warnings.push({ code: "UNCONNECTED_STEP", targetId: node.id });
+  for (const node of nodes) if (!connected.has(node.id) || (starts.length > 0 && !reachable.has(node.id))) warnings.push({ code: "UNCONNECTED_STEP", targetId: node.id });
   for (const edge of edges) if (document.nodes[edge.fromId]?.kind === "DECISION" && !edge.condition.trim()) warnings.push({ code: "UNLABELLED_BRANCH", targetId: edge.id });
   return warnings;
 }

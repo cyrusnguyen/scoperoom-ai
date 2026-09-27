@@ -61,9 +61,10 @@ export function AddStepDialog({ flowId, onClose, onAdded }: { flowId: string; on
       const found = fieldErrors("NODE", currentValues.current);
       setErrors(found);
       if (Object.keys(found).length) { focusFirst("add-step", found); return; }
+      const { kind, label, actorLabel, description } = currentValues.current;
       submitted.current = {
         command: { commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision: draft.documentRevision,
-          payload: { flowId, kind: values.kind as NodeKind, label: values.label, actorLabel: values.actorLabel, description: values.description } },
+          payload: { flowId, kind: kind as NodeKind, label, actorLabel, description } },
         values: currentValues.current,
       };
     }

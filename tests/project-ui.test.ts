@@ -62,7 +62,6 @@ test("discard clears only that project's drafts and buffers and keeps its panel;
   assert.deepEqual(defaultUi, closed, "the shared default is never mutated");
 });
 
-
 test("endpoint choices count as unsaved and discard clears only their project", () => {
   const saved: Saved = { kind: "EDGE", id: "e1", version: 1, fields: { fromId: "a", toId: "b" } };
   let store = updateUi({}, "a", () => ({ endpointBuffers: edit({}, saved, "toId", "c") }));
@@ -74,7 +73,6 @@ test("endpoint choices count as unsaved and discard clears only their project", 
   assert.deepEqual(uiFor(discarded, "a").endpointBuffers, {});
   assert.equal(dirtyCount(discarded, "b"), 1);
 });
-
 
 test("an uncertain topology receipt guards navigation and survives explicit edit discard", () => {
   const pending = { inFlight: false, draftId: "d1", key: "receipt-1", command: { commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: 3, payload: { edgeId: "e1" } } } as const;
@@ -90,7 +88,6 @@ test("an uncertain topology receipt guards navigation and survives explicit edit
   assert.equal(anyDirty(updateUi(discarded, "a", () => ({ pending: null }))), false);
 });
 
-
 test("discard clears a certain command failure but preserves an unresolved receipt's status", () => {
   const failed = { state: "failed", message: "Command refused" } as const;
   const clean = discardDrafts(updateUi({}, "a", () => ({ save: failed })), "a");
@@ -100,7 +97,6 @@ test("discard clears a certain command failure but preserves an unresolved recei
   assert.deepEqual(uiFor(unresolved, "a").save, failed);
   assert.deepEqual(uiFor(unresolved, "a").pending, pending);
 });
-
 
 test("reads must cover both acknowledged revision floors and clear only the qualifying draft", () => {
   let floors = requireDraftRevision({}, { draftId: "d1", documentRevision: 5, layoutRevision: 7 });

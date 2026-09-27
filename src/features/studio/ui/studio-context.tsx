@@ -91,6 +91,11 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
         if (outcome.ok) endpointBuffers = acknowledge(endpointBuffers, bufferKey, outcome.result.documentRevision);
         else if (!outcome.uncertain) endpointBuffers = refuse(endpointBuffers, bufferKey, outcome.code === "STALE_DOCUMENT_REVISION");
       }
+      // Only this command's effective document change may advance an unsent endpoint choice. A no-op receipt can
+      // report a revision written by another tab; existing conflicts still need explicit review.
+      const changed = outcome.ok && (outcome.result.createdIds.length > 0 || outcome.result.retiredIds.length > 0 || Object.keys(outcome.result.versions).length > 0);
+      if (changed) endpointBuffers = follow(endpointBuffers, Object.fromEntries(Object.values(endpointBuffers)
+        .map((buffer) => [buffer.id, outcome.result.documentRevision])));
       return {
         buffers: outcome.ok ? follow(buffers, outcome.result.versions) : buffers, endpointBuffers,
         pending: !outcome.ok && outcome.uncertain ? { command, key, draftId: requestDraftId, inFlight: false } : null,
