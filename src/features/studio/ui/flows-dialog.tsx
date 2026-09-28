@@ -44,6 +44,8 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   const [values, setValues] = useState<FlowValues>({ title: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" });
   const [titleError, setTitleError] = useState("");
   const [message, setMessage] = useState("");
+  // While the save before a switch runs, the form is read-only: text typed then would be lost when the dialog closes.
+  const [saving, setSaving] = useState(false);
   const { document } = draft;
   const flows = flowsInOrder(document);
   const current = currentFlow(document, ui.flowId);
@@ -54,7 +56,10 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   const open = async (flowId: string | null) => {
     // Unsaved changes are saved before another flow opens; if they cannot be, this flow stays open with them. After a
     // deleted flow (null) the view falls back to another flow of the same draft.
-    if (flowId && flowId !== current?.id && !(await saveChanges())) {
+    setSaving(true);
+    const saved = !flowId || flowId === current?.id || await saveChanges();
+    setSaving(false);
+    if (!saved) {
       setMessage("Your changes aren’t saved yet, so this flow stays open. Resolve them in the Studio, then switch.");
       return;
     }
@@ -99,23 +104,23 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   if (editable && mode === "create") {
     return <Dialog title="New flow" onClose={onClose} footer={<>
       <button type="button" className="button quiet" onClick={() => (flows.length ? setMode("list") : onClose())}>Cancel</button>
-      <button type="submit" form="new-flow-form" className="button primary" disabled={full}>Create flow</button>
+      <button type="submit" form="new-flow-form" className="button primary" disabled={full || saving}>{saving ? "Saving…" : "Create flow"}</button>
     </>}>
       <form id="new-flow-form" onSubmit={create} onKeyDown={formKeys} noValidate>
         <div className="field">
           <label htmlFor="new-flow-title">Title</label>
-          <input id="new-flow-title" value={values.title} onChange={(event) => setValues({ ...values, title: event.target.value })} aria-invalid={Boolean(titleError)} aria-describedby={titleError ? "new-flow-title-error" : undefined} />
+          <input id="new-flow-title" readOnly={saving} value={values.title} onChange={(event) => setValues({ ...values, title: event.target.value })} aria-invalid={Boolean(titleError)} aria-describedby={titleError ? "new-flow-title-error" : undefined} />
           {titleError && <small id="new-flow-title-error" className="field-error">{titleError}</small>}
         </div>
         <div className="field">
           <label htmlFor="new-flow-type">Type</label>
-          <select id="new-flow-type" value={values.classification} onChange={(event) => setValues({ ...values, classification: event.target.value })}>
+          <select id="new-flow-type" disabled={saving} value={values.classification} onChange={(event) => setValues({ ...values, classification: event.target.value })}>
             {CLASSIFICATIONS.map((value) => <option key={value} value={value}>{CLASSIFICATION_LABELS[value]}</option>)}
           </select>
         </div>
         <div className="field">
           <label htmlFor="new-flow-scope">Scope</label>
-          <select id="new-flow-scope" value={values.inclusion} onChange={(event) => setValues({ ...values, inclusion: event.target.value })}>
+          <select id="new-flow-scope" disabled={saving} value={values.inclusion} onChange={(event) => setValues({ ...values, inclusion: event.target.value })}>
             {INCLUSIONS.map((value) => <option key={value} value={value}>{INCLUSION_LABELS[value]}</option>)}
           </select>
         </div>
@@ -146,7 +151,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     </div>
     <p className="muted">{flows.length} of {LIMITS.flows} flows{filter === "ALL" ? "" : ` · showing ${shown.length}`}</p>
     <ul className="item-list">{shown.map((flow) => <li key={flow.id}>
-      <button type="button" className="item-row" aria-current={flow.id === current?.id ? "true" : undefined} onClick={() => void open(flow.id)}>
+      <button type="button" className="item-row" aria-current={flow.id === current?.id ? "true" : undefined} onClick={() => void open(flow.id)} disabled={saving}>
         <span><strong>{flow.title}</strong><small>{counts(flow.id)} {counts(flow.id) === 1 ? "step" : "steps"} · {INCLUSION_LABELS[flow.inclusion]}</small></span>
         {flow.id === current?.id && <Icon name="check" size={14} />}
       </button>

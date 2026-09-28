@@ -3,7 +3,7 @@ import type { Client } from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
-import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, openDatabase, signIn } from "./support";
+import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, headerSave, openDatabase, saveStudio, signIn } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -11,6 +11,8 @@ const toolbar = (page: Page) => page.locator(".studio-toolbar");
 const panel = (page: Page) => page.locator("#right-panel");
 const modal = (page: Page, name: string) => page.getByRole("dialog", { name });
 const openModals = (page: Page) => page.locator("dialog[open]");
+/** The save's recovery note (Task 14b): Retry, Apply my changes again, Discard my changes. */
+const note = (page: Page) => page.locator(".save-note");
 const pageFits = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
 
 async function draftOf(page: Page, projectId: string): Promise<DraftView> {
@@ -41,6 +43,7 @@ async function addStepInUi(page: Page, label: string, shape?: "Start" | "Step" |
   await expect(form).toBeHidden();
 }
 
+/** The inspector's Save: applies the typed fields, then saves every unsaved change. */
 const saveButton = (page: Page) => panel(page).getByRole("button", { name: "Save", exact: true });
 
 test.describe("Studio on a real draft", () => {
@@ -99,25 +102,32 @@ test.describe("Studio on a real draft", () => {
     await connect.getByLabel("To").selectOption({ label: "Pay" });
     await connect.getByRole("button", { name: "Connect" }).click();
     await expect(connect).toBeHidden();
-    await expect(page.locator(".studio-status")).toContainText("3 steps \u00b7 1 connection");
+    await expect(page.locator(".studio-status")).toContainText("3 steps · 1 connection");
     await expect(page.locator(".react-flow").getByText("Done")).toBeVisible();
+    await saveStudio(page);
+    expect(Object.keys((await draftOf(page, projectId)).document.edges)).toHaveLength(1);
     await toolbar(page).getByRole("button", { name: "List" }).click();
     await expect(page.getByRole("list", { name: "Steps" }).getByRole("listitem")).toHaveText([/Cart/, /Pay/, /Done/]);
-    await page.getByRole("button", { name: "Delete connection Cart \u2192 Pay" }).click();
+    await page.getByRole("button", { name: "Delete connection Cart → Pay" }).click();
     await expect(page.getByText("Connection deleted.")).toBeVisible();
-    expect(Object.keys((await draftOf(page, projectId)).document.edges)).toHaveLength(0);
+    await saveStudio(page);
+    const draft = await draftOf(page, projectId);
+    expect(Object.keys(draft.document.edges)).toHaveLength(0);
+    expect(Object.keys(draft.document.nodes)).toHaveLength(3);
   });
 
   test("Delete never removes steps while someone types in the Studio; on a focused step it asks first and keeps focus on the flow", async ({ page }) => {
     await createFlowInUi(page, "Orders");
     await addStepInUi(page, "Pack", "Start");
     await addStepInUi(page, "Ship");
+    await saveStudio(page);
     await toolbar(page).getByRole("button", { name: "List" }).click();
     const search = page.getByLabel("Find a step");
     await search.fill("Sh");
     await search.press("Backspace");
     await search.press("Delete");
     await expect(openModals(page)).toHaveCount(0);
+    await expect(page.locator(".studio-status")).not.toContainText("Unsaved changes");
     expect(Object.keys((await draftOf(page, projectId)).document.nodes)).toHaveLength(2);
 
     await search.fill("");
@@ -131,10 +141,11 @@ test.describe("Studio on a real draft", () => {
     await confirm.getByRole("button", { name: "Delete" }).click();
     await expect(confirm).toBeHidden();
     await expect(page.locator("#studio-flow-title")).toBeFocused();
+    await saveStudio(page);
     expect(Object.values((await draftOf(page, projectId)).document.nodes).map((node) => node.label)).toEqual(["Pack"]);
   });
 
-  test("Add step validates code points without truncating and keeps later typing after exact receipt recovery", async ({ page }) => {
+  test("Add step validates code points without truncating; an unconfirmed save retries its exact batch and later steps save behind it", async ({ page }) => {
     await createFlowInUi(page, "Intake");
     await toolbar(page).getByRole("button", { name: "Add step" }).click();
     const form = modal(page, "Add step");
@@ -146,64 +157,58 @@ test.describe("Studio on a real draft", () => {
     await expect(form.getByText(/Name can be up to 160 characters/)).toBeVisible();
 
     const attempts: { key: string; body: string }[] = [];
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    await page.route("**/commands", async (route) => {
-      attempts.push({ key: route.request().headers()["idempotency-key"], body: route.request().postData()! });
+    await page.route("**/changes", async (route) => {
+      attempts.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
       const response = await route.fetch();
-      if (attempts.length === 1) await gate;
       if (attempts.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
       else await route.fulfill({ response });
     });
     await form.getByLabel("Name").fill("Submitted step");
     await form.getByRole("button", { name: "Add step" }).click();
-    await expect(form.getByRole("button", { name: /^Adding/ })).toBeDisabled();
-    await form.getByLabel("Name").fill("Newer step");
-    await form.getByLabel("Actor").fill("Clerk");
-    release();
-    await form.getByRole("button", { name: "Retry last change" }).click();
-    await expect(form.getByRole("status")).toContainText("Your newer values are unsaved");
-    await expect(form.getByLabel("Name")).toHaveValue("Newer step");
-    await expect(form.getByLabel("Actor")).toHaveValue("Clerk");
-    expect(attempts[1]).toEqual(attempts[0]);
-    expect(Object.values((await draftOf(page, projectId)).document.nodes).map((node) => node.label)).toEqual(["Submitted step"]);
-    await form.getByRole("button", { name: "Add step" }).click();
     await expect(form).toBeHidden();
+    await headerSave(page).click();
+    await expect(note(page)).toContainText("We couldn’t confirm your changes.");
+    // Editing continues behind the unconfirmed save.
+    await addStepInUi(page, "Newer step");
+    await note(page).getByRole("button", { name: "Retry" }).click();
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    expect(attempts).toHaveLength(3);
+    expect(attempts[1]).toEqual(attempts[0]);
+    expect(attempts[2]!.key).not.toBe(attempts[0]!.key);
     expect(Object.values((await draftOf(page, projectId)).document.nodes).map((node) => node.label).sort()).toEqual(["Newer step", "Submitted step"]);
   });
 
-  test("Connect keeps a later condition after an acknowledged request and retries its exact receipt", async ({ page }) => {
+  test("Connect adds a connection at once; one made while a save is in flight is saved right after it", async ({ page }) => {
     await createFlowInUi(page, "Decision");
     await addStepInUi(page, "Ask", "Start");
     await addStepInUi(page, "Answer");
-    await toolbar(page).getByRole("button", { name: "Connect" }).click();
-    const form = modal(page, "Connect steps");
-    await form.getByLabel("Condition").fill("Submitted branch");
-    const attempts: { key: string; body: string }[] = [];
+    const connectWith = async (condition: string) => {
+      await toolbar(page).getByRole("button", { name: "Connect" }).click();
+      const form = modal(page, "Connect steps");
+      await form.getByLabel("Condition").fill(condition);
+      await form.getByRole("button", { name: "Connect" }).click();
+      await expect(form).toBeHidden();
+    };
+    const bodies: { commands: { command: string }[] }[] = [];
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    await page.route("**/commands", async (route) => {
-      attempts.push({ key: route.request().headers()["idempotency-key"], body: route.request().postData()! });
-      const response = await route.fetch();
-      if (attempts.length === 1) await gate;
-      if (attempts.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
-      else await route.fulfill({ response });
+    await page.route("**/changes", async (route) => {
+      bodies.push(route.request().postDataJSON());
+      if (bodies.length === 1) await gate;
+      await route.continue();
     });
-    await form.getByRole("button", { name: "Connect" }).click();
-    await expect(form.getByRole("button", { name: /^Connecting/ })).toBeDisabled();
-    await form.getByLabel("Condition").fill("Newer branch");
+    await connectWith("Submitted branch");
+    await headerSave(page).click();
+    await expect(page.locator(".studio-status")).toContainText("Saving…");
+    await connectWith("Newer branch");
+    await expect(page.locator(".studio-status")).toContainText("2 connections");
     release();
-    await form.getByRole("button", { name: "Retry last change" }).click();
-    await expect(form.getByRole("status")).toContainText("Your newer values are unsaved");
-    await expect(form.getByLabel("Condition")).toHaveValue("Newer branch");
-    expect(attempts[1]).toEqual(attempts[0]);
-    expect(Object.values((await draftOf(page, projectId)).document.edges).map((edge) => edge.condition)).toEqual(["Submitted branch"]);
-    await form.getByRole("button", { name: "Connect" }).click();
-    await expect(form).toBeHidden();
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    expect(bodies.map((body) => body.commands.map((command) => command.command))).toEqual([["ADD_NODE", "ADD_NODE", "ADD_EDGE"], ["ADD_EDGE"]]);
     expect(Object.values((await draftOf(page, projectId)).document.edges).map((edge) => edge.condition).sort()).toEqual(["Newer branch", "Submitted branch"]);
   });
 
-  test("Delete step previews its incident connection and retries the exact deletion receipt", async ({ page }) => {
+  test("Delete step previews its incident connection, and an unconfirmed save of it retries the exact batch", async ({ page }) => {
     await createFlowInUi(page, "Orders");
     await addStepInUi(page, "Pack", "Start");
     await addStepInUi(page, "Ship");
@@ -213,23 +218,27 @@ test.describe("Studio on a real draft", () => {
     await connect.getByLabel("To").selectOption({ label: "Ship" });
     await connect.getByRole("button", { name: "Connect" }).click();
     await expect(connect).toBeHidden();
+    await saveStudio(page);
     await toolbar(page).getByRole("button", { name: "List" }).click();
     await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Ship/ }).press("Delete");
     const confirm = modal(page, "Delete step");
     await expect(confirm).toContainText("This also removes 1 connection");
-    await expect(confirm).toContainText("Pack \u2192 Ship");
+    await expect(confirm).toContainText("Pack → Ship");
     const attempts: { key: string; body: string }[] = [];
-    await page.route("**/commands", async (route) => {
-      attempts.push({ key: route.request().headers()["idempotency-key"], body: route.request().postData()! });
+    await page.route("**/changes", async (route) => {
+      attempts.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
       const response = await route.fetch();
       if (attempts.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
       else await route.fulfill({ response });
     });
     await confirm.getByRole("button", { name: "Delete" }).click();
-    await confirm.getByRole("button", { name: "Retry last change" }).click();
     await expect(confirm).toBeHidden();
+    await headerSave(page).click();
+    await note(page).getByRole("button", { name: "Retry" }).click();
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
     expect(attempts).toHaveLength(2);
     expect(attempts[1]).toEqual(attempts[0]);
+    expect(JSON.parse(attempts[0]!.body).commands.map((command: { command: string }) => command.command)).toEqual(["DELETE_NODES"]);
     const draft = await draftOf(page, projectId);
     expect(Object.values(draft.document.nodes).map((node) => node.label)).toEqual(["Pack"]);
     expect(Object.keys(draft.document.edges)).toHaveLength(0);
@@ -269,12 +278,12 @@ test.describe("Studio on a real draft", () => {
     await expect(page.locator("#editor-main h1")).toBeFocused();
   });
 
-  test("uncertain creation retries the exact receipt, then duplicate and delete survive refresh", async ({ page }) => {
+  test("an unconfirmed flow creation keeps the flow, Retry repeats its exact batch, and duplicate and delete survive refresh", async ({ page }) => {
     const attempts: { key: string; body: string }[] = [];
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
-    await page.route("**/commands", async (route) => {
-      attempts.push({ key: route.request().headers()["idempotency-key"], body: route.request().postData()! });
+    await page.route("**/changes", async (route) => {
+      attempts.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
       const response = await route.fetch();
       if (attempts.length === 1) await firstGate;
       if (attempts.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
@@ -284,13 +293,17 @@ test.describe("Studio on a real draft", () => {
     const form = modal(page, "New flow");
     await form.getByLabel("Title").fill("Retry once");
     await form.getByRole("button", { name: "Create flow" }).click();
-    await expect(form.getByRole("button", { name: /^Creating/ })).toBeDisabled();
-    await expect(form.getByRole("button", { name: "Cancel" })).toBeDisabled();
-    await expect(form.getByLabel("Title")).toBeEditable();
+    // While the new flow saves, the form is read-only, so nothing typed can be lost when it closes.
+    await expect(form.getByRole("button", { name: "Saving…" })).toBeDisabled();
+    await expect(form.getByLabel("Title")).not.toBeEditable();
     releaseFirst();
-    await expect(form.getByRole("alert")).toContainText("Retry sends the same request");
-    await form.getByRole("button", { name: "Create flow" }).click();
+    await expect(form.getByRole("alert")).toContainText("Your changes aren’t saved yet");
+    await expect(form.getByLabel("Title")).toBeEditable();
+    await page.keyboard.press("Escape");
+    await expect(form).toHaveCount(0);
     await expect(page.locator("#studio-flow-title")).toHaveText("Retry once");
+    await note(page).getByRole("button", { name: "Retry" }).click();
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
     expect(attempts).toHaveLength(2);
     expect(attempts[1]).toEqual(attempts[0]);
     const original = await draftOf(page, projectId);
@@ -308,82 +321,70 @@ test.describe("Studio on a real draft", () => {
     await confirmation.getByRole("button", { name: "Delete flow", exact: true }).click();
     await expect(page.locator("#studio-flow-title")).toHaveText("Retry once");
     await expect(page.locator("#studio-flow-title")).toBeFocused();
+    await saveStudio(page);
     await page.reload();
     await expect(page.locator("#studio-flow-title")).toHaveText("Retry once");
     expect(Object.keys((await draftOf(page, projectId)).document.flows)).toEqual(Object.keys(original.document.flows));
   });
 
-  test("central recovery settles create, duplicate and delete dialogs in a populated project", async ({ page }) => {
+  test("one save carries a flow deletion and the next flow's creation, and an unconfirmed one retries the exact batch", async ({ page }) => {
     await createFlowInUi(page, "Existing");
-    const attempts = new Map<string, { key: string; body: string }[]>();
-    await page.route("**/commands", async (route) => {
-      const command = route.request().postDataJSON().command as string;
-      const requests = attempts.get(command) ?? [];
-      requests.push({ key: route.request().headers()["idempotency-key"], body: route.request().postData()! });
-      attempts.set(command, requests);
+    await page.locator(".flow-switch").click();
+    const flows = modal(page, "Flows");
+    await flows.getByRole("button", { name: "Duplicate Existing" }).click();
+    await expect(page.locator("#studio-flow-title")).toHaveText("Copy of Existing");
+    await page.locator(".flow-switch").click();
+    await flows.getByRole("button", { name: /^Delete Copy of Existing/ }).click();
+    await modal(page, "Delete Copy of Existing?").getByRole("button", { name: "Delete flow", exact: true }).click();
+    await expect(page.locator("#studio-flow-title")).toHaveText("Existing");
+    await expect(page.locator(".studio-status")).toContainText("Unsaved changes");
+    const attempts: { key: string; body: string }[] = [];
+    await page.route("**/changes", async (route) => {
+      attempts.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
       const response = await route.fetch();
-      if (requests.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
+      if (attempts.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
       else await route.fulfill({ response });
     });
     await page.locator(".flow-switch").click();
-    await modal(page, "Flows").getByRole("button", { name: "New flow" }).click();
+    await flows.getByRole("button", { name: "New flow" }).click();
     const form = modal(page, "New flow");
     await form.getByLabel("Title").fill("Second");
     await form.getByRole("button", { name: "Create flow" }).click();
-    await form.getByRole("button", { name: "Retry last change" }).click();
-    await expect(form).toHaveCount(0);
-    await expect(page.locator("#studio-flow-title")).toHaveText("Second");
-    expect(Object.keys((await draftOf(page, projectId)).document.flows)).toHaveLength(2);
-    await page.locator(".flow-switch").click();
-    const flows = modal(page, "Flows");
-    await flows.getByRole("button", { name: "Duplicate Second" }).click();
-    await flows.getByRole("button", { name: "Retry last change" }).click();
-    await expect(flows).toHaveCount(0);
-    await expect(page.locator("#studio-flow-title")).toHaveText("Copy of Second");
-    await page.locator(".flow-switch").click();
-    await flows.getByRole("button", { name: /^Delete Copy of Second/ }).click();
-    const confirmation = modal(page, "Delete Copy of Second?");
-    await confirmation.getByRole("button", { name: "Delete flow", exact: true }).click();
-    await confirmation.getByRole("button", { name: "Retry last change" }).click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(form.getByRole("alert")).toContainText("Your changes aren’t saved yet");
+    await page.keyboard.press("Escape");
+    await note(page).getByRole("button", { name: "Retry" }).click();
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]).toEqual(attempts[0]);
+    expect(JSON.parse(attempts[0]!.body).commands.map((command: { command: string }) => command.command)).toEqual(["DELETE_FLOW", "CREATE_FLOW"]);
     expect(Object.values((await draftOf(page, projectId)).document.flows).map((flow) => flow.title).sort()).toEqual(["Existing", "Second"]);
-    for (const requests of attempts.values()) { expect(requests).toHaveLength(2); expect(requests[1]).toEqual(requests[0]); }
   });
 
-  for (const { populated, uncertain } of [{ populated: false, uncertain: false }, { populated: true, uncertain: false }, { populated: true, uncertain: true }]) test(`flow creation preserves newer typed fields after acknowledgement (populated: ${populated}, uncertain: ${uncertain})`, async ({ page }) => {
+  for (const populated of [false, true]) test(`flow creation locks its form while the new flow saves, so no typed value is lost (populated: ${populated})`, async ({ page }) => {
     if (populated) { await createFlowInUi(page, "Existing"); await page.locator(".flow-switch").click(); }
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let writes = 0;
-    await page.route("**/commands", async (route) => {
+    await page.route("**/changes", async (route) => {
       writes++;
-      const response = await route.fetch();
       if (writes === 1) await gate;
-      if (writes === 1 && uncertain) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
-      else await route.fulfill({ response });
+      await route.continue();
     });
     await page.getByRole("button", { name: "New flow", exact: true }).click();
     const form = modal(page, "New flow");
     await form.getByLabel("Title").fill("Submitted title");
-    await form.getByRole("button", { name: "Create flow" }).click();
-    await expect(form.getByRole("button", { name: /^Creating/ })).toBeDisabled();
-    await form.getByLabel("Title").fill("Newer title");
     await form.getByLabel("Type").selectOption("BUSINESS_PROCESS");
-    await form.getByLabel("Scope").selectOption("INCLUDED");
-    release();
-    if (uncertain) await form.getByRole("button", { name: "Retry last change" }).click();
-    await expect(form.getByRole("status")).toContainText("Your newer values are unsaved");
-    await expect(form.getByLabel("Title")).toHaveValue("Newer title");
-    await expect(form.getByLabel("Type")).toHaveValue("BUSINESS_PROCESS");
-    await expect(form.getByLabel("Scope")).toHaveValue("INCLUDED");
-    const saved = Object.values((await draftOf(page, projectId)).document.flows).find((flow) => flow.title === "Submitted title")!;
-    expect(saved.classification).toBe("USER_JOURNEY");
-    expect(saved.inclusion).toBe("UNDECIDED");
-    expect(writes).toBe(uncertain ? 2 : 1);
     await form.getByRole("button", { name: "Create flow" }).click();
+    await expect(form.getByRole("button", { name: "Saving…" })).toBeDisabled();
+    await expect(form.getByLabel("Title")).not.toBeEditable();
+    await expect(form.getByLabel("Type")).toBeDisabled();
+    await expect(form.getByLabel("Scope")).toBeDisabled();
+    release();
     await expect(form).toHaveCount(0);
-    await expect(page.locator("#studio-flow-title")).toHaveText("Newer title");
-    expect(writes).toBe(uncertain ? 3 : 2);
+    await expect(page.locator("#studio-flow-title")).toHaveText("Submitted title");
+    const saved = Object.values((await draftOf(page, projectId)).document.flows).find((flow) => flow.title === "Submitted title")!;
+    expect([saved.classification, saved.inclusion]).toEqual(["BUSINESS_PROCESS", "UNDECIDED"]);
+    expect(writes).toBe(1);
   });
 
   test("create, connect, edit and duplicate a flow; a reload shows the same saved ids and content", async ({ page }) => {
@@ -462,9 +463,10 @@ test.describe("Studio on a real draft", () => {
     expect(Object.values(draft.document.edges).map((edge) => [edge.fromId, edge.toId])).toEqual([[request.id, refund.id]]);
   });
 
-  test("typed text survives a refetch and a same-step conflict; the person chooses to save their edit", async ({ page }) => {
+  test("typed text survives someone else's change; the person applies their changes again", async ({ page }) => {
     await createFlowInUi(page, "Billing");
     await addStepInUi(page, "Invoice", "Start");
+    await saveStudio(page);
     await page.getByRole("button", { name: "Inspect" }).click();
     const name = panel(page).getByLabel("Name");
     await name.fill("Invoice (mine)");
@@ -473,26 +475,20 @@ test.describe("Studio on a real draft", () => {
     const invoice = Object.values(draft.document.nodes)[0]!;
     await command(page, projectId, draft.id, { command: "UPDATE_NODE", expectedEntityVersion: invoice.version, payload: { nodeId: invoice.id, label: "Invoice (theirs)" } });
 
-    // Adding a step now meets the other tab's change: the stale add is refused, the draft is re-read, and a second add works.
-    await toolbar(page).getByRole("button", { name: "Add step" }).click();
-    const add = modal(page, "Add step");
-    await add.getByLabel("Name").fill("Paid");
-    await add.getByRole("button", { name: "Add step" }).click();
-    await expect(add.getByRole("alert")).toContainText("The flow changed");
-    await add.getByRole("button", { name: "Add step" }).click();
-    await expect(add).toBeHidden();
-
+    // Adding a step is local: nothing refuses it until the save meets the other tab's change.
+    await addStepInUi(page, "Paid");
     await toolbar(page).getByRole("button", { name: "List" }).click();
     await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Invoice/ }).click();
     await expect(name).toHaveValue("Invoice (mine)");
     await saveButton(page).click();
-    const note = panel(page).getByRole("alert");
-    await expect(note).toContainText("Someone else saved this step first");
-    await expect(note).toContainText("Invoice (theirs)");
-    await expect(note).toContainText("Invoice (mine)");
-    await note.getByRole("button", { name: "Save my edit" }).click();
-    await expect(panel(page).getByText("Saved.")).toBeVisible();
-    expect((await draftOf(page, projectId)).document.nodes[invoice.id]!.label).toBe("Invoice (mine)");
+    await expect(note(page)).toContainText("Someone else changed this draft first, so your changes weren’t saved.");
+    await expect(page.getByRole("list", { name: "Steps" })).toContainText("Invoice (mine)");
+    expect((await draftOf(page, projectId)).document.nodes[invoice.id]!.label).toBe("Invoice (theirs)");
+    await note(page).getByRole("button", { name: "Apply my changes again" }).click();
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    const saved = await draftOf(page, projectId);
+    expect(saved.document.nodes[invoice.id]!.label).toBe("Invoice (mine)");
+    expect(Object.values(saved.document.nodes).map((node) => node.label).sort()).toEqual(["Invoice (mine)", "Paid"]);
   });
 
   test("text typed while a save is in flight stays unsaved after the acknowledgement", async ({ page }) => {
@@ -501,7 +497,7 @@ test.describe("Studio on a real draft", () => {
     await page.getByRole("button", { name: "Inspect" }).click();
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
-    await page.route("**/drafts/*/commands", async (route) => { await held; await route.continue(); });
+    await page.route("**/drafts/*/changes", async (route) => { await held; await route.continue(); });
     const name = panel(page).getByLabel("Name");
     await name.fill("Ticket opened");
     await saveButton(page).click();
@@ -513,19 +509,19 @@ test.describe("Studio on a real draft", () => {
     await expect(panel(page).getByText("Saved.", { exact: true })).toHaveCount(0);
     await expect(name).toHaveValue("Ticket opened by email");
     await expect(saveButton(page)).toBeEnabled();
-    await page.unroute("**/drafts/*/commands");
+    await page.unroute("**/drafts/*/changes");
     expect(Object.values((await draftOf(page, projectId)).document.nodes)[0]!.label).toBe("Ticket opened");
     await saveButton(page).click();
     await expect.poll(async () => Object.values((await draftOf(page, projectId)).document.nodes)[0]!.label).toBe("Ticket opened by email");
   });
 
-  test("an unconfirmed save keeps its key, and saving again repeats the same request once", async ({ page }) => {
+  test("an unconfirmed save keeps its key, and Retry repeats the same request once", async ({ page }) => {
     await createFlowInUi(page, "Onboarding");
     await addStepInUi(page, "Welcome", "Start");
     await page.getByRole("button", { name: "Inspect" }).click();
     const keys: string[] = [];
     let lose = true;
-    await page.route("**/drafts/*/commands", async (route) => {
+    await page.route("**/drafts/*/changes", async (route) => {
       keys.push(route.request().headers()["idempotency-key"]!);
       if (!lose) return route.continue();
       lose = false;
@@ -534,22 +530,23 @@ test.describe("Studio on a real draft", () => {
     });
     await panel(page).getByLabel("Name").fill("Welcome aboard");
     await saveButton(page).click();
-    await expect(panel(page).getByText("We couldn’t confirm this save")).toBeVisible();
-    await panel(page).getByRole("button", { name: "Save again" }).click();
-    await expect(panel(page).getByText("Saved.")).toBeVisible();
-    await page.unroute("**/drafts/*/commands");
+    await expect(note(page)).toContainText("We couldn’t confirm your changes.");
+    await expect(panel(page).getByText("Saved.", { exact: true })).toHaveCount(0);
+    await note(page).getByRole("button", { name: "Retry" }).click();
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    await page.unroute("**/drafts/*/changes");
     expect(keys).toHaveLength(2);
     expect(keys[1]).toBe(keys[0]);
     const node = Object.values((await draftOf(page, projectId)).document.nodes)[0]!;
     expect([node.label, node.version]).toEqual(["Welcome aboard", 2]);
   });
 
-  for (const leaveInspector of [false, true]) test(`the global retry settles an inspector buffer and preserves newer typing (leave: ${leaveInspector})`, async ({ page }) => {
+  for (const leaveInspector of [false, true]) test(`Retry settles an unconfirmed save and preserves newer typing (leave: ${leaveInspector})`, async ({ page }) => {
     await createFlowInUi(page, "Recovery");
     await addStepInUi(page, "Initial", "Start");
     await page.getByRole("button", { name: "Inspect" }).click();
     const attempts: { key: string; body: string }[] = [];
-    await page.route("**/drafts/*/commands", async (route) => {
+    await page.route("**/drafts/*/changes", async (route) => {
       attempts.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
       if (attempts.length === 1) { await route.fetch(); await route.abort("connectionreset"); }
       else await route.continue();
@@ -557,57 +554,57 @@ test.describe("Studio on a real draft", () => {
     const name = panel(page).getByLabel("Name");
     await name.fill("Acknowledged");
     await saveButton(page).click();
-    await expect(panel(page).getByRole("button", { name: "Save again" })).toBeVisible();
+    await expect(note(page).getByRole("button", { name: "Retry" })).toBeVisible();
     await name.fill("Newer typing");
     if (leaveInspector) {
       await panel(page).getByRole("button", { name: /Project$/ }).focus();
       await page.keyboard.press("Enter");
       await expect(panel(page).getByRole("tab", { name: "Details" })).toBeFocused();
     }
-    await page.locator(".studio-status").getByRole("button", { name: "Retry last change" }).click();
+    await note(page).getByRole("button", { name: "Retry" }).click();
     await expect(page.locator(".studio-status")).toContainText("Unsaved changes");
     await toolbar(page).getByRole("button", { name: "List" }).click();
     await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Acknowledged/ }).click();
     await expect(name).toHaveValue("Newer typing");
-    await expect(panel(page).getByText(/confirm this save/)).toHaveCount(0);
+    await expect(note(page)).toHaveCount(0);
     await expect(saveButton(page)).toBeEnabled();
     await saveButton(page).click();
     await expect.poll(async () => Object.values((await draftOf(page, projectId)).document.nodes)[0]!.label).toBe("Newer typing");
     expect(attempts).toHaveLength(3);
     expect(attempts[1]).toEqual(attempts[0]);
     expect(attempts[2]!.key).not.toBe(attempts[0]!.key);
-    expect(JSON.parse(attempts[2]!.body).expectedEntityVersion).toBe(2);
+    expect(JSON.parse(attempts[2]!.body).commands[0].expectedEntityVersion).toBe(2);
   });
 
   test("a step deleted in another tab keeps the typed text for copying and is never re-created", async ({ page }) => {
     await createFlowInUi(page, "Claims");
     await addStepInUi(page, "Assess", "Start");
+    await saveStudio(page);
     await page.getByRole("button", { name: "Inspect" }).click();
     await panel(page).getByLabel("Description").fill("Check the policy number first");
     const draft = await draftOf(page, projectId);
     const flowId = Object.keys(draft.document.flows)[0]!;
     const nodeId = Object.keys(draft.document.nodes)[0]!;
     await command(page, projectId, draft.id, { command: "DELETE_NODES", expectedDocumentRevision: draft.documentRevision, payload: { flowId, nodeIds: [nodeId], removeEdgeIds: [] } });
-    // The next change meets the deletion: it is refused as stale and the draft is re-read.
-    await toolbar(page).getByRole("button", { name: "Add step" }).click();
-    const add = modal(page, "Add step");
-    await add.getByLabel("Name").fill("Probe");
-    await add.getByRole("button", { name: "Add step" }).click();
-    await expect(add.getByRole("alert")).toContainText("The flow changed");
-    await add.getByRole("button", { name: "Cancel" }).click();
+    // The next save meets the deletion; applying again on the newer draft keeps only what still applies.
+    await addStepInUi(page, "Probe");
+    await headerSave(page).click();
+    await note(page).getByRole("button", { name: "Apply my changes again" }).click();
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    await page.locator(".studio-status").getByRole("button", { name: "Unsaved text for a removed item" }).click();
     await expect(panel(page).getByRole("heading", { name: "This step was removed" })).toBeVisible();
     await expect(panel(page).getByLabel("Your unsaved text")).toHaveValue("Description: Check the policy number first");
-    await expect(page.locator(".studio-status").getByRole("button", { name: "Unsaved text for a removed item" })).toBeVisible();
     await panel(page).getByRole("button", { name: "Discard" }).click();
     await expect(panel(page).getByRole("heading", { name: "Project" })).toBeVisible();
-    expect((await draftOf(page, projectId)).document.nodes).toEqual({});
+    expect(Object.values((await draftOf(page, projectId)).document.nodes).map((node) => node.label)).toEqual(["Probe"]);
   });
 
-  test("switching projects guards Studio edits and Discard clears a certain save failure", async ({ page }) => {
+  test("switching projects guards Studio edits and Discard clears a refused save", async ({ page }) => {
     await createProjectViaApi(page, "Other project");
     await page.reload();
     await createFlowInUi(page, "Intake");
     await addStepInUi(page, "Receive", "Start");
+    await saveStudio(page);
     await page.getByRole("button", { name: "Inspect" }).click();
     const name = panel(page).getByLabel("Name");
     await name.fill("Receive claim");
@@ -618,16 +615,21 @@ test.describe("Studio on a real draft", () => {
     await expect(guard).toHaveCount(0);
     await expect(page).toHaveURL(new RegExp(`/app/projects/${projectId}$`));
     await expect(name).toHaveValue("Receive claim");
-    await page.route("**/drafts/*/commands", (route) => route.fulfill({ status: 400, json: { error: { code: "INVALID_INPUT", message: "Rejected Studio save" } } }));
+    await page.route("**/drafts/*/changes", (route) => route.fulfill({ status: 400, json: { error: { code: "INVALID_INPUT", message: "Rejected Studio save" } } }));
     await saveButton(page).click();
-    await expect(page.locator(".studio-status")).toContainText("Rejected Studio save");
+    await expect(page.locator(".studio-status")).toContainText("Your changes weren’t saved.");
+    await expect(note(page)).toContainText("Rejected Studio save");
     await page.locator("#projects-nav").getByRole("button", { name: "Other project", exact: true }).click();
     await guard.getByRole("button", { name: "Discard changes", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Other project" })).toBeVisible();
     await page.locator("#projects-nav").getByRole("button", { name: "Studio project", exact: true }).click();
+    await expect(page.locator("#studio-flow-title")).toHaveText("Intake");
+    await toolbar(page).getByRole("button", { name: "List" }).click();
+    await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Receive/ }).click();
+    await page.getByRole("button", { name: "Inspect" }).click();
     await expect(name).toHaveValue("Receive");
-    await expect(page.locator(".studio-status")).not.toContainText("Rejected Studio save");
-    await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toHaveCount(0);
+    await expect(page.locator(".studio-status")).not.toContainText("weren’t saved");
+    await expect(note(page)).toHaveCount(0);
   });
 
   test("deleting from the inspector returns keyboard focus to the surviving flow", async ({ page }) => {
@@ -668,25 +670,23 @@ test.describe("Studio on a real draft", () => {
     await expect(saveButton(page)).toBeDisabled();
     await expect(page.locator(".studio-status")).toContainText("Unsaved changes");
     await expect(panel(page).getByLabel("To", { exact: true }).locator("option:checked")).toHaveText("Closed");
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    const reconnects: { key: string; body: string }[] = [];
-    await page.route("**/drafts/*/commands", async (route) => {
-      reconnects.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
-      if (reconnects.length === 1) { await held; await route.fetch(); await route.abort("connectionreset"); }
+    await panel(page).getByRole("button", { name: "Reconnect", exact: true }).click();
+    await expect(page.getByRole("list", { name: "Connections" })).toContainText(/Received.*Closed/);
+    await panel(page).getByLabel("To", { exact: true }).selectOption({ label: "Reviewed" });
+    const requests: { key: string; body: string }[] = [];
+    await page.route("**/drafts/*/changes", async (route) => {
+      requests.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
+      if (requests.length === 1) { await route.fetch(); await route.abort("connectionreset"); }
       else await route.continue();
     });
-    await panel(page).getByRole("button", { name: "Reconnect", exact: true }).click();
-    await expect(page.locator(".studio-status")).toContainText("Saving");
-    await panel(page).getByLabel("To", { exact: true }).selectOption({ label: "Reviewed" });
-    release();
-    await expect(panel(page).getByRole("button", { name: "Retry reconnect" })).toBeVisible();
-    await page.locator(".studio-status").getByRole("button", { name: "Retry last change" }).click();
-    await expect.poll(() => reconnects.length).toBe(2);
-    expect(reconnects[1]).toEqual(reconnects[0]);
-    expect(JSON.parse(reconnects[0]!.body).command).toBe("RECONNECT_EDGE");
-    expect(JSON.parse(reconnects[0]!.body).payload.condition).toBeUndefined();
-    await expect(page.getByRole("list", { name: "Connections" })).toContainText(/Received.*Closed/);
+    await headerSave(page).click();
+    await note(page).getByRole("button", { name: "Retry" }).click();
+    await expect.poll(() => requests.length).toBe(2);
+    await expect(note(page)).toHaveCount(0);
+    expect(requests[1]).toEqual(requests[0]);
+    const sent = JSON.parse(requests[0]!.body).commands as { command: string; payload: Record<string, unknown> }[];
+    expect(sent.map((item) => item.command)).toEqual(["RECONNECT_EDGE"]);
+    expect(sent[0]!.payload.condition).toBeUndefined();
     const draft = await draftOf(page, projectId);
     const flow = Object.values(draft.document.flows)[0]!;
     expect([flow.title, flow.purpose, flow.classification, flow.inclusion]).toEqual(["Case triage", "Review cases", "BUSINESS_PROCESS", "INCLUDED"]);
@@ -696,20 +696,22 @@ test.describe("Studio on a real draft", () => {
     await expect(panel(page).getByLabel("To", { exact: true }).locator("option:checked")).toHaveText("Reviewed");
     await expect(panel(page).getByRole("button", { name: "Reconnect" })).toBeEnabled();
     await expect(page.locator(".studio-status")).toContainText("Unsaved changes");
-    await page.unroute("**/drafts/*/commands");
+    await page.unroute("**/drafts/*/changes");
     await panel(page).getByRole("button", { name: "Reconnect" }).click();
     await expect(page.getByRole("list", { name: "Connections" })).toContainText(/Received.*Reviewed/);
     await panel(page).getByRole("button", { name: "Delete connection", exact: true }).click();
     await expect(panel(page).getByRole("heading", { name: "Project", exact: true })).toBeVisible();
+    await saveStudio(page);
     expect(Object.keys((await draftOf(page, projectId)).document.edges)).toHaveLength(0);
   });
 
-  test("endpoint edits conflict with a remote reconnect and require explicit inspected revision", async ({ page }) => {
+  test("endpoint edits made against an older draft need an explicit, inspected reapply", async ({ page }) => {
     await createFlowInUi(page, "Connections");
     await addStepInUi(page, "Start", "Start");
     await addStepInUi(page, "Original");
     await addStepInUi(page, "Mine");
     await addStepInUi(page, "Remote");
+    await saveStudio(page);
     let draft = await draftOf(page, projectId);
     const nodes = Object.fromEntries(Object.values(draft.document.nodes).map((node) => [node.label, node.id]));
     const flowId = Object.keys(draft.document.flows)[0]!;
@@ -724,57 +726,39 @@ test.describe("Studio on a real draft", () => {
     const edge = Object.values(before.document.edges)[0]!;
     await command(page, projectId, before.id, { command: "RECONNECT_EDGE", expectedDocumentRevision: before.documentRevision,
       payload: { edgeId: edge.id, fromId: nodes.Remote, toId: nodes.Original } });
-    // A stale condition save refreshes the authorized draft while the endpoint choice stays local.
+    // A condition save meets the remote reconnect; discarding it re-reads the draft while the endpoint choice stays local.
     await panel(page).getByLabel("Condition").fill("My condition");
     await saveButton(page).click();
-    await expect(panel(page).getByRole("button", { name: "Keep saved value" })).toBeVisible();
-    await panel(page).getByRole("button", { name: "Keep saved value" }).click();
-    const requests: { key: string; body: string }[] = [];
-    await page.route("**/drafts/*/commands", async (route) => {
-      requests.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
-      if (requests.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
-      else await route.continue();
-    });
-    let readBlocked = true;
-    await page.route(`**/drafts/${before.id}`, (route) => readBlocked
-      ? route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Read unavailable" } } }) : route.continue());
-    await panel(page).getByRole("button", { name: "Reconnect", exact: true }).click();
-    await expect(page.locator(".studio-status").getByRole("button", { name: "Retry last change" })).toBeVisible();
-    expect(JSON.parse(requests[0]!.body)).toMatchObject({ expectedDocumentRevision: before.documentRevision,
-      payload: { edgeId: edge.id, fromId: nodes.Start, toId: nodes.Mine } });
-    // Retry from outside the inspector must preserve the stale conflict in the project store.
-    await panel(page).getByRole("button", { name: /Project$/ }).click();
-    await page.locator(".studio-status").getByRole("button", { name: "Retry last change" }).click();
-    await expect.poll(() => requests.length).toBe(2);
-    expect(requests[1]).toEqual(requests[0]);
-    await expect(page.locator(".studio-status").getByRole("button", { name: "Retry last change" })).toHaveCount(0);
+    await expect(note(page)).toContainText("Someone else changed this draft first");
+    await note(page).getByRole("button", { name: "Discard my changes" }).click();
+    await expect(page.getByRole("list", { name: "Connections" })).toContainText(/Remote.*Original/);
+    const requests: Record<string, unknown>[] = [];
+    await page.route("**/drafts/*/changes", async (route) => { requests.push(route.request().postDataJSON()); await route.continue(); });
     await page.getByRole("list", { name: "Connections" }).getByRole("button", { name: /^Remote/ }).click();
+    await panel(page).getByRole("button", { name: "Reconnect", exact: true }).click();
     const conflict = panel(page).getByRole("alert");
     await expect(conflict).toContainText("Saved connectionRemote");
     await expect(conflict).toContainText("Your connectionStart");
     await expect(conflict).toContainText("Before your editStart");
     await expect(panel(page).getByRole("button", { name: "Reconnect", exact: true })).toBeDisabled();
     expect(Object.values((await draftOf(page, projectId)).document.edges)[0]!.fromId).toBe(nodes.Remote);
-    expect(requests).toHaveLength(2);
-    await expect(conflict.getByRole("button", { name: "Apply my connection" })).toBeDisabled();
-    readBlocked = false;
-    await page.getByRole("button", { name: "Retry read", exact: true }).click();
-    await expect(conflict.getByRole("button", { name: "Apply my connection" })).toBeEnabled();
     await conflict.getByRole("button", { name: "Apply my connection" }).click();
     await expect(page.getByRole("list", { name: "Connections" })).toContainText(/Start.*Mine/);
+    expect(requests).toHaveLength(0);
+    await saveStudio(page);
     draft = await draftOf(page, projectId);
     expect(Object.values(draft.document.edges)[0]).toMatchObject({ fromId: nodes.Start, toId: nodes.Mine });
-    expect(requests).toHaveLength(3);
-    expect(requests[2]!.key).not.toBe(requests[1]!.key);
-    expect(JSON.parse(requests[2]!.body).expectedDocumentRevision).toBe(before.documentRevision + 1);
+    expect(requests).toHaveLength(1);
+    expect((requests[0]!.commands as { expectedDocumentRevision: number }[])[0]!.expectedDocumentRevision).toBe(before.documentRevision + 1);
   });
 
-  test("an uncertain List delete survives Stay, discard, project switch and exact receipt replay", async ({ page }) => {
+  test("an unconfirmed List delete survives Stay, Discard and a project switch, and every retry repeats the exact request", async ({ page }) => {
     const otherId = await createProjectViaApi(page, "Other project");
     await page.reload();
     await createFlowInUi(page, "Recovery");
     await addStepInUi(page, "From", "Start");
     await addStepInUi(page, "To", "Outcome");
+    await saveStudio(page);
     let draft = await draftOf(page, projectId);
     const nodes = Object.values(draft.document.nodes);
     await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
@@ -782,46 +766,49 @@ test.describe("Studio on a real draft", () => {
     await page.reload();
     await toolbar(page).getByRole("button", { name: "List" }).click();
     const requests: { key: string; body: string }[] = [];
-    await page.route("**/drafts/*/commands", async (route) => {
+    await page.route("**/drafts/*/changes", async (route) => {
       requests.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
-      if (requests.length === 1) {
+      if (requests.length <= 3) {
         await route.fetch();
         await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
       } else await route.continue();
     });
     await page.getByRole("button", { name: /^Delete connection/ }).click();
-    await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toBeVisible();
+    await headerSave(page).click();
+    await expect(note(page).getByRole("button", { name: "Retry" })).toBeVisible();
     const committed = await draftOf(page, projectId);
     expect(Object.keys(committed.document.edges)).toHaveLength(0);
     expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(true);
+    // A switch saves first: the unconfirmed batch is retried with its own key, and stays unconfirmed.
     await page.locator("#projects-nav").getByRole("button", { name: "Other project", exact: true }).click();
     const guard = modal(page, "Unsaved changes in Studio project");
     await expect(guard).toContainText("unconfirmed change");
     await guard.getByRole("button", { name: "Stay", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/app/projects/${projectId}$`));
-    await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toBeVisible();
+    await expect(note(page).getByRole("button", { name: "Retry" })).toBeVisible();
     await page.locator("#projects-nav").getByRole("button", { name: "Other project", exact: true }).click();
     await guard.getByRole("button", { name: "Discard changes", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/app/projects/${otherId}$`));
-    await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toHaveCount(0);
+    await expect(note(page)).toHaveCount(0);
     await page.locator("#projects-nav").getByRole("button", { name: "Studio project", exact: true }).click();
-    await page.getByRole("button", { name: "Retry last change", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toHaveCount(0);
+    await note(page).getByRole("button", { name: "Retry" }).click();
+    await expect(note(page)).toHaveCount(0);
     await expect(page.locator(".studio-status")).toContainText("All changes saved");
-    expect(requests).toHaveLength(2);
-    expect(requests[1]).toEqual(requests[0]);
+    expect(requests).toHaveLength(4);
+    for (const request of requests) expect(request).toEqual(requests[0]);
     draft = await draftOf(page, projectId);
     expect(draft.documentRevision).toBe(committed.documentRevision);
     expect(Object.keys(draft.document.edges)).toHaveLength(0);
     expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
   });
 
-  for (const { uncertain, failedRead } of [{ uncertain: false, failedRead: false }, { uncertain: true, failedRead: false }, { uncertain: false, failedRead: true }]) test(`an in-flight List command stays locked after browser history remount (uncertain: ${uncertain}, failed read: ${failedRead})`, async ({ page }) => {
+  for (const { uncertain, failedRead } of [{ uncertain: false, failedRead: false }, { uncertain: true, failedRead: false }, { uncertain: false, failedRead: true }]) test(`an in-flight save stays locked after browser history remount (uncertain: ${uncertain}, failed read: ${failedRead})`, async ({ page }) => {
     await createProjectViaApi(page, "History project");
     await page.reload();
     await createFlowInUi(page, "History recovery");
     await addStepInUi(page, "From", "Start");
     await addStepInUi(page, "To", "Outcome");
+    await saveStudio(page);
     const draft = await draftOf(page, projectId);
     const nodes = Object.values(draft.document.nodes);
     await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
@@ -836,7 +823,7 @@ test.describe("Studio on a real draft", () => {
     const held = new Promise<void>((resolve) => { release = resolve; });
     const requests: { key: string; body: string }[] = [];
     if (failedRead) await page.route(`**/drafts/${draft.id}`, (route) => route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Read unavailable" } } }));
-    await page.route("**/drafts/*/commands", async (route) => {
+    await page.route("**/drafts/*/changes", async (route) => {
       requests.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
       if (requests.length !== 1) return route.continue();
       await held;
@@ -846,23 +833,25 @@ test.describe("Studio on a real draft", () => {
     });
     try {
       await page.getByRole("button", { name: /^Delete connection/ }).click();
+      await headerSave(page).click();
       await expect.poll(() => requests.length).toBe(1);
       await page.goBack();
       await expect(page.getByRole("heading", { level: 1, name: "History project" })).toBeVisible();
       await page.goForward();
       await expect(page.getByRole("heading", { level: 1, name: "Studio project" })).toBeVisible();
-      await expect(page.getByRole("button", { name: /^Delete connection/ })).toBeDisabled();
-      await expect(toolbar(page).getByRole("button", { name: "Add step", exact: true })).toBeDisabled();
-      await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toHaveCount(0);
       await expect(page.locator(".studio-status")).toContainText("Saving");
+      await expect(headerSave(page)).toBeDisabled();
+      // Editing is never locked by a save: new changes queue behind it.
+      await expect(toolbar(page).getByRole("button", { name: "Add step", exact: true })).toBeEnabled();
+      await expect(note(page)).toHaveCount(0);
       expect(requests).toHaveLength(1);
       release();
       if (uncertain) {
-        await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toBeEnabled();
-        await page.getByRole("button", { name: "Retry last change", exact: true }).click();
+        await expect(note(page).getByRole("button", { name: "Retry" })).toBeEnabled();
+        await note(page).getByRole("button", { name: "Retry" }).click();
       }
       if (failedRead) {
-        await expect(page.locator(".studio-status")).toContainText("Change saved. The latest draft could not load.");
+        await expect(page.locator(".studio-status")).toContainText("Changes saved. The latest draft could not load.");
         await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
         await page.goBack();
         await expect(page.getByRole("heading", { level: 1, name: "History project" })).toBeVisible();
@@ -872,9 +861,8 @@ test.describe("Studio on a real draft", () => {
       }
       await expect(page.locator(".studio-status")).toContainText("0 connections");
       await expect(page.locator(".studio-status")).toContainText("All changes saved");
-      await expect(page.locator(".studio-status")).not.toContainText("could not confirm");
-      await expect(toolbar(page).getByRole("button", { name: "Add step", exact: true })).toBeEnabled();
-      await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toHaveCount(0);
+      await expect(page.locator(".studio-status")).not.toContainText("couldn’t confirm");
+      await expect(note(page)).toHaveCount(0);
       expect(requests).toHaveLength(uncertain ? 2 : 1);
       if (uncertain) expect(requests[1]).toEqual(requests[0]);
       const saved = await draftOf(page, projectId);
@@ -903,7 +891,7 @@ test.describe("Studio on a real draft", () => {
     });
     let mode: "failed" | "stale" | "fresh" = "failed";
     let writes = 0;
-    await page.route("**/drafts/*/commands", async (route) => { writes += 1; await route.continue(); });
+    await page.route("**/drafts/*/changes", async (route) => { writes += 1; await route.continue(); });
     try {
       await panel(page).getByLabel("Project name").fill("Metadata reread");
       await saveButton(page).click();
@@ -916,7 +904,7 @@ test.describe("Studio on a real draft", () => {
       await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Before/ }).click();
       await panel(page).getByLabel("Name", { exact: true }).fill("After");
       await saveButton(page).click();
-      await expect(page.locator(".studio-status")).toContainText("Change saved. The latest draft could not load.");
+      await expect(page.locator(".studio-status")).toContainText("Changes saved. The latest draft could not load.");
       release();
       await expect(page.getByRole("heading", { level: 1, name: "Metadata reread" })).toBeVisible();
       await expect(page.getByRole("button", { name: "Retry read", exact: true })).toBeVisible();
@@ -936,27 +924,32 @@ test.describe("Studio on a real draft", () => {
     } finally { release(); }
   });
 
-  test("a refused canvas connection reports failure in Studio status", async ({ page }) => {
+  test("a canvas connection is local at once; a refused save of it reports failure in Studio status", async ({ page }) => {
     await createFlowInUi(page, "Canvas connection");
     await addStepInUi(page, "Start", "Start");
     await addStepInUi(page, "End", "Outcome");
+    await saveStudio(page);
     const draft = await draftOf(page, projectId);
     const nodes = Object.fromEntries(Object.values(draft.document.nodes).map((node) => [node.label, node.id]));
-    await page.route("**/drafts/*/commands", (route) => route.fulfill({ status: 400, json: { error: { code: "INVALID_INPUT", message: "Connection refused" } } }));
+    await page.route("**/drafts/*/changes", (route) => route.fulfill({ status: 400, json: { error: { code: "INVALID_INPUT", message: "Connection refused" } } }));
     // Four handles per step (UI02) are all connectable; the bottom/top pair is the default TB routing.
     await page.locator(`.react-flow__node[data-id="${nodes.Start}"] .react-flow__handle[data-handleid="bottom"]`).dragTo(
       page.locator(`.react-flow__node[data-id="${nodes.End}"] .react-flow__handle[data-handleid="top"]`),
     );
-    await expect(page.locator(".studio-status")).toContainText("Connection refused");
+    await expect(page.locator(".studio-status")).toContainText("1 connection");
+    await headerSave(page).click();
+    await expect(page.locator(".studio-status")).toContainText("Your changes weren’t saved.");
+    await expect(note(page)).toContainText("Connection refused");
     expect(Object.values((await draftOf(page, projectId)).document.edges)).toHaveLength(0);
   });
 
-  test("a stale canvas reconnect retains mine and original for explicit inspector recovery", async ({ page }) => {
+  test("a stale canvas reconnect stays on screen and is applied again only when the person chooses", async ({ page }) => {
     await createFlowInUi(page, "Canvas recovery");
     await addStepInUi(page, "Start", "Start");
     await addStepInUi(page, "Original");
     await addStepInUi(page, "Mine");
     await addStepInUi(page, "Remote");
+    await saveStudio(page);
     let draft = await draftOf(page, projectId);
     const nodes = Object.fromEntries(Object.values(draft.document.nodes).map((node) => [node.label, node.id]));
     await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
@@ -967,32 +960,29 @@ test.describe("Studio on a real draft", () => {
     const edge = Object.values(draft.document.edges)[0]!;
     await command(page, projectId, draft.id, { command: "RECONNECT_EDGE", expectedDocumentRevision: draft.documentRevision,
       payload: { edgeId: edge.id, fromId: nodes.Remote, toId: nodes.Original } });
-    const requests: Record<string, unknown>[] = [];
-    await page.route("**/drafts/*/commands", async (route) => { requests.push(route.request().postDataJSON()); await route.continue(); });
+    const requests: { commands: Record<string, unknown>[] }[] = [];
+    await page.route("**/drafts/*/changes", async (route) => { requests.push(route.request().postDataJSON()); await route.continue(); });
     await page.locator(".react-flow__edgeupdater-target").dragTo(page.locator(`.react-flow__node[data-id="${nodes.Mine}"] .react-flow__handle[data-handleid="top"]`));
-    await expect.poll(() => requests.length).toBe(1);
-    expect(requests[0]).toMatchObject({ command: "RECONNECT_EDGE", expectedDocumentRevision: draft.documentRevision,
+    await expect(page.locator(`.react-flow__edge[data-id="${edge.id}"]`)).toBeVisible();
+    expect(requests).toHaveLength(0);
+    await headerSave(page).click();
+    await expect(note(page)).toContainText("Someone else changed this draft first");
+    expect(requests[0]!.commands[0]).toMatchObject({ command: "RECONNECT_EDGE", expectedDocumentRevision: draft.documentRevision,
       payload: { edgeId: edge.id, fromId: nodes.Start, toId: nodes.Mine } });
-    // Open through the normal inspector control if the stale gesture did not already open recovery.
-    await toolbar(page).getByRole("button", { name: "List" }).click();
-    await page.getByRole("list", { name: "Connections" }).getByRole("button", { name: /^Remote/ }).click();
-    if (!(await panel(page).isVisible())) await page.getByRole("button", { name: "Inspect", exact: true }).click();
-    const conflict = panel(page).getByRole("alert");
-    await expect(conflict).toContainText("Saved connectionRemote");
-    await expect(conflict).toContainText("Your connectionStart");
-    await expect(conflict).toContainText("Before your editStart");
-    await expect(panel(page).getByLabel("To", { exact: true })).toHaveValue(nodes.Mine!);
     expect(Object.values((await draftOf(page, projectId)).document.edges)[0]!.fromId).toBe(nodes.Remote);
-    expect(requests).toHaveLength(1);
-    await conflict.getByRole("button", { name: "Apply my connection", exact: true }).click();
-    await expect(page.getByRole("list", { name: "Connections" })).toContainText(/Start.*Mine/);
+    await toolbar(page).getByRole("button", { name: "List" }).click();
+    await expect(page.getByRole("list", { name: "Connections" })).toContainText(/Start.*Mine/); // mine stays on screen
+    await note(page).getByRole("button", { name: "Apply my changes again" }).click();
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
     expect(requests).toHaveLength(2);
-    expect(requests[1]).toMatchObject({ expectedDocumentRevision: draft.documentRevision + 1 });
+    expect(requests[1]!.commands[0]).toMatchObject({ expectedDocumentRevision: draft.documentRevision + 1 });
+    expect(Object.values((await draftOf(page, projectId)).document.edges)[0]).toMatchObject({ fromId: nodes.Start, toId: nodes.Mine });
   });
 
   test("local Archive preserves typed Studio text for copying and explicit discard", async ({ page }) => {
     await createFlowInUi(page, "Review");
     await addStepInUi(page, "Keep", "Start");
+    await saveStudio(page);
     await page.getByRole("button", { name: "Inspect" }).click();
     await panel(page).getByLabel("Description").fill("Archive local text");
     await panel(page).getByRole("button", { name: /Project$/ }).click();
@@ -1037,7 +1027,7 @@ test.describe("Studio on a real draft", () => {
     await expect(name).toHaveValue(long);
     await name.fill("\u{1f642}".repeat(160));
     let writes = 0;
-    page.on("request", (request) => { if (request.url().endsWith("/commands") && request.method() === "POST") writes++; });
+    page.on("request", (request) => { if (/\/(commands|changes)$/.test(request.url()) && request.method() === "POST") writes++; });
     await name.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true });
     expect(writes).toBe(0);
     await panel(page).getByLabel("Description").fill("Complete description");
@@ -1169,13 +1159,13 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await expect(flows.getByRole("button", { name: /^Duplicate/ })).toBeDisabled();
     await expect(flows.getByText("A project can have up to 5 flows.", { exact: false })).toBeVisible();
   });
-  test("keyboard List selection survives filtering, Canvas pan and zoom never write, and a drag writes only one position save, on Save", async ({ page }) => {
+  test("keyboard List selection survives filtering, Canvas pan and zoom never write, and a drag writes only one batch, on Save", async ({ page }) => {
     await mock(page, "OWNER");
     let writes = 0;
-    let positionWrites = 0;
-    await page.route("**/commands", async (route) => { writes++; await route.abort(); });
-    // Stage 03.3 Task 12: an editor's drag stays unsaved until Save (or autosave), then saves through the positions route only.
-    await page.route("**/positions", async (route) => { positionWrites++; await route.abort(); });
+    let saves = 0;
+    await page.route(/\/(commands|positions)$/, async (route) => { writes++; await route.abort(); });
+    // Task 14b: an editor's drag stays unsaved until Save (or autosave), then saves in one batch.
+    await page.route("**/changes", async (route) => { saves++; await route.abort(); });
     await page.goto(`/app/projects/${projectId}`);
     await toolbar(page).getByRole("button", { name: "List", exact: true }).click();
     const picked = page.getByRole("checkbox", { name: "Select Receive form" });
@@ -1195,77 +1185,85 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await expect(panel(page)).toHaveCount(0);
     const before = await node.getAttribute("style");
     await node.dragTo(node, { sourcePosition: { x: 30, y: 30 }, targetPosition: { x: 90, y: 90 }, steps: 5 });
-    await expect(page.locator(".studio-status")).toContainText("Unsaved positions");
-    expect(positionWrites).toBe(0);
-    await page.locator(".editor-header").getByRole("button", { name: "Save", exact: true }).click();
-    // The lost acknowledgement keeps the attempted placement on screen with a same-key Retry.
-    await expect(page.locator(".placement-note")).toContainText("We couldn’t confirm the new position.");
+    await expect(page.locator(".studio-status")).toContainText("Unsaved changes");
+    expect(saves).toBe(0);
+    await headerSave(page).click();
+    // The lost acknowledgement keeps the moved step on screen with a same-key Retry.
+    await expect(note(page)).toContainText("We couldn’t confirm your changes.");
     await expect(node).not.toHaveAttribute("style", before!);
     await page.getByRole("button", { name: "Zoom In", exact: true }).click();
     await page.getByRole("button", { name: "Fit View", exact: true }).click();
     expect(writes).toBe(0);
-    expect(positionWrites).toBe(1);
+    expect(saves).toBe(1);
     await page.screenshot({ path: test.info().outputPath("studio-canvas.png") });
   });
 
-  for (const [role, status] of [["VIEWER", "ACTIVE"], ["OWNER", "ARCHIVED"]]) test(`a read-only canvas (${role}, ${status}) never moves or saves a dragged step`, async ({ page }) => {
+  for (const [role, status] of [["VIEWER", "ACTIVE"], ["OWNER", "ARCHIVED"]]) test(`a read-only canvas (${role}, ${status}) never moves, queues or saves a dragged step`, async ({ page }) => {
     await mock(page, role!, status);
     let writes = 0;
-    await page.route(/\/(commands|positions)$/, async (route) => { writes++; await route.abort(); });
+    await page.route(/\/(commands|positions|changes)$/, async (route) => { writes++; await route.abort(); });
     await page.goto(`/app/projects/${projectId}`);
     const node = page.locator(`.react-flow__node[data-id="${start}"]`);
     await expect(node).toBeVisible();
     const before = await node.getAttribute("style");
     await node.dragTo(node, { sourcePosition: { x: 30, y: 30 }, targetPosition: { x: 90, y: 90 }, steps: 5 });
     await expect(node).toHaveAttribute("style", before!);
+    // Readers never get an outbox: no Save, nothing unsaved.
+    await expect(headerSave(page)).toHaveCount(0);
+    await expect(page.locator(".studio-status")).not.toContainText("Unsaved changes");
     expect(writes).toBe(0);
   });
 
-  test("an uncertain List deletion retries its exact request after switching views", async ({ page }) => {
+  test("an unconfirmed List deletion retries its exact batch after switching views", async ({ page }) => {
     await mock(page, "OWNER");
     const attempts: { key: string; body: string }[] = [];
     const initial = draft();
     await page.route("**/drafts/" + initial.id, async (route) => route.fulfill({ json: { ...initial, documentRevision: 2, document: { ...initial.document, edges: {} } } }));
-    await page.route("**/commands", async (route) => {
-      attempts.push({ key: route.request().headers()["idempotency-key"], body: route.request().postData()! });
+    await page.route("**/changes", async (route) => {
+      attempts.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
       if (attempts.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
-      else await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, createdIds: [], retiredIds: [edgeId], versions: {}, replayed: true } });
+      else await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, createdIds: [], versions: {}, positions: {}, replayed: true } });
     });
     await page.goto(`/app/projects/${projectId}`);
     await toolbar(page).getByRole("button", { name: "List", exact: true }).click();
     await page.getByRole("button", { name: /^Delete connection Receive form/ }).click();
-    await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toBeVisible();
+    await headerSave(page).click();
+    await expect(note(page).getByRole("button", { name: "Retry" })).toBeVisible();
     await toolbar(page).getByRole("button", { name: "Canvas", exact: true }).click();
-    await page.getByRole("button", { name: "Retry last change", exact: true }).click();
+    await note(page).getByRole("button", { name: "Retry" }).click();
     await expect(page.locator(".studio-status")).toContainText("0 connections");
     await expect(page.locator(".studio-status")).toContainText("All changes saved");
     expect(attempts).toHaveLength(2);
     expect(attempts[1]).toEqual(attempts[0]);
-    await expect(page.getByRole("button", { name: "Retry last change", exact: true })).toHaveCount(0);
+    await expect(note(page)).toHaveCount(0);
   });
 
-  test("Delete step stays open when its recovery control settles an earlier connection change", async ({ page }) => {
+  test("Delete on a selected connection removes it at once and Undo brings it back; on a step Delete still asks first", async ({ page }) => {
     await mock(page, "OWNER");
-    const initial = draft();
-    await page.route("**/drafts/" + initial.id, async (route) => route.fulfill({ json: { ...initial, documentRevision: 2, document: { ...initial.document, edges: {} } } }));
     let writes = 0;
-    await page.route("**/commands", async (route) => {
-      writes++;
-      if (writes === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
-      else await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, createdIds: [], retiredIds: [edgeId], versions: {}, replayed: true } });
-    });
+    await page.route(/\/(commands|positions|changes)$/, async (route) => { writes++; await route.abort(); });
     await page.goto(`/app/projects/${projectId}`);
-    await toolbar(page).getByRole("button", { name: "List" }).click();
-    await page.getByRole("button", { name: /^Delete connection Receive form/ }).click();
-    await expect(page.getByRole("button", { name: "Retry last change" })).toBeVisible();
-    const step = page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Receive form/ });
-    await step.click();
-    await step.press("Delete");
+    const path = page.locator(`.react-flow__edge[data-id="${edgeId}"] path.react-flow__edge-path`);
+    await expect(path).toHaveCount(1);
+    const point = await path.evaluate((element: SVGPathElement) => {
+      const at = element.getPointAtLength(element.getTotalLength() / 2).matrixTransform(element.getScreenCTM()!);
+      return { x: at.x, y: at.y };
+    });
+    await page.mouse.click(point.x, point.y);
+    await expect(page.locator(`.react-flow__edge[data-id="${edgeId}"]`)).toHaveClass(/selected/);
+    await page.keyboard.press("Delete");
+    await expect(openModals(page)).toHaveCount(0);
+    await expect(page.locator(`.react-flow__edge[data-id="${edgeId}"]`)).toHaveCount(0);
+    await expect(page.locator(".studio-status")).toContainText("0 connections");
+    await expect(page.locator(".studio-status")).toContainText("Unsaved changes");
+    await page.locator(".studio-status").getByRole("button", { name: "Undo" }).click();
+    await expect(page.locator(".studio-status")).toContainText("1 connection");
+    await page.locator(`.react-flow__node[data-id="${start}"]`).click();
+    await page.keyboard.press("Delete");
     const confirm = modal(page, "Delete step");
-    await confirm.getByRole("button", { name: "Retry last change" }).click();
-    await expect(confirm).toBeVisible();
     await expect(confirm.getByText("Receive form")).toBeVisible();
-    expect(writes).toBe(2);
+    await confirm.getByRole("button", { name: "Cancel" }).click();
+    expect(writes).toBe(0);
   });
 
   test("a narrow editor uses 44 px controls even on a wider screen", async ({ page }) => {
@@ -1297,7 +1295,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     expect(await pageFits(page)).toBe(true);
   });
 
-  test("an acknowledged change reports and recovers a failed draft refresh without sending another command", async ({ page }) => {
+  test("an acknowledged save reports and recovers a failed draft refresh without sending another request", async ({ page }) => {
     await mock(page, "OWNER");
     const initial = draft();
     let reads = 0;
@@ -1307,15 +1305,17 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
       if (reads === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Read unavailable" } } });
       else await route.fulfill({ json: { ...initial, documentRevision: 2, document: { ...initial.document, edges: {} } } });
     });
-    await page.route("**/commands", async (route) => {
+    await page.route("**/changes", async (route) => {
       writes++;
-      await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, createdIds: [], retiredIds: [edgeId], versions: {}, replayed: false } });
+      await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, createdIds: [], versions: {}, positions: {}, replayed: false } });
     });
     await page.goto(`/app/projects/${projectId}`);
     await toolbar(page).getByRole("button", { name: "List", exact: true }).click();
     await page.getByRole("button", { name: /^Delete connection Receive form/ }).click();
-    await expect(page.locator(".studio-status")).toContainText("Change saved. The latest draft could not load.");
+    await headerSave(page).click();
+    await expect(page.locator(".studio-status")).toContainText("Changes saved. The latest draft could not load.");
     await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
+    await expect(page.locator(".studio-status")).toContainText("0 connections"); // what was saved stays shown
     await page.getByRole("button", { name: "Retry read", exact: true }).click();
     await expect(page.locator(".studio-status")).toContainText("0 connections");
     await expect(page.locator(".studio-status")).toContainText("All changes saved");
@@ -1323,7 +1323,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     expect(reads).toBe(2);
   });
 
-  for (const change of ["role", "archive", "empty"]) test(`an exact unconfirmed receipt retries after ${change} change without a new write`, async ({ page }) => {
+  for (const change of ["role", "archive", "empty"]) test(`an exact unconfirmed batch retries after ${change} change without a new write`, async ({ page }) => {
     await mock(page, "OWNER");
     let role = "OWNER", status = "ACTIVE";
     const initial = draft();
@@ -1339,10 +1339,10 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
       await route.fulfill({ json: {} });
     });
     await page.route("**/drafts/" + initial.id, async (route) => route.fulfill({ json: currentDraft() }));
-    await page.route("**/commands", async (route) => {
+    await page.route("**/changes", async (route) => {
       attempts.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
       if (attempts.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Acknowledgement lost" } } });
-      else await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, createdIds: [], retiredIds: [], versions: { [start]: 2 }, replayed: true } });
+      else await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, createdIds: [], versions: { [start]: 2 }, positions: {}, replayed: true } });
     });
     await page.goto(`/app/projects/${projectId}`);
     await toolbar(page).getByRole("button", { name: "List" }).click();
@@ -1350,16 +1350,16 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await page.getByRole("button", { name: "Inspect" }).click();
     await panel(page).getByLabel("Name").fill("Saved before change");
     await saveButton(page).click();
-    await expect(panel(page).getByRole("button", { name: "Save again" })).toBeVisible();
+    await expect(note(page).getByRole("button", { name: "Retry" })).toBeVisible();
     await panel(page).getByLabel("Name").fill("My later text");
     await panel(page).getByRole("button", { name: /Project$/ }).click();
     await panel(page).getByLabel("Project name").fill("Refresh access");
     await saveButton(page).click();
     await expect(page.locator(change === "role" ? ".editor-header" : ".editor-banner")).toContainText(change === "role" ? "Viewer" : "Archived");
-    await page.locator(".studio-status").getByRole("button", { name: "Retry last change" }).click();
+    await note(page).getByRole("button", { name: "Retry" }).click();
     await expect.poll(() => attempts.length).toBe(2);
     expect(attempts[1]).toEqual(attempts[0]);
-    await expect(page.getByRole("button", { name: "Retry last change" })).toHaveCount(0);
+    await expect(note(page)).toHaveCount(0);
     if (change === "empty") await page.getByRole("button", { name: "Unsaved text for a removed item" }).click();
     else await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Saved before change/ }).click();
     await expect(panel(page).getByLabel("Your unsaved text")).toHaveValue("Name: My later text");
@@ -1369,13 +1369,13 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     expect(attempts).toHaveLength(2);
   });
 
-  for (const change of ["role", "archive"]) test(`a ${change} change retains isolated inspector text with copy and discard only`, async ({ page }) => {
+  for (const change of ["role", "archive"]) test(`a ${change} change keeps unsaved changes readable for copying, with discard only`, async ({ page }) => {
     await mock(page, "OWNER");
     let role = "OWNER";
     let status = "ACTIVE";
     let writes = 0;
     await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: draft() } }));
-    await page.route("**/commands", async (route) => {
+    await page.route("**/changes", async (route) => {
       writes++;
       if (change === "role") role = "VIEWER";
       else status = "ARCHIVED";
@@ -1389,12 +1389,14 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await saveButton(page).click();
     await expect(page.locator(change === "role" ? ".editor-header" : ".editor-banner")).toContainText(change === "role" ? "Viewer" : "Archived");
     await expect(saveButton(page)).toHaveCount(0);
+    await expect(headerSave(page)).toHaveCount(0);
     await expect(panel(page).getByLabel("Name")).toHaveCount(0);
     await expect(panel(page).getByText("Full description text", { exact: true })).toBeVisible();
-    await expect(panel(page).getByLabel("Your unsaved text")).toHaveValue("Name: Denied change");
-    await expect(panel(page).getByRole("button", { name: "Copy", exact: true })).toBeVisible();
-    await panel(page).getByRole("button", { name: "Discard", exact: true }).click();
-    await expect(panel(page).getByLabel("Your unsaved text")).toHaveCount(0);
+    // The typed name now lives in the unsaved change, listed for copying since it can no longer be saved.
+    await expect(note(page)).toContainText("This draft is read-only now");
+    await expect(note(page)).toContainText("name “Denied change”");
+    await note(page).getByRole("button", { name: "Discard my changes" }).click();
+    await expect(note(page)).toHaveCount(0);
     await expect(page.locator(".studio-status")).not.toContainText("Unsaved changes");
     expect(writes).toBe(1);
   });
@@ -1403,15 +1405,19 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await mock(page, "OWNER");
     let role = "OWNER";
     await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status: "ACTIVE", role, ownerId: projectId }, draft: draft() } }));
-    await page.route("**/commands", async (route) => {
+    await page.route("**/changes", async (route) => {
       role = "VIEWER";
       await route.fulfill({ status: 403, json: { error: { code: "FORBIDDEN", message: "Access changed" } } });
     });
+    await page.clock.install();
     await page.goto(`/app/projects/${projectId}`);
+    // A queued change is autosaved while the form is open; that save finds the narrower access.
+    await toolbar(page).getByRole("button", { name: "List" }).click();
+    await page.getByRole("button", { name: /^Delete connection Receive form/ }).click();
     await toolbar(page).getByRole("button", { name: "Add step" }).click();
     const add = modal(page, "Add step");
     await add.getByLabel("Name").fill("No longer permitted");
-    await add.getByRole("button", { name: "Add step" }).click();
+    await page.clock.fastForward(10_500);
     await expect(page.locator(".editor-header")).toContainText("Viewer");
     await expect(add).toHaveCount(0);
     await expect(toolbar(page).getByRole("button", { name: "Add step" })).toHaveCount(0);
@@ -1421,7 +1427,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await mock(page, "OWNER");
     let role = "OWNER";
     await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status: "ACTIVE", role, ownerId: projectId }, draft: draft() } }));
-    await page.route("**/commands", async (route) => {
+    await page.route("**/changes", async (route) => {
       role = "VIEWER";
       await route.fulfill({ status: 403, json: { error: { code: "FORBIDDEN", message: "Access changed" } } });
     });
