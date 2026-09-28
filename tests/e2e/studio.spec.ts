@@ -1451,8 +1451,12 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await modal(page, "New flow").getByLabel("Title").fill("No longer permitted");
     await modal(page, "New flow").getByRole("button", { name: "Create flow" }).click();
     await expect(page.locator(".editor-header")).toContainText("Viewer");
-    await expect(modal(page, "Flows")).toBeVisible();
+    // The local flow's form closed (it can never create a second one); the unsaved flow is listed, and a reader's
+    // Flows dialog offers no creation.
     await expect(page.getByRole("button", { name: "Create flow", exact: true })).toHaveCount(0);
+    await expect(note(page)).toContainText("New flow “No longer permitted”");
+    await page.locator(".flow-switch").click();
+    await expect(modal(page, "Flows")).toBeVisible();
     await expect(modal(page, "Flows").getByRole("button", { name: "New flow" })).toHaveCount(0);
   });
 
