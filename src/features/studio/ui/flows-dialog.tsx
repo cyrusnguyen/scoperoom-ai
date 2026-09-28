@@ -37,7 +37,7 @@ type Submitted = { command: GraphCommand; values?: FlowValues };
  * until someone marks them included; no requirement or approver is needed first.
  */
 export function FlowsDialog({ onClose, creating = false }: { onClose: () => void; creating?: boolean }) {
-  const { draft, editable, busy, ui, update } = useStudio();
+  const { draft, editable, busy, ui, update, unsaved, savePositions } = useStudio();
   const submitCommand = useCommandSubmit();
   const [mode, setMode] = useState<Mode>(creating ? "create" : "list");
   const [filter, setFilter] = useState<"ALL" | Inclusion>("ALL");
@@ -55,7 +55,13 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   const full = flows.length >= LIMITS.flows;
   const duplicateTooLong = Boolean(current && [...`Copy of ${current.title}`].length > LIMITS.title);
   const counts = (flowId: string) => Object.values(document.nodes).filter((node) => node.flowId === flowId).length;
-  const open = (flowId: string | null) => {
+  const open = async (flowId: string | null) => {
+    // Moved steps are saved before another flow opens; if they cannot be, this flow stays open with them. After a
+    // deleted flow (null) its steps' moves are already gone.
+    if (flowId && unsaved && flowId !== current?.id && !(await savePositions())) {
+      setMessage("Your moved steps aren’t saved yet, so this flow stays open. Resolve them, then switch.");
+      return;
+    }
     // Commit the destination and native dialog close before focusing outside its modal focus trap.
     flushSync(() => {
       update(() => ({ flowId, selection: null }));
@@ -77,11 +83,11 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     setMessage("");
     if (action.values && JSON.stringify(currentValues.current) !== JSON.stringify(action.values)) {
       // The saved flow used the submitted values. Later typing remains an explicit, unsaved next creation.
-      update(() => ({ flowId: outcome.result.createdIds[0]!, selection: null }));
       setNotice("Flow created. Your newer values are unsaved. Create another flow to save them.");
+      void (async () => { if (!unsaved || await savePositions()) update(() => ({ flowId: outcome.result.createdIds[0]!, selection: null })); })();
       return;
     }
-    open(action.command.command === "DELETE_FLOW" ? null : outcome.result.createdIds[0]!);
+    void open(action.command.command === "DELETE_FLOW" ? null : outcome.result.createdIds[0]!);
   };
   const send = async (command: GraphCommand, sentValues?: FlowValues) => {
     if (submitted.current && JSON.stringify(command) !== JSON.stringify(submitted.current.command)) {
@@ -168,7 +174,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     </div>
     <p className="muted">{flows.length} of {LIMITS.flows} flows{filter === "ALL" ? "" : ` · showing ${shown.length}`}</p>
     <ul className="item-list">{shown.map((flow) => <li key={flow.id}>
-      <button type="button" className="item-row" aria-current={flow.id === current?.id ? "true" : undefined} onClick={() => open(flow.id)}>
+      <button type="button" className="item-row" aria-current={flow.id === current?.id ? "true" : undefined} onClick={() => void open(flow.id)}>
         <span><strong>{flow.title}</strong><small>{counts(flow.id)} {counts(flow.id) === 1 ? "step" : "steps"} · {INCLUSION_LABELS[flow.inclusion]}</small></span>
         {flow.id === current?.id && <Icon name="check" size={14} />}
       </button>

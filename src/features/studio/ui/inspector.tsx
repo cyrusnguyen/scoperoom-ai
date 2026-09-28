@@ -150,7 +150,7 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
 }
 
 function StepContext({ node }: { node: NodeRecord }) {
-  const { draft, editable, busy, update } = useStudio();
+  const { draft, editable, busy, ui, update } = useStudio();
   const [deleting, setDeleting] = useState(false);
   const { incoming, outgoing } = neighbours(draft.document, node.id);
   const link = (nodeId: string, label: string) => <button type="button" className="text-link" onClick={() => update(() => ({ selection: { kind: "NODES", ids: [nodeId] } }))}>{label}</button>;
@@ -161,16 +161,16 @@ function StepContext({ node }: { node: NodeRecord }) {
       {incoming.map((edge) => <li key={edge.id}>From {link(edge.fromId, stepName(draft.document, edge.fromId))}{edge.condition && <span className="muted"> · {edge.condition}</span>}</li>)}
       {outgoing.map((edge) => <li key={edge.id}>To {link(edge.toId, stepName(draft.document, edge.toId))}{edge.condition && <span className="muted"> · {edge.condition}</span>}</li>)}
     </ul>
-    {editable && draft.layout.positions[node.id] && <PositionForm key={`${node.id}:${draft.layout.positions[node.id]!.version}`} node={node} />}
+    {editable && draft.layout.positions[node.id] && <PositionForm key={`${node.id}:${draft.layout.positions[node.id]!.version}:${JSON.stringify(ui.unsavedMoves[node.id] ?? null)}`} node={node} />}
     {editable && <button type="button" className="button danger small" onClick={() => setDeleting(true)} disabled={busy}>Delete step…</button>}
     {editable && deleting && <DeleteStepsDialog flowId={node.flowId} nodeIds={[node.id]} onClose={() => setDeleting(false)} onDeleted={() => { setDeleting(false); update(() => ({ selection: null })); focusAfterRemoval(); }} />}
   </section>;
 }
 
-/** The keyboard way to move a step: the same MOVE_NODES save as a drag, one step at a time. */
+/** The keyboard way to move a step: a local move like a drop, saved at once with every other unsaved move. */
 function PositionForm({ node }: { node: NodeRecord }) {
-  const { draft, busy, attempt, moveSteps } = useStudio();
-  const saved = draft.layout.positions[node.id]!;
+  const { draft, ui, busy, attempt, moveSteps } = useStudio();
+  const saved = ui.unsavedMoves[node.id] ?? draft.layout.positions[node.id]!;
   const [x, setX] = useState(String(saved.x));
   const [y, setY] = useState(String(saved.y));
   const [error, setError] = useState("");
@@ -180,7 +180,7 @@ function PositionForm({ node }: { node: NodeRecord }) {
     const next = [x, y].map((value) => (value.trim() ? Number(value) : Number.NaN));
     if (next.some((value) => !Number.isFinite(value) || Math.abs(value) > COORDINATE_LIMIT)) { setError(`Enter numbers from -${COORDINATE_LIMIT} to ${COORDINATE_LIMIT}.`); return; }
     setError("");
-    if (!blocked) void moveSteps(node.flowId, [{ nodeId: node.id, x: next[0]!, y: next[1]! }]);
+    if (!blocked) void moveSteps(node.flowId, [{ nodeId: node.id, x: next[0]!, y: next[1]! }], true);
   };
   return <form className="position-form" onSubmit={submit} onKeyDown={formKeys} noValidate aria-labelledby="inspector-position">
     <h4 id="inspector-position" className="sr-only">Position</h4>

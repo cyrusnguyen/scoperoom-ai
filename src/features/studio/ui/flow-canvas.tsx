@@ -165,7 +165,8 @@ const defaultEdgeOptions = { type: "flow" as const };
 /**
  * Controlled React Flow view of one flow's saved document and layout. Selection, pan, zoom and measurement stay local
  * and never become edits; connecting and reconnecting call the same commands as the Connect form and the inspector.
- * A drag shows locally and saves once, on drop, as one MOVE_NODES for every moved step. Keyboard arrow moves are
+ * A drop keeps the moved steps as unsaved moves, shown over the saved layout until Save, autosave or a save-first action
+ * sends them (Task 12). Keyboard arrow moves are
  * ignored: the inspector's position form is the keyboard path. `preview` renders proposed positions read-only.
  * A `ReactFlowProvider` wraps this so the shape panel's click path and the canvas wrapper's drop handler can both
  * convert a screen point to a flow position (`screenToFlowPosition` needs an ancestor provider).
@@ -176,7 +177,7 @@ export default function FlowCanvas(props: { flowId: string; preview?: { position
 }
 
 function CanvasInner({ flowId, preview }: { flowId: string; preview?: { positions: Record<string, Point>; direction: Direction } }) {
-  const { draft, editable, busy, ui, update, run, place, inspect, attempt, moveSteps } = useStudio();
+  const { draft, editable, busy, ui, update, run, place, inspect, attempt, moveSteps, dragActive } = useStudio();
   const { document, layout } = draft;
   const { screenToFlowPosition } = useReactFlow();
   const [dragging, setDragging] = useState<Record<string, Point>>({});
@@ -185,6 +186,8 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   const [editing, setEditing] = useState<Editing>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const interactive = !preview;
+  // A canvas unmounted mid-drag (flow removed elsewhere) must not leave autosave paused.
+  useEffect(() => () => dragActive(false), [dragActive]);
   // Inline editors exist only on an editable, live canvas (never read-only, archived or the arrangement preview).
   const inlineEnabled = interactive && editable;
   const connectable = interactive && editable && !busy && !ui.pending;
@@ -237,16 +240,17 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   const nodes = useMemo<StepNode[]>(() => {
     const selected = interactive && ui.selection?.kind === "NODES" ? ui.selection.ids : [];
     const attempted: Record<string, Point> = Object.fromEntries((shown?.command.items ?? []).map(({ nodeId, x, y }) => [nodeId, { x, y }]));
+    const unsaved = interactive ? ui.unsavedMoves : {};
     const direction = preview?.direction ?? layout.directions[flowId] ?? "TB";
     return Object.values(document.nodes).filter((node) => node.flowId === flowId).map((node) => {
       const size = STEP_SIZE[node.kind];
       return {
         id: node.id, type: "step", width: size.width, height: size.height,
-        position: preview?.positions[node.id] ?? dragging[node.id] ?? attempted[node.id] ?? { x: layout.positions[node.id]!.x, y: layout.positions[node.id]!.y },
+        position: preview?.positions[node.id] ?? dragging[node.id] ?? attempted[node.id] ?? unsaved[node.id] ?? { x: layout.positions[node.id]!.x, y: layout.positions[node.id]!.y },
         data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction }, selected: selected.includes(node.id), measured: measured[node.id],
       };
     });
-  }, [document, layout, flowId, ui.selection, preview, dragging, shown, interactive, measured]);
+  }, [document, layout, flowId, ui.selection, ui.unsavedMoves, preview, dragging, shown, interactive, measured]);
 
   const edges = useMemo<FlowEdge[]>(() => Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => ({
     id: edge.id, type: "flow", source: edge.fromId, target: edge.toId, data: { condition: edge.condition },
@@ -275,7 +279,8 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     if (moving.length) setDragging((current) => ({ ...current, ...Object.fromEntries(moving) }));
   };
   const drop = (_event: unknown, _node: unknown, moved: StepNode[]) => {
-    const targets = moveTargets(moved, layout);
+    dragActive(false);
+    const targets = moveTargets(moved, layout, ui.unsavedMoves);
     setDragging({});
     if (targets.length > MAX_MOVE_NODES) { setNote(`Move up to ${MAX_MOVE_NODES} steps at a time.`); return; }
     setNote("");
@@ -335,7 +340,7 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     <ReactFlow<StepNode, FlowEdge> key={preview ? `preview-${preview.direction}` : flowId} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions} connectionMode={ConnectionMode.Loose}
       onNodesChange={interactive ? onNodesChange : measure} onEdgesChange={interactive ? onEdgesChange : undefined}
-      onNodeDoubleClick={interactive ? nodeDoubleClick : undefined} onEdgeDoubleClick={interactive ? edgeDoubleClick : undefined} onNodeDragStop={interactive ? drop : undefined}
+      onNodeDoubleClick={interactive ? nodeDoubleClick : undefined} onEdgeDoubleClick={interactive ? edgeDoubleClick : undefined} onNodeDragStart={interactive ? () => dragActive(true) : undefined} onNodeDragStop={interactive ? drop : undefined}
       onConnect={connect} onReconnect={reconnect} elementsSelectable={interactive}
       nodesDraggable={draggable} nodesConnectable={connectable} edgesReconnectable={connectable} deleteKeyCode={null}
       fitView fitViewOptions={{ padding: 0.2, maxZoom: 1 }} minZoom={0.1} maxZoom={4}

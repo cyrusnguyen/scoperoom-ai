@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import type { ErrorDetails } from "@/contracts/http";
 import type { CommandResult, GraphCommand } from "@/features/drafts/contracts/commands";
@@ -9,7 +9,10 @@ import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
 import { acknowledge, follow, refuse } from "./buffers";
 import { reconnectCommand, updateCommand } from "./fields";
-import { afterDraftRead, canUndo, requireDraftRevision, type Attempt, type SaveState, type StudioUi } from "./studio-ui";
+import {
+  afterDraftRead, AUTOSAVE_MS, canUndo, forgetMoves, moveChunks, recordDrop, requireDraftRevision, settleMoves, undoDrop,
+  type Attempt, type SaveState, type StudioUi, type UnsavedMoves,
+} from "./studio-ui";
 
 export type { Attempt } from "./studio-ui";
 export type Outcome<T> =
@@ -30,11 +33,18 @@ type Studio = {
   preview: (request: ArrangementRequest) => Promise<Outcome<ArrangementPreview>>;
   reload: () => Promise<void>;
   retry: (() => Promise<RunOutcome>) | null;
-  /** The person's unsaved placement (pending, unconfirmed or refused as a conflict), shown over the saved layout. */
+  /** The person's position save being sent, or unresolved (unconfirmed or refused as a conflict), shown over the saved layout. */
   attempt: Attempt | null;
-  /** The flow whose last own move can still be undone, if any. */
+  /** The flow whose last own move can still be undone, if any: the latest local drop while moves are unsaved. */
   undoFlowId: string | null;
-  moveSteps: (flowId: string, targets: Target[]) => Promise<void>;
+  /** True while dropped steps wait to be saved (Save, autosave, or before Arrange and flow/project switches). */
+  unsaved: boolean;
+  /** Keeps dropped steps as unsaved moves; `save` sends them at once (the position form's Move). */
+  moveSteps: (flowId: string, targets: Target[], save?: boolean) => Promise<void>;
+  /** Sends every unsaved move. True once all are saved (or there were none); false if any stayed unsaved. */
+  savePositions: () => Promise<boolean>;
+  /** The canvas reports a pointer drag in progress, so autosave never sends mid-drag. */
+  dragActive: (active: boolean) => void;
   retryPlacement: () => Promise<void>; applyMyPlacement: () => Promise<void>; keepSavedPositions: () => void; undoMove: () => Promise<void>;
   /** Opens the right panel on its Details tab (the Inspect toggle). */
   inspect: () => void;
@@ -58,14 +68,17 @@ const busyOutcome = { ok: false as const, code: "BUSY", message: "Another change
  * unresolved placement live in the shell per-project store, so remounting this provider cannot lose an exact retry or
  * start a second request. The saved draft also lives in the shell (`adopt` keeps only newer reads).
  */
-export function StudioProvider({ projectId, draft, role, archived, narrow, ui, update, adopt, onAccessChanged, onInspect, children }: {
+export function StudioProvider({ projectId, draft, role, archived, narrow, ui, update, adopt, onAccessChanged, onInspect, saveRef, children }: {
   projectId: string; draft: DraftView; role: ProjectAccessRole; archived: boolean; narrow: boolean;
   ui: StudioUi; update: (change: (ui: StudioUi) => Partial<StudioUi>) => void;
-  adopt: (view: DraftView) => void; onAccessChanged: () => void; onInspect: () => void; children: ReactNode;
+  adopt: (view: DraftView) => void; onAccessChanged: () => void; onInspect: () => void;
+  /** Lets the shell save moved steps before a project switch. */
+  saveRef?: RefObject<(() => Promise<boolean>) | null>; children: ReactNode;
 }) {
   const [localBusy, setBusy] = useState(false);
   const busyRef = useRef(false);
-  const { pending, save, refreshFailed, placement, placing, attempt, lastMove } = ui;
+  const { pending, save, refreshFailed, placement, placing, attempt, lastMove, unsavedMoves, drops } = ui;
+  const unsaved = Object.keys(unsavedMoves).length > 0;
   // Another instance may still own the request after browser history remounts this keyed provider.
   const busy = localBusy || Boolean(pending?.inFlight) || Boolean(placing);
   const draftId = draft.id;
@@ -115,6 +128,8 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
       if (changed) endpointBuffers = follow(endpointBuffers, Object.fromEntries(Object.values(endpointBuffers)
         .map((buffer) => [buffer.id, outcome.result.documentRevision])));
       return {
+        // A deleted step has no position left to save: its unsaved move and local undo go with it.
+        ...(outcome.ok && outcome.result.retiredIds.length ? forgetMoves(current, outcome.result.retiredIds) : {}),
         buffers: outcome.ok ? follow(buffers, outcome.result.versions) : buffers, endpointBuffers,
         pending: !outcome.ok && outcome.uncertain ? { command, key, draftId: requestDraftId, inFlight: false } : null,
         save: outcome.ok ? { state: "saved", message: "" } : { state: "failed", message: outcome.uncertain ? "We could not confirm the last change. Retry it." : outcome.message },
@@ -189,22 +204,30 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
     return { ok: false, code: result.code, message: result.message, uncertain: result.uncertain, ...(result.details ? { details: result.details } : {}) };
   }, [projectId, draftId, reload, onAccessChanged]);
 
-  /** Saves one move and settles only its own attempt: saved, unconfirmed (same key to retry) or refused as a conflict. */
-  const attemptMove = useCallback(async (next: Attempt) => {
+  /**
+   * Saves one MOVE_NODES and settles only its own attempt: saved (its steps leave the unsaved moves), unconfirmed (same
+   * key to retry) or refused as a conflict (the placement stays until the person chooses). Null while another request runs.
+   */
+  const attemptMove = useCallback(async (next: Attempt): Promise<Outcome<PositionResult> | null> => {
     const outcome = await send(next.command, next.key, next.draftId, next);
-    if (!outcome) return;
+    if (!outcome) return null;
     update((current) => {
       if (current.attempt?.key !== next.key) return {};
       if (outcome.ok) {
         if (next.undo) return { attempt: null, lastMove: null };
         const moved = Object.entries(outcome.result.positions).filter(([nodeId]) => next.before[nodeId]);
-        return { attempt: null, lastMove: moved.length ? { flowId: next.flowId, items: moved.map(([nodeId, saved]) => ({ nodeId, ...next.before[nodeId]!, version: saved.version })) } : current.lastMove };
+        return {
+          ...settleMoves(current, next.command.items, outcome.result.positions), attempt: null,
+          lastMove: moved.length ? { flowId: next.flowId, items: moved.map(([nodeId, saved]) => ({ nodeId, ...next.before[nodeId]!, version: saved.version })) } : current.lastMove,
+        };
       }
       if (outcome.uncertain) return { attempt: { ...next, state: "uncertain" } };
       if (outcome.code === "POSITION_CONFLICT" && !next.undo) return { attempt: { ...next, state: "conflict" } };
-      if (!next.undo) return { attempt: null };
+      // Any other certain refusal shows the saved layout again, as a refused drop always has.
+      if (!next.undo) return { ...forgetMoves(current, next.command.items.map((item) => item.nodeId)), attempt: null };
       return { attempt: null, lastMove: null, placement: { state: "failed", message: outcome.code === "POSITION_CONFLICT" ? "A step moved since your last move, so it can’t be undone." : outcome.message } };
     });
+    return outcome;
   }, [send, update]);
 
   /** A new move from the saved positions on screen; expected versions come from that saved layout unless given. */
@@ -219,9 +242,40 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
     });
   }, [draft, draftId, attemptMove]);
 
-  // ponytail: one unresolved placement at a time (a single store slot), so a new move waits until the person retries,
-  // reapplies or keeps the saved positions; per-step attempts would need a keyed map of attempts.
-  const moveSteps = useCallback(async (flowId: string, targets: Target[]) => { if (!attempt) await move(flowId, targets); }, [attempt, move]);
+  /**
+   * Sends unsaved moves: one flow at a time, chunks of at most 20, one request after another on the shared path. The first
+   * chunk that is not acknowledged stops the flush and keeps every unsent move; "Positions saved" shows only once none
+   * remain. Steps no longer in the document are dropped first.
+   */
+  // ponytail: sequential ≤20-step MOVE_NODES chunks through the single attempt slot; a multi-chunk flush is not atomic and
+  // Undo covers only its last chunk. To be replaced by one batch save (POST D/changes: queued commands and moves, one key).
+  const flush = useCallback(async (moves: UnsavedMoves): Promise<boolean> => {
+    const gone = Object.keys(moves).filter((nodeId) => !draft.document.nodes[nodeId] || !draft.layout.positions[nodeId]);
+    if (gone.length) update((current) => forgetMoves(current, gone));
+    const chunks = moveChunks(moves, draft.layout, draft.document.nodes);
+    if (!chunks.length) return true;
+    // An unconfirmed or refused save is resolved first (Retry, Apply my placement or Keep saved positions).
+    if (attempt) return false;
+    const saved = draft.layout.positions;
+    for (const command of chunks) {
+      const outcome = await attemptMove({
+        draftId, flowId: command.flowId, key: crypto.randomUUID(), undo: false, state: "pending", command,
+        before: Object.fromEntries(command.items.map(({ nodeId }) => [nodeId, { x: saved[nodeId]!.x, y: saved[nodeId]!.y }])),
+      });
+      if (!outcome?.ok) return false;
+    }
+    return true;
+  }, [draft, draftId, attempt, attemptMove, update]);
+  const savePositions = useCallback(() => flush(unsavedMoves), [flush, unsavedMoves]);
+
+  // ponytail: one unresolved placement at a time (a single store slot), so no step is dragged again until the person
+  // retries, reapplies or keeps the saved positions; per-step attempts would need a keyed map of attempts.
+  const moveSteps = useCallback(async (flowId: string, targets: Target[], saveNow = false) => {
+    if (attempt) return;
+    // A new drop replaces an earlier failure message with "Unsaved positions".
+    update((current) => ({ ...recordDrop(current, flowId, targets, draft.layout), ...(current.placement.state === "failed" ? { placement: idle } : {}) }));
+    if (saveNow) await flush(recordDrop(ui, flowId, targets, draft.layout).unsavedMoves);
+  }, [attempt, update, draft, flush, ui]);
   const retryPlacement = useCallback(async () => { if (attempt?.state === "uncertain") await attemptMove(attempt); }, [attempt, attemptMove]);
   // Explicit reapply after a conflict: the same placement against the newly read versions, as a new operation.
   const applyMyPlacement = useCallback(async () => {
@@ -229,22 +283,44 @@ export function StudioProvider({ projectId, draft, role, archived, narrow, ui, u
   }, [attempt, move]);
   // Dropping an unconfirmed or refused placement shows the saved layout again, re-read in case the request did commit.
   const keepSavedPositions = useCallback(() => {
-    update((current) => (current.attempt && current.attempt.state !== "pending" ? { attempt: null, placement: idle } : {}));
+    update((current) => (current.attempt && current.attempt.state !== "pending"
+      ? { ...forgetMoves(current, current.attempt.command.items.map((item) => item.nodeId)), attempt: null, placement: idle } : {}));
     void reload();
   }, [update, reload]);
-  // Undo is a new versioned save back to the "before" positions, guarded by the versions the last move saved.
+  // With unsaved moves, Undo reverts the latest local drop (no request). Otherwise it is a new versioned save back to the
+  // "before" positions, guarded by the versions the last acknowledged move saved.
   const undoMove = useCallback(async () => {
-    if (!lastMove || attempt) return;
+    if (attempt || busyRef.current) return;
+    if (unsaved) { update((current) => undoDrop(current)); return; }
+    if (!lastMove) return;
     await move(lastMove.flowId, lastMove.items.map(({ nodeId, x, y }) => ({ nodeId, x, y })), Object.fromEntries(lastMove.items.map((item) => [item.nodeId, item.version])), true);
-  }, [lastMove, attempt, move]);
+  }, [lastMove, attempt, unsaved, update, move]);
 
-  const undoFlowId = lastMove && canUndo(lastMove, draft.layout) ? lastMove.flowId : null;
+  // Autosave: one timer per open project (this provider is keyed by project, so unmount clears it). It runs only while
+  // moves are unsaved, nothing is in flight and no save awaits the person's choice; a tick during a drag is skipped.
+  // Hidden tabs keep it: the browser throttles the timer, and saving there still narrows what a closed tab could lose.
+  const dragging = useRef(false);
+  const dragActive = useCallback((active: boolean) => { dragging.current = active; }, []);
+  const autosave = useRef(savePositions);
+  useEffect(() => {
+    autosave.current = savePositions;
+    if (!saveRef) return;
+    saveRef.current = savePositions;
+    return () => { if (saveRef.current === savePositions) saveRef.current = null; };
+  }, [savePositions, saveRef]);
+  useEffect(() => {
+    if (!editable || !unsaved || busy || attempt) return;
+    const timer = window.setInterval(() => { if (!dragging.current) void autosave.current(); }, AUTOSAVE_MS);
+    return () => window.clearInterval(timer);
+  }, [editable, unsaved, busy, attempt]);
+
+  const undoFlowId = unsaved ? drops.at(-1)?.flowId ?? null : lastMove && canUndo(lastMove, draft.layout) ? lastMove.flowId : null;
   const value = useMemo<Studio>(() => ({
     projectId, draft, role, archived, editable, narrow, ui, update, busy, save, placement, refreshFailed, run, place, preview, reload,
     retry: pending && !pending.inFlight ? () => run(pending.command, pending.key) : null,
-    attempt, undoFlowId, moveSteps, retryPlacement, applyMyPlacement, keepSavedPositions, undoMove, inspect: onInspect,
+    attempt, undoFlowId, unsaved, moveSteps, savePositions, dragActive, retryPlacement, applyMyPlacement, keepSavedPositions, undoMove, inspect: onInspect,
   }), [projectId, draft, role, archived, editable, narrow, ui, update, busy, save, placement, refreshFailed, run, place, preview, reload, pending,
-    attempt, undoFlowId, moveSteps, retryPlacement, applyMyPlacement, keepSavedPositions, undoMove, onInspect]);
+    attempt, undoFlowId, unsaved, moveSteps, savePositions, dragActive, retryPlacement, applyMyPlacement, keepSavedPositions, undoMove, onInspect]);
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }
 

@@ -1169,12 +1169,12 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await expect(flows.getByRole("button", { name: /^Duplicate/ })).toBeDisabled();
     await expect(flows.getByText("A project can have up to 5 flows.", { exact: false })).toBeVisible();
   });
-  test("keyboard List selection survives filtering, Canvas pan and zoom never write, and a drag writes only one position save", async ({ page }) => {
+  test("keyboard List selection survives filtering, Canvas pan and zoom never write, and a drag writes only one position save, on Save", async ({ page }) => {
     await mock(page, "OWNER");
     let writes = 0;
     let positionWrites = 0;
     await page.route("**/commands", async (route) => { writes++; await route.abort(); });
-    // Stage 03.3: an editor's drag saves its final position once, on drop, through the positions route only.
+    // Stage 03.3 Task 12: an editor's drag stays unsaved until Save (or autosave), then saves through the positions route only.
     await page.route("**/positions", async (route) => { positionWrites++; await route.abort(); });
     await page.goto(`/app/projects/${projectId}`);
     await toolbar(page).getByRole("button", { name: "List", exact: true }).click();
@@ -1195,6 +1195,9 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await expect(panel(page)).toHaveCount(0);
     const before = await node.getAttribute("style");
     await node.dragTo(node, { sourcePosition: { x: 30, y: 30 }, targetPosition: { x: 90, y: 90 }, steps: 5 });
+    await expect(page.locator(".studio-status")).toContainText("Unsaved positions");
+    expect(positionWrites).toBe(0);
+    await page.locator(".editor-header").getByRole("button", { name: "Save", exact: true }).click();
     // The lost acknowledgement keeps the attempted placement on screen with a same-key Retry.
     await expect(page.locator(".placement-note")).toContainText("We couldn’t confirm the new position.");
     await expect(node).not.toHaveAttribute("style", before!);

@@ -4,7 +4,7 @@ import { edit, send, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { afterDraftRead, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
 import { anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
-const closed = { acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, pending: null, buffers: {}, endpointBuffers: {}, placement: { state: "idle", message: "" }, placing: null, attempt: null, lastMove: null, flowId: null, selection: null, view: null };
+const closed = { acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, pending: null, buffers: {}, endpointBuffers: {}, placement: { state: "idle", message: "" }, placing: null, attempt: null, lastMove: null, unsavedMoves: {}, drops: [], flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("an unknown or absent project reads the closed default", () => {
@@ -111,4 +111,18 @@ test("reads must cover both acknowledged revision floors and clear only the qual
   assert.equal(read.refreshFailed, false);
   assert.deepEqual(read.acknowledgedRevisions, { d2: floors.d2 });
   assert.deepEqual(ui.acknowledgedRevisions, floors, "the original per-project state is immutable");
+});
+
+test("unsaved step positions guard navigation; discard drops them and a refused placement, never an unconfirmed one", () => {
+  const unsavedMoves = { n1: { flowId: "f", x: 1, y: 2, expectedVersion: 1 } };
+  const command = { mode: "MOVE_NODES" as const, flowId: "f", items: [{ nodeId: "n1", expectedPositionVersion: 1, x: 1, y: 2 }] };
+  const attempt = { draftId: "d1", flowId: "f", command, key: "k", before: { n1: { x: 0, y: 0 } }, undo: false, state: "conflict" as const };
+  const store = updateUi({}, "a", () => ({ unsavedMoves, drops: [{ flowId: "f", items: [{ nodeId: "n1", prior: null }] }], attempt }));
+  assert.equal(dirtyCount(store, "a"), 1);
+  assert.equal(anyDirty(store), true);
+  const discarded = uiFor(discardDrafts(store, "a"), "a");
+  assert.deepEqual([discarded.unsavedMoves, discarded.drops, discarded.attempt], [{}, [], null]);
+  const uncertain = updateUi(store, "a", () => ({ attempt: { ...attempt, state: "uncertain" } }));
+  assert.equal(uiFor(discardDrafts(uncertain, "a"), "a").attempt?.key, "k", "an unconfirmed save stays retryable");
+  assert.equal(dirtyCount(discardDrafts(uncertain, "a"), "a"), 1);
 });

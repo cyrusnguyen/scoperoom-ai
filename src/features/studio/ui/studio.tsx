@@ -23,9 +23,10 @@ function typing(event: KeyboardEvent<HTMLElement>) {
 
 /** The centre of the editor: the open flow, its toolbox and status. */
 export default function Studio() {
-  const { draft, editable, busy, narrow, ui, update, inspect } = useStudio();
+  const { draft, editable, busy, narrow, ui, update, inspect, unsaved, attempt, savePositions } = useStudio();
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<StudioDialog>(null);
+  const [arrangeRefused, setArrangeRefused] = useState(false);
   // Keep this mount stable when the first flow changes the centre from empty to populated.
   const creation = creating && <FlowsDialog key="new-flow" creating onClose={() => setCreating(false)} />;
   const flow = currentFlow(draft.document, ui.flowId);
@@ -41,6 +42,12 @@ export default function Studio() {
     setDialog("delete");
   };
   const showFlowDetails = () => { update(() => ({ selection: { kind: "FLOW", id: flow.id } })); inspect(); };
+  // Arrange works from saved positions, so unsaved moves are saved first; if they cannot be, it does not open.
+  const arrange = async () => {
+    setArrangeRefused(false);
+    if (await savePositions()) setDialog("arrange");
+    else setArrangeRefused(true);
+  };
 
   return <><section className="studio" aria-labelledby="studio-flow-title" onKeyDown={onKeyDown}>
     <div className="studio-toolbar">
@@ -54,7 +61,7 @@ export default function Studio() {
       {editable && <>
         <button type="button" className="button small" onClick={() => setDialog("add")} disabled={busy}><Icon name="plus" size={14} />Add step</button>
         <button type="button" className="button small" onClick={() => setDialog("connect")} disabled={busy || !stepCount}><Icon name="link" size={14} />Connect</button>
-        <button type="button" className="button quiet small" onClick={() => setDialog("arrange")} disabled={busy || !stepCount}><Icon name="grid" size={14} />Arrange</button>
+        <button type="button" className="button quiet small" onClick={() => void arrange()} disabled={busy || !stepCount}><Icon name="grid" size={14} />Arrange</button>
       </>}
       <button type="button" className="button quiet small" onClick={showFlowDetails}>Flow details</button>
     </div>
@@ -62,6 +69,9 @@ export default function Studio() {
       {view === "canvas" ? <FlowCanvas flowId={flow.id} /> : <GraphList flowId={flow.id} onDeleteSelected={() => setDialog("delete")} />}
     </div>
     <PlacementNote />
+    {arrangeRefused && (unsaved || attempt) && <div className="placement-note" role="alert">
+      <span>Arrange didn’t open because your moved steps aren’t saved yet.</span>
+    </div>}
     <StudioStatus flowId={flow.id} />
     {editable && dialog === "add" && <AddStepDialog flowId={flow.id} onClose={() => setDialog(null)} onAdded={(nodeId) => { setDialog(null); update(() => ({ selection: { kind: "NODES", ids: [nodeId] } })); }} />}
     {editable && dialog === "connect" && <ConnectDialog flowId={flow.id} from={selectedSteps.length === 1 ? selectedSteps[0] : undefined} onClose={() => setDialog(null)} />}
@@ -114,15 +124,16 @@ function PlacementNote() {
 }
 
 function StudioStatus({ flowId }: { flowId: string }) {
-  const { draft, ui, update, save, placement, attempt, busy, undoFlowId, undoMove, refreshFailed, inspect } = useStudio();
+  const { draft, ui, update, save, placement, attempt, busy, undoFlowId, undoMove, unsaved, refreshFailed, inspect } = useStudio();
   const steps = Object.values(draft.document.nodes).filter((node) => node.flowId === flowId).length;
   const connections = Object.values(draft.document.edges).filter((edge) => edge.flowId === flowId).length;
   const checks = graphWarnings(draft.document, flowId).length;
   const saveText = save.state === "saving" ? "Saving…" : save.state === "failed" ? save.message
     : studioDirtyCount(ui) ? "Unsaved changes" : save.state === "saved" && !refreshFailed ? "All changes saved" : "";
-  // Position status is its own line (UI02): content can be saved while a position is still pending, and the reverse.
-  const placeText = placement.state === "saving" ? "Position pending" : placement.state === "saved" && !refreshFailed ? "Positions saved"
-    : placement.state === "failed" && !attempt ? placement.message : "";
+  // Position status is its own line (UI02): content can be saved while positions are unsaved, and the reverse. A flush
+  // of several chunks never says "Positions saved" while any moved step is still unsaved.
+  const placeText = placement.state === "saving" ? "Saving positions…" : placement.state === "failed" && !attempt ? placement.message
+    : unsaved ? "Unsaved positions" : placement.state === "saved" && !refreshFailed ? "Positions saved" : "";
   return <div className="studio-status">
     <span>{steps} {steps === 1 ? "step" : "steps"} · {connections} {connections === 1 ? "connection" : "connections"}</span>
     <button type="button" className="button quiet small" onClick={() => { update(() => ({ selection: { kind: "FLOW", id: flowId } })); inspect(); }}>

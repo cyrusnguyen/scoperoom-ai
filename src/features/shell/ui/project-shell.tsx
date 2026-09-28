@@ -64,6 +64,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const [listsState, setListsState] = useState<"loading" | "ready" | "error">("loading");
   const [opened, setOpened] = useState<Opened | null>(null);
   const [store, setStore] = useState<UiStore>({});
+  const savePositionsRef = useRef<(() => Promise<boolean>) | null>(null);
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
   const [dialog, setDialog] = useState<ShellDialog | null>(null);
   const [notice, setNotice] = useState({ text: "", error: false });
@@ -170,10 +171,15 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     // route re-runs a server auth check (force-dynamic), so useParams only catches up once that resolves.
     startNavigation(() => router.push(id ? `/app/projects/${id}` : "/app"));
   }
-  function openProject(id: string) {
+  async function openProject(id: string) {
     if (id === projectId) return;
+    let remaining = store;
+    // Moved steps are saved first. Once all are acknowledged they no longer need resolving (the store has not re-rendered yet).
+    if (projectId && Object.keys(ui.unsavedMoves).length && await savePositionsRef.current?.()) {
+      remaining = updateUi(store, projectId, () => ({ unsavedMoves: {}, drops: [], attempt: null }));
+    }
     // Switching projects resolves unsaved edits first (UI00): Stay, or an explicit Discard, never silent.
-    if (dirtyCount(store, projectId) > 0) { setDialog({ kind: "switch", target: id }); return; }
+    if (dirtyCount(remaining, projectId) > 0) { setDialog({ kind: "switch", target: id }); return; }
     navigate(id);
   }
   async function created(project: CreatedProject) {
@@ -248,14 +254,14 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
         {dock.right === "overlay" && <div className="panel-scrim" aria-hidden="true" onClick={() => setPanel(false)} />}
         <div className="sidebar-slot" data-mode={dock.left}>
           <ProjectsSidebar lists={lists} invites={invites} state={listsState} onRetry={() => { setListsState("loading"); void loadLists(); }}
-            tab={prefs.listTab} onTabChange={(listTab) => setPrefs((previous) => ({ ...previous, listTab }))} openProjectId={projectId} onOpenProject={openProject}
+            tab={prefs.listTab} onTabChange={(listTab) => setPrefs((previous) => ({ ...previous, listTab }))} openProjectId={projectId} onOpenProject={(id) => void openProject(id)}
             hidden={sidebarClosed} overlay={dock.left === "overlay"} onHide={hideProjects} onNewProject={() => setDialog({ kind: "create" })}
             onAction={(kind, item) => setDialog({ kind, project: { id: item.id, name: item.name } })}
             onInviteSettled={(text, error) => { notify(text, error); void loadLists(); }} />
         </div>
         {projectId && bootstrap
           ? <StudioProvider key={projectId} projectId={projectId} draft={bootstrap.draft} role={bootstrap.project.role} archived={bootstrap.project.status === "ARCHIVED"}
-              narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={projectChanged} onInspect={() => setPanel(true)}>
+              narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={projectChanged} onInspect={() => setPanel(true)} saveRef={savePositionsRef}>
               {main}{panel}
             </StudioProvider>
           : <>{main}{panel}</>}
@@ -269,8 +275,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     {dialog?.kind === "create" && <NewProjectDialog onClose={() => closeDialog()} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}
     {switchTarget && <Dialog title={`Unsaved changes in ${bootstrap?.project.name ?? "this project"}`} onClose={() => setDialog(null)} footer={<>
       <CancelFocus label="Stay" onClick={() => setDialog(null)} />
-      <button type="button" className="button danger" disabled={ui.pending?.inFlight} onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
-    </>}><p>{dirtyCount(store, projectId)} {ui.pending ? "unsaved edit(s) or unconfirmed change(s)." : "unsaved field(s)."}</p>{ui.pending && <p>The unconfirmed change will still be available to retry when you return. Discard only removes local edits; it cannot cancel a change already sent.</p>}</Dialog>}
+      <button type="button" className="button danger" disabled={ui.pending?.inFlight || Boolean(ui.placing)} onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
+    </>}><p>{dirtyCount(store, projectId)} {ui.pending || ui.attempt ? "unsaved edit(s) or unconfirmed change(s)." : Object.keys(ui.unsavedMoves).length ? "unsaved change(s), including moved steps." : "unsaved field(s)."}</p>{ui.pending && <p>The unconfirmed change will still be available to retry when you return. Discard only removes local edits; it cannot cancel a change already sent.</p>}</Dialog>}
     {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project}
       onClose={() => closeDialog(lifecycleDialog.project.id)} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}
   </div>;

@@ -5,7 +5,17 @@ import type { ProjectBootstrap, ProjectCapacity } from "@/features/projects/cont
 import { roleLabel } from "@/features/projects/ui/format";
 import { FlowSwitcher } from "@/features/studio/ui/flows-dialog";
 import Studio from "@/features/studio/ui/studio";
+import { useStudio } from "@/features/studio/ui/studio-context";
 import { Icon } from "./icon";
+
+/** Saves moved steps now instead of at the next autosave (editors only). */
+function SavePositions() {
+  const { editable, unsaved, busy, attempt, savePositions } = useStudio();
+  if (!editable) return null;
+  return <button type="button" className="button small" title="Save step positions" disabled={!unsaved || busy || Boolean(attempt)} onClick={() => void savePositions()}>
+    <Icon name="check" size={14} /><span>Save</span>
+  </button>;
+}
 
 function ShowProjects({ onClick }: { onClick: () => void }) {
   return <button type="button" className="button quiet small" onClick={onClick} aria-label="Show projects" aria-expanded={false} aria-controls="projects-nav"><Icon name="panel" /></button>;
@@ -27,6 +37,7 @@ export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onS
       {project.role !== "OWNER" && <span className="badge">{roleLabel(project.role)}</span>}
       <FlowSwitcher />
       <span className="editor-spacer" />
+      <SavePositions />
       <button type="button" className="button small editor-toggle" aria-pressed={panelOpen} aria-controls="right-panel" onClick={onTogglePanel}><Icon name="details" size={14} /><span>Inspect</span></button>
     </header>
     {archived && <div className="editor-banner">

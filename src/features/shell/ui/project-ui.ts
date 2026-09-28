@@ -42,10 +42,16 @@ export function anyDirty(store: UiStore): boolean {
   return Object.keys(store).some((projectId) => dirtyCount(store, projectId) > 0);
 }
 
-/** Discard local input only. A sent command may already have committed, so its receipt must remain recoverable. */
+/**
+ * Discard local input only: typed values, unsaved step positions and a refused (conflict) placement. A sent command or
+ * position save may already have committed, so its receipt must remain recoverable.
+ */
 export function discardDrafts(store: UiStore, projectId: string): UiStore {
   const current = uiFor(store, projectId);
-  return { ...store, [projectId]: { ...current, drafts: {}, buffers: {}, endpointBuffers: {}, save: current.pending ? current.save : { state: "idle", message: "" } } };
+  return { ...store, [projectId]: {
+    ...current, drafts: {}, buffers: {}, endpointBuffers: {}, save: current.pending ? current.save : { state: "idle", message: "" },
+    unsavedMoves: {}, drops: [], attempt: current.attempt?.state === "conflict" ? null : current.attempt,
+  } };
 }
 
 /** Access loss or leaving: forget everything held for that project. */
