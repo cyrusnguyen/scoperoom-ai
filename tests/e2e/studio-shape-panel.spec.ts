@@ -18,7 +18,7 @@ async function draftOf(page: Page, projectId: string): Promise<DraftView> {
 }
 
 /** One flow with a single Start step, created through the real command route (no dialog needed for these tests). */
-async function seedFlow(page: Page, projectId: string): Promise<{ draftId: string; flowId: string; startId: string }> {
+async function seedFlow(page: Page, projectId: string, title = "Shapes"): Promise<{ draftId: string; flowId: string; startId: string }> {
   const draftId = (await draftOf(page, projectId)).id;
   const send = async (body: Record<string, unknown>) => {
     const { documentRevision } = await draftOf(page, projectId);
@@ -26,7 +26,7 @@ async function seedFlow(page: Page, projectId: string): Promise<{ draftId: strin
     expect(response.status()).toBe(200);
     return (await response.json() as { createdIds: string[] }).createdIds;
   };
-  const [flowId] = await send({ command: "CREATE_FLOW", payload: { title: "Shapes", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" } });
+  const [flowId] = await send({ command: "CREATE_FLOW", payload: { title, purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" } });
   const [startId] = await send({ command: "ADD_NODE", payload: { flowId, kind: "START", label: "Start", description: "", actorLabel: "" } });
   return { draftId, flowId: flowId!, startId: startId! };
 }
@@ -116,6 +116,58 @@ test.describe("Shape panel (real draft)", () => {
     const createdId = Object.keys(after.document.nodes).find((id) => !before.document.nodes[id])!;
     expect(after.document.nodes[createdId]!.kind).toBe("OUTCOME");
     await expect(nodeAt(page, createdId)).toHaveClass(/selected/);
+  });
+
+  test("switching flows while a drop's create is still in flight still places the step in the flow it was created in", async ({ page }) => {
+    const flowA = await seedFlow(page, projectId, "Flow A");
+    const flowB = await seedFlow(page, projectId, "Flow B");
+    await page.goto(`/app/projects/${projectId}`);
+    const flowsDialog = page.getByRole("dialog", { name: "Flows" });
+    // Land on Flow A regardless of which flow bootstrap opened by default.
+    await page.locator(".flow-switch").click();
+    await flowsDialog.locator(".item-row").filter({ hasText: "Flow A" }).click();
+    await expect(page.locator("#studio-flow-title")).toHaveText("Flow A");
+    await expect(nodeAt(page, flowA.startId)).toBeVisible();
+
+    const box = (await canvas(page).boundingBox())!;
+    const centre = await flowPoint(page, box.x + box.width / 2, box.y + box.height / 2);
+    const size = STEP_SIZE.OUTCOME;
+    const expected = { x: Math.round(centre.x - size.width / 2), y: Math.round(centre.y - size.height / 2) };
+
+    const positionRequests: Request[] = [];
+    page.on("request", (request) => { if (request.method() === "POST" && request.url().endsWith("/positions")) positionRequests.push(request); });
+    let requestHeld: () => void = () => {};
+    const held = new Promise<void>((resolve) => { requestHeld = resolve; });
+    let stalled: import("@playwright/test").Route | null = null;
+    await page.route("**/commands", (route) => {
+      if (stalled) { void route.continue(); return; } // only the triggering ADD_NODE is held
+      stalled = route;
+      requestHeld();
+    });
+
+    await panel(page).getByRole("button", { name: "End (Outcome)" }).click();
+    await held; // the ADD_NODE request for Flow A is now stalled at the network layer
+
+    // Switch to Flow B while that create is still unresolved (flows-dialog.tsx's `open` has no busy gate).
+    await page.locator(".flow-switch").click();
+    await flowsDialog.locator(".item-row").filter({ hasText: "Flow B" }).click();
+    await expect(page.locator("#studio-flow-title")).toHaveText("Flow B");
+
+    await stalled!.continue();
+    await page.unroute("**/commands");
+
+    // Wait for the follow-up move to actually land (not just be sent) before reading the saved draft.
+    await expect.poll(() => positionRequests.length).toBe(1);
+    expect((await positionRequests[0]!.response())?.status()).toBe(200);
+    expect((positionRequests[0]!.postDataJSON() as { flowId: string }).flowId).toBe(flowA.flowId);
+
+    // The created step belongs to Flow A: its saved position (and the move that placed it) must say so, never Flow B.
+    const after = await draftOf(page, projectId);
+    const createdId = Object.keys(after.document.nodes).find((id) => after.document.nodes[id]!.flowId === flowA.flowId && id !== flowA.startId)!;
+    expect(createdId).toBeTruthy();
+    expect(after.document.nodes[createdId]!.kind).toBe("OUTCOME");
+    expect(after.document.nodes[createdId]!.flowId).not.toBe(flowB.flowId);
+    expect(after.layout.positions[createdId]).toEqual({ x: expected.x, y: expected.y, version: 2 });
   });
 });
 

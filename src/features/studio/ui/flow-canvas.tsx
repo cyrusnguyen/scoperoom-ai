@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   Background, BaseEdge, ConnectionMode, Controls, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
   useReactFlow, type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
@@ -87,7 +87,7 @@ export default function FlowCanvas(props: { flowId: string; preview?: { position
 }
 
 function CanvasInner({ flowId, preview }: { flowId: string; preview?: { positions: Record<string, Point>; direction: Direction } }) {
-  const { draft, editable, busy, ui, update, run, inspect, attempt, moveSteps } = useStudio();
+  const { draft, editable, busy, ui, update, run, place, inspect, attempt, moveSteps } = useStudio();
   const { document, layout } = draft;
   const { screenToFlowPosition } = useReactFlow();
   const [dragging, setDragging] = useState<Record<string, Point>>({});
@@ -102,32 +102,26 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   const draggable = interactive && editable && !busy && !attempt;
   // The shape panel shares this same "one unresolved placement at a time" gate: adding a step will move it once.
   const shapesEnabled = interactive && editable && !busy && !attempt;
-  // A created step's move waits for an effect, not the promise chain: `run` returns as soon as its own reload lands,
-  // but that reload's `draft` reaches this component through a state update, one render after this callback resumes.
-  // `placing` (a ref, acted on at most once per id) is set synchronously; the effect fires once the render carrying
-  // that reload has happened, so `moveSteps` sees the new step's saved position (Task 7 brief).
-  const placing = useRef<{ nodeId: string; x: number; y: number } | null>(null);
-  const [placingId, setPlacingId] = useState<string | null>(null);
-  useEffect(() => {
-    const target = placing.current;
-    if (!target || target.nodeId !== placingId || !layout.positions[placingId]) return;
-    placing.current = null;
-    void moveSteps(flowId, [target]);
-  }, [placingId, layout, flowId, moveSteps]);
+  // A brand-new node is always saved at position version 1 (placeNew, domain/graph.ts): the move never has to read
+  // any draft state to know its expected version, so it can run in the same sequential chain as the create, entirely
+  // in terms of the flow id captured when the drop or click happened — never a `flowId` re-read after a later flow
+  // switch (Task 7 fix round 1). `place` (not `moveSteps`) sends it directly and records no undoable "last move".
   const createShapeAt = useCallback(async (kind: NodeKind, point: Point) => {
+    const capturedFlowId = flowId;
     const size = STEP_SIZE[kind];
     const target = dropTarget(point, size);
     const outcome = await run({
       commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision: draft.documentRevision,
-      payload: { flowId, kind, label: KIND_LABELS[kind], actorLabel: "", description: "" },
+      payload: { flowId: capturedFlowId, kind, label: KIND_LABELS[kind], actorLabel: "", description: "" },
     });
     if (!outcome.ok) return;
     const nodeId = outcome.result.createdIds[0];
     if (!nodeId) return;
+    // The node belongs to capturedFlowId regardless of which flow is now visible; downstream selection consumers
+    // (Connect, Delete) already ignore a selected id from another flow.
     update(() => ({ selection: { kind: "NODES", ids: [nodeId] } }));
-    placing.current = { nodeId, ...target };
-    setPlacingId(nodeId);
-  }, [flowId, run, draft, update]);
+    await place({ mode: "MOVE_NODES", flowId: capturedFlowId, items: [{ nodeId, expectedPositionVersion: 1, ...target }] });
+  }, [flowId, run, draft, update, place]);
   const activateShape = useCallback((kind: NodeKind) => {
     const rect = wrapperRef.current?.getBoundingClientRect();
     const centre = rect ? { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
