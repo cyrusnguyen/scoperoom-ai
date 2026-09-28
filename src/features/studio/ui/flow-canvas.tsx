@@ -5,7 +5,7 @@ import {
   Background, BaseEdge, ConnectionMode, Controls, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
   useReactFlow, type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
 } from "@xyflow/react";
-import { STEP_SIZE, type Direction } from "@/features/drafts/contracts/draft-layout";
+import { SIDES, STEP_SIZE, type Direction, type Side } from "@/features/drafts/contracts/draft-layout";
 import type { NodeKind } from "@/features/drafts/contracts/scope-document";
 import { bufferKey, discard, edit, editFields, refuse, type Saved } from "./buffers";
 import { endpointGuard, inlinePlan, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
@@ -39,6 +39,8 @@ const HANDLE_ORDER: Record<Direction, { position: Position; type: "source" | "ta
     { position: Position.Top, type: "target" }, { position: Position.Bottom, type: "source" },
   ],
 };
+// Handle ids are the side names themselves (Position's string values), so a connection's handles are its sides directly.
+const isSide = (value: string | null | undefined): value is Side => (SIDES as readonly string[]).includes(value ?? "");
 
 /** The DECISION diamond and DATA_STORE cylinder: an SVG that stretches to the node's exact box (UI02). Shared by the
  * canvas node, the shape panel's icons and its drag ghost, so a shape is drawn in exactly one place. */
@@ -240,10 +242,15 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     });
   }, [document, layout, flowId, ui.selection, preview, dragging, interactive, measured]);
 
-  const edges = useMemo<FlowEdge[]>(() => Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => ({
-    id: edge.id, type: "flow", source: edge.fromId, target: edge.toId, data: { condition: edge.condition },
-    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: "var(--foreground-subtle)" }, selected: interactive && ui.selection?.kind === "EDGE" && ui.selection.id === edge.id,
-  })), [document, flowId, ui.selection, interactive]);
+  const edges = useMemo<FlowEdge[]>(() => Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => {
+    // A saved connection point (UI02 Task 13); absent, an edge renders with today's direction-based default.
+    const sides = layout.edgeSides[edge.id];
+    return {
+      id: edge.id, type: "flow", source: edge.fromId, target: edge.toId, data: { condition: edge.condition },
+      ...(sides ? { sourceHandle: sides.from, targetHandle: sides.to } : {}),
+      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: "var(--foreground-subtle)" }, selected: interactive && ui.selection?.kind === "EDGE" && ui.selection.id === edge.id,
+    };
+  }), [document, layout, flowId, ui.selection, interactive]);
 
   const picks = (changes: (NodeChange<StepNode> | EdgeChange<FlowEdge>)[]): SelectChange[] =>
     changes.flatMap((change) => (change.type === "select" ? [{ id: change.id, selected: change.selected }] : []));
@@ -299,15 +306,25 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     event.preventDefault();
     setEditing({ kind: "NODE", id: target.dataset.id });
   };
-  const connect = async ({ source, target }: Connection) => {
+  const connect = async ({ source, target, sourceHandle, targetHandle }: Connection) => {
     if (!source || !target || !connectable) return;
-    const outcome = await run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId: source, toId: target, condition: "" } });
+    const sides = isSide(sourceHandle) && isSide(targetHandle) ? { fromSide: sourceHandle, toSide: targetHandle } : {};
+    const outcome = await run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId: source, toId: target, condition: "", ...sides } });
     setNote(outcome.ok ? "" : explain(outcome));
   };
-  const reconnect = async (edge: FlowEdge, { source, target }: Connection) => {
+  const reconnect = async (edge: FlowEdge, { source, target, sourceHandle, targetHandle }: Connection) => {
     if (!source || !target || !connectable) return;
     const savedEdge = document.edges[edge.id];
     if (!savedEdge) return;
+    const sides = isSide(sourceHandle) && isSide(targetHandle) ? { fromSide: sourceHandle, toSide: targetHandle } : {};
+    // Dragging an end to another point on the same two steps only changes which handles it uses: a plain layout-only
+    // save (Task 13), never the endpoint-choice review the inspector's dropdown form needs.
+    if (source === savedEdge.fromId && target === savedEdge.toId) {
+      if (!sides.fromSide) return;
+      const outcome = await run({ commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { edgeId: edge.id, fromId: source, toId: target, ...sides } });
+      if (!outcome.ok) setNote(explain(outcome));
+      return;
+    }
     const key = bufferKey("EDGE", edge.id);
     const saved: Saved = { kind: "EDGE", id: edge.id, version: draft.documentRevision, fields: { fromId: savedEdge.fromId, toId: savedEdge.toId } };
     const choose = (current: StudioUi) => editFields(current.endpointBuffers, saved, { fromId: source, toId: target });
@@ -321,7 +338,7 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
       inspect();
       return;
     }
-    const outcome = await run(reconnectCommand(edge.id, guard, chosen.values));
+    const outcome = await run(reconnectCommand(edge.id, guard, chosen.values, sides));
     if (outcome.ok) { update((current) => ({ endpointBuffers: discard(current.endpointBuffers, key) })); return; }
     update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, outcome.code === "STALE_DOCUMENT_REVISION") }));
     inspect();

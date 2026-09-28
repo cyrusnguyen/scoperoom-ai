@@ -240,6 +240,37 @@ test("deletion needs the exact dependency plan, and a delayed edit to a deleted 
   });
 });
 
+test("a side-only RECONNECT_EDGE saves the layout without moving the document revision or any record version", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project }) => {
+    const owner = await user();
+    const { projectId, draftId, flowId, nodeIds } = await seeded(project, owner, ["A", "B"]);
+    let draft = await getDraft(owner, projectId, draftId);
+    const added = await send(owner, projectId, draftId, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId: nodeIds[0], toId: nodeIds[1], condition: "" } });
+    const edgeId = added.createdIds[0]!;
+    draft = await getDraft(owner, projectId, draftId);
+    const before = await getProjectStatus(owner, projectId);
+    const sideOnly = await send(owner, projectId, draftId, {
+      command: "RECONNECT_EDGE", expectedDocumentRevision: draft.documentRevision,
+      payload: { edgeId, fromId: nodeIds[0], toId: nodeIds[1], fromSide: "right", toSide: "left" },
+    });
+    assert.deepEqual([sideOnly.documentRevision, sideOnly.layoutRevision], [draft.documentRevision, draft.layoutRevision + 1]);
+    assert.deepEqual(sideOnly.versions, {});
+    assert.equal((await getProjectStatus(owner, projectId)).eventSequence, before.eventSequence + 1, "still audited, its own event");
+    const reloaded = await getDraft(owner, projectId, draftId);
+    assert.deepEqual(reloaded.layout.edgeSides[edgeId], { from: "right", to: "left" });
+    assert.equal(reloaded.document.edges[edgeId]!.version, 1);
+    assert.equal(reloaded.document.flows[flowId]!.version, added.versions[flowId]);
+    // Repeating the exact same sides is a true no-op: no counter moves, nothing new is audited.
+    const beforeRepeat = await getProjectStatus(owner, projectId);
+    const repeat = await send(owner, projectId, draftId, {
+      command: "RECONNECT_EDGE", expectedDocumentRevision: reloaded.documentRevision,
+      payload: { edgeId, fromId: nodeIds[0], toId: nodeIds[1], fromSide: "right", toSide: "left" },
+    });
+    assert.deepEqual([repeat.documentRevision, repeat.layoutRevision], [reloaded.documentRevision, reloaded.layoutRevision]);
+    assert.equal((await getProjectStatus(owner, projectId)).eventSequence, beforeRepeat.eventSequence);
+  });
+});
+
 test("topology changes need the exact document revision; an identical edit moves no counter", { skip: !canRun }, async () => {
   await withFixture(async ({ user, project }) => {
     const owner = await user();
@@ -312,7 +343,8 @@ test("the route's draft must be this project's current draft", { skip: !canRun }
       `insert into app.scope_draft (project_id, created_by, document_json, layout_json, status) values ($1, $2, $3::jsonb, '{"schemaVersion":1,"positions":{},"directions":{}}'::jsonb, 'ARCHIVED') returning id`,
       [projectId, await profileId(owner), empty]);
     await assert.rejects(edit(archived!.id), code("DRAFT_REPLACED"));
-    assert.deepEqual(await getDraft(owner, projectId, archived!.id), { id: archived!.id, status: "ARCHIVED", documentRevision: 1, layoutRevision: 1, document: JSON.parse(empty), layout: { schemaVersion: 1, positions: {}, directions: {} } });
+    // The raw insert above is deliberately old-style (no edgeSides): it must still parse, as {}.
+    assert.deepEqual(await getDraft(owner, projectId, archived!.id), { id: archived!.id, status: "ARCHIVED", documentRevision: 1, layoutRevision: 1, document: JSON.parse(empty), layout: { schemaVersion: 1, positions: {}, directions: {}, edgeSides: {} } });
   });
 });
 

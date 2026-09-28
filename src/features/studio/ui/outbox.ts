@@ -156,19 +156,20 @@ function coalesces(last: Entry | undefined, command: GraphCommand): last is Extr
 export function enqueue(outbox: Outbox, saved: DraftView, command: GraphCommand, newId: () => string = () => crypto.randomUUID()): Enqueued {
   const current = optimistic(outbox, saved);
   const applied = applyGraphCommand(current, current.documentRevision, command, newId);
-  if (!applied.documentChanged) return { entries: outbox.entries, createdIds: [], versions: {}, retiredIds: [], documentRevision: current.documentRevision };
+  // A layout-only effect (a side-only RECONNECT_EDGE) still queues: it changes what is shown, just not documentRevision.
+  if (!applied.documentChanged && !applied.layoutChanged) return { entries: outbox.entries, createdIds: [], versions: {}, retiredIds: [], documentRevision: current.documentRevision };
   const last = outbox.entries.at(-1);
   if (coalesces(last, command)) {
     const earlier = outbox.entries.slice(0, -1);
     const merged = { ...last.command, payload: { ...last.command.payload, ...command.payload } } as GraphCommand;
     const before = optimistic({ ...outbox, entries: earlier }, saved);
     const again = applyGraphCommand(before, before.documentRevision, merged, () => { throw new Error("NO_IDS"); });
-    if (!again.documentChanged) return { entries: earlier, createdIds: [], versions: {}, retiredIds: [], documentRevision: before.documentRevision };
-    return { entries: [...earlier, { kind: "command", command: merged, proposedIds: [] }], createdIds: [], versions: again.versions, retiredIds: [], documentRevision: before.documentRevision + 1 };
+    if (!again.documentChanged && !again.layoutChanged) return { entries: earlier, createdIds: [], versions: {}, retiredIds: [], documentRevision: before.documentRevision };
+    return { entries: [...earlier, { kind: "command", command: merged, proposedIds: [] }], createdIds: [], versions: again.versions, retiredIds: [], documentRevision: before.documentRevision + (again.documentChanged ? 1 : 0) };
   }
   return {
     entries: [...outbox.entries, { kind: "command", command, proposedIds: applied.createdIds }],
-    createdIds: applied.createdIds, versions: applied.versions, retiredIds: applied.retiredIds, documentRevision: current.documentRevision + 1,
+    createdIds: applied.createdIds, versions: applied.versions, retiredIds: applied.retiredIds, documentRevision: current.documentRevision + (applied.documentChanged ? 1 : 0),
   };
 }
 

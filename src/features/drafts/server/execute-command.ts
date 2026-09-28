@@ -111,11 +111,12 @@ export async function executeGraphCommand(identity: ProjectIdentity, projectId: 
   return draftMutation(identity, projectId, draftId, key, COMMAND_OPERATION, hash, parseCommandResult, async (tx, project, draft, actorId) => {
     let applied: Applied;
     try { applied = applyGraphCommand(draft.draft, draft.documentRevision, command, randomUUID); } catch (error) { graphFailure(error); }
-    // An effective no-op keeps every counter; only its receipt is saved.
-    if (!applied.documentChanged) {
+    // An effective no-op keeps every counter; only its receipt is saved. A layout-only effect (Task 13's side-only
+    // RECONNECT_EDGE) still writes and advances layoutRevision, just never documentRevision or a record version.
+    if (!applied.documentChanged && !applied.layoutChanged) {
       return { draftId: draft.id, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, eventSequence: Number(project.eventSequence), createdIds: [], versions: {}, retiredIds: [] };
     }
-    const documentRevision = nextRevision(draft.documentRevision);
+    const documentRevision = applied.documentChanged ? nextRevision(draft.documentRevision) : draft.documentRevision;
     const layoutRevision = applied.layoutChanged ? nextRevision(draft.layoutRevision) : draft.layoutRevision;
     await requireStoredSize(tx, applied.document, applied.layout);
     await tx.scopeDraft.update({ where: { id: draft.id }, data: { documentJson: asJson(applied.document), layoutJson: asJson(applied.layout), documentRevision, layoutRevision }, select: { id: true } });

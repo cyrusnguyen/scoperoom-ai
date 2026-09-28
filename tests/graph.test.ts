@@ -221,7 +221,7 @@ test("deleting a flow removes its nodes, edges, positions and direction together
     payload: { flowId, removeNodeIds: plan.nodeIds, removeEdgeIds: plan.edgeIds },
   }, ids(90));
   assert.deepEqual(applied.document.flows, {});
-  assert.deepEqual(applied.layout, { schemaVersion: 1, positions: {}, directions: {} });
+  assert.deepEqual(applied.layout, { schemaVersion: 1, positions: {}, directions: {}, edgeSides: {} });
   assert.equal(applied.document.retiredEntityIds.length, 4);
 });
 
@@ -244,6 +244,84 @@ test("reconnect keeps the edge ID, and moving an edge endpoint into another flow
   const applied = applyGraphCommand(state.draft, state.revision, reconnect(c!), ids(90));
   assert.deepEqual([applied.document.edges[edgeId]!.toId, applied.document.edges[edgeId]!.version], [c, 2]);
   assert.throws(() => applyGraphCommand(state.draft, state.revision, reconnect(elsewhere!), ids(90)), failsWith("INVALID_INPUT"));
+});
+
+test("ADD_EDGE with sides saves the layout entry; without sides it leaves no entry", () => {
+  const { state } = run([createFlow, addNode("A"), addNode("B"), addNode("C")]);
+  const [a, b, c] = nodesOf(state);
+  const flowId = flowOf(state);
+  const withSides = applyGraphCommand(state.draft, state.revision, {
+    commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: state.revision,
+    payload: { flowId, fromId: a!, toId: b!, condition: "", fromSide: "right", toSide: "left" },
+  }, ids(90));
+  const edgeId = withSides.createdIds[0]!;
+  assert.equal(withSides.layoutChanged, true);
+  assert.deepEqual(withSides.layout.edgeSides[edgeId], { from: "right", to: "left" });
+  const without = applyGraphCommand(withSides, state.revision + 1, {
+    commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: state.revision + 1,
+    payload: { flowId, fromId: a!, toId: c!, condition: "" },
+  }, ids(91));
+  assert.equal(without.layoutChanged, false);
+  assert.equal(Object.keys(without.layout.edgeSides).length, 1);
+});
+
+test("a side-only RECONNECT_EDGE changes the layout without touching the document, and is never refused as a no-op", () => {
+  const { state } = run([createFlow, addNode("A"), addNode("B"), connect(0, 1)]);
+  const [a, b] = nodesOf(state);
+  const edgeId = Object.keys(state.draft.document.edges)[0]!;
+  const flowId = flowOf(state);
+  const edgeVersion = state.draft.document.edges[edgeId]!.version;
+  const flowVersion = state.draft.document.flows[flowId]!.version;
+  const sideOnly = applyGraphCommand(state.draft, state.revision, {
+    commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: state.revision,
+    payload: { edgeId, fromId: a!, toId: b!, fromSide: "bottom", toSide: "top" },
+  }, ids(90));
+  assert.equal(sideOnly.documentChanged, false);
+  assert.equal(sideOnly.layoutChanged, true);
+  assert.deepEqual(sideOnly.layout.edgeSides[edgeId], { from: "bottom", to: "top" });
+  // The document (and its record versions) is exactly what it was: no revision or behaviour version moved.
+  assert.equal(sideOnly.document.edges[edgeId]!.version, edgeVersion);
+  assert.equal(sideOnly.document.flows[flowId]!.version, flowVersion);
+  assert.deepEqual(sideOnly.versions, {});
+  // Repeating the exact same sides is now a true no-op.
+  const repeat = applyGraphCommand(sideOnly, state.revision, {
+    commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: state.revision,
+    payload: { edgeId, fromId: a!, toId: b!, fromSide: "bottom", toSide: "top" },
+  }, ids(91));
+  assert.equal(repeat.documentChanged, false);
+  assert.equal(repeat.layoutChanged, false);
+  // An endpoint change without sides clears any previously saved sides.
+  const cleared = applyGraphCommand(sideOnly, state.revision, {
+    commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: state.revision,
+    payload: { edgeId, fromId: b!, toId: a! },
+  }, ids(92));
+  assert.equal(cleared.documentChanged, true);
+  assert.equal(cleared.layout.edgeSides[edgeId], undefined);
+});
+
+test("deleting an edge or its nodes removes its saved connection-point entry", () => {
+  const { state } = run([createFlow, addNode("A"), addNode("B"), connect(0, 1)]);
+  const [a, b] = nodesOf(state);
+  const edgeId = Object.keys(state.draft.document.edges)[0]!;
+  const flowId = flowOf(state);
+  const withSides = applyGraphCommand(state.draft, state.revision, {
+    commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: state.revision,
+    payload: { edgeId, fromId: a!, toId: b!, fromSide: "right", toSide: "left" },
+  }, ids(90));
+  const deletedEdge = applyGraphCommand(withSides, state.revision, {
+    commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: state.revision, payload: { edgeId },
+  }, ids(91));
+  assert.deepEqual(deletedEdge.layout.edgeSides, {});
+
+  const withSides2 = applyGraphCommand(state.draft, state.revision, {
+    commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: state.revision,
+    payload: { edgeId, fromId: a!, toId: b!, fromSide: "right", toSide: "left" },
+  }, ids(92));
+  const deletedNode = applyGraphCommand(withSides2, state.revision, {
+    commandSchemaVersion: 1, command: "DELETE_NODES", expectedDocumentRevision: state.revision,
+    payload: { flowId, nodeIds: [a!], removeEdgeIds: [edgeId] },
+  }, ids(93));
+  assert.deepEqual(deletedNode.layout.edgeSides, {});
 });
 
 test("text is stored exactly as typed: spacing, emoji, combining marks and right-to-left text survive", () => {

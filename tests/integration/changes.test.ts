@@ -77,6 +77,28 @@ test("a batch of commands and moves saves atomically with the proposed ids, and 
   });
 });
 
+test("a side-only RECONNECT_EDGE inside a batch saves the layout without a documentRevision of its own", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project }) => {
+    const owner = await user();
+    const { projectId, draftId, base } = await started(project, owner);
+    const [flowId, start, next, edgeId] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    const setup = {
+      commands: [createFlow(base.documentRevision, [flowId]), addNode(base.documentRevision + 1, flowId, [start], "START"), addNode(base.documentRevision + 2, flowId, [next]), addEdge(base.documentRevision + 3, flowId, start, next, [edgeId])],
+      moves: [],
+    };
+    const saved = await saveChanges(owner, projectId, draftId, { ...setup, key: randomUUID() });
+    const reconnectSides = {
+      commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: saved.documentRevision,
+      payload: { edgeId, fromId: start, toId: next, fromSide: "right", toSide: "left" }, proposedIds: [],
+    };
+    const withSides = await saveChanges(owner, projectId, draftId, { commands: [reconnectSides], moves: [], key: randomUUID() });
+    assert.deepEqual([withSides.documentRevision, withSides.layoutRevision], [saved.documentRevision, saved.layoutRevision + 1]);
+    assert.deepEqual(withSides.versions, {});
+    const draft = await getDraft(owner, projectId, draftId);
+    assert.deepEqual(draft.layout.edgeSides[edgeId], { from: "right", to: "left" });
+  });
+});
+
 test("a refusal anywhere in the batch rolls back every item and names the failing one", { skip: !canRun }, async () => {
   await withFixture(async ({ database, user, project }) => {
     const owner = await user();

@@ -380,7 +380,7 @@ test.describe("Inline label editing (read-only, mocked project)", () => {
         nodes: { [startId]: step(startId, "START", "Receive form"), [endId]: step(endId, "OUTCOME", "Filed") },
         edges: { [edgeId]: { id: edgeId, flowId, version: 1, fromId: startId, toId: endId, condition: "", origin: "HUMAN", sourceRefs: [] } },
       },
-      layout: { schemaVersion: 1, positions: { [startId]: { x: 0, y: 0, version: 1 }, [endId]: { x: 0, y: 240, version: 1 } }, directions: { [flowId]: "TB" } },
+      layout: { schemaVersion: 1, positions: { [startId]: { x: 0, y: 0, version: 1 }, [endId]: { x: 0, y: 240, version: 1 } }, directions: { [flowId]: "TB" }, edgeSides: {} },
     };
     await page.unrouteAll({ behavior: "ignoreErrors" });
     await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: { items: [], truncated: false }, shared: { items: [{ id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerName: "Owner", updatedAt: "2026-09-27T00:00:00.000Z" }], truncated: false }, archived: { items: [], truncated: false }, capacity: { entitled: true, activeOwned: 0, maxOwned: 10, canCreate: true } } }));

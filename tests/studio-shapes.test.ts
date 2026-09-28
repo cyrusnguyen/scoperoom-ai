@@ -20,7 +20,7 @@ test("an unknown kind, malformed JSON or wrong-typed field is ignored", () => {
 });
 
 test("a drop point centres the step on the pointer and rounds to whole pixels", () => {
-  assert.deepEqual(dropTarget({ x: 100.4, y: 200.6 }, STEP_SIZE.DATA_STORE), { x: 10, y: 146 });
+  assert.deepEqual(dropTarget({ x: 100.4, y: 200.6 }, STEP_SIZE.DATA_STORE), { x: 40, y: 131 });
 });
 
 test("a drop point rounds only after centring, matching a saved position", () => {

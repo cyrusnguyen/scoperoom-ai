@@ -50,8 +50,10 @@ export function applyChanges(base: Draft, documentRevision: number, changes: Cha
       };
       const applied = applyGraphCommand(draft, revision, command, newId, { inPlace: true });
       if (next !== proposedIds.length) throw new GraphError("INVALID_INPUT");
-      if (!applied.documentChanged) continue;
-      revision = bump(revision);
+      // A layout-only effect (Task 13's side-only RECONNECT_EDGE) still needs saving and its own audit event, just
+      // never a documentRevision of its own.
+      if (!applied.documentChanged && !applied.layoutChanged) continue;
+      if (applied.documentChanged) revision = bump(revision);
       draft = { document: applied.document, layout: applied.layout };
       layoutChanged ||= applied.layoutChanged;
       createdIds.push(...applied.createdIds);

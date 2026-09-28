@@ -1116,7 +1116,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
         nodes: { [start]: node(start, "START", "Receive form"), [long]: node(long, "ACTION", longLabel), [end]: node(end, "OUTCOME", "Filed") },
         edges: { [edgeId]: { id: edgeId, flowId, version: 1, fromId: start, toId: end, condition: "", origin: "HUMAN", sourceRefs: [] } },
       },
-      layout: { schemaVersion: 1, positions: { [start]: { x: 0, y: 0, version: 1 }, [long]: { x: 260, y: 80, version: 1 }, [end]: { x: 0, y: 160, version: 1 } }, directions: Object.fromEntries([flowId, ...extra].map((id) => [id, "TB"])) },
+      layout: { schemaVersion: 1, positions: { [start]: { x: 0, y: 0, version: 1 }, [long]: { x: 260, y: 80, version: 1 }, [end]: { x: 0, y: 160, version: 1 } }, directions: Object.fromEntries([flowId, ...extra].map((id) => [id, "TB"])), edgeSides: {} },
     };
   };
   const lists = (role: string, status = "ACTIVE") => {

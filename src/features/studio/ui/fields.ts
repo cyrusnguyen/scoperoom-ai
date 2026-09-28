@@ -1,4 +1,5 @@
 import type { GraphCommand } from "../../drafts/contracts/commands.ts";
+import type { Side } from "../../drafts/contracts/draft-layout.ts";
 import { CLASSIFICATIONS, INCLUSIONS, LIMITS, NODE_KINDS, type EdgeRecord, type FlowRecord, type NodeRecord } from "../../drafts/contracts/scope-document.ts";
 import { changes, dirtyFields, type EntityBuffer, type EntityKind, type Fields, type Saved } from "./buffers.ts";
 
@@ -85,10 +86,11 @@ export function updateCommand(kind: EntityKind, id: string, expectedEntityVersio
   return { commandSchemaVersion: 1, command: "UPDATE_EDGE", expectedEntityVersion, payload: { edgeId: id, condition: changed.condition } };
 }
 
-/** Endpoint choices are a topology command, never fields of UPDATE_EDGE. */
-export function reconnectCommand(id: string, expectedDocumentRevision: number, values: Fields): GraphCommand {
+/** Endpoint choices are a topology command, never fields of UPDATE_EDGE. `sides` carries the handles a canvas drag
+ * used (UI02 Task 13); the inspector's dropdown form leaves them out, which clears any previously saved sides. */
+export function reconnectCommand(id: string, expectedDocumentRevision: number, values: Fields, sides: { fromSide?: Side; toSide?: Side } = {}): GraphCommand {
   return { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision,
-    payload: { edgeId: id, fromId: values.fromId!, toId: values.toId! } };
+    payload: { edgeId: id, fromId: values.fromId!, toId: values.toId!, ...sides } };
 }
 
 /**

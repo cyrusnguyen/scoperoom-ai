@@ -121,7 +121,7 @@ test.describe("Studio canvas handles (read-only, mocked project)", () => {
         nodes: { [start]: node(start, "START", "Receive form"), [end]: node(end, "OUTCOME", "Filed") },
         edges: {},
       },
-      layout: { schemaVersion: 1, positions: { [start]: { x: 0, y: 0, version: 1 }, [end]: { x: 0, y: 160, version: 1 } }, directions: { [flowId]: "TB" } },
+      layout: { schemaVersion: 1, positions: { [start]: { x: 0, y: 0, version: 1 }, [end]: { x: 0, y: 160, version: 1 } }, directions: { [flowId]: "TB" }, edgeSides: {} },
     };
   };
 

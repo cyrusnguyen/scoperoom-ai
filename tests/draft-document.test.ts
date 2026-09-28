@@ -74,6 +74,18 @@ test("every node has exactly one position and every flow one direction", () => {
   rejects((draft) => { at(draft.layout, "directions")[flowId] = "RL"; });
 });
 
+test("edgeSides is optional (an old draft without it parses as {}), and any entry names a live edge and valid sides", () => {
+  const missing = stored();
+  delete missing.layout.edgeSides;
+  assert.deepEqual(parseDraftPair(missing.document, missing.layout).layout.edgeSides, {});
+  const saved = stored();
+  at(saved.layout, "edgeSides")[edgeId] = { from: "right", to: "left" };
+  assert.deepEqual(parseDraftPair(saved.document, saved.layout).layout.edgeSides, { [edgeId]: { from: "right", to: "left" } });
+  rejects((draft) => { at(draft.layout, "edgeSides")[edgeId] = { from: "up", to: "left" }; });
+  rejects((draft) => { at(draft.layout, "edgeSides")[unknownId] = { from: "right", to: "left" }; });
+  rejects((draft) => { at(draft.layout, "edgeSides")[edgeId] = { from: "right" }; });
+});
+
 test("coordinates, versions and text respect their bounds", () => {
   rejects((draft) => { at(draft.layout, "positions", startId).x = 100_001; });
   rejects((draft) => { at(draft.layout, "positions", startId).y = Number.NaN; });

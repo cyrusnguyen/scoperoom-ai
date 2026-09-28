@@ -162,6 +162,12 @@ export function applyGraphCommand(
     versions: {},
     retiredIds: [],
   });
+  /** A layout-only effect (Task 13's side-only RECONNECT_EDGE): the document is untouched, so no revision or version
+   * advances, but the changed layout still needs its own invariant check and its layoutRevision. */
+  const layoutOnly = (): Applied => {
+    if (!inPlace) checkDraft({ document, layout });
+    return { document, layout, documentChanged: false, layoutChanged: true, createdIds: [], versions: {}, retiredIds: [] };
+  };
 
   switch (command.command) {
     case "CREATE_FLOW": {
@@ -249,7 +255,7 @@ export function applyGraphCommand(
       if (!sameIds(plan.nodeIds, command.payload.removeNodeIds) || !sameIds(plan.edgeIds, command.payload.removeEdgeIds)) {
         fail("DEPENDENCY_CONFLICT");
       }
-      for (const edgeId of plan.edgeIds) delete document.edges[edgeId];
+      for (const edgeId of plan.edgeIds) { delete document.edges[edgeId]; delete layout.edgeSides[edgeId]; }
       for (const nodeId of plan.nodeIds) {
         delete document.nodes[nodeId];
         delete layout.positions[nodeId];
@@ -302,7 +308,7 @@ export function applyGraphCommand(
       }
       const plan = dependencyPlan(document, flowId, nodeIds);
       if (!sameIds(plan.edgeIds, removeEdgeIds)) fail("DEPENDENCY_CONFLICT");
-      for (const edgeId of plan.edgeIds) delete document.edges[edgeId];
+      for (const edgeId of plan.edgeIds) { delete document.edges[edgeId]; delete layout.edgeSides[edgeId]; }
       for (const nodeId of plan.nodeIds) {
         delete document.nodes[nodeId];
         delete layout.positions[nodeId];
@@ -313,7 +319,7 @@ export function applyGraphCommand(
       break;
     }
     case "ADD_EDGE": {
-      const { flowId, fromId, toId, condition } = command.payload;
+      const { flowId, fromId, toId, condition, fromSide, toSide } = command.payload;
       if (
         !document.flows[flowId]
         || document.nodes[fromId]?.flowId !== flowId
@@ -331,6 +337,7 @@ export function applyGraphCommand(
         origin: "HUMAN",
         sourceRefs: [],
       };
+      if (fromSide) { layout.edgeSides[edgeId] = { from: fromSide, to: toSide! }; layoutChanged = true; }
       touchFlow(flowId);
       break;
     }
@@ -343,12 +350,20 @@ export function applyGraphCommand(
       break;
     }
     case "RECONNECT_EDGE": {
-      const { edgeId, fromId, toId } = command.payload;
+      const { edgeId, fromId, toId, fromSide, toSide } = command.payload;
       const edge = document.edges[edgeId] ?? fail("INVALID_INPUT");
       if (document.nodes[fromId]?.flowId !== edge.flowId || document.nodes[toId]?.flowId !== edge.flowId) {
         fail("INVALID_INPUT");
       }
-      if (edge.fromId === fromId && edge.toId === toId) return noChange();
+      const endpointsChanged = edge.fromId !== fromId || edge.toId !== toId;
+      const existingSides = layout.edgeSides[edgeId];
+      const sidesChanged = fromSide ? existingSides?.from !== fromSide || existingSides?.to !== toSide : Boolean(existingSides);
+      if (!endpointsChanged && !sidesChanged) return noChange();
+      // The endpoints and their sides are one geometry decision: a plain reconnect (no sides given) clears them, a
+      // side-carrying reconnect (endpoints changed or not) writes or replaces them.
+      if (fromSide) layout.edgeSides[edgeId] = { from: fromSide, to: toSide! };
+      else delete layout.edgeSides[edgeId];
+      if (!endpointsChanged) return layoutOnly(); // sides only: no document revision, no behaviour version
       document.edges[edgeId] = { ...edge, fromId, toId, version: bump(edge.version) };
       versions[edgeId] = document.edges[edgeId].version;
       touchFlow(edge.flowId);
@@ -357,6 +372,7 @@ export function applyGraphCommand(
     case "DELETE_EDGE": {
       const edge = document.edges[command.payload.edgeId] ?? fail("INVALID_INPUT");
       delete document.edges[edge.id];
+      if (layout.edgeSides[edge.id]) { delete layout.edgeSides[edge.id]; layoutChanged = true; }
       retire([edge.id]);
       touchFlow(edge.flowId);
       break;

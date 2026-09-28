@@ -25,6 +25,17 @@ test("each command family parses to exactly the fields it names", () => {
   for (const command of commands) assert.deepEqual(parseGraphCommand(command), command);
 });
 
+test("ADD_EDGE and RECONNECT_EDGE accept optional sides, both or neither, and reject an unknown side", () => {
+  const add = { commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: 1, payload: { flowId, fromId: nodeId, toId: otherId, condition: "", fromSide: "right", toSide: "left" } };
+  assert.deepEqual(parseGraphCommand(add), add);
+  const reconnect = { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: 1, payload: { edgeId: otherId, fromId: flowId, toId: nodeId, fromSide: "top", toSide: "bottom" } };
+  assert.deepEqual(parseGraphCommand(reconnect), reconnect);
+  invalid({ ...add, payload: { ...add.payload, fromSide: "up" } });
+  invalid({ ...add, payload: { flowId, fromId: nodeId, toId: otherId, condition: "", fromSide: "right" } });
+  invalid({ ...add, payload: { flowId, fromId: nodeId, toId: otherId, condition: "", toSide: "left" } });
+  invalid({ ...reconnect, payload: { edgeId: otherId, fromId: flowId, toId: nodeId, toSide: "bottom" } });
+});
+
 test("ADD_NODE and UPDATE_NODE accept the DATA_STORE kind and still reject an unknown one", () => {
   const add = { commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision: 1, payload: { flowId, kind: "DATA_STORE", label: "Orders table", description: "", actorLabel: "" } };
   assert.deepEqual(parseGraphCommand(add), add);
