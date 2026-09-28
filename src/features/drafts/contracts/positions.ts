@@ -23,16 +23,27 @@ export type ArrangementPreview = {
 /** A saved position change and its receipt: the new saved position and version of every node that actually moved. */
 export type PositionResult = { draftId: string; layoutRevision: number; eventSequence: number; positions: Record<string, SavedPosition>; replayed: boolean };
 
+export function parseMoveItem(entry: unknown): MoveItem {
+  const item = object(entry);
+  keys(item, ["nodeId", "expectedPositionVersion", "x", "y"]);
+  return { nodeId: id(item.nodeId), expectedPositionVersion: version(item.expectedPositionVersion), x: coordinate(item.x), y: coordinate(item.y) };
+}
+
+/** Saved positions keyed by node id, as a stored receipt holds them. */
+export function parseSavedPositions(value: unknown): Record<string, SavedPosition> {
+  return Object.fromEntries(Object.entries(object(value)).map(([nodeId, entry]) => {
+    const position = object(entry);
+    keys(position, ["x", "y", "version"]);
+    return [id(nodeId), { x: coordinate(position.x), y: coordinate(position.y), version: version(position.version) }];
+  }));
+}
+
 export function parsePositionCommand(raw: unknown): PositionCommand {
   const body = object(raw);
   if (body.mode === "MOVE_NODES") {
     keys(body, ["mode", "flowId", "items"]);
     if (!Array.isArray(body.items) || !body.items.length || body.items.length > MAX_MOVE_NODES) invalid();
-    const items = body.items.map((entry) => {
-      const item = object(entry);
-      keys(item, ["nodeId", "expectedPositionVersion", "x", "y"]);
-      return { nodeId: id(item.nodeId), expectedPositionVersion: version(item.expectedPositionVersion), x: coordinate(item.x), y: coordinate(item.y) };
-    });
+    const items = body.items.map(parseMoveItem);
     if (new Set(items.map((item) => item.nodeId)).size !== items.length) invalid();
     return { mode: "MOVE_NODES", flowId: id(body.flowId), items };
   }
@@ -59,10 +70,5 @@ export function parsePositionResult(value: unknown): Omit<PositionResult, "repla
   const result = object(value);
   keys(result, ["draftId", "layoutRevision", "eventSequence", "positions"]);
   if (typeof result.eventSequence !== "number" || !Number.isSafeInteger(result.eventSequence) || result.eventSequence < 0) invalid();
-  const positions = Object.fromEntries(Object.entries(object(result.positions)).map(([nodeId, entry]) => {
-    const position = object(entry);
-    keys(position, ["x", "y", "version"]);
-    return [id(nodeId), { x: coordinate(position.x), y: coordinate(position.y), version: version(position.version) }];
-  }));
-  return { draftId: id(result.draftId), layoutRevision: version(result.layoutRevision), eventSequence: result.eventSequence, positions };
+  return { draftId: id(result.draftId), layoutRevision: version(result.layoutRevision), eventSequence: result.eventSequence, positions: parseSavedPositions(result.positions) };
 }

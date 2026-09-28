@@ -124,3 +124,38 @@ test("position routes: a move needs a key and same origin; a preview needs same 
     await database.end();
   }
 });
+
+test("the batch save route needs a key and same origin, then saves every change with the proposed ids in one request", async ({ page }) => {
+  test.setTimeout(60_000);
+  const admin = adminClient(); const database = await openDatabase(); const users: string[] = [];
+  try {
+    const { authUserId } = await signIn(page, admin, users, "Changes API Owner");
+    await entitle(database, authUserId);
+    const projectId = await createProjectViaApi(page, "Changes API project");
+    const draftId = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string } }).draft.id;
+    const url = `/api/projects/${projectId}/drafts/${draftId}/changes`;
+    const [flowId, nodeId] = [randomUUID(), randomUUID()];
+    const batch = {
+      commands: [
+        { ...createFlow(1), proposedIds: [flowId] },
+        { commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision: 2, payload: { flowId, kind: "START", label: "Start", description: "", actorLabel: "" }, proposedIds: [nodeId] },
+      ],
+      moves: [{ flowId, items: [{ nodeId, expectedPositionVersion: 1, x: 40, y: 80 }] }],
+    };
+    expect((await page.request.post(url, { headers: { Origin: appUrl }, data: batch })).status()).toBe(400);
+    for (const origin of [undefined, "https://evil.example"]) {
+      const refused = await page.request.post(url, { headers: { ...(origin ? { Origin: origin } : {}), "Idempotency-Key": randomUUID() }, data: batch });
+      expect(refused.status()).toBe(403);
+      expect((await refused.json() as { error: { code: string } }).error.code).toBe("INVALID_REQUEST");
+    }
+    const saved = await page.request.post(url, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: batch });
+    expect(saved.status()).toBe(200);
+    expect(await saved.json()).toMatchObject({ draftId, documentRevision: 3, layoutRevision: 2, createdIds: [flowId, nodeId], positions: { [nodeId]: { x: 40, y: 80, version: 2 } }, replayed: false });
+    const draft = await (await page.request.get(`/api/projects/${projectId}/drafts/${draftId}`)).json() as Draft & { layout: { positions: Record<string, unknown> } };
+    expect(draft.document.flows[flowId]!.title).toBe("Checkout");
+    expect(draft.layout.positions[nodeId]).toEqual({ x: 40, y: 80, version: 2 });
+  } finally {
+    await cleanupUsers(database, admin, users, page);
+    await database.end();
+  }
+});

@@ -35,7 +35,7 @@ export function nextRevision(value: number): number {
 export const asJson = (value: unknown) => value as Prisma.InputJsonValue;
 
 /** PostgreSQL checks JSONB's formatted text, which is larger than compact JSON.stringify output. */
-async function requireStoredSize(tx: Transaction, document: unknown, layout: unknown) {
+export async function requireStoredSize(tx: Transaction, document: unknown, layout: unknown) {
   const [size] = await tx.$queryRaw<Array<{ documentBytes: number; layoutBytes: number }>>`
     SELECT octet_length(${JSON.stringify(document)}::jsonb::text)::integer AS "documentBytes",
            octet_length(${JSON.stringify(layout)}::jsonb::text)::integer AS "layoutBytes"`;
@@ -94,7 +94,7 @@ export async function draftMutation<T extends object>(
 }
 
 /** Audit names what the command touched, bounded well under the audit payload cap. */
-function auditRefs(applied: Applied) {
+export function auditRefs(applied: Applied) {
   const ids = [...new Set([...applied.createdIds, ...Object.keys(applied.versions), ...applied.retiredIds])].slice(0, 25);
   return ids.map((id) => ({ kind: "DRAFT_ENTITY", id }));
 }
