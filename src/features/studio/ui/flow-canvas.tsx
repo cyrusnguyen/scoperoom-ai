@@ -8,7 +8,7 @@ import {
 import { STEP_SIZE, type Direction } from "@/features/drafts/contracts/draft-layout";
 import type { NodeKind } from "@/features/drafts/contracts/scope-document";
 import { bufferKey, discard, edit, editFields, refuse, type Saved } from "./buffers";
-import { inlinePlan, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
+import { endpointGuard, inlinePlan, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
 import ShapePanel from "./shape-panel";
 import { explain, useStudio } from "./studio-context";
 import { dropTarget, moveTargets, parseShapePayload, selectEdge, selectNodes, SHAPE_DRAG_MIME, type SelectChange, type StudioUi } from "./studio-ui";
@@ -315,8 +315,13 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     if (!chosen) return;
     update((current) => ({ endpointBuffers: choose(current), selection: { kind: "EDGE", id: edge.id } }));
     // A second gesture can revise retained choices, but only the inspector can explicitly resolve a stale conflict.
-    if (chosen.conflict) { inspect(); return; }
-    const outcome = await run(reconnectCommand(edge.id, chosen.baseVersion, chosen.values));
+    const guard = endpointGuard(chosen, savedEdge, draft.documentRevision);
+    if (chosen.conflict || guard === null) {
+      update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, true) }));
+      inspect();
+      return;
+    }
+    const outcome = await run(reconnectCommand(edge.id, guard, chosen.values));
     if (outcome.ok) { update((current) => ({ endpointBuffers: discard(current.endpointBuffers, key) })); return; }
     update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, outcome.code === "STALE_DOCUMENT_REVISION") }));
     inspect();

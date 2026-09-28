@@ -82,7 +82,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   };
   const create = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!editable) return;
+    if (!editable || saving) return;
     const error = fieldErrors("FLOW", { title: values.title }).title ?? "";
     setTitleError(error);
     if (error) { window.document.getElementById("new-flow-title")?.focus(); return; }

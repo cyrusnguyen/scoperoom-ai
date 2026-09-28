@@ -15,6 +15,7 @@ async function createFlow(page: Page, title: string) {
   await form.getByLabel("Title").fill(title);
   await form.getByRole("button", { name: "Create flow" }).click();
   await expect(page.locator("#studio-flow-title")).toHaveText(title);
+  await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
 }
 
 test.describe("Studio review polish", () => {
@@ -47,6 +48,7 @@ test.describe("Studio review polish", () => {
     await flows.getByRole("button", { name: /^Duplicate/ }).click();
 
     await expect(page.locator("#studio-flow-title")).toHaveText(`Copy of ${symbol.repeat(112)}`);
+    await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
     const copied = await page.locator("#studio-flow-title").textContent();
     expect([...copied!]).toHaveLength(120);
 
@@ -60,6 +62,7 @@ test.describe("Studio review polish", () => {
     await form.getByLabel("Title").fill(tooLong);
     await form.getByRole("button", { name: "Create flow" }).click();
     await expect(page.locator("#studio-flow-title")).toHaveText(tooLong);
+    await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
     await page.locator(".flow-switch").click();
     await expect(flows.getByRole("button", { name: /^Duplicate/ })).toBeDisabled();
   });

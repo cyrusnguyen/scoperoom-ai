@@ -21,6 +21,7 @@ async function createFlowInUi(page: Page, title: string) {
   await form.getByLabel("Title").fill(title);
   await form.getByRole("button", { name: "Create flow" }).click();
   await expect(page.locator("#studio-flow-title")).toHaveText(title);
+  await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
 }
 
 async function addStepInUi(page: Page, label: string, shape: "Start" | "Step" | "Decision" | "Outcome" | "Data store") {

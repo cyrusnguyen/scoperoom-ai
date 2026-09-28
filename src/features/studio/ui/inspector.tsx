@@ -7,7 +7,7 @@ import { graphWarnings, type GraphWarning } from "@/features/drafts/domain/warni
 import {
   bufferKey, changes, dirtyFields, discard, edit, rebase, refuse, type EntityBuffer, type EntityKind, type Fields, type Saved,
 } from "./buffers";
-import { FIELDS, fieldErrors, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
+import { endpointGuard, FIELDS, fieldErrors, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
 import { neighbours, recordOf, stepName } from "./graph-view";
 import { DeleteStepsDialog } from "./step-dialogs";
 import { explain, formKeys, useCommandSubmit, useStudio } from "./studio-context";
@@ -221,7 +221,9 @@ function Endpoints({ edge }: { edge: EdgeRecord }) {
   const steps = Object.values(draft.document.nodes).filter((node) => node.flowId === edge.flowId);
   const submit = async (target: EntityBuffer) => {
     if (!editable || target.conflict) return;
-    const outcome = await submitCommand(reconnectCommand(edge.id, target.baseVersion, target.values));
+    const guard = endpointGuard(target, edge, draft.documentRevision);
+    if (guard === null) { update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, true) })); setMessage(""); return; }
+    const outcome = await submitCommand(reconnectCommand(edge.id, guard, target.values));
     if (outcome.ok) update((current) => ({ endpointBuffers: discard(current.endpointBuffers, key) }));
     else update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, outcome.code === "STALE_DOCUMENT_REVISION") }));
     setMessage(outcome.ok ? "Connection moved." : outcome.code === "STALE_DOCUMENT_REVISION" ? "" : explain(outcome));

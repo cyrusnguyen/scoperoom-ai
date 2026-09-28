@@ -90,3 +90,12 @@ export function reconnectCommand(id: string, expectedDocumentRevision: number, v
   return { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision,
     payload: { edgeId: id, fromId: values.fromId!, toId: values.toId! } };
 }
+
+/**
+ * The guard for applying an endpoint choice (Task 14b). Every local change advances the shown document revision, so the
+ * revision the choice began at says little; what matters is whether the connection's endpoints changed since. If they
+ * still match where the choice began, it applies at the shown revision; otherwise (null) it needs explicit review.
+ */
+export function endpointGuard(buffer: EntityBuffer, edge: { fromId: string; toId: string }, documentRevision: number): number | null {
+  return buffer.original.fromId === edge.fromId && buffer.original.toId === edge.toId ? documentRevision : null;
+}

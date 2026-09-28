@@ -32,6 +32,7 @@ async function createFlowInUi(page: Page, title: string) {
   await form.getByLabel("Title").fill(title);
   await form.getByRole("button", { name: "Create flow" }).click();
   await expect(page.locator("#studio-flow-title")).toHaveText(title);
+  await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
 }
 
 async function addStepInUi(page: Page, label: string, shape?: "Start" | "Step" | "Decision" | "Outcome") {
@@ -250,6 +251,7 @@ test.describe("Studio on a real draft", () => {
     await page.locator(".flow-switch").click();
     await modal(page, "Flows").getByRole("button", { name: "Duplicate Original" }).click();
     await expect(page.locator("#studio-flow-title")).toHaveText("Copy of Original");
+    await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
     await page.locator(".flow-switch").click();
     await modal(page, "Flows").getByRole("button", { name: /^Delete Copy of Original/ }).click();
 
@@ -311,9 +313,11 @@ test.describe("Studio on a real draft", () => {
     await page.locator(".flow-switch").click();
     await modal(page, "Flows").getByRole("button", { name: "Duplicate Retry once" }).click();
     await expect(page.locator("#studio-flow-title")).toHaveText("Copy of Retry once");
+    await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
     expect(Object.keys((await draftOf(page, projectId)).document.flows)).toHaveLength(2);
     await page.reload();
     await expect(page.locator("#studio-flow-title")).toHaveText("Copy of Retry once");
+    await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
     await page.locator(".flow-switch").click();
     await modal(page, "Flows").getByRole("button", { name: /^Delete Copy of Retry once/ }).click();
     const confirmation = modal(page, "Delete Copy of Retry once?");
@@ -333,6 +337,7 @@ test.describe("Studio on a real draft", () => {
     const flows = modal(page, "Flows");
     await flows.getByRole("button", { name: "Duplicate Existing" }).click();
     await expect(page.locator("#studio-flow-title")).toHaveText("Copy of Existing");
+    await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
     await page.locator(".flow-switch").click();
     await flows.getByRole("button", { name: /^Delete Copy of Existing/ }).click();
     await modal(page, "Delete Copy of Existing?").getByRole("button", { name: "Delete flow", exact: true }).click();
@@ -411,6 +416,7 @@ test.describe("Studio on a real draft", () => {
     await page.locator(".flow-switch").click();
     await modal(page, "Flows").getByRole("button", { name: "Duplicate Checkout" }).click();
     await expect(page.locator("#studio-flow-title")).toHaveText("Copy of Checkout");
+    await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
 
     await page.reload();
     await expect(page.locator("#studio-flow-title")).toHaveText("Checkout");
@@ -428,6 +434,7 @@ test.describe("Studio on a real draft", () => {
     await page.keyboard.type("Returns");
     await page.keyboard.press("Enter");
     await expect(page.locator("#studio-flow-title")).toHaveText("Returns");
+    await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
     for (const label of ["Request return", "Refund issued"]) {
       await press(toolbar(page).getByRole("button", { name: "Add step" }));
       await page.keyboard.press("Tab"); // Shape → Name
@@ -590,7 +597,9 @@ test.describe("Studio on a real draft", () => {
     await addStepInUi(page, "Probe");
     await headerSave(page).click();
     await note(page).getByRole("button", { name: "Apply my changes again" }).click();
-    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    await expect(note(page)).toHaveCount(0);
+    // The typed description still counts as unsaved: it belongs to the removed step.
+    await expect.poll(async () => Object.values((await draftOf(page, projectId)).document.nodes).map((node) => node.label)).toEqual(["Probe"]);
     await page.locator(".studio-status").getByRole("button", { name: "Unsaved text for a removed item" }).click();
     await expect(panel(page).getByRole("heading", { name: "This step was removed" })).toBeVisible();
     await expect(panel(page).getByLabel("Your unsaved text")).toHaveValue("Description: Check the policy number first");
@@ -1261,7 +1270,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await page.locator(`.react-flow__node[data-id="${start}"]`).click();
     await page.keyboard.press("Delete");
     const confirm = modal(page, "Delete step");
-    await expect(confirm.getByText("Receive form")).toBeVisible();
+    await expect(confirm.getByText("Receive form", { exact: true })).toBeVisible();
     await confirm.getByRole("button", { name: "Cancel" }).click();
     expect(writes).toBe(0);
   });

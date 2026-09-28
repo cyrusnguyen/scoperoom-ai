@@ -125,12 +125,9 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
       return { ok: false, code: error.code, message: projectErrors[error.code].message, uncertain: false, ...(error.details ? { details: error.details } : {}) };
     }
     const { entries, createdIds, versions, retiredIds, documentRevision } = queued;
-    const changed = entries !== latest.current.entries;
-    change((current) => withEntries(current, base, entries), (current) => ({
-      // Our own change may advance records other buffers were typed against; endpoint choices follow the revision.
-      buffers: follow(current.buffers, versions),
-      endpointBuffers: changed ? follow(current.endpointBuffers, Object.fromEntries(Object.values(current.endpointBuffers).map((buffer) => [buffer.id, documentRevision]))) : current.endpointBuffers,
-    }));
+    // Our own change may advance records other buffers were typed against. (Endpoint choices are checked against the
+    // connection itself when applied: see endpointGuard.)
+    change((current) => withEntries(current, base, entries), (current) => ({ buffers: follow(current.buffers, versions) }));
     return { ok: true, result: { createdIds, versions, retiredIds, documentRevision } };
   }, [editable, change]);
 

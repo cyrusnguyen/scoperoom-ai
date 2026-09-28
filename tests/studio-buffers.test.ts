@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { inlinePlan } from "../src/features/studio/ui/fields.ts";
+import { endpointGuard, inlinePlan } from "../src/features/studio/ui/fields.ts";
 import { changes, discard, edit, editFields, follow, isDirty, rebase, refuse, type Saved } from "../src/features/studio/ui/buffers.ts";
 
 const node: Saved = { kind: "NODE", id: "n1", version: 3, fields: { label: "Pay", description: "" } };
@@ -83,4 +83,13 @@ test("an empty or over-limit inline label is refused without touching the buffer
   const edge: Saved = { kind: "EDGE", id: "e1", version: 2, fields: { condition: "Paid" } };
   assert.deepEqual(inlinePlan(edit({}, edge, "condition", "")["EDGE:e1"], "EDGE", "condition", "Paid"), { kind: "send", fields: { condition: "" } });
   assert.equal(inlinePlan(edit({}, edge, "condition", "y".repeat(241))["EDGE:e1"], "EDGE", "condition", "Paid").kind, "refused");
+});
+
+test("an endpoint choice applies at the shown revision while its connection is unchanged, and needs review once it moved", () => {
+  const edge: Saved = { kind: "EDGE", id: "e1", version: 7, fields: { fromId: "a", toId: "b" } };
+  const choice = edit({}, edge, "toId", "mine")["EDGE:e1"]!;
+  // Other local changes advanced the shown revision: the choice still applies, at that revision.
+  assert.equal(endpointGuard(choice, { fromId: "a", toId: "b" }, 12), 12);
+  // Someone reconnected it since (or a discarded change had): explicit review, never a silent overwrite.
+  assert.equal(endpointGuard(choice, { fromId: "remote", toId: "b" }, 8), null);
 });
