@@ -67,14 +67,16 @@ function StepCard({ id, data, isConnectable }: NodeProps<StepNode>) {
     <KindShape kind={data.kind} />
     {/* React Flow's edge-drawing lookup only finds a saved *start* handle among `source`-typed handles (never
         `target`), so every side needs one of each type at the same id and position to draw as either end of a saved
-        connection. The primary pass keeps HANDLE_ORDER's direction-based type first in DOM order, so a plain
-        (handle-less) connection still defaults to bottom→top (TB) or right→left (LR) as before; the secondary pass
-        adds the other type, stacked exactly on top, so it still reads as one dot per side. */}
+        connection. The primary pass is the one interactive, visible handle per side, keeping HANDLE_ORDER's
+        direction-based type (so a plain, handle-less connection still defaults to bottom→top (TB) or right→left
+        (LR), and dragging still starts exactly one gesture per side). The shadow pass, `pointer-events: none`,
+        exists only so React Flow measures and registers the other type at the same id: real for the edge-drawing
+        lookup, invisible to pointer input, so it never intercepts the primary handle beneath it. */}
     {HANDLE_ORDER[data.direction].map(({ position, type }) => (
       <Handle key={`${position}-${type}`} id={position} type={type} position={position} isConnectable={isConnectable} />
     ))}
     {HANDLE_ORDER[data.direction].map(({ position, type }) => (
-      <Handle key={`${position}-${otherType(type)}`} id={position} type={otherType(type)} position={position} isConnectable={isConnectable} />
+      <Handle key={`${position}-${otherType(type)}`} id={position} type={otherType(type)} position={position} isConnectable={isConnectable} style={{ pointerEvents: "none" }} />
     ))}
     <div className="step-body">
       <span className="step-kind">{KIND_LABELS[data.kind]}</span>
