@@ -184,9 +184,12 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
         change(mark("uncertain"), (current) => ({ ...release(current), save: { state: "failed", message: "We couldn’t confirm your changes." } }));
         return false;
       }
-      change(mark("refused", { code: result.code, message: result.message }), (current) => ({ ...release(current), save: { state: "failed", message: "Your changes weren’t saved." } }));
+      // A refusal usually means newer saved data. It is read before the refusal is shown, so the note compares the
+      // person's changes with it and "Apply my changes again" replays on exactly what was compared. The lock stays
+      // until then ("Saving…"), so nothing else is sent in between.
       if (accessCodes.has(result.code)) onAccessChanged();
-      else await reload(); // a refusal usually means newer saved data; "Apply my changes again" replays on it
+      else await reload();
+      change(mark("refused", { code: result.code, message: result.message }), (current) => ({ ...release(current), save: { state: "failed", message: "Your changes weren’t saved." } }));
       return false;
     }
     if (sent) await finish();
