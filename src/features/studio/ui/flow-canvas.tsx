@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState, type DragEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import {
   Background, BaseEdge, ConnectionMode, Controls, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
   useReactFlow, type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
@@ -8,16 +8,25 @@ import {
 import { STEP_SIZE, type Direction } from "@/features/drafts/contracts/draft-layout";
 import { MAX_MOVE_NODES } from "@/features/drafts/contracts/positions";
 import type { NodeKind } from "@/features/drafts/contracts/scope-document";
-import { bufferKey, editFields, refuse, send, type Saved } from "./buffers";
-import { KIND_LABELS, reconnectCommand } from "./fields";
+import { bufferKey, edit, editFields, refuse, send, type Saved } from "./buffers";
+import { inlinePlan, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
 import ShapePanel from "./shape-panel";
-import { useStudio } from "./studio-context";
+import { explain, useStudio } from "./studio-context";
 import { dropTarget, moveTargets, parseShapePayload, selectEdge, selectNodes, SHAPE_DRAG_MIME, type SelectChange, type StudioUi } from "./studio-ui";
 
 type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction };
 type StepNode = Node<StepData, "step">;
 type FlowEdge = Edge<{ condition: string }, "flow">;
 type Point = { x: number; y: number };
+/** The one open inline label editor. `select` selects its whole text (a step just added from the shape panel). */
+type Editing = { kind: "NODE" | "EDGE"; id: string; select?: boolean } | null;
+type InlineEditing = { editing: Editing; enabled: boolean; close: (refocus: boolean) => void; setNote: (note: string) => void };
+const InlineEditingContext = createContext<InlineEditing>({ editing: null, enabled: false, close: () => {}, setNote: () => {} });
+
+const INLINE = {
+  NODE: { field: "label", name: "Step name", placeholder: "Name this step", noun: "name" },
+  EDGE: { field: "condition", name: "Connection label", placeholder: "Add label", noun: "label" },
+} as const;
 
 // Every step keeps all four sides connectable (UI02); which one is first of its type per direction decides the
 // default, unsaved routing a plain (handle-less) connection draws, matching the earlier single-handle behaviour.
@@ -45,8 +54,13 @@ export function KindShape({ kind }: { kind: NodeKind }) {
   return null;
 }
 
-/** Fixed application-owned shapes (UI02); names are plain text, clamped here and complete in the inspector. */
-function StepCard({ data, isConnectable }: NodeProps<StepNode>) {
+/**
+ * Fixed application-owned shapes (UI02); names are plain text, clamped here and complete in the inspector. The label
+ * is always `nopan`: React Flow drops a node's own `nopan` while it cannot be dragged (a save in flight, a reader),
+ * and d3's double-click zoom would then swallow the double-click that opens the inline editor.
+ */
+function StepCard({ id, data, isConnectable }: NodeProps<StepNode>) {
+  const { editing } = useContext(InlineEditingContext);
   return <div className="step-node" data-kind={data.kind}>
     <KindShape kind={data.kind} />
     {HANDLE_ORDER[data.direction].map(({ position, type }) => (
@@ -54,20 +68,95 @@ function StepCard({ data, isConnectable }: NodeProps<StepNode>) {
     ))}
     <div className="step-body">
       <span className="step-kind">{KIND_LABELS[data.kind]}</span>
-      <span className="step-label">{data.label}</span>
+      {editing?.kind === "NODE" && editing.id === id ? <InlineEditor kind="NODE" id={id} /> : <span className="step-label nopan">{data.label}</span>}
       {data.actor && <span className="step-actor">{data.actor}</span>}
     </div>
   </div>;
 }
 
-function FlowEdgeLine({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, data }: EdgeProps<FlowEdge>) {
+function FlowEdgeLine({ id, selected, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, data }: EdgeProps<FlowEdge>) {
+  const { editing, enabled } = useContext(InlineEditingContext);
   const [path, labelX, labelY] = getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, borderRadius: 14, offset: 28 });
+  // The label, its inline editor and the "Add label" hint all sit at the path's own label point.
+  const style = { transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` };
+  const label = editing?.kind === "EDGE" && editing.id === id
+    ? <div className="edge-label edge-label-editor nodrag nopan nowheel" style={style}><InlineEditor kind="EDGE" id={id} /></div>
+    : data?.condition ? <div className="edge-label" style={style}>{data.condition}</div>
+      : selected && enabled ? <div className="edge-label edge-label-hint" style={style}>Add label</div> : null;
   return <>
     <BaseEdge id={id} path={path} markerEnd={markerEnd} interactionWidth={20} />
-    {data?.condition && <EdgeLabelRenderer>
-      <div className="edge-label" style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}>{data.condition}</div>
-    </EdgeLabelRenderer>}
+    {label && <EdgeLabelRenderer>{label}</EdgeLabelRenderer>}
   </>;
+}
+
+/**
+ * Inline step name / connection label editor (UI02 Task 8). Its text lives in the same per-project buffer as the
+ * inspector's field, so both show one value and neither overwrites the other; closing it (blur, Enter or Escape)
+ * is the inspector's Save for that record: same command, same key on an unconfirmed retry, same conflict review.
+ * A hidden copy of the text sizes it, so the editor covers the label exactly and grows with what is typed.
+ */
+function InlineEditor({ kind, id }: { kind: "NODE" | "EDGE"; id: string }) {
+  const { draft, ui, update, run, busy, inspect } = useStudio();
+  const { editing, close, setNote } = useContext(InlineEditingContext);
+  const control = useRef<HTMLTextAreaElement & HTMLInputElement>(null);
+  const closed = useRef(false);
+  const selectAll = Boolean(editing?.select);
+  useEffect(() => {
+    const element = control.current;
+    if (!element) return;
+    element.focus();
+    if (selectAll) element.select();
+    else element.setSelectionRange(element.value.length, element.value.length);
+  }, [selectAll]);
+  const record = kind === "NODE" ? draft.document.nodes[id] : draft.document.edges[id];
+  if (!record) return null;
+  const { field, name, placeholder, noun } = INLINE[kind];
+  const saved = savedOf(kind, record);
+  const key = bufferKey(kind, id);
+  const buffer = ui.buffers[key];
+  const value = buffer && buffer.values[field] !== buffer.original[field] ? buffer.values[field]! : saved.fields[field]!;
+  const review = () => { update(() => ({ selection: kind === "NODE" ? { kind: "NODES", ids: [id] } : { kind: "EDGE", id } })); inspect(); };
+
+  const finish = async (refocus: boolean) => {
+    if (closed.current) return;
+    closed.current = true;
+    close(refocus);
+    const plan = inlinePlan(buffer, kind, field);
+    if (plan.kind === "unchanged") return;
+    if (plan.kind === "review") { review(); return; }
+    if (plan.kind === "refused") {
+      update((current) => ({ buffers: edit(current.buffers, saved, field, current.buffers[key]?.original[field] ?? saved.fields[field]!) }));
+      setNote(`${plan.message} The saved ${noun} is kept.`);
+      return;
+    }
+    // One request at a time: the text stays in the buffer until this person closes the editor again or saves it.
+    if (busy) { setNote("Another change is still saving. Your text is kept."); return; }
+    setNote("");
+    const requestKey = plan.retrying ? buffer!.key! : crypto.randomUUID();
+    if (!plan.retrying) update((current) => ({ buffers: send(current.buffers, key, requestKey) }));
+    const outcome = await run(updateCommand(kind, id, buffer!.baseVersion, plan.fields), requestKey);
+    if (outcome.ok || outcome.uncertain) return; // an unconfirmed save keeps its key; the status offers Retry
+    const stale = outcome.code === "STALE_ENTITY_VERSION";
+    update((current) => ({ buffers: refuse(current.buffers, key, stale) }));
+    if (stale) review();
+    else setNote(outcome.code === "BUSY" ? "Another change is still saving. Your text is kept." : explain(outcome));
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement | HTMLInputElement>) => {
+    if (event.key !== "Enter" && event.key !== "Escape") return;
+    event.stopPropagation(); // React Flow would otherwise select or deselect the element
+    if (event.nativeEvent.isComposing || (event.key === "Enter" && event.shiftKey)) return;
+    event.preventDefault();
+    void finish(true);
+  };
+  const props = {
+    ref: control, value, placeholder, "aria-label": name, className: "nodrag nopan nowheel",
+    onChange: (event: { target: { value: string } }) => { const next = event.target.value; update((current) => ({ buffers: edit(current.buffers, saved, field, next) })); },
+    onKeyDown, onBlur: () => void finish(false),
+  };
+  return <span className={kind === "NODE" ? "inline-edit step-label" : "inline-edit"}>
+    <span className={kind === "NODE" ? "step-label" : undefined} aria-hidden="true">{value || placeholder}</span>
+    {kind === "NODE" ? <textarea {...props} rows={1} cols={1} /> : <input {...props} size={1} />}
+  </span>;
 }
 
 const nodeTypes = { step: StepCard };
@@ -83,7 +172,8 @@ const defaultEdgeOptions = { type: "flow" as const };
  * convert a screen point to a flow position (`screenToFlowPosition` needs an ancestor provider).
  */
 export default function FlowCanvas(props: { flowId: string; preview?: { positions: Record<string, Point>; direction: Direction } }) {
-  return <ReactFlowProvider><CanvasInner {...props} /></ReactFlowProvider>;
+  // Keyed by flow: switching flows closes an inline editor and never reopens one for a step created in another flow.
+  return <ReactFlowProvider><CanvasInner key={props.flowId} {...props} /></ReactFlowProvider>;
 }
 
 function CanvasInner({ flowId, preview }: { flowId: string; preview?: { positions: Record<string, Point>; direction: Direction } }) {
@@ -93,8 +183,11 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   const [dragging, setDragging] = useState<Record<string, Point>>({});
   const [note, setNote] = useState("");
   const [measured, setMeasured] = useState<Record<string, { width: number; height: number }>>({});
+  const [editing, setEditing] = useState<Editing>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const interactive = !preview;
+  // Inline editors exist only on an editable, live canvas (never read-only, archived or the arrangement preview).
+  const inlineEnabled = interactive && editable;
   const connectable = interactive && editable && !busy && !ui.pending;
   // The person's own placement stays on screen while it saves, awaits a retry, or waits for their conflict choice.
   const shown = interactive && attempt?.flowId === flowId ? attempt : null;
@@ -121,6 +214,8 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     // (Connect, Delete) already ignore a selected id from another flow.
     update(() => ({ selection: { kind: "NODES", ids: [nodeId] } }));
     await place({ mode: "MOVE_NODES", flowId: capturedFlowId, items: [{ nodeId, expectedPositionVersion: 1, ...target }] });
+    // Name it next: its default label is selected, so typing replaces it (a flow switch unmounted this canvas).
+    setEditing({ kind: "NODE", id: nodeId, select: true });
   }, [flowId, run, draft, update, place]);
   const activateShape = useCallback((kind: NodeKind) => {
     const rect = wrapperRef.current?.getBoundingClientRect();
@@ -191,6 +286,28 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     const selection = picks(changes);
     if (selection.length) update((current) => ({ selection: selectEdge(current.selection, selection) }));
   };
+  const closeEditor = useCallback((refocus: boolean) => {
+    if (refocus && editing) wrapperRef.current?.querySelector<HTMLElement>(`.react-flow__${editing.kind === "NODE" ? "node" : "edge"}[data-id="${CSS.escape(editing.id)}"]`)?.focus();
+    setEditing(null);
+  }, [editing]);
+  const inline = useMemo<InlineEditing>(() => ({ editing: inlineEnabled ? editing : null, enabled: inlineEnabled, close: closeEditor, setNote }), [inlineEnabled, editing, closeEditor]);
+  // Double-clicking a step's label names it in place; anywhere else on the step still opens the inspector.
+  const nodeDoubleClick = (event: MouseEvent, node: StepNode) => {
+    const target = event.target as Element;
+    if (target.closest(".inline-edit")) return;
+    if (inlineEnabled && target.closest(".step-label")) setEditing({ kind: "NODE", id: node.id });
+    else inspect();
+  };
+  const edgeDoubleClick = (event: MouseEvent, edge: FlowEdge) => {
+    if (inlineEnabled && !(event.target as Element).closest(".inline-edit")) setEditing({ kind: "EDGE", id: edge.id });
+  };
+  // The keyboard path: F2 or Enter on a focused step opens its editor.
+  const canvasKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (!inlineEnabled || (event.key !== "F2" && event.key !== "Enter") || event.nativeEvent.isComposing || !target.classList.contains("react-flow__node") || !target.dataset.id) return;
+    event.preventDefault();
+    setEditing({ kind: "NODE", id: target.dataset.id });
+  };
   const connect = ({ source, target }: Connection) => {
     if (!source || !target || !connectable) return;
     void run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId: source, toId: target, condition: "" } });
@@ -215,11 +332,11 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     }
   };
 
-  return <div className="canvas" ref={wrapperRef} onDragOver={onShapeDragOver} onDrop={onShapeDrop}>
+  return <InlineEditingContext.Provider value={inline}><div className="canvas" ref={wrapperRef} onDragOver={onShapeDragOver} onDrop={onShapeDrop} onKeyDown={canvasKeyDown}>
     <ReactFlow<StepNode, FlowEdge> key={preview ? `preview-${preview.direction}` : flowId} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions} connectionMode={ConnectionMode.Loose}
       onNodesChange={interactive ? onNodesChange : measure} onEdgesChange={interactive ? onEdgesChange : undefined}
-      onNodeDoubleClick={interactive ? inspect : undefined} onNodeDragStop={interactive ? drop : undefined}
+      onNodeDoubleClick={interactive ? nodeDoubleClick : undefined} onEdgeDoubleClick={interactive ? edgeDoubleClick : undefined} onNodeDragStop={interactive ? drop : undefined}
       onConnect={connect} onReconnect={reconnect} elementsSelectable={interactive}
       nodesDraggable={draggable} nodesConnectable={connectable} edgesReconnectable={connectable} deleteKeyCode={null}
       fitView fitViewOptions={{ padding: 0.2, maxZoom: 1 }} minZoom={0.1} maxZoom={4}
@@ -230,5 +347,5 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     {interactive && editable && <ShapePanel disabled={!shapesEnabled} onActivate={activateShape} />}
     {!nodes.length && <div className="canvas-empty"><p>This flow has no steps yet.</p></div>}
     {note && <p className="canvas-note" role="alert">{note}</p>}
-  </div>;
+  </div></InlineEditingContext.Provider>;
 }

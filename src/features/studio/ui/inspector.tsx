@@ -2,12 +2,12 @@
 
 import { useState, type SubmitEvent } from "react";
 import { COORDINATE_LIMIT } from "@/features/drafts/contracts/draft-layout";
-import type { EdgeRecord, FlowRecord, NodeRecord } from "@/features/drafts/contracts/scope-document";
+import type { EdgeRecord, NodeRecord } from "@/features/drafts/contracts/scope-document";
 import { graphWarnings, type GraphWarning } from "@/features/drafts/domain/warnings";
 import {
   bufferKey, changes, dirtyFields, discard, edit, rebase, refuse, send, type EntityBuffer, type EntityKind, type Fields, type Saved,
 } from "./buffers";
-import { edgeFields, FIELDS, fieldErrors, flowFields, KIND_LABELS, nodeFields, reconnectCommand, updateCommand } from "./fields";
+import { FIELDS, fieldErrors, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
 import { neighbours, recordOf, stepName } from "./graph-view";
 import { DeleteStepsDialog } from "./step-dialogs";
 import { explain, formKeys, useCommandSubmit, useStudio } from "./studio-context";
@@ -18,11 +18,6 @@ const NOUNS: Record<EntityKind, string> = { FLOW: "flow", NODE: "step", EDGE: "c
 function focusAfterRemoval() {
   requestAnimationFrame(() => (document.querySelector<HTMLElement>('#right-panel[aria-modal="true"] [role="tab"]')
     ?? document.getElementById("studio-flow-title"))?.focus());
-}
-
-function savedOf(kind: EntityKind, record: FlowRecord | NodeRecord | EdgeRecord): Saved {
-  const fields = kind === "FLOW" ? flowFields(record as FlowRecord) : kind === "NODE" ? nodeFields(record as NodeRecord) : edgeFields(record as EdgeRecord);
-  return { kind, id: record.id, version: record.version, fields };
 }
 
 /** Everything the person typed, as text they can copy out. */

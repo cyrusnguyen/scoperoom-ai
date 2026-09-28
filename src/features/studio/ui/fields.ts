@@ -1,6 +1,6 @@
 import type { GraphCommand } from "../../drafts/contracts/commands.ts";
 import { CLASSIFICATIONS, INCLUSIONS, LIMITS, NODE_KINDS, type EdgeRecord, type FlowRecord, type NodeRecord } from "../../drafts/contracts/scope-document.ts";
-import type { EntityKind, Fields } from "./buffers.ts";
+import { changes, type EntityBuffer, type EntityKind, type Fields, type Saved } from "./buffers.ts";
 
 // Form fields for the inspector and the Studio dialogs. Limits come from the draft contract, counted in code points,
 // and are checked on Save — never by truncating what was typed (no `maxLength`: it silently cuts pasted text).
@@ -36,6 +36,11 @@ export const flowFields = (flow: FlowRecord): Fields => ({ title: flow.title, pu
 export const nodeFields = (node: NodeRecord): Fields => ({ label: node.label, kind: node.kind, actorLabel: node.actorLabel, description: node.description, assumptionNotes: node.assumptionNotes.join("\n") });
 export const edgeFields = (edge: EdgeRecord): Fields => ({ condition: edge.condition });
 
+export function savedOf(kind: EntityKind, record: FlowRecord | NodeRecord | EdgeRecord): Saved {
+  const fields = kind === "FLOW" ? flowFields(record as FlowRecord) : kind === "NODE" ? nodeFields(record as NodeRecord) : edgeFields(record as EdgeRecord);
+  return { kind, id: record.id, version: record.version, fields };
+}
+
 /** Field errors for the given values, in form order. Empty when the values can be sent. */
 export function fieldErrors(kind: EntityKind, values: Fields): Record<string, string> {
   const errors: Record<string, string> = {};
@@ -51,6 +56,23 @@ export function fieldErrors(kind: EntityKind, values: Fields): Record<string, st
     } else if (codePoints(value) > spec.max) errors[spec.name] = `${spec.label} can be up to ${spec.max} characters (now ${codePoints(value)}).`;
   }
   return errors;
+}
+
+export type InlinePlan = { kind: "unchanged" } | { kind: "refused"; message: string } | { kind: "review" } | { kind: "send"; fields: Fields; retrying: boolean };
+
+/**
+ * Closing an inline canvas editor is the inspector's Save for that record's shared buffer (same sent fields, same
+ * uncertain retry), but only when the inline field itself changed. A stale conflict, or another typed field that is
+ * invalid, is left for explicit review in the inspector; an invalid inline value is refused locally.
+ */
+export function inlinePlan(buffer: EntityBuffer | undefined, kind: EntityKind, field: string): InlinePlan {
+  if (!buffer || buffer.values[field] === buffer.original[field]) return { kind: "unchanged" };
+  if (buffer.conflict) return { kind: "review" };
+  const own = fieldErrors(kind, { [field]: buffer.values[field]! })[field];
+  if (own) return { kind: "refused", message: own };
+  const retrying = buffer.sent !== null;
+  const fields = retrying ? buffer.sent! : changes(buffer);
+  return Object.keys(fieldErrors(kind, fields)).length ? { kind: "review" } : { kind: "send", fields, retrying };
 }
 
 /** The update command for changed fields, guarded by the version the edits were made against. */

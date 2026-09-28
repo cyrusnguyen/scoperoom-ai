@@ -36,6 +36,18 @@
 .step-node[data-kind="START"] .step-label, .step-node[data-kind="OUTCOME"] .step-label { -webkit-line-clamp: 2; }
 .step-actor { overflow: hidden; color: var(--foreground-subtle); font-size: var(--font-label); text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .edge-label { position: absolute; max-width: 180px; padding: 3px 10px; border: var(--panel-border); border-radius: 999px; background: var(--surface-raised); color: var(--foreground); font-size: var(--font-label); overflow-wrap: anywhere; text-align: center; pointer-events: none; }
+.edge-label-hint { border-style: dashed; background: var(--canvas-background); color: var(--foreground-subtle); }
+.edge-label-editor { max-width: 320px; pointer-events: all; }
+/* Inline editors: a hidden copy of the text (same classes and font) sizes one grid cell that the control fills, so the
+   editor covers the label exactly and grows with typing. */
+.inline-edit { display: inline-grid; max-width: 100%; }
+.step-label.inline-edit { display: grid; overflow: visible; }
+.inline-edit > * { grid-area: 1 / 1; min-width: 0; }
+.inline-edit > [aria-hidden] { visibility: hidden; white-space: pre-wrap; }
+.edge-label-editor .inline-edit > [aria-hidden] { white-space: pre; }
+.inline-edit > :is(textarea, input) { box-sizing: border-box; width: 100%; max-width: none; height: 100%; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 2px; background: transparent; color: inherit; font: inherit; line-height: inherit; letter-spacing: inherit; text-align: center; overflow: hidden; overflow-wrap: inherit; resize: none; }
+.inline-edit > :is(textarea, input):focus { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.inline-edit > :is(textarea, input)::placeholder { color: var(--foreground-subtle); opacity: 1; }
 .react-flow__node.selected .step-node { border-color: var(--accent-hover); outline: 2px solid var(--accent); outline-offset: 3px; }
 .react-flow__node.selected .step-shape-fill { stroke: var(--accent-hover); stroke-width: 2; }
 .react-flow__node:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 5px; }
