@@ -42,6 +42,9 @@ function fail(code: GraphErrorCode, details?: GraphErrorDetails): never {
   throw new GraphError(code, details);
 }
 
+/** Deterministic record order: stored JSONB sorts keys, a browser copy keeps insertion order. */
+export const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
 export function bump(value: number): number {
   if (value >= MAX_VERSION) fail("VERSION_EXHAUSTED");
   return value + 1;
@@ -89,22 +92,36 @@ function current<T extends { version: number }>(record: T | undefined, entityId:
   return record;
 }
 
+/** The final size and invariant check of a changed draft (LIMIT_EXCEEDED is a refusal; anything else a server fault). */
+export function checkDraft({ document, layout }: Draft) {
+  if (utf8Bytes(document) > LIMITS.documentBytes || utf8Bytes(layout) > LIMITS.layoutBytes) fail("LIMIT_EXCEEDED");
+  try {
+    parseDraftPair(document, layout);
+  } catch {
+    throw new Error("GRAPH_INVARIANT");
+  }
+}
+
 /**
  * Applies one command to a saved draft and returns the next valid draft. GraphError signals a safe command refusal;
  * other errors represent a server invariant failure. An effective no-op returns documentChanged=false.
+ *
+ * `inPlace` is for a batch: `saved` is the caller's private working copy, changed in place and not checked here, and
+ * the caller runs checkDraft once on the final draft. A refusal can leave the copy half-changed, so any error discards it.
  */
 export function applyGraphCommand(
   saved: Draft,
   documentRevision: number,
   command: GraphCommand,
   newId: () => string,
+  { inPlace = false } = {},
 ): Applied {
   if ("expectedDocumentRevision" in command && command.expectedDocumentRevision !== documentRevision) {
     fail("STALE_DOCUMENT_REVISION", { documentRevision });
   }
 
-  const document = structuredClone(saved.document);
-  const layout = structuredClone(saved.layout);
+  const document = inPlace ? saved.document : structuredClone(saved.document);
+  const layout = inPlace ? saved.layout : structuredClone(saved.layout);
   const used = new Set([
     ...Object.keys(document.flows),
     ...Object.keys(document.nodes),
@@ -177,8 +194,8 @@ export function applyGraphCommand(
     }
     case "DUPLICATE_FLOW": {
       const source = document.flows[command.payload.flowId] ?? fail("INVALID_INPUT");
-      const nodes = Object.values(document.nodes).filter((node) => node.flowId === source.id);
-      const edges = Object.values(document.edges).filter((edge) => edge.flowId === source.id);
+      const nodes = Object.values(document.nodes).filter((node) => node.flowId === source.id).sort(byId);
+      const edges = Object.values(document.edges).filter((edge) => edge.flowId === source.id).sort(byId);
       const title = `Copy of ${source.title}`;
       if ([...title].length > LIMITS.title) fail("LIMIT_EXCEEDED", { limit: LIMITS.title });
       if (
@@ -346,11 +363,6 @@ export function applyGraphCommand(
     }
   }
 
-  if (utf8Bytes(document) > LIMITS.documentBytes || utf8Bytes(layout) > LIMITS.layoutBytes) fail("LIMIT_EXCEEDED");
-  try {
-    parseDraftPair(document, layout);
-  } catch {
-    throw new Error("GRAPH_INVARIANT");
-  }
+  if (!inPlace) checkDraft({ document, layout });
   return { document, layout, documentChanged: true, layoutChanged, createdIds, versions, retiredIds };
 }

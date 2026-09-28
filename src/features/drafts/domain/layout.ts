@@ -2,7 +2,7 @@ import { Graph, layout as dagreLayout, type EdgeLabel, type GraphLabel, type Nod
 import { COORDINATE_LIMIT, STEP_SIZE, type Direction, type DraftLayout, type SavedPosition } from "../contracts/draft-layout.ts";
 import type { MoveNodes } from "../contracts/positions.ts";
 import { parseDraftPair, type ScopeDocument } from "../contracts/scope-document.ts";
-import { bump, GraphError, type Draft } from "./graph.ts";
+import { bump, byId, GraphError, type Draft } from "./graph.ts";
 
 // Saved geometry (Data02 "Saved layout and position invariants", "Exact arrangement preview"). Moves and arrangements
 // change position versions and the layout only; they never touch the document or any behaviour version.
@@ -12,14 +12,15 @@ export const ALGORITHM_VERSION = "dagre-3.1.1/fixed-sizes-v1";
 
 export type Placed = { layout: DraftLayout; positions: Record<string, SavedPosition>; changed: boolean };
 
-const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-
 function checked(saved: Draft, layout: DraftLayout) {
   try { parseDraftPair(saved.document, layout); } catch { throw new Error("LAYOUT_INVARIANT"); }
 }
 
-/** MOVE_NODES: each item names a live node of the flow at its expected position version; all move or none do. */
-export function moveNodes(saved: Draft, command: MoveNodes): Placed {
+/**
+ * MOVE_NODES: each item names a live node of the flow at its expected position version; all move or none do.
+ * `check: false` is for a batch that runs checkDraft once on its final draft.
+ */
+export function moveNodes(saved: Draft, command: MoveNodes, { check = true } = {}): Placed {
   for (const item of command.items) {
     const node = saved.document.nodes[item.nodeId];
     if (!node) throw new GraphError("POSITION_CONFLICT", { nodeId: item.nodeId, currentVersion: null }); // deleted: a late move never recreates it
@@ -34,7 +35,7 @@ export function moveNodes(saved: Draft, command: MoveNodes): Placed {
   }
   if (!Object.keys(positions).length) return { layout: saved.layout, positions, changed: false };
   const layout = { ...saved.layout, positions: { ...saved.layout.positions, ...positions } };
-  checked(saved, layout);
+  if (check) checked(saved, layout);
   return { layout, positions, changed: true };
 }
 

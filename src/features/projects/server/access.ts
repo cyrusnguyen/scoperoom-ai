@@ -138,13 +138,20 @@ export function requireActive(project: ProjectRow) {
   if (project.status !== "ACTIVE") throw new ProjectError("CONFLICT");
 }
 
+export type AuditEntry = { action: string; entityRefs: Prisma.InputJsonValue; metadata: Prisma.InputJsonValue };
+
 /** Assigns the next per-project event sequence (under the project lock) and writes its audit event. */
 export async function recordEvent(tx: Transaction, project: Pick<ProjectRow, "id" | "eventSequence">, actorId: string, action: string, entityRefs: Prisma.InputJsonValue, metadata: Prisma.InputJsonValue) {
-  if (project.eventSequence >= BigInt(Number.MAX_SAFE_INTEGER)) throw new ProjectError("VERSION_EXHAUSTED");
-  const sequence = project.eventSequence + BigInt(1);
-  await tx.$executeRaw`UPDATE app.project SET event_sequence = ${sequence}::bigint, updated_at = CURRENT_TIMESTAMP WHERE id = ${project.id}::uuid`;
-  await tx.auditEvent.create({ data: { projectId: project.id, sequence, actorId, action, entityRefs, metadata } });
-  return sequence;
+  return recordEvents(tx, project, actorId, [{ action, entityRefs, metadata }]);
+}
+
+/** Consecutive sequences for several events in two statements, whatever their number. Returns the last sequence. */
+export async function recordEvents(tx: Transaction, project: Pick<ProjectRow, "id" | "eventSequence">, actorId: string, entries: AuditEntry[]) {
+  const last = project.eventSequence + BigInt(entries.length);
+  if (last > BigInt(Number.MAX_SAFE_INTEGER)) throw new ProjectError("VERSION_EXHAUSTED");
+  await tx.$executeRaw`UPDATE app.project SET event_sequence = ${last}::bigint, updated_at = CURRENT_TIMESTAMP WHERE id = ${project.id}::uuid`;
+  await tx.auditEvent.createMany({ data: entries.map((entry, index) => ({ projectId: project.id, sequence: project.eventSequence + BigInt(index + 1), actorId, ...entry })) });
+  return last;
 }
 
 export function findReceipt(tx: Transaction, actorId: string, scopeKind: "USER" | "PROJECT", scopeId: string, key: string) {

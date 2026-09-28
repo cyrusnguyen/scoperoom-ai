@@ -1,11 +1,13 @@
 import type { Changes } from "../contracts/changes.ts";
 import type { SavedPosition } from "../contracts/draft-layout.ts";
-import { applyGraphCommand, bump, GraphError, type Applied, type Draft } from "./graph.ts";
+import { applyGraphCommand, bump, checkDraft, GraphError, type Applied, type Draft } from "./graph.ts";
 import { moveNodes } from "./layout.ts";
 
 // A batch of draft changes (API "POST D/changes"): commands in order, then moves, all or nothing. Each command is checked
 // by its own guard against the state the earlier items produced, and documentRevision advances once per effective
 // command, exactly as the same commands sent one by one would. A refusal names its item: `part` and `index`.
+// The batch works on one private copy changed in place and checks size and invariants once at the end, so a batch at
+// the limits costs one clone and one validation, not one per command (about 45 ms each on a 2 MB document).
 export type AppliedChanges = Draft & {
   documentRevision: number;
   layoutChanged: boolean;
@@ -27,7 +29,7 @@ export function applyChanges(base: Draft, documentRevision: number, changes: Cha
   const used = new Set([
     ...Object.keys(base.document.flows), ...Object.keys(base.document.nodes), ...Object.keys(base.document.edges), ...base.document.retiredEntityIds,
   ]);
-  let draft: Draft = { document: base.document, layout: base.layout };
+  let draft: Draft = { document: structuredClone(base.document), layout: structuredClone(base.layout) };
   let revision = documentRevision;
   let layoutChanged = false;
   const createdIds: string[] = [];
@@ -46,7 +48,7 @@ export function applyChanges(base: Draft, documentRevision: number, changes: Cha
         used.add(value);
         return value;
       };
-      const applied = applyGraphCommand(draft, revision, command, newId);
+      const applied = applyGraphCommand(draft, revision, command, newId, { inPlace: true });
       if (next !== proposedIds.length) throw new GraphError("INVALID_INPUT");
       if (!applied.documentChanged) continue;
       revision = bump(revision);
@@ -59,7 +61,7 @@ export function applyChanges(base: Draft, documentRevision: number, changes: Cha
   }
   for (const [index, group] of changes.moves.entries()) {
     try {
-      const placed = moveNodes(draft, { mode: "MOVE_NODES", ...group });
+      const placed = moveNodes(draft, { mode: "MOVE_NODES", ...group }, { check: false });
       if (!placed.changed) continue;
       draft = { document: draft.document, layout: placed.layout };
       layoutChanged = true;
@@ -67,6 +69,8 @@ export function applyChanges(base: Draft, documentRevision: number, changes: Cha
       moved.push({ flowId: group.flowId, positions: placed.positions });
     } catch (error) { at("moves", index, error); }
   }
+  // A final draft over its byte cap is a batch-level LIMIT_EXCEEDED, without an item index.
+  if (layoutChanged || saved.length) checkDraft(draft);
   // Versions report only records that still exist, at their final version.
   const live = { ...draft.document.flows, ...draft.document.nodes, ...draft.document.edges };
   const finalVersions = Object.fromEntries(Object.keys(versions).filter((key) => live[key]).map((key) => [key, live[key]!.version]));

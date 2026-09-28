@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MAX_CHANGE_COMMANDS, MAX_CHANGE_MOVES, parseChanges, parseChangesResult, type Changes } from "../src/features/drafts/contracts/changes.ts";
-import { emptyDraft } from "../src/features/drafts/contracts/scope-document.ts";
+import { emptyDraft, LIMITS } from "../src/features/drafts/contracts/scope-document.ts";
+import { utf8Bytes } from "../src/features/drafts/contracts/strict.ts";
 import { applyChanges } from "../src/features/drafts/domain/changes.ts";
-import { GraphError } from "../src/features/drafts/domain/graph.ts";
+import { applyGraphCommand, GraphError, type Draft } from "../src/features/drafts/domain/graph.ts";
+import { largeDraft, largestBatch } from "./support/large-draft.ts";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const invalid = (raw: unknown) => assert.throws(() => parseChanges(raw), /INVALID_INPUT/);
@@ -113,4 +115,39 @@ test("a stored batch result round-trips and a malformed one is refused", () => {
   assert.deepEqual(parseChangesResult(result), result);
   assert.throws(() => parseChangesResult({ ...result, retiredIds: [] }), /INVALID_INPUT/);
   assert.throws(() => parseChangesResult({ ...result, eventSequence: -1 }), /INVALID_INPUT/);
+});
+
+test("the largest batch on a draft at the size limit applies in well under a second and leaves its base untouched", () => {
+  const draft = largeDraft();
+  assert(utf8Bytes(draft.document) > 1_900_000);
+  const before = structuredClone(draft);
+  const changes = parseChanges(largestBatch(draft));
+  const started = performance.now();
+  const applied = applyChanges(draft, 1, changes);
+  const elapsed = performance.now() - started;
+  assert.equal(applied.documentRevision, 101);
+  assert.equal(Object.keys(applied.positions).length, 200);
+  assert.deepEqual(draft, before, "the saved draft is never mutated");
+  // Per-command cloning and full validation took about 4.5 s here; the transaction budget is a few seconds.
+  assert(elapsed < 1_000, `applyChanges took ${Math.round(elapsed)} ms`);
+});
+
+test("the batch still refuses a final draft over the byte limit", () => {
+  const draft = largeDraft();
+  // Each edit adds 1,300 three-byte characters; 100 of them cross 2 MiB.
+  const commands = Object.values(draft.document.nodes).slice(0, MAX_CHANGE_COMMANDS).map((node) => ({ commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: node.version, payload: { nodeId: node.id, description: "ệ".repeat(LIMITS.longText) } }));
+  assert.throws(() => applyChanges(draft, 1, parseChanges({ commands, moves: [] })), (error: unknown) => error instanceof GraphError && error.code === "LIMIT_EXCEEDED");
+});
+
+test("DUPLICATE_FLOW assigns new ids in id order, whatever the stored key order", () => {
+  const base = applyChanges(emptyDraft(), 1, parseChanges({ commands: [createFlow(1, [flowId]), addNode(2, flowId, [next], "START"), addNode(3, flowId, [start]), addEdge(4, flowId, next, start, [edgeId])], moves: [] }));
+  const reversed = (record: Record<string, unknown>) => Object.fromEntries(Object.entries(record).reverse());
+  const reordered: Draft = { document: { ...base.document, nodes: reversed(base.document.nodes) as Draft["document"]["nodes"], edges: reversed(base.document.edges) as Draft["document"]["edges"] }, layout: base.layout };
+  const copy = (draft: Draft) => {
+    const proposed = [id(10), id(11), id(12), id(13)];
+    const applied = applyGraphCommand(draft, 5, { commandSchemaVersion: 1, command: "DUPLICATE_FLOW", expectedDocumentRevision: 5, payload: { flowId } }, () => proposed.shift()!);
+    return Object.fromEntries([...Object.values(applied.document.nodes), ...Object.values(applied.document.edges)].filter((record) => record.flowId !== flowId).map((record) => [record.id, "label" in record ? record.label + record.kind : record.fromId + record.toId]));
+  };
+  assert.notDeepEqual(Object.keys(reordered.document.nodes), Object.keys(base.document.nodes));
+  assert.deepEqual(copy(reordered), copy(base));
 });

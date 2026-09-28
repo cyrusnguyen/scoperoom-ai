@@ -62,12 +62,13 @@ async function lockDraft(tx: Transaction, project: ProjectRow, draftId: string):
 /**
  * Draft mutation skeleton, in the Data03 order: actor → project lock → current read access → matching receipt replay →
  * (new work only) owner/editor capability → ACTIVE project → current draft lock → work. `work` returns the safe result
- * that is saved as the receipt and replayed for the same key.
+ * that is saved as the receipt and replayed for the same key. `timeout` overrides Prisma's 5 s interactive-transaction limit.
  */
 export async function draftMutation<T extends object>(
   identity: ProjectIdentity, projectId: string, draftId: string, key: string, operation: string, hash: string,
   parseStored: (value: unknown) => T,
   work: (tx: Transaction, project: ProjectRow, draft: LockedDraft, actorId: string) => Promise<T>,
+  timeout?: number,
 ): Promise<T & { replayed: boolean }> {
   if (!uuid.test(projectId) || !uuid.test(draftId)) throw new ProjectError("NOT_FOUND");
   return withDatabase(async (database) => {
@@ -89,7 +90,7 @@ export async function draftMutation<T extends object>(
       const value = parseStored(await work(tx, project, draft, profile.id));
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, operation, hash, asJson(value));
       return { ...value, replayed: false };
-    });
+    }, timeout ? { timeout } : undefined);
   });
 }
 

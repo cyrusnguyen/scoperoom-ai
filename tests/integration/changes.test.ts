@@ -7,6 +7,9 @@ import { saveChanges } from "../../src/features/drafts/server/changes.ts";
 import { ProjectError } from "../../src/features/projects/server/errors.ts";
 import { archiveProject } from "../../src/features/projects/server/management.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
+import { CHANGES_BODY_LIMIT } from "../../src/features/drafts/contracts/changes.ts";
+import { utf8Bytes } from "../../src/features/drafts/contracts/strict.ts";
+import { largeDraft, largestBatch } from "../support/large-draft.ts";
 import { canRun, withFixture, type Identity } from "./support/fixture.ts";
 
 const refused = (expected: string, details?: Record<string, unknown>) => (error: unknown) =>
@@ -131,5 +134,30 @@ test("proposed ids must be new and unique, readers and archived projects are ref
     const status = await getProjectStatus(owner, projectId);
     await archiveProject(owner, projectId, { expectedProjectVersion: status.version, reason: "Done", key: randomUUID() });
     await assert.rejects(send(owner, { commands: [addNode(revision, flowId, [randomUUID()])], moves: [] }), refused("CONFLICT"));
+  });
+});
+
+test("the largest batch on a draft at its size limit saves well inside the transaction budget", { skip: !canRun }, async () => {
+  await withFixture(async ({ database, user, project }) => {
+    const owner = await user();
+    const { projectId, draftId, base } = await started(project, owner);
+    const large = largeDraft();
+    await database.query("update app.scope_draft set document_json = $1::jsonb, layout_json = $2::jsonb where id = $3", [JSON.stringify(large.document), JSON.stringify(large.layout), draftId]);
+    const before = await events(database, projectId);
+    const body = largestBatch(large);
+    assert(utf8Bytes(body) <= CHANGES_BODY_LIMIT);
+    const clock = performance.now();
+    const saved = await saveChanges(owner, projectId, draftId, { ...body, key: randomUUID() });
+    const elapsed = performance.now() - clock;
+    console.log(`largest batch on a ${utf8Bytes(large.document)}-byte draft saved in ${Math.round(elapsed)} ms`);
+    assert.equal(saved.documentRevision, base.documentRevision + 100);
+    assert.equal(saved.layoutRevision, base.layoutRevision + 1);
+    assert.equal(Object.keys(saved.positions).length, 200);
+    const draft = await getDraft(owner, projectId, draftId);
+    assert.equal(Object.values(draft.document.nodes).filter((node) => node.label === "Renamed").length, 100);
+    const added = (await events(database, projectId)).slice(before.length);
+    assert.deepEqual(added, [...Array(100).fill("DRAFT_COMMAND_SAVED"), ...Array(5).fill("DRAFT_POSITIONS_SAVED")]);
+    // Before the fix this batch ran past Prisma's 5 s default and failed as UNAVAILABLE (8.9 s); now it is about 1–1.7 s.
+    assert(elapsed < 5_000, `the save took ${Math.round(elapsed)} ms`);
   });
 });
