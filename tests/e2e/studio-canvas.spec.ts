@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
 import type { DraftView, NodeKind } from "../../src/features/drafts/contracts/scope-document.ts";
 import { STEP_SIZE } from "../../src/features/drafts/contracts/draft-layout.ts";
-import { adminClient, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, openDatabase, signIn } from "./support";
+import { adminClient, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, openDatabase, saveStudio, signIn } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -61,6 +61,7 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
       ["Orders", "Data store", "DATA_STORE"], ["Done", "Outcome", "OUTCOME"],
     ];
     for (const [label, shape] of shapes) await addStepInUi(page, label, shape);
+    await saveStudio(page);
     const draft = await draftOf(page, projectId);
     const byLabel = Object.fromEntries(Object.values(draft.document.nodes).map((node) => [node.label, node.id]));
     for (const [label, , kind] of shapes) {
@@ -84,6 +85,7 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
   test("an editor sees four connectable handles per step, and a condition on a new edge shows as a label pill", async ({ page }) => {
     await addStepInUi(page, "Cart", "Start");
     await addStepInUi(page, "Done", "Outcome");
+    await saveStudio(page);
     const draft = await draftOf(page, projectId);
     const cartId = Object.values(draft.document.nodes).find((node) => node.label === "Cart")!.id;
     const cartNode = nodeAt(page, cartId);

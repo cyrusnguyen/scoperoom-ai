@@ -1,43 +1,16 @@
 import { Graph, layout as dagreLayout, type EdgeLabel, type GraphLabel, type NodeLabel } from "@dagrejs/dagre";
-import { COORDINATE_LIMIT, STEP_SIZE, type Direction, type DraftLayout, type SavedPosition } from "../contracts/draft-layout.ts";
-import type { MoveNodes } from "../contracts/positions.ts";
-import { parseDraftPair, type ScopeDocument } from "../contracts/scope-document.ts";
+import { COORDINATE_LIMIT, STEP_SIZE, type Direction, type SavedPosition } from "../contracts/draft-layout.ts";
+import type { ScopeDocument } from "../contracts/scope-document.ts";
 import { bump, byId, GraphError, type Draft } from "./graph.ts";
+import { checked, type Placed } from "./moves.ts";
+
+export { moveNodes, type Placed } from "./moves.ts";
 
 // Saved geometry (Data02 "Saved layout and position invariants", "Exact arrangement preview"). Moves and arrangements
 // change position versions and the layout only; they never touch the document or any behaviour version.
 
 /** Identifies the complete geometry contract below: library version, fixed sizes, spacing and rounding. */
 export const ALGORITHM_VERSION = "dagre-3.1.1/fixed-sizes-v1";
-
-export type Placed = { layout: DraftLayout; positions: Record<string, SavedPosition>; changed: boolean };
-
-function checked(saved: Draft, layout: DraftLayout) {
-  try { parseDraftPair(saved.document, layout); } catch { throw new Error("LAYOUT_INVARIANT"); }
-}
-
-/**
- * MOVE_NODES: each item names a live node of the flow at its expected position version; all move or none do.
- * `check: false` is for a batch that runs checkDraft once on its final draft.
- */
-export function moveNodes(saved: Draft, command: MoveNodes, { check = true } = {}): Placed {
-  for (const item of command.items) {
-    const node = saved.document.nodes[item.nodeId];
-    if (!node) throw new GraphError("POSITION_CONFLICT", { nodeId: item.nodeId, currentVersion: null }); // deleted: a late move never recreates it
-    if (node.flowId !== command.flowId) throw new GraphError("INVALID_INPUT");
-    const current = saved.layout.positions[item.nodeId]!;
-    if (current.version !== item.expectedPositionVersion) throw new GraphError("POSITION_CONFLICT", { nodeId: item.nodeId, currentVersion: current.version });
-  }
-  const positions: Record<string, SavedPosition> = {};
-  for (const item of command.items) {
-    const current = saved.layout.positions[item.nodeId]!;
-    if (current.x !== item.x || current.y !== item.y) positions[item.nodeId] = { x: item.x, y: item.y, version: bump(current.version) };
-  }
-  if (!Object.keys(positions).length) return { layout: saved.layout, positions, changed: false };
-  const layout = { ...saved.layout, positions: { ...saved.layout.positions, ...positions } };
-  if (check) checked(saved, layout);
-  return { layout, positions, changed: true };
-}
 
 /** Deterministic Dagre arrangement of one flow from saved content only: id-sorted input, fixed sizes, integer top-left corners. */
 export function arrange(document: ScopeDocument, flowId: string, direction: Direction): Record<string, { x: number; y: number }> {

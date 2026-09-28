@@ -6,9 +6,8 @@ import {
   useReactFlow, type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
 } from "@xyflow/react";
 import { STEP_SIZE, type Direction } from "@/features/drafts/contracts/draft-layout";
-import { MAX_MOVE_NODES } from "@/features/drafts/contracts/positions";
 import type { NodeKind } from "@/features/drafts/contracts/scope-document";
-import { bufferKey, edit, editFields, refuse, send, type Saved } from "./buffers";
+import { bufferKey, discard, edit, editFields, refuse, type Saved } from "./buffers";
 import { inlinePlan, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
 import ShapePanel from "./shape-panel";
 import { explain, useStudio } from "./studio-context";
@@ -92,11 +91,11 @@ function FlowEdgeLine({ id, selected, sourceX, sourceY, targetX, targetY, source
 /**
  * Inline step name / connection label editor (UI02 Task 8). Its text lives in the same per-project buffer as the
  * inspector's field, so both show one value and neither overwrites the other; closing it (blur, Enter or Escape)
- * is the inspector's Save for that record: same command, same key on an unconfirmed retry, same conflict review.
+ * applies it like the inspector does: the same command, queued locally until Save, and the same conflict review.
  * A hidden copy of the text sizes it, so the editor covers the label exactly and grows with what is typed.
  */
 function InlineEditor({ kind, id }: { kind: "NODE" | "EDGE"; id: string }) {
-  const { draft, ui, update, run, busy, inspect } = useStudio();
+  const { draft, ui, update, run, inspect } = useStudio();
   const { editing, close, setNote } = useContext(InlineEditingContext);
   const control = useRef<HTMLTextAreaElement & HTMLInputElement>(null);
   const closed = useRef(false);
@@ -128,17 +127,14 @@ function InlineEditor({ kind, id }: { kind: "NODE" | "EDGE"; id: string }) {
     if (plan.kind === "unchanged") return;
     if (plan.kind === "review") { review(); return; }
     if (plan.kind === "refused") { setNote(`${plan.message} Your text is kept; fix it here or in the inspector.`); return; }
-    // One request at a time: the text stays in the buffer for a deliberate Save (in the inspector, or by editing again).
-    if (busy) { setNote("Another change is still saving. Your text is kept; save it in the inspector when that finishes."); return; }
     setNote("");
-    const requestKey = plan.retrying ? buffer!.key! : crypto.randomUUID();
-    if (!plan.retrying) update((current) => ({ buffers: send(current.buffers, key, requestKey) }));
-    const outcome = await run(updateCommand(kind, id, buffer!.baseVersion, plan.fields), requestKey);
-    if (outcome.ok || outcome.uncertain) return; // an unconfirmed save keeps its key; the status offers Retry
+    const outcome = await run(updateCommand(kind, id, buffer!.baseVersion, plan.fields));
+    // Queued: the text now lives in the queued command, shown on the canvas until Save or autosave sends it.
+    if (outcome.ok) { update((current) => ({ buffers: discard(current.buffers, key) })); return; }
     const stale = outcome.code === "STALE_ENTITY_VERSION";
     update((current) => ({ buffers: refuse(current.buffers, key, stale) }));
     if (stale) review();
-    else setNote(outcome.code === "BUSY" ? "Another change is still saving. Your text is kept; save it in the inspector when that finishes." : explain(outcome));
+    else setNote(explain(outcome));
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement | HTMLInputElement>) => {
     if (event.key !== "Enter" && event.key !== "Escape") return;
@@ -163,11 +159,10 @@ const edgeTypes = { flow: FlowEdgeLine };
 const defaultEdgeOptions = { type: "flow" as const };
 
 /**
- * Controlled React Flow view of one flow's saved document and layout. Selection, pan, zoom and measurement stay local
- * and never become edits; connecting and reconnecting call the same commands as the Connect form and the inspector.
- * A drop keeps the moved steps as unsaved moves, shown over the saved layout until Save, autosave or a save-first action
- * sends them (Task 12). Keyboard arrow moves are
- * ignored: the inspector's position form is the keyboard path. `preview` renders proposed positions read-only.
+ * Controlled React Flow view of one flow of the shown draft (saved content plus unsaved changes). Selection, pan, zoom
+ * and measurement stay local and never become edits; connecting and reconnecting queue the same commands as the Connect
+ * form and the inspector, and a drop queues the moved steps, all saved later by Save, autosave or a save-first action
+ * (Task 14b). Keyboard arrow moves are ignored: the inspector's position form is the keyboard path. `preview` renders proposed positions read-only.
  * A `ReactFlowProvider` wraps this so the shape panel's click path and the canvas wrapper's drop handler can both
  * convert a screen point to a flow position (`screenToFlowPosition` needs an ancestor provider).
  */
@@ -177,7 +172,7 @@ export default function FlowCanvas(props: { flowId: string; preview?: { position
 }
 
 function CanvasInner({ flowId, preview }: { flowId: string; preview?: { positions: Record<string, Point>; direction: Direction } }) {
-  const { draft, editable, busy, ui, update, run, place, inspect, attempt, moveSteps, dragActive } = useStudio();
+  const { draft, editable, ui, update, run, inspect, moveSteps, dragActive } = useStudio();
   const { document, layout } = draft;
   const { screenToFlowPosition } = useReactFlow();
   const [dragging, setDragging] = useState<Record<string, Point>>({});
@@ -190,17 +185,12 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   useEffect(() => () => dragActive(false), [dragActive]);
   // Inline editors exist only on an editable, live canvas (never read-only, archived or the arrangement preview).
   const inlineEnabled = interactive && editable;
-  const connectable = interactive && editable && !busy && !ui.pending;
-  // The person's own placement stays on screen while it saves, awaits a retry, or waits for their conflict choice.
-  const shown = interactive && attempt?.flowId === flowId ? attempt : null;
-  // One unresolved placement at a time: no step can be dragged again until it is saved, retried, reapplied or dropped.
-  const draggable = interactive && editable && !busy && !attempt;
-  // The shape panel shares this same "one unresolved placement at a time" gate: adding a step will move it once.
-  const shapesEnabled = interactive && editable && !busy && !attempt;
-  // A brand-new node is always saved at position version 1 (placeNew, domain/graph.ts): the move never has to read
-  // any draft state to know its expected version, so it can run in the same sequential chain as the create, entirely
-  // in terms of the flow id captured when the drop or click happened — never a `flowId` re-read after a later flow
-  // switch (Task 7 fix round 1). `place` (not `moveSteps`) sends it directly and records no undoable "last move".
+  // Every edit is local (queued in the outbox), so a save in flight never locks the canvas: new edits queue behind it.
+  const connectable = interactive && editable;
+  const draggable = interactive && editable;
+  const shapesEnabled = interactive && editable;
+  // A new shape is one local ADD_NODE plus its drop point, joined for undo; both show at once, with no request, in
+  // the flow captured when the drop or click happened.
   const createShapeAt = useCallback(async (kind: NodeKind, point: Point) => {
     const capturedFlowId = flowId;
     const size = STEP_SIZE[kind];
@@ -214,11 +204,11 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     if (!nodeId) return;
     // The node belongs to capturedFlowId regardless of which flow is now visible; downstream selection consumers
     // (Connect, Delete) already ignore a selected id from another flow.
+    await moveSteps(capturedFlowId, [{ nodeId, ...target }], { joined: true });
     update(() => ({ selection: { kind: "NODES", ids: [nodeId] } }));
-    await place({ mode: "MOVE_NODES", flowId: capturedFlowId, items: [{ nodeId, expectedPositionVersion: 1, ...target }] });
     // Name it next: its default label is selected, so typing replaces it (a flow switch unmounted this canvas).
     setEditing({ kind: "NODE", id: nodeId, select: true });
-  }, [flowId, run, draft, update, place]);
+  }, [flowId, run, draft, update, moveSteps]);
   const activateShape = useCallback((kind: NodeKind) => {
     const rect = wrapperRef.current?.getBoundingClientRect();
     const centre = rect ? { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
@@ -239,18 +229,16 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
 
   const nodes = useMemo<StepNode[]>(() => {
     const selected = interactive && ui.selection?.kind === "NODES" ? ui.selection.ids : [];
-    const attempted: Record<string, Point> = Object.fromEntries((shown?.command.items ?? []).map(({ nodeId, x, y }) => [nodeId, { x, y }]));
-    const unsaved = interactive ? ui.unsavedMoves : {};
     const direction = preview?.direction ?? layout.directions[flowId] ?? "TB";
     return Object.values(document.nodes).filter((node) => node.flowId === flowId).map((node) => {
       const size = STEP_SIZE[node.kind];
       return {
         id: node.id, type: "step", width: size.width, height: size.height,
-        position: preview?.positions[node.id] ?? dragging[node.id] ?? attempted[node.id] ?? unsaved[node.id] ?? { x: layout.positions[node.id]!.x, y: layout.positions[node.id]!.y },
+        position: preview?.positions[node.id] ?? dragging[node.id] ?? { x: layout.positions[node.id]!.x, y: layout.positions[node.id]!.y },
         data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction }, selected: selected.includes(node.id), measured: measured[node.id],
       };
     });
-  }, [document, layout, flowId, ui.selection, ui.unsavedMoves, preview, dragging, shown, interactive, measured]);
+  }, [document, layout, flowId, ui.selection, preview, dragging, interactive, measured]);
 
   const edges = useMemo<FlowEdge[]>(() => Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => ({
     id: edge.id, type: "flow", source: edge.fromId, target: edge.toId, data: { condition: edge.condition },
@@ -278,12 +266,11 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     const moving = changes.flatMap((change) => (change.type === "position" && change.dragging && change.position ? [[change.id, change.position] as const] : []));
     if (moving.length) setDragging((current) => ({ ...current, ...Object.fromEntries(moving) }));
   };
-  const drop = (_event: unknown, _node: unknown, moved: StepNode[]) => {
+  // A step drag and a drag of the selection box both end here: one local drop, however many steps it moved.
+  const drop = (moved: StepNode[]) => {
     dragActive(false);
-    const targets = moveTargets(moved, layout, ui.unsavedMoves);
+    const targets = moveTargets(moved, layout);
     setDragging({});
-    if (targets.length > MAX_MOVE_NODES) { setNote(`Move up to ${MAX_MOVE_NODES} steps at a time.`); return; }
-    setNote("");
     if (targets.length) void moveSteps(flowId, targets);
   };
   const onEdgesChange = (changes: EdgeChange<FlowEdge>[]) => {
@@ -312,9 +299,10 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     event.preventDefault();
     setEditing({ kind: "NODE", id: target.dataset.id });
   };
-  const connect = ({ source, target }: Connection) => {
+  const connect = async ({ source, target }: Connection) => {
     if (!source || !target || !connectable) return;
-    void run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId: source, toId: target, condition: "" } });
+    const outcome = await run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId: source, toId: target, condition: "" } });
+    setNote(outcome.ok ? "" : explain(outcome));
   };
   const reconnect = async (edge: FlowEdge, { source, target }: Connection) => {
     if (!source || !target || !connectable) return;
@@ -325,23 +313,22 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     const choose = (current: StudioUi) => editFields(current.endpointBuffers, saved, { fromId: source, toId: target });
     const chosen = choose(ui)[key];
     if (!chosen) return;
-    const requestKey = crypto.randomUUID();
-    update((current) => ({ endpointBuffers: chosen.conflict ? choose(current) : send(choose(current), key, requestKey), selection: { kind: "EDGE", id: edge.id } }));
+    update((current) => ({ endpointBuffers: choose(current), selection: { kind: "EDGE", id: edge.id } }));
     // A second gesture can revise retained choices, but only the inspector can explicitly resolve a stale conflict.
     if (chosen.conflict) { inspect(); return; }
-    const outcome = await run(reconnectCommand(edge.id, chosen.baseVersion, chosen.values), requestKey);
-    if (!outcome.ok) {
-      if (!outcome.uncertain) update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, outcome.code === "STALE_DOCUMENT_REVISION") }));
-      inspect();
-    }
+    const outcome = await run(reconnectCommand(edge.id, chosen.baseVersion, chosen.values));
+    if (outcome.ok) { update((current) => ({ endpointBuffers: discard(current.endpointBuffers, key) })); return; }
+    update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, outcome.code === "STALE_DOCUMENT_REVISION") }));
+    inspect();
   };
 
   return <InlineEditingContext.Provider value={inline}><div className="canvas" ref={wrapperRef} onDragOver={onShapeDragOver} onDrop={onShapeDrop} onKeyDown={canvasKeyDown}>
     <ReactFlow<StepNode, FlowEdge> key={preview ? `preview-${preview.direction}` : flowId} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions} connectionMode={ConnectionMode.Loose}
       onNodesChange={interactive ? onNodesChange : measure} onEdgesChange={interactive ? onEdgesChange : undefined}
-      onNodeDoubleClick={interactive ? nodeDoubleClick : undefined} onEdgeDoubleClick={interactive ? edgeDoubleClick : undefined} onNodeDragStart={interactive ? () => dragActive(true) : undefined} onNodeDragStop={interactive ? drop : undefined}
-      onConnect={connect} onReconnect={reconnect} elementsSelectable={interactive}
+      onNodeDoubleClick={interactive ? nodeDoubleClick : undefined} onEdgeDoubleClick={interactive ? edgeDoubleClick : undefined} onNodeDragStart={interactive ? () => dragActive(true) : undefined} onNodeDragStop={interactive ? (_event, _node, moved) => drop(moved) : undefined}
+      onSelectionDragStart={interactive ? () => dragActive(true) : undefined} onSelectionDragStop={interactive ? (_event, moved) => drop(moved) : undefined}
+      onConnect={(connection) => void connect(connection)} onReconnect={reconnect} elementsSelectable={interactive}
       nodesDraggable={draggable} nodesConnectable={connectable} edgesReconnectable={connectable} deleteKeyCode={null}
       fitView fitViewOptions={{ padding: 0.2, maxZoom: 1 }} minZoom={0.1} maxZoom={4}
       aria-label={preview ? "Arrangement preview" : `${editable ? "Editable" : "Read-only"} flow canvas: ${document.flows[flowId]?.title ?? ""}`}>

@@ -5,7 +5,7 @@ import { COORDINATE_LIMIT } from "@/features/drafts/contracts/draft-layout";
 import type { EdgeRecord, NodeRecord } from "@/features/drafts/contracts/scope-document";
 import { graphWarnings, type GraphWarning } from "@/features/drafts/domain/warnings";
 import {
-  bufferKey, changes, dirtyFields, discard, edit, rebase, refuse, send, type EntityBuffer, type EntityKind, type Fields, type Saved,
+  bufferKey, changes, dirtyFields, discard, edit, rebase, refuse, type EntityBuffer, type EntityKind, type Fields, type Saved,
 } from "./buffers";
 import { FIELDS, fieldErrors, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
 import { neighbours, recordOf, stepName } from "./graph-view";
@@ -50,7 +50,7 @@ export default function Inspector({ onBack }: { onBack: () => void }) {
 }
 
 function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
-  const { editable, busy, ui, update, run, refreshFailed } = useStudio();
+  const { editable, ui, update, run, refreshFailed, saveChanges } = useStudio();
   const key = bufferKey(kind, saved.id);
   const buffer = ui.buffers[key];
   const values = buffer ? { ...saved.fields, ...changes(buffer) } : saved.fields;
@@ -65,37 +65,38 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
         <dt>{spec.label}</dt>
         <dd>{(spec.options?.find(([value]) => value === saved.fields[spec.name])?.[1] ?? saved.fields[spec.name]) || "—"}</dd>
       </div>)}</dl>
-      {buffer && <RetainedText text={typedText(kind, changes(buffer))} pending={Boolean(buffer.sent)}
+      {buffer && <RetainedText text={typedText(kind, changes(buffer))}
         onDiscard={() => update((current) => ({ buffers: discard(current.buffers, key) }))} />}
     </section>;
   }
 
-  const submit = async (target: EntityBuffer, retrying: boolean) => {
-    if (!editable || busy || (target.conflict && !retrying)) return;
-    const fields = retrying ? target.sent! : changes(target);
+  // Save applies this record's edits (queued with the rest of the unsaved changes) and then saves them all at once.
+  const submit = async (target: EntityBuffer) => {
+    if (!editable || target.conflict) return;
+    const fields = changes(target);
     const found = fieldErrors(kind, fields);
     setErrors(found);
     if (Object.keys(found).length) { document.getElementById(`inspect-${Object.keys(found)[0]}`)?.focus(); return; }
-    const requestKey = retrying ? target.key! : crypto.randomUUID();
-    if (!retrying) update((current) => ({ buffers: send(current.buffers, key, requestKey) }));
     setMessage("");
-    const outcome = await run(updateCommand(kind, saved.id, target.baseVersion, fields), requestKey);
-    if (outcome.ok) {
-      setMessage("Saved.");
-    } else if (!outcome.uncertain) {
+    const outcome = await run(updateCommand(kind, saved.id, target.baseVersion, fields));
+    if (!outcome.ok) {
       update((current) => ({ buffers: refuse(current.buffers, key, outcome.code === "STALE_ENTITY_VERSION") }));
       setMessage(outcome.code === "STALE_ENTITY_VERSION" ? "" : explain(outcome));
+      return;
     }
+    // The text now lives in the queued command; the buffer is clean. "Saved." only after the acknowledgement.
+    update((current) => ({ buffers: discard(current.buffers, key) }));
+    if (await saveChanges()) setMessage("Saved.");
   };
   const onSave = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (buffer && !busy && !buffer.conflict && editable) void submit(buffer, buffer.sent !== null);
+    if (buffer && !buffer.conflict && editable) void submit(buffer);
   };
   const saveMine = () => {
-    if (busy || !editable || refreshFailed) return;
+    if (!editable || refreshFailed) return;
     const rebased = rebase(ui.buffers, saved)[key];
     update((current) => ({ buffers: rebase(current.buffers, saved) }));
-    if (rebased && !busy) void submit(rebased, false);
+    if (rebased) void submit(rebased);
     else setMessage("Your text already matches the saved value.");
   };
   const copyMine = async () => {
@@ -118,8 +119,8 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
         </div>;
       })}</dl>
       <div className="view-actions">
-        <button type="button" className="button primary small" onClick={saveMine} disabled={busy || refreshFailed}>Save my edit</button>
-        <button type="button" className="button small" onClick={keepSaved} disabled={busy || refreshFailed}>Keep saved value</button>
+        <button type="button" className="button primary small" onClick={saveMine} disabled={refreshFailed}>Save my edit</button>
+        <button type="button" className="button small" onClick={keepSaved} disabled={refreshFailed}>Keep saved value</button>
         <button type="button" className="button quiet small" onClick={() => void copyMine()}>Copy my edit</button>
       </div>
     </div>}
@@ -141,16 +142,16 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
         </div>;
       })}
       <div className="view-actions">
-        <button type="submit" className="button primary small" disabled={busy || !buffer || buffer.conflict}>{buffer?.sent ? "Save again" : "Save"}</button>
-        {buffer && !buffer.conflict && <button type="button" className="button quiet small" onClick={keepSaved} disabled={busy || buffer.sent !== null}>Discard local changes</button>}
+        <button type="submit" className="button primary small" disabled={!buffer || buffer.conflict}>Save</button>
+        {buffer && !buffer.conflict && <button type="button" className="button quiet small" onClick={keepSaved}>Discard local changes</button>}
       </div>
-      <p className="muted" role="status" aria-live="polite">{buffer?.sent && !busy ? "We couldn’t confirm this save. Save again repeats the same request." : message === "Saved." && studioDirtyCount(ui) ? "Unsaved changes" : message}</p>
+      <p className="muted" role="status" aria-live="polite">{message === "Saved." && studioDirtyCount(ui) ? "Unsaved changes" : message}</p>
     </form>
   </section>;
 }
 
 function StepContext({ node }: { node: NodeRecord }) {
-  const { draft, editable, busy, ui, update } = useStudio();
+  const { draft, editable, update } = useStudio();
   const [deleting, setDeleting] = useState(false);
   const { incoming, outgoing } = neighbours(draft.document, node.id);
   const link = (nodeId: string, label: string) => <button type="button" className="text-link" onClick={() => update(() => ({ selection: { kind: "NODES", ids: [nodeId] } }))}>{label}</button>;
@@ -161,26 +162,25 @@ function StepContext({ node }: { node: NodeRecord }) {
       {incoming.map((edge) => <li key={edge.id}>From {link(edge.fromId, stepName(draft.document, edge.fromId))}{edge.condition && <span className="muted"> · {edge.condition}</span>}</li>)}
       {outgoing.map((edge) => <li key={edge.id}>To {link(edge.toId, stepName(draft.document, edge.toId))}{edge.condition && <span className="muted"> · {edge.condition}</span>}</li>)}
     </ul>
-    {editable && draft.layout.positions[node.id] && <PositionForm key={`${node.id}:${draft.layout.positions[node.id]!.version}:${JSON.stringify(ui.unsavedMoves[node.id] ?? null)}`} node={node} />}
-    {editable && <button type="button" className="button danger small" onClick={() => setDeleting(true)} disabled={busy}>Delete step…</button>}
+    {editable && draft.layout.positions[node.id] && <PositionForm key={`${node.id}:${JSON.stringify(draft.layout.positions[node.id])}`} node={node} />}
+    {editable && <button type="button" className="button danger small" onClick={() => setDeleting(true)}>Delete step…</button>}
     {editable && deleting && <DeleteStepsDialog flowId={node.flowId} nodeIds={[node.id]} onClose={() => setDeleting(false)} onDeleted={() => { setDeleting(false); update(() => ({ selection: null })); focusAfterRemoval(); }} />}
   </section>;
 }
 
-/** The keyboard way to move a step: a local move like a drop, saved at once with every other unsaved move. */
+/** The keyboard way to move a step: a local move like a drop, saved at once with every other unsaved change. */
 function PositionForm({ node }: { node: NodeRecord }) {
-  const { draft, ui, busy, attempt, moveSteps } = useStudio();
-  const saved = ui.unsavedMoves[node.id] ?? draft.layout.positions[node.id]!;
+  const { draft, moveSteps } = useStudio();
+  const saved = draft.layout.positions[node.id]!;
   const [x, setX] = useState(String(saved.x));
   const [y, setY] = useState(String(saved.y));
   const [error, setError] = useState("");
-  const blocked = busy || Boolean(attempt);
   const submit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     const next = [x, y].map((value) => (value.trim() ? Number(value) : Number.NaN));
     if (next.some((value) => !Number.isFinite(value) || Math.abs(value) > COORDINATE_LIMIT)) { setError(`Enter numbers from -${COORDINATE_LIMIT} to ${COORDINATE_LIMIT}.`); return; }
     setError("");
-    if (!blocked) void moveSteps(node.flowId, [{ nodeId: node.id, x: next[0]!, y: next[1]! }], true);
+    void moveSteps(node.flowId, [{ nodeId: node.id, x: next[0]!, y: next[1]! }], { save: true });
   };
   return <form className="position-form" onSubmit={submit} onKeyDown={formKeys} noValidate aria-labelledby="inspector-position">
     <h4 id="inspector-position" className="sr-only">Position</h4>
@@ -188,13 +188,13 @@ function PositionForm({ node }: { node: NodeRecord }) {
     <input id="position-x" inputMode="decimal" value={x} onChange={(event) => setX(event.target.value)} aria-invalid={Boolean(error)} aria-describedby={error ? "position-error" : undefined} />
     <label htmlFor="position-y">Y</label>
     <input id="position-y" inputMode="decimal" value={y} onChange={(event) => setY(event.target.value)} aria-invalid={Boolean(error)} aria-describedby={error ? "position-error" : undefined} />
-    <button type="submit" className="button small" disabled={blocked}>Move</button>
+    <button type="submit" className="button small">Move</button>
     {error && <small id="position-error" className="field-error" role="alert">{error}</small>}
   </form>;
 }
 
 function ManySteps({ ids }: { ids: string[] }) {
-  const { draft, editable, busy, update } = useStudio();
+  const { draft, editable, update } = useStudio();
   const [deleting, setDeleting] = useState(false);
   const present = ids.filter((id) => draft.document.nodes[id]);
   const flowId = present.length ? draft.document.nodes[present[0]!]!.flowId : "";
@@ -203,7 +203,7 @@ function ManySteps({ ids }: { ids: string[] }) {
     <ul className="plain-list">{present.map((id) => <li key={id}>{stepName(draft.document, id)}</li>)}</ul>
     <div className="view-actions">
       <button type="button" className="button quiet small" onClick={() => update(() => ({ selection: null }))}>Clear selection</button>
-      {editable && present.length > 0 && <button type="button" className="button danger small" onClick={() => setDeleting(true)} disabled={busy}>Delete {present.length} steps…</button>}
+      {editable && present.length > 0 && <button type="button" className="button danger small" onClick={() => setDeleting(true)}>Delete {present.length} steps…</button>}
     </div>
     {editable && deleting && <DeleteStepsDialog flowId={flowId} nodeIds={present} onClose={() => setDeleting(false)} onDeleted={() => { setDeleting(false); update(() => ({ selection: null })); focusAfterRemoval(); }} />}
   </section>;
@@ -211,7 +211,7 @@ function ManySteps({ ids }: { ids: string[] }) {
 
 /** Reconnect guards the document revision (topology), so it is a separate action from editing the condition text. */
 function Endpoints({ edge }: { edge: EdgeRecord }) {
-  const { draft, editable, busy, ui, update, refreshFailed } = useStudio();
+  const { draft, editable, ui, update, refreshFailed } = useStudio();
   const submitCommand = useCommandSubmit();
   const key = bufferKey("EDGE", edge.id);
   const saved: Saved = { kind: "EDGE", id: edge.id, version: draft.documentRevision, fields: { fromId: edge.fromId, toId: edge.toId } };
@@ -220,13 +220,11 @@ function Endpoints({ edge }: { edge: EdgeRecord }) {
   const [message, setMessage] = useState("");
   const steps = Object.values(draft.document.nodes).filter((node) => node.flowId === edge.flowId);
   const submit = async (target: EntityBuffer) => {
-    if (busy || !editable || target.conflict) return;
-    const requestKey = target.key ?? crypto.randomUUID();
-    if (!target.sent) update((current) => ({ endpointBuffers: send(current.endpointBuffers, key, requestKey) }));
-    const fields = target.sent ? { ...target.original, ...target.sent } : target.values;
-    const outcome = await submitCommand(reconnectCommand(edge.id, target.baseVersion, fields), requestKey);
-    if (!outcome.ok && !outcome.uncertain) update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, outcome.code === "STALE_DOCUMENT_REVISION") }));
-    setMessage(outcome.ok ? "Connection moved." : outcome.uncertain || outcome.code === "STALE_DOCUMENT_REVISION" ? "" : explain(outcome));
+    if (!editable || target.conflict) return;
+    const outcome = await submitCommand(reconnectCommand(edge.id, target.baseVersion, target.values));
+    if (outcome.ok) update((current) => ({ endpointBuffers: discard(current.endpointBuffers, key) }));
+    else update((current) => ({ endpointBuffers: refuse(current.endpointBuffers, key, outcome.code === "STALE_DOCUMENT_REVISION") }));
+    setMessage(outcome.ok ? "Connection moved." : outcome.code === "STALE_DOCUMENT_REVISION" ? "" : explain(outcome));
   };
   const reconnect = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -234,7 +232,7 @@ function Endpoints({ edge }: { edge: EdgeRecord }) {
   };
   const keepSaved = () => { update((current) => ({ endpointBuffers: discard(current.endpointBuffers, key) })); setMessage(""); };
   const applyMine = () => {
-    if (!buffer?.conflict || busy || !editable || refreshFailed || saved.version <= buffer.baseVersion) return;
+    if (!buffer?.conflict || !editable || refreshFailed || saved.version <= buffer.baseVersion) return;
     // This deliberate action is the only rebase. Keep the whole chosen pair, including its unchanged endpoint.
     if (buffer.values.fromId === saved.fields.fromId && buffer.values.toId === saved.fields.toId) { keepSaved(); return; }
     const target = { ...buffer, baseVersion: saved.version, original: saved.fields, conflict: false };
@@ -246,14 +244,14 @@ function Endpoints({ edge }: { edge: EdgeRecord }) {
     catch { setMessage("Copy failed. Select the connection text instead."); }
   };
   const remove = async () => {
-    if (busy || !editable) return;
+    if (!editable) return;
     const outcome = await submitCommand({ commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { edgeId: edge.id } });
     if (outcome.ok) { update(() => ({ selection: null })); focusAfterRemoval(); }
     else setMessage(explain(outcome));
   };
   if (!editable) return <section className="detail-section">
     <p>{stepName(draft.document, edge.fromId)} {"\u2192"} {stepName(draft.document, edge.toId)}</p>
-    {buffer && <RetainedText label="Your unsaved endpoint choices" text={endpointText(changes(buffer))} pending={Boolean(buffer.sent)}
+    {buffer && <RetainedText label="Your unsaved endpoint choices" text={endpointText(changes(buffer))}
       onDiscard={() => update((current) => ({ endpointBuffers: discard(current.endpointBuffers, key) }))} />}
   </section>;
   const picker = (field: string, label: string) => <div className="field">
@@ -270,8 +268,8 @@ function Endpoints({ edge }: { edge: EdgeRecord }) {
         { label: "Saved connection", fields: saved.fields }, { label: "Your connection", fields: buffer.values }, { label: "Before your edit", fields: buffer.original },
       ].map(({ label, fields }) => <div key={label}><dt>{label}</dt><dd>{stepName(draft.document, fields.fromId!)} {"\u2192"} {stepName(draft.document, fields.toId!)}</dd></div>)}</dl>
       <div className="view-actions">
-        <button type="button" className="button primary small" onClick={applyMine} disabled={busy || refreshFailed || saved.version <= buffer.baseVersion}>Apply my connection</button>
-        <button type="button" className="button small" onClick={keepSaved} disabled={busy}>Keep saved connection</button>
+        <button type="button" className="button primary small" onClick={applyMine} disabled={refreshFailed || saved.version <= buffer.baseVersion}>Apply my connection</button>
+        <button type="button" className="button small" onClick={keepSaved}>Keep saved connection</button>
         <button type="button" className="button quiet small" onClick={() => void copyMine()}>Copy my connection</button>
       </div>
     </div>}
@@ -279,12 +277,12 @@ function Endpoints({ edge }: { edge: EdgeRecord }) {
       {picker("fromId", "From")}
       {picker("toId", "To")}
       <div className="view-actions">
-        <button type="submit" className="button small" disabled={busy || !buffer || buffer.conflict}>{buffer?.sent ? "Retry reconnect" : "Reconnect"}</button>
-        {buffer && !buffer.conflict && <button type="button" className="button quiet small" disabled={busy || Boolean(buffer.sent)} onClick={keepSaved}>Discard endpoint changes</button>}
-        <button type="button" className="button danger small" onClick={() => void remove()} disabled={busy}>Delete connection</button>
+        <button type="submit" className="button small" disabled={!buffer || buffer.conflict}>Reconnect</button>
+        {buffer && !buffer.conflict && <button type="button" className="button quiet small" onClick={keepSaved}>Discard endpoint changes</button>}
+        <button type="button" className="button danger small" onClick={() => void remove()}>Delete connection</button>
       </div>
     </form>
-    <p className="muted" role="status" aria-live="polite">{buffer?.sent && !busy ? "Unconfirmed endpoint change. Retry reconnect repeats the same request." : buffer && message === "Connection moved." ? "Connection saved; newer endpoint choices remain unsaved." : message || (buffer ? "Unsaved endpoint choices" : "")}</p>
+    <p className="muted" role="status" aria-live="polite">{buffer && message === "Connection moved." ? "Connection moved; newer endpoint choices aren’t applied yet." : message || (buffer ? "Unsaved endpoint choices" : "")}</p>
   </section>;
 }
 
@@ -311,8 +309,7 @@ function endpointText(values: Fields) {
     .map(([field, label]) => `${label}: ${values[field]}`).join("\n");
 }
 
-function RetainedText({ text, onDiscard, pending = false, label = "Your unsaved text" }: { text: string; onDiscard: () => void; pending?: boolean; label?: string }) {
-  const { busy } = useStudio();
+function RetainedText({ text, onDiscard, label = "Your unsaved text" }: { text: string; onDiscard: () => void; label?: string }) {
   const [message, setMessage] = useState("");
   const copy = async () => {
     try { await navigator.clipboard.writeText(text); setMessage("Copied your text."); } catch { setMessage("Copy failed. Select the text instead."); }
@@ -322,9 +319,8 @@ function RetainedText({ text, onDiscard, pending = false, label = "Your unsaved 
     <textarea aria-label={label} readOnly rows={4} value={text} />
     <div className="view-actions">
       <button type="button" className="button small" onClick={() => void copy()}>Copy</button>
-      <button type="button" className="button quiet small" disabled={busy || pending} onClick={onDiscard}>Discard</button>
+      <button type="button" className="button quiet small" onClick={onDiscard}>Discard</button>
     </div>
-    {pending && <p className="muted">Retry the unconfirmed change before discarding.</p>}
     <p className="muted" role="status" aria-live="polite">{message}</p>
   </div>;
 }
@@ -338,7 +334,7 @@ function Removed({ kind, id }: { kind: EntityKind; id: string }) {
   const text = [buffer ? typedText(kind, changes(buffer)) : "", endpoints ? endpointText(changes(endpoints)) : ""].filter(Boolean).join("\n");
   return <section className="detail-section" aria-labelledby="inspector-removed">
     <h3 id="inspector-removed">This {NOUNS[kind]} was removed</h3>
-    {buffer || endpoints ? <RetainedText text={text} pending={Boolean(buffer?.sent || endpoints?.sent)}
+    {buffer || endpoints ? <RetainedText text={text}
       onDiscard={() => update((current) => ({ buffers: discard(current.buffers, key), endpointBuffers: discard(current.endpointBuffers, key), selection: null }))} />
       : <p className="muted">Choose another item, or go back to the project.</p>}
   </section>;

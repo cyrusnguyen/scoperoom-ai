@@ -13,10 +13,10 @@ const staleCodes = new Set(["STALE_DOCUMENT_REVISION", "STALE_LAYOUT_REVISION", 
 /**
  * Arrange (UI02 "Position saves and arrangement"): the server computes a preview for the exact saved pair; Apply sends
  * only that preview's identity and hash, and a changed flow asks for a new preview instead of arranging something else.
- * Cancel saves nothing.
+ * Cancel saves nothing. It opens only once every unsaved change is saved, and works on the saved draft.
  */
 export function ArrangeDialog({ flowId, onClose }: { flowId: string; onClose: () => void }) {
-  const { draft, busy, preview, place } = useStudio();
+  const { savedDraft: draft, busy, preview, place } = useStudio();
   const [direction, setDirection] = useState<Direction>(draft.layout.directions[flowId] ?? "TB");
   const [shown, setShown] = useState<ArrangementPreview | null>(null);
   const [loading, setLoading] = useState(false);

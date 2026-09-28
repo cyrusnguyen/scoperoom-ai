@@ -11,6 +11,7 @@ import { expiryLabel } from "@/features/projects/ui/format";
 import ProjectDetails from "@/features/projects/ui/project-details";
 import Inspector from "@/features/studio/ui/inspector";
 import { StudioProvider } from "@/features/studio/ui/studio-context";
+import { emptyOutbox, pendingCount } from "@/features/studio/ui/outbox";
 import { afterDraftRead, isNewer, type StudioUi } from "@/features/studio/ui/studio-ui";
 import Dialog, { CancelFocus } from "./dialog";
 import { resolveDock } from "./dock";
@@ -64,7 +65,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const [listsState, setListsState] = useState<"loading" | "ready" | "error">("loading");
   const [opened, setOpened] = useState<Opened | null>(null);
   const [store, setStore] = useState<UiStore>({});
-  const savePositionsRef = useRef<(() => Promise<boolean>) | null>(null);
+  const saveChangesRef = useRef<(() => Promise<boolean>) | null>(null);
+  const opening = useRef(false);
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
   const [dialog, setDialog] = useState<ShellDialog | null>(null);
   const [notice, setNotice] = useState({ text: "", error: false });
@@ -172,15 +174,20 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     startNavigation(() => router.push(id ? `/app/projects/${id}` : "/app"));
   }
   async function openProject(id: string) {
-    if (id === projectId) return;
-    let remaining = store;
-    // Moved steps are saved first. Once all are acknowledged they no longer need resolving (the store has not re-rendered yet).
-    if (projectId && Object.keys(ui.unsavedMoves).length && await savePositionsRef.current?.()) {
-      remaining = updateUi(store, projectId, () => ({ unsavedMoves: {}, drops: [], attempt: null }));
-    }
-    // Switching projects resolves unsaved edits first (UI00): Stay, or an explicit Discard, never silent.
-    if (dirtyCount(remaining, projectId) > 0) { setDialog({ kind: "switch", target: id }); return; }
-    navigate(id);
+    // One switch at a time: a second click while the first saves must not leave a stale guard dialog behind.
+    if (id === projectId || opening.current) return;
+    opening.current = true;
+    try {
+      let remaining = store;
+      // Unsaved changes are saved first. Once all are acknowledged they no longer need resolving (the store has not
+      // re-rendered yet); typed but unapplied text still does.
+      if (projectId && pendingCount(ui.outbox) && await saveChangesRef.current?.()) remaining = updateUi(store, projectId, () => ({ outbox: emptyOutbox }));
+      // Browser history may have moved on while the save ran: the guard belongs to the project still open.
+      if (projectIdRef.current !== projectId) return;
+      // Switching projects resolves unsaved edits first (UI00): Stay, or an explicit Discard, never silent.
+      if (dirtyCount(remaining, projectId) > 0) { setDialog({ kind: "switch", target: id }); return; }
+      navigate(id);
+    } finally { opening.current = false; }
   }
   async function created(project: CreatedProject) {
     setDialog(null);
@@ -261,7 +268,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
         </div>
         {projectId && bootstrap
           ? <StudioProvider key={projectId} projectId={projectId} draft={bootstrap.draft} role={bootstrap.project.role} archived={bootstrap.project.status === "ARCHIVED"}
-              narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={projectChanged} onInspect={() => setPanel(true)} saveRef={savePositionsRef}>
+              narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={projectChanged} onInspect={() => setPanel(true)} saveRef={saveChangesRef}>
               {main}{panel}
             </StudioProvider>
           : <>{main}{panel}</>}
@@ -275,8 +282,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     {dialog?.kind === "create" && <NewProjectDialog onClose={() => closeDialog()} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}
     {switchTarget && <Dialog title={`Unsaved changes in ${bootstrap?.project.name ?? "this project"}`} onClose={() => setDialog(null)} footer={<>
       <CancelFocus label="Stay" onClick={() => setDialog(null)} />
-      <button type="button" className="button danger" disabled={ui.pending?.inFlight || Boolean(ui.placing)} onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
-    </>}><p>{dirtyCount(store, projectId)} {ui.pending || ui.attempt ? "unsaved edit(s) or unconfirmed change(s)." : Object.keys(ui.unsavedMoves).length ? "unsaved change(s), including moved steps." : "unsaved field(s)."}</p>{ui.pending && <p>The unconfirmed change will still be available to retry when you return. Discard only removes local edits; it cannot cancel a change already sent.</p>}</Dialog>}
+      <button type="button" className="button danger" disabled={Boolean(ui.request)} onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
+    </>}><p>{dirtyCount(store, projectId)} {ui.outbox.sending?.state === "uncertain" ? "unsaved edit(s) or unconfirmed change(s)." : pendingCount(ui.outbox) ? "unsaved change(s)." : "unsaved field(s)."}</p>{ui.outbox.sending?.state === "uncertain" && <p>The unconfirmed save will still be available to retry when you return. Discard only removes local edits; it cannot cancel a change already sent.</p>}</Dialog>}
     {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project}
       onClose={() => closeDialog(lifecycleDialog.project.id)} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}
   </div>;

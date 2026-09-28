@@ -8,11 +8,14 @@ import Studio from "@/features/studio/ui/studio";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import { Icon } from "./icon";
 
-/** Saves moved steps now instead of at the next autosave (editors only). */
-function SavePositions() {
-  const { editable, unsaved, busy, attempt, savePositions } = useStudio();
+/**
+ * Saves every unsaved change now instead of at the next autosave (editors only). Enabled whenever something is unsaved
+ * and nothing is in flight; an unconfirmed save is retried with its key, a refused one waits for the person's choice.
+ */
+function SaveChanges() {
+  const { editable, unsaved, busy, ui, saveChanges } = useStudio();
   if (!editable) return null;
-  return <button type="button" className="button small" title="Save step positions" disabled={!unsaved || busy || Boolean(attempt)} onClick={() => void savePositions()}>
+  return <button type="button" className="button small" title="Save all changes" disabled={!unsaved || busy || ui.outbox.sending?.state === "refused"} onClick={() => void saveChanges()}>
     <Icon name="check" size={14} /><span>Save</span>
   </button>;
 }
@@ -37,7 +40,7 @@ export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onS
       {project.role !== "OWNER" && <span className="badge">{roleLabel(project.role)}</span>}
       <FlowSwitcher />
       <span className="editor-spacer" />
-      <SavePositions />
+      <SaveChanges />
       <button type="button" className="button small editor-toggle" aria-pressed={panelOpen} aria-controls="right-panel" onClick={onTogglePanel}><Icon name="details" size={14} /><span>Inspect</span></button>
     </header>
     {archived && <div className="editor-banner">

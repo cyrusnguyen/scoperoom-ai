@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page, type Request } from "@playwright/test";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { STEP_SIZE } from "../../src/features/drafts/contracts/draft-layout.ts";
-import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, openDatabase, signIn } from "./support";
+import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, headerSave, openDatabase, saveStudio, signIn } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -12,6 +12,14 @@ const panel = (page: Page) => page.locator(".shape-panel");
 const canvas = (page: Page) => page.locator(".canvas");
 const nodeAt = (page: Page, nodeId: string) => page.locator(`.react-flow__node[data-id="${nodeId}"]`);
 const headers = () => ({ Origin: appUrl, "Idempotency-Key": randomUUID() });
+type Batch = { commands: { command: string; proposedIds: string[]; payload: Record<string, unknown> }[]; moves: { flowId: string; items: { nodeId: string; expectedPositionVersion: number; x: number; y: number }[] }[] };
+const WRITES = /\/(commands|positions|changes)$/;
+/** Every write the Studio sends (Task 14b: only batch saves). */
+function recordWrites(page: Page) {
+  const writes: Request[] = [];
+  page.on("request", (request) => { if (request.method() === "POST" && WRITES.test(request.url())) writes.push(request); });
+  return writes;
+}
 
 async function draftOf(page: Page, projectId: string): Promise<DraftView> {
   return (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: DraftView }).draft;
@@ -72,10 +80,9 @@ test.describe("Shape panel (real draft)", () => {
     try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
-  test("dropping a shape adds one step at the rounded drop point, with one document change and one position save", async ({ page }) => {
+  test("a dropped shape shows at the rounded drop point at once, with no request; Save sends its creation and placement in one batch", async ({ page }) => {
     const seeded = await seedFlow(page, projectId);
-    const moves: Request[] = [];
-    page.on("request", (request) => { if (request.method() === "POST" && request.url().endsWith("/positions")) moves.push(request); });
+    const writes = recordWrites(page);
     await page.goto(`/app/projects/${projectId}`);
     await expect(nodeAt(page, seeded.startId)).toBeVisible();
 
@@ -89,36 +96,46 @@ test.describe("Shape panel (real draft)", () => {
     const point = await flowPoint(page, clientX, clientY);
     const size = STEP_SIZE.DATA_STORE;
     const expected = { x: Math.round(point.x - size.width / 2), y: Math.round(point.y - size.height / 2) };
+    // Hold every write: the step must show at its drop point without one.
+    await page.route(WRITES, () => {});
 
     await dropShape(page, "DATA_STORE", clientX, clientY);
 
-    // Creation and its follow-up move are two sequential requests; wait for the move to actually land before reading.
-    await expect.poll(() => moves.length).toBe(1);
-    expect((await moves[0]!.response())?.status()).toBe(200);
+    const created = page.locator(".react-flow__node").filter({ hasText: "Data store" });
+    await expect(created).toHaveAttribute("style", new RegExp(`translate\\(${expected.x}px, ${expected.y}px\\)`));
+    await expect(page.locator(".studio-status")).toContainText("Unsaved changes");
+    expect(writes).toHaveLength(0);
+    const createdId = (await created.getAttribute("data-id"))!;
+    expect(await draftOf(page, projectId)).toEqual(before);
+
+    await page.unroute(WRITES);
+    await saveStudio(page);
+    expect(writes).toHaveLength(1);
+    const body = writes[0]!.postDataJSON() as Batch;
+    expect(body.commands.map((command) => [command.command, command.proposedIds])).toEqual([["ADD_NODE", [createdId]]]);
+    expect(body.moves).toEqual([{ flowId: seeded.flowId, items: [{ nodeId: createdId, expectedPositionVersion: 1, ...expected }] }]);
     const after = await draftOf(page, projectId);
     expect(after.documentRevision).toBe(before.documentRevision + 1);
-    const createdId = Object.keys(after.document.nodes).find((id) => !before.document.nodes[id]);
-    expect(createdId).toBeTruthy();
-    const created = after.document.nodes[createdId!]!;
-    expect(created.kind).toBe("DATA_STORE");
-    expect(created.label).toBe("Data store");
-    expect(after.layout.positions[createdId!]).toEqual({ x: expected.x, y: expected.y, version: 2 });
-    await expect(nodeAt(page, createdId!)).toBeVisible();
+    expect(after.document.nodes[createdId]).toMatchObject({ kind: "DATA_STORE", label: "Data store" });
+    expect(after.layout.positions[createdId]).toEqual({ x: expected.x, y: expected.y, version: 2 });
   });
 
-  test("clicking End adds an OUTCOME step", async ({ page }) => {
+  test("clicking End adds an OUTCOME step, selected at once", async ({ page }) => {
     await seedFlow(page, projectId);
     await page.goto(`/app/projects/${projectId}`);
     const before = await draftOf(page, projectId);
     await panel(page).getByRole("button", { name: "End (Outcome)" }).click();
-    await expect.poll(async () => Object.keys((await draftOf(page, projectId)).document.nodes).length).toBe(Object.keys(before.document.nodes).length + 1);
+    const created = page.locator(".react-flow__node").filter({ has: page.locator('.step-node[data-kind="OUTCOME"]') });
+    await expect(created).toHaveClass(/selected/);
+    const createdId = (await created.getAttribute("data-id"))!;
+    await page.keyboard.press("Escape"); // leave the name as it is
+    await saveStudio(page);
     const after = await draftOf(page, projectId);
-    const createdId = Object.keys(after.document.nodes).find((id) => !before.document.nodes[id])!;
+    expect(Object.keys(after.document.nodes)).toHaveLength(Object.keys(before.document.nodes).length + 1);
     expect(after.document.nodes[createdId]!.kind).toBe("OUTCOME");
-    await expect(nodeAt(page, createdId)).toHaveClass(/selected/);
   });
 
-  test("switching flows while a drop's create is still in flight still places the step in the flow it was created in", async ({ page }) => {
+  test("a step dropped in one flow is saved there when a flow switch saves it first", async ({ page }) => {
     const flowA = await seedFlow(page, projectId, "Flow A");
     const flowB = await seedFlow(page, projectId, "Flow B");
     await page.goto(`/app/projects/${projectId}`);
@@ -133,33 +150,16 @@ test.describe("Shape panel (real draft)", () => {
     const centre = await flowPoint(page, box.x + box.width / 2, box.y + box.height / 2);
     const size = STEP_SIZE.OUTCOME;
     const expected = { x: Math.round(centre.x - size.width / 2), y: Math.round(centre.y - size.height / 2) };
-
-    const positionRequests: Request[] = [];
-    page.on("request", (request) => { if (request.method() === "POST" && request.url().endsWith("/positions")) positionRequests.push(request); });
-    let requestHeld: () => void = () => {};
-    const held = new Promise<void>((resolve) => { requestHeld = resolve; });
-    let stalled: import("@playwright/test").Route | null = null;
-    await page.route("**/commands", (route) => {
-      if (stalled) { void route.continue(); return; } // only the triggering ADD_NODE is held
-      stalled = route;
-      requestHeld();
-    });
+    const writes = recordWrites(page);
 
     await panel(page).getByRole("button", { name: "End (Outcome)" }).click();
-    await held; // the ADD_NODE request for Flow A is now stalled at the network layer
-
-    // Switch to Flow B while that create is still unresolved (flows-dialog.tsx's `open` has no busy gate).
+    await page.keyboard.press("Escape");
+    expect(writes).toHaveLength(0);
     await page.locator(".flow-switch").click();
     await flowsDialog.locator(".item-row").filter({ hasText: "Flow B" }).click();
     await expect(page.locator("#studio-flow-title")).toHaveText("Flow B");
-
-    await stalled!.continue();
-    await page.unroute("**/commands");
-
-    // Wait for the follow-up move to actually land (not just be sent) before reading the saved draft.
-    await expect.poll(() => positionRequests.length).toBe(1);
-    expect((await positionRequests[0]!.response())?.status()).toBe(200);
-    expect((positionRequests[0]!.postDataJSON() as { flowId: string }).flowId).toBe(flowA.flowId);
+    expect(writes).toHaveLength(1);
+    expect((writes[0]!.postDataJSON() as Batch).moves.map((group) => group.flowId)).toEqual([flowA.flowId]);
 
     // The created step belongs to Flow A: its saved position (and the move that placed it) must say so, never Flow B.
     const after = await draftOf(page, projectId);
@@ -168,6 +168,7 @@ test.describe("Shape panel (real draft)", () => {
     expect(after.document.nodes[createdId]!.kind).toBe("OUTCOME");
     expect(after.document.nodes[createdId]!.flowId).not.toBe(flowB.flowId);
     expect(after.layout.positions[createdId]).toEqual({ x: expected.x, y: expected.y, version: 2 });
+    await expect(headerSave(page)).toBeDisabled();
   });
 });
 

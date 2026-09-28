@@ -1,7 +1,7 @@
 import type { Changes } from "../contracts/changes.ts";
 import type { SavedPosition } from "../contracts/draft-layout.ts";
 import { applyGraphCommand, bump, checkDraft, GraphError, type Applied, type Draft } from "./graph.ts";
-import { moveNodes } from "./layout.ts";
+import { moveNodes } from "./moves.ts";
 
 // A batch of draft changes (API "POST D/changes"): commands in order, then moves, all or nothing. Each command is checked
 // by its own guard against the state the earlier items produced, and documentRevision advances once per effective

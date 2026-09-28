@@ -10,8 +10,9 @@ import { FlowsDialog } from "./flows-dialog";
 import GraphList from "./graph-list";
 import { currentFlow, recordOf } from "./graph-view";
 import { AddStepDialog, ConnectDialog, DeleteStepsDialog } from "./step-dialogs";
-import { CommandRecovery, useStudio } from "./studio-context";
-import { studioDirtyCount } from "./studio-ui";
+import { describeAll, optimistic } from "./outbox";
+import { ReadRecovery, staleCodes, useStudio } from "./studio-context";
+import { studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
 
 type StudioDialog = "add" | "connect" | "delete" | "arrange" | null;
 
@@ -23,10 +24,12 @@ function typing(event: KeyboardEvent<HTMLElement>) {
 
 /** The centre of the editor: the open flow, its toolbox and status. */
 export default function Studio() {
-  const { draft, editable, busy, narrow, ui, update, inspect, unsaved, attempt, savePositions } = useStudio();
+  const { draft, editable, busy, narrow, ui, update, inspect, run, saveChanges } = useStudio();
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<StudioDialog>(null);
-  const [arrangeRefused, setArrangeRefused] = useState(false);
+  // Arrange stayed closed because a save is unresolved; its note goes once that save is resolved.
+  const [arrangeBlocked, setArrangeBlocked] = useState(false);
+  if (arrangeBlocked && !ui.outbox.sending) setArrangeBlocked(false);
   // Keep this mount stable when the first flow changes the centre from empty to populated.
   const creation = creating && <FlowsDialog key="new-flow" creating onClose={() => setCreating(false)} />;
   const flow = currentFlow(draft.document, ui.flowId);
@@ -37,16 +40,25 @@ export default function Studio() {
   const stepCount = Object.values(draft.document.nodes).filter((node) => node.flowId === flow.id).length;
   const focusFlowTitle = () => requestAnimationFrame(() => document.getElementById("studio-flow-title")?.focus());
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if ((event.key !== "Delete" && event.key !== "Backspace") || typing(event) || !editable || busy || !selectedSteps.length || dialog) return;
+    if ((event.key !== "Delete" && event.key !== "Backspace") || typing(event) || !editable || dialog) return;
+    const edge = ui.selection?.kind === "EDGE" ? draft.document.edges[ui.selection.id] : undefined;
+    // A selected connection goes at once: it is undoable until saved. Steps are confirmed first (they take connections).
+    if (edge) {
+      event.preventDefault();
+      void run({ commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { edgeId: edge.id } })
+        .then((outcome) => { if (outcome.ok) update(() => ({ selection: null })); });
+      return;
+    }
+    if (!selectedSteps.length) return;
     event.preventDefault();
     setDialog("delete");
   };
   const showFlowDetails = () => { update(() => ({ selection: { kind: "FLOW", id: flow.id } })); inspect(); };
-  // Arrange works from saved positions, so unsaved moves are saved first; if they cannot be, it does not open.
+  // Arrange works from the saved draft, so unsaved changes are saved first; if they cannot be, it does not open.
   const arrange = async () => {
-    setArrangeRefused(false);
-    if (await savePositions()) setDialog("arrange");
-    else setArrangeRefused(true);
+    const saved = await saveChanges();
+    setArrangeBlocked(!saved);
+    if (saved) setDialog("arrange");
   };
 
   return <><section className="studio" aria-labelledby="studio-flow-title" onKeyDown={onKeyDown}>
@@ -59,8 +71,8 @@ export default function Studio() {
         <button type="button" aria-pressed={view === "list"} onClick={() => update(() => ({ view: "list" }))}><Icon name="list" size={14} />List</button>
       </div>
       {editable && <>
-        <button type="button" className="button small" onClick={() => setDialog("add")} disabled={busy}><Icon name="plus" size={14} />Add step</button>
-        <button type="button" className="button small" onClick={() => setDialog("connect")} disabled={busy || !stepCount}><Icon name="link" size={14} />Connect</button>
+        <button type="button" className="button small" onClick={() => setDialog("add")}><Icon name="plus" size={14} />Add step</button>
+        <button type="button" className="button small" onClick={() => setDialog("connect")} disabled={!stepCount}><Icon name="link" size={14} />Connect</button>
         <button type="button" className="button quiet small" onClick={() => void arrange()} disabled={busy || !stepCount}><Icon name="grid" size={14} />Arrange</button>
       </>}
       <button type="button" className="button quiet small" onClick={showFlowDetails}>Flow details</button>
@@ -68,9 +80,9 @@ export default function Studio() {
     <div className="studio-stage">
       {view === "canvas" ? <FlowCanvas flowId={flow.id} /> : <GraphList flowId={flow.id} onDeleteSelected={() => setDialog("delete")} />}
     </div>
-    <PlacementNote />
-    {arrangeRefused && (unsaved || attempt) && <div className="placement-note" role="alert">
-      <span>Arrange didn’t open because your moved steps aren’t saved yet.</span>
+    <SaveNote />
+    {arrangeBlocked && <div className="save-note" role="alert">
+      <span>Arrange didn’t open because your changes aren’t saved yet.</span>
     </div>}
     <StudioStatus flowId={flow.id} />
     {editable && dialog === "add" && <AddStepDialog flowId={flow.id} onClose={() => setDialog(null)} onAdded={(nodeId) => { setDialog(null); update(() => ({ selection: { kind: "NODES", ids: [nodeId] } })); }} />}
@@ -91,8 +103,15 @@ function NoFlows({ onCreate }: { onCreate: () => void }) {
         <div className="view-actions"><button type="button" className="button primary" onClick={onCreate}>New flow</button></div>
       </> : <p>Only the owner and editors can add flows.</p>}
     </>}
-    <div className="studio-status"><RemovedRecovery /><CommandRecovery /></div>
+    <SaveNote />
+    <div className="studio-status"><RemovedRecovery /><ReadRecovery /><NoFlowsStatus /></div>
   </div>;
+}
+
+/** Without a flow (a deleted last flow may still be saving), the save status still shows. */
+function NoFlowsStatus() {
+  const { ui, save, refreshFailed } = useStudio();
+  return <SaveStatus ui={ui} save={save} refreshFailed={refreshFailed} />;
 }
 
 /** A removed item's local input remains reachable even after the last flow disappears. */
@@ -107,43 +126,62 @@ function RemovedRecovery() {
   return <button type="button" className="button quiet small" onClick={review}>Unsaved text for a removed item</button>;
 }
 
-/** A placement that did not save: kept on the canvas until the person retries, reapplies it or keeps the saved positions. */
-function PlacementNote() {
-  const { attempt, busy, retryPlacement, applyMyPlacement, keepSavedPositions } = useStudio();
-  if (!attempt || attempt.state === "pending") return null;
-  const conflict = attempt.state === "conflict";
-  return <div className="placement-note" role="alert">
-    <span>{conflict ? "Someone moved these steps first. Your placement is shown until you choose." : "We couldn’t confirm the new position."}</span>
+/**
+ * The save's recovery note (Task 14b): an unconfirmed save retries with its own key; a refused one keeps every unsaved
+ * change on screen until the person applies them again on the newer draft or discards them; a replay that had to leave
+ * changes out lists them (their typed text included), so nothing is dropped silently.
+ */
+function SaveNote() {
+  const { ui, editable, busy, savedDraft, saveChanges, applyAgain, discardChanges, dismissDropped, unsaved } = useStudio();
+  const { sending, dropped } = ui.outbox;
+  const list = (items: string[]) => <ul className="plain-list save-note-list">{items.map((text, index) => <li key={index}>{text}</li>)}</ul>;
+  if (sending?.state === "uncertain") return <div className="save-note" role="alert">
+    <span>We couldn’t confirm your changes. Retry sends the same request.</span>
+    <span className="view-actions"><button type="button" className="button primary small" onClick={() => void saveChanges()} disabled={busy}>Retry</button></span>
+  </div>;
+  if (!editable && unsaved) return <div className="save-note" role="alert">
+    <span>This draft is read-only now, so your unsaved changes can’t be saved. They’re listed here for copying:</span>
+    {list(describeAll(ui.outbox, optimistic(ui.outbox, savedDraft).document))}
+    <span className="view-actions"><button type="button" className="button quiet small" onClick={discardChanges} disabled={busy}>Discard my changes</button></span>
+  </div>;
+  if (sending?.state === "refused") return <div className="save-note" role="alert">
+    <span>{staleCodes.has(sending.code ?? "") ? "Someone else changed this draft first, so your changes weren’t saved." : `${sending.message ?? ""} Your changes weren’t saved.`} They’re still shown here.</span>
     <span className="view-actions">
-      {conflict
-        ? <button type="button" className="button primary small" onClick={() => void applyMyPlacement()} disabled={busy}>Apply my placement</button>
-        : <button type="button" className="button primary small" onClick={() => void retryPlacement()} disabled={busy}>Retry</button>}
-      <button type="button" className="button quiet small" onClick={keepSavedPositions} disabled={busy}>Keep saved positions</button>
+      <button type="button" className="button primary small" onClick={() => void applyAgain()} disabled={busy}>Apply my changes again</button>
+      <button type="button" className="button quiet small" onClick={discardChanges} disabled={busy}>Discard my changes</button>
     </span>
   </div>;
+  if (dropped.length) return <div className="save-note" role="alert">
+    <span>These changes no longer applied, so they were left out:</span>
+    {list(dropped)}
+    <span className="view-actions"><button type="button" className="button quiet small" onClick={dismissDropped}>Dismiss</button></span>
+  </div>;
+  return null;
 }
 
+/** One status line for every change (UI02, Task 14b): "Unsaved changes" → "Saving…" → "All changes saved". */
 function StudioStatus({ flowId }: { flowId: string }) {
-  const { draft, ui, update, save, placement, attempt, busy, undoFlowId, undoMove, unsaved, refreshFailed, inspect } = useStudio();
+  const { draft, ui, update, save, refreshFailed, inspect, canUndo, canRedo, undo, redo } = useStudio();
   const steps = Object.values(draft.document.nodes).filter((node) => node.flowId === flowId).length;
   const connections = Object.values(draft.document.edges).filter((edge) => edge.flowId === flowId).length;
   const checks = graphWarnings(draft.document, flowId).length;
-  const saveText = save.state === "saving" ? "Saving…" : save.state === "failed" ? save.message
-    : studioDirtyCount(ui) ? "Unsaved changes" : save.state === "saved" && !refreshFailed ? "All changes saved" : "";
-  // Position status is its own line (UI02): content can be saved while positions are unsaved, and the reverse. A flush
-  // of several chunks never says "Positions saved" while any moved step is still unsaved.
-  const placeText = placement.state === "saving" ? "Saving positions…" : placement.state === "failed" && !attempt ? placement.message
-    : unsaved ? "Unsaved positions" : placement.state === "saved" && !refreshFailed ? "Positions saved" : "";
   return <div className="studio-status">
     <span>{steps} {steps === 1 ? "step" : "steps"} · {connections} {connections === 1 ? "connection" : "connections"}</span>
     <button type="button" className="button quiet small" onClick={() => { update(() => ({ selection: { kind: "FLOW", id: flowId } })); inspect(); }}>
       {checks ? `${checks} draft ${checks === 1 ? "check" : "checks"}` : "No draft checks"}
     </button>
     <RemovedRecovery />
-    {undoFlowId === flowId && <button type="button" className="button quiet small" onClick={() => void undoMove()} disabled={busy || Boolean(attempt)}><Icon name="undo" size={14} />Undo move</button>}
+    {canUndo && <button type="button" className="button quiet small" onClick={undo} title="Undo the last unsaved change"><Icon name="undo" size={14} />Undo</button>}
+    {canRedo && <button type="button" className="button quiet small" onClick={redo} title="Redo the change you undid">Redo</button>}
     <span className="editor-spacer" />
-    <CommandRecovery />
-    <span className={placement.state === "failed" ? "status-error" : "muted"} role="status" aria-live="polite">{placeText}</span>
-    <span className={save.state === "failed" ? "status-error" : "muted"} role="status" aria-live="polite">{saveText}</span>
+    <ReadRecovery />
+    <SaveStatus ui={ui} save={save} refreshFailed={refreshFailed} />
   </div>;
+}
+
+function SaveStatus({ ui, save, refreshFailed }: { ui: StudioUi; save: SaveState; refreshFailed: boolean }) {
+  const state = ui.outbox.sending?.state;
+  const text = state === "sending" ? "Saving…" : state === "uncertain" ? "We couldn’t confirm your changes." : state === "refused" ? "Your changes weren’t saved."
+    : studioDirtyCount(ui) ? "Unsaved changes" : save.state === "saved" && !refreshFailed ? "All changes saved" : "";
+  return <span className={state === "uncertain" || state === "refused" ? "status-error" : "muted"} role="status" aria-live="polite">{text}</span>;
 }

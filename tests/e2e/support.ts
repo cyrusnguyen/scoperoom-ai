@@ -102,3 +102,12 @@ export async function cleanupUsers(database: Client, admin: SupabaseClient, user
   await database.query(`delete from app.user_profile where auth_user_id = any($1::uuid[])`, [users]);
   await Promise.all(users.map((id) => admin.auth.admin.deleteUser(id)));
 }
+
+/** The project header's Save (Task 14b): every Studio change waits for it, the 10-second autosave or a save-first action. */
+export const headerSave = (page: Page) => page.locator(".editor-header").getByRole("button", { name: "Save", exact: true });
+
+/** Saves every unsaved Studio change and waits for the acknowledgement to show. */
+export async function saveStudio(page: Page) {
+  await headerSave(page).click();
+  await expect(page.locator(".studio-status")).toContainText("All changes saved");
+}

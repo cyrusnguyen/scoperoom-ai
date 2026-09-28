@@ -3,7 +3,7 @@ import type { Client } from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page, type Request, type Route } from "@playwright/test";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
-import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, openDatabase, signIn } from "./support";
+import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, headerSave, openDatabase, saveStudio, signIn } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -12,7 +12,10 @@ const nodeAt = (page: Page, nodeId: string) => page.locator(`.react-flow__node[d
 const stepEditor = (page: Page, nodeId: string) => nodeAt(page, nodeId).getByRole("textbox", { name: "Step name" });
 const edgeEditor = (page: Page) => page.getByRole("textbox", { name: "Connection label" });
 const note = (page: Page) => page.locator(".canvas-note");
+const saveNote = (page: Page) => page.locator(".save-note");
 const headers = () => ({ Origin: appUrl, "Idempotency-Key": randomUUID() });
+type Batch = { commands: Record<string, unknown>[]; moves: unknown[] };
+const batchOf = (request: Request) => request.postDataJSON() as Batch;
 
 async function draftOf(page: Page, projectId: string): Promise<DraftView> {
   return (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: DraftView }).draft;
@@ -44,14 +47,16 @@ async function edgePoint(page: Page, edgeId: string) {
   });
 }
 
+/** Single-command, position and batch writes (Task 14b: the Studio sends only batches, on Save). */
 function recordWrites(page: Page) {
-  const commands: Request[] = [], positions: Request[] = [];
+  const commands: Request[] = [], positions: Request[] = [], changes: Request[] = [];
   page.on("request", (request) => {
     if (request.method() !== "POST") return;
     if (request.url().endsWith("/commands")) commands.push(request);
     if (request.url().endsWith("/positions")) positions.push(request);
+    if (request.url().endsWith("/changes")) changes.push(request);
   });
-  return { commands, positions };
+  return { commands, positions, changes };
 }
 
 test.describe("Inline label editing (real draft)", () => {
@@ -78,7 +83,7 @@ test.describe("Inline label editing (real draft)", () => {
     try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
-  test("double-clicking a step's label renames it in place with one UPDATE_NODE and no position save", async ({ page }) => {
+  test("double-clicking a step's label renames it in place; Save sends one UPDATE_NODE and no move", async ({ page }) => {
     const writes = recordWrites(page);
     const before = await draftOf(page, projectId);
     const pay = nodeAt(page, ids.payId);
@@ -103,21 +108,26 @@ test.describe("Inline label editing (real draft)", () => {
     await editor.press("Enter");
     await expect(editor).toBeHidden();
     await expect(pay.locator(".step-label")).toHaveText("Pay by card");
-    await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay by card");
+    await expect(page.locator(".studio-status")).toContainText("Unsaved changes");
+    expect(writes.changes).toHaveLength(0);
+    expect((await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay");
+
+    await saveStudio(page);
     const after = await draftOf(page, projectId);
+    expect(after.document.nodes[ids.payId]!.label).toBe("Pay by card");
     expect(after.documentRevision).toBe(before.documentRevision + 1);
-    expect(writes.commands).toHaveLength(1);
-    expect(writes.commands[0]!.postDataJSON()).toEqual({ commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: before.document.nodes[ids.payId]!.version, payload: { nodeId: ids.payId, label: "Pay by card" } });
-    expect(writes.positions).toHaveLength(0);
+    expect(writes.changes).toHaveLength(1);
+    expect(batchOf(writes.changes[0]!)).toEqual({ commands: [{ commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: before.document.nodes[ids.payId]!.version, payload: { nodeId: ids.payId, label: "Pay by card" }, proposedIds: [] }], moves: [] });
+    expect([writes.commands, writes.positions]).toEqual([[], []]);
   });
 
-  test("Escape saves, unchanged text sends nothing, and composition never commits", async ({ page }) => {
+  test("Escape applies, unchanged text queues nothing, and composition never commits", async ({ page }) => {
     const writes = recordWrites(page);
     const pay = nodeAt(page, ids.payId);
     await pay.locator(".step-label").dblclick();
     await stepEditor(page, ids.payId).press("Escape");
     await expect(stepEditor(page, ids.payId)).toBeHidden();
-    expect(writes.commands).toHaveLength(0);
+    await expect(headerSave(page)).toBeDisabled();
 
     await pay.locator(".step-label").dblclick();
     const editor = stepEditor(page, ids.payId);
@@ -125,11 +135,13 @@ test.describe("Inline label editing (real draft)", () => {
     await editor.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true });
     await editor.dispatchEvent("keydown", { key: "Escape", code: "Escape", isComposing: true });
     await expect(editor).toBeVisible();
-    expect(writes.commands).toHaveLength(0);
+    await expect(headerSave(page)).toBeDisabled();
     await editor.press("Escape");
     await expect(editor).toBeHidden();
-    await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay now");
-    expect(writes.commands).toHaveLength(1);
+    await expect(pay.locator(".step-label")).toHaveText("Pay now");
+    await saveStudio(page);
+    expect((await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay now");
+    expect(writes.changes).toHaveLength(1);
   });
 
   test("an empty or over-limit name is refused locally and the typed text is kept for fixing", async ({ page }) => {
@@ -141,7 +153,7 @@ test.describe("Inline label editing (real draft)", () => {
     await expect(editor).toHaveAttribute("placeholder", "Name this step");
     await editor.press("Enter");
     await expect(note(page)).toHaveText("Enter a name. Your text is kept; fix it here or in the inspector.");
-    await expect(pay.locator(".step-label")).toHaveText("Pay"); // the canvas shows the saved name
+    await expect(pay.locator(".step-label")).toHaveText("Pay"); // the canvas shows the step's name, not the refused text
 
     await pay.locator(".step-label").dblclick();
     await expect(stepEditor(page, ids.payId)).toHaveValue("");
@@ -154,17 +166,18 @@ test.describe("Inline label editing (real draft)", () => {
     await panel(page).getByRole("button", { name: "Close panel" }).click();
     await pay.locator(".step-label").dblclick();
     await expect(stepEditor(page, ids.payId)).toHaveValue(long);
-    await stepEditor(page, ids.payId).press("Escape"); // unchanged since opening: nothing is sent or discarded
-    expect(writes.commands).toHaveLength(0);
+    await stepEditor(page, ids.payId).press("Escape"); // unchanged since opening: nothing is queued or discarded
+    await expect(headerSave(page)).toBeDisabled();
 
     await pay.locator(".step-label").dblclick();
     await stepEditor(page, ids.payId).fill("x".repeat(160));
     await stepEditor(page, ids.payId).press("Enter");
-    await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("x".repeat(160));
-    expect(writes.commands).toHaveLength(1);
+    await saveStudio(page);
+    expect((await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("x".repeat(160));
+    expect(writes.changes).toHaveLength(1);
   });
 
-  test("opening and closing the editor without typing never submits the inspector's unsaved fields", async ({ page }) => {
+  test("opening and closing the editor without typing never applies the inspector's unsaved fields", async ({ page }) => {
     const writes = recordWrites(page);
     const pay = nodeAt(page, ids.payId);
     await pay.locator(".step-kind").dblclick();
@@ -177,13 +190,14 @@ test.describe("Inline label editing (real draft)", () => {
     await page.locator(".studio-flow-title").click();
     await expect(stepEditor(page, ids.payId)).toBeHidden();
 
-    // A real inline change with other unsaved fields opens the inspector instead of sending them.
+    // A real inline change with other unsaved fields opens the inspector instead of applying them.
     await pay.locator(".step-label").dblclick();
     await stepEditor(page, ids.payId).fill("Pay by bank");
     await stepEditor(page, ids.payId).press("Enter");
     await expect(panel(page).getByLabel("Name")).toHaveValue("Pay by bank");
     await expect(panel(page).getByLabel("Description")).toHaveValue("Half-written");
-    expect(writes.commands).toHaveLength(0);
+    await expect(headerSave(page)).toBeDisabled(); // nothing was queued
+    expect(writes.changes).toHaveLength(0);
     expect((await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay");
   });
 
@@ -202,7 +216,8 @@ test.describe("Inline label editing (real draft)", () => {
     await editor.press("End");
     await editor.pressSequentially(" and canvas");
     await editor.press("Enter");
-    await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("From inspector and canvas");
+    await saveStudio(page);
+    expect((await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("From inspector and canvas");
     await page.getByRole("button", { name: "Inspect" }).click();
     await expect(name).toHaveValue("From inspector and canvas");
     await expect(panel(page).getByRole("button", { name: "Save", exact: true })).toBeDisabled();
@@ -217,13 +232,13 @@ test.describe("Inline label editing (real draft)", () => {
     await editor.fill("Pay online");
     await editor.press("Escape");
     await expect(pay).toBeFocused();
-    await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay online");
+    await expect(pay.locator(".step-label")).toHaveText("Pay online");
     await page.keyboard.press("Enter");
     await expect(editor).toBeFocused();
     await expect(editor).toHaveValue("Pay online");
   });
 
-  test("a stale save keeps the typed name and opens the inspector's conflict review", async ({ page }) => {
+  test("a save that meets someone else's rename keeps the typed name on screen; Apply my changes again saves it", async ({ page }) => {
     const pay = nodeAt(page, ids.payId);
     await pay.locator(".step-label").dblclick();
     await stepEditor(page, ids.payId).fill("Mine");
@@ -232,52 +247,60 @@ test.describe("Inline label editing (real draft)", () => {
       data: { commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: saved.document.nodes[ids.payId]!.version, payload: { nodeId: ids.payId, label: "Theirs" } } });
     expect(remote.status()).toBe(200);
     await stepEditor(page, ids.payId).press("Enter");
-    await expect(panel(page).getByText("Someone else saved this step first. Your text is kept; nothing was overwritten.")).toBeVisible();
-    await expect(panel(page).locator(".conflict-list")).toContainText("Mine");
+    await headerSave(page).click();
+    await expect(saveNote(page)).toContainText("Someone else changed this draft first, so your changes weren’t saved.");
+    await expect(pay.locator(".step-label")).toHaveText("Mine");
     expect((await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Theirs");
+    await saveNote(page).getByRole("button", { name: "Apply my changes again" }).click();
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    await expect(saveNote(page)).toHaveCount(0);
+    expect((await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Mine");
   });
 
-  test("an unconfirmed save keeps its text and retries with the same key, and a save while another is in flight keeps the text", async ({ page }) => {
+  test("an unconfirmed save keeps its text and retries with the same key; a rename made while a save is in flight saves next", async ({ page }) => {
     const writes = recordWrites(page);
-    await page.route("**/commands", (route) => route.abort("failed"), { times: 1 });
+    await page.route("**/changes", (route) => route.abort("failed"), { times: 1 });
     const pay = nodeAt(page, ids.payId);
     await pay.locator(".step-label").dblclick();
     await stepEditor(page, ids.payId).fill("Pay later");
     await stepEditor(page, ids.payId).press("Enter");
-    await expect(page.getByText("We could not confirm the last change. Retry it.")).toBeVisible();
+    await headerSave(page).click();
+    await expect(saveNote(page)).toContainText("We couldn’t confirm your changes.");
+    await expect(pay.locator(".step-label")).toHaveText("Pay later");
     await pay.locator(".step-label").dblclick();
     await expect(stepEditor(page, ids.payId)).toHaveValue("Pay later");
-    await stepEditor(page, ids.payId).press("Enter"); // unchanged since opening: no new request
-    expect(writes.commands).toHaveLength(1);
-    await page.getByRole("button", { name: "Retry last change" }).click();
-    await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay later");
-    expect(writes.commands).toHaveLength(2);
-    expect(writes.commands[1]!.headers()["idempotency-key"]).toBe(writes.commands[0]!.headers()["idempotency-key"]);
-    await expect(page.locator(".studio-status")).toContainText("All changes saved"); // the retry's read has landed
+    await stepEditor(page, ids.payId).press("Enter"); // unchanged since opening: nothing new
+    expect(writes.changes).toHaveLength(1);
+    await saveNote(page).getByRole("button", { name: "Retry" }).click();
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    expect((await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay later");
+    expect(writes.changes).toHaveLength(2);
+    expect(writes.changes[1]!.headers()["idempotency-key"]).toBe(writes.changes[0]!.headers()["idempotency-key"]);
+    expect(writes.changes[1]!.postData()).toBe(writes.changes[0]!.postData());
 
-    // Hold the next save in flight, then close another step's editor: its text stays for later.
+    // Hold the next save in flight, then rename another step: it queues behind and is sent right after.
     let release: Route | null = null;
     let held: () => void = () => {};
     const holding = new Promise<void>((resolve) => { held = resolve; });
-    await page.route("**/commands", (route) => { release = route; held(); }, { times: 1 });
+    await page.route("**/changes", (route) => { release = route; held(); }, { times: 1 });
     await pay.locator(".step-label").dblclick();
     await stepEditor(page, ids.payId).fill("Pay first");
     await stepEditor(page, ids.payId).press("Enter");
+    await headerSave(page).click();
     await holding;
+    await expect(page.locator(".studio-status")).toContainText("Saving…");
     const ship = nodeAt(page, ids.shipId);
     await ship.locator(".step-label").dblclick();
     await stepEditor(page, ids.shipId).fill("Ship fast");
     await stepEditor(page, ids.shipId).press("Enter");
-    await expect(note(page)).toHaveText("Another change is still saving. Your text is kept; save it in the inspector when that finishes.");
+    await expect(ship.locator(".step-label")).toHaveText("Ship fast");
+    await expect(note(page)).toHaveCount(0);
     await release!.continue();
-    await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay first");
-    await ship.locator(".step-label").dblclick();
-    await expect(stepEditor(page, ids.shipId)).toHaveValue("Ship fast");
-    await stepEditor(page, ids.shipId).press("Escape");
-    await ship.locator(".step-kind").dblclick();
-    await expect(panel(page).getByLabel("Name")).toHaveValue("Ship fast");
-    await panel(page).getByRole("button", { name: "Save", exact: true }).click();
-    await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[ids.shipId]!.label).toBe("Ship fast");
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    await expect.poll(() => writes.changes.length).toBe(4);
+    expect(writes.changes[3]!.headers()["idempotency-key"]).not.toBe(writes.changes[2]!.headers()["idempotency-key"]);
+    const saved = await draftOf(page, projectId);
+    expect([saved.document.nodes[ids.payId]!.label, saved.document.nodes[ids.shipId]!.label]).toEqual(["Pay first", "Ship fast"]);
   });
 
   test("a connection is labelled inline at its label position and cleared again", async ({ page }) => {
@@ -302,29 +325,31 @@ test.describe("Inline label editing (real draft)", () => {
     await input.press("Enter");
     await expect(input).toBeHidden();
     await expect(page.locator(".edge-label").filter({ hasText: "Card accepted by the processor" })).toBeVisible();
-    await expect.poll(async () => (await draftOf(page, projectId)).document.edges[ids.edgeId]!.condition).toBe("Card accepted by the processor");
+    await saveStudio(page);
+    expect((await draftOf(page, projectId)).document.edges[ids.edgeId]!.condition).toBe("Card accepted by the processor");
 
     await page.mouse.dblclick(point.x, point.y);
     await expect(edgeEditor(page)).toHaveValue("Card accepted by the processor");
     await edgeEditor(page).fill("");
     await edgeEditor(page).press("Escape");
-    await expect.poll(async () => (await draftOf(page, projectId)).document.edges[ids.edgeId]!.condition).toBe("");
-    expect(writes.commands.map((request) => (request.postDataJSON() as { command: string }).command)).toEqual(["UPDATE_EDGE", "UPDATE_EDGE"]);
-    expect(writes.positions).toHaveLength(0);
+    await saveStudio(page);
+    expect((await draftOf(page, projectId)).document.edges[ids.edgeId]!.condition).toBe("");
+    expect(writes.changes.map((request) => batchOf(request).commands.map((command) => command.command))).toEqual([["UPDATE_EDGE"], ["UPDATE_EDGE"]]);
+    expect(writes.changes.every((request) => batchOf(request).moves.length === 0)).toBe(true);
   });
 
   test("a step added from the shape panel opens its editor with the default name selected", async ({ page }) => {
-    const before = await draftOf(page, projectId);
     await page.locator(".shape-panel").getByRole("button", { name: "Decision" }).click();
-    await expect.poll(async () => Object.keys((await draftOf(page, projectId)).document.nodes).length).toBe(Object.keys(before.document.nodes).length + 1);
-    const createdId = Object.keys((await draftOf(page, projectId)).document.nodes).find((id) => !before.document.nodes[id])!;
+    const created = page.locator(".react-flow__node").filter({ has: page.locator('.step-node[data-kind="DECISION"]') });
+    const createdId = (await created.getAttribute("data-id"))!;
     const editor = stepEditor(page, createdId);
     await expect(editor).toBeFocused();
     await expect(editor).toHaveValue("Decision");
     expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd])).toEqual([0, "Decision".length]);
     await page.keyboard.type("Paid?");
     await page.keyboard.press("Enter");
-    await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[createdId]!.label).toBe("Paid?");
+    await saveStudio(page);
+    expect((await draftOf(page, projectId)).document.nodes[createdId]!.label).toBe("Paid?");
   });
 });
 

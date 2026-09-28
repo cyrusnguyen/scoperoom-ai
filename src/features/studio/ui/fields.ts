@@ -58,12 +58,12 @@ export function fieldErrors(kind: EntityKind, values: Fields): Record<string, st
   return errors;
 }
 
-export type InlinePlan = { kind: "unchanged" } | { kind: "refused"; message: string } | { kind: "review" } | { kind: "send"; fields: Fields; retrying: boolean };
+export type InlinePlan = { kind: "unchanged" } | { kind: "refused"; message: string } | { kind: "review" } | { kind: "send"; fields: Fields };
 
 /**
- * Closing an inline canvas editor is the inspector's Save for that record's shared buffer (same command, same key on an
- * unconfirmed retry), limited to what was typed in the editor: `opened` is the text it showed when it opened, so opening
- * and closing it never submits anything. Other unsaved fields, and a stale conflict, go to the inspector for deliberate
+ * Closing an inline canvas editor applies that record's shared buffer like the inspector does (the same command, queued
+ * in the outbox), limited to what was typed in the editor: `opened` is the text it showed when it opened, so opening
+ * and closing it never queues anything. Other unsaved fields, and a stale conflict, go to the inspector for deliberate
  * review. Invalid text is refused but never discarded: the buffer keeps it (UI02 "Invalid fields retain text").
  */
 export function inlinePlan(buffer: EntityBuffer | undefined, kind: EntityKind, field: string, opened: string): InlinePlan {
@@ -71,8 +71,7 @@ export function inlinePlan(buffer: EntityBuffer | undefined, kind: EntityKind, f
   if (buffer.conflict) return { kind: "review" };
   const own = fieldErrors(kind, { [field]: buffer.values[field]! })[field];
   if (own) return { kind: "refused", message: own };
-  if (buffer.sent) return { kind: "send", fields: buffer.sent, retrying: true };
-  return dirtyFields(buffer).some((name) => name !== field) ? { kind: "review" } : { kind: "send", fields: changes(buffer), retrying: false };
+  return dirtyFields(buffer).some((name) => name !== field) ? { kind: "review" } : { kind: "send", fields: changes(buffer) };
 }
 
 /** The update command for changed fields, guarded by the version the edits were made against. */

@@ -2,7 +2,7 @@ import type { Client } from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
-import { adminClient, cleanupUsers, createProjectViaApi, e2eReady, entitle, openDatabase, signIn } from "./support";
+import { adminClient, cleanupUsers, createProjectViaApi, e2eReady, entitle, openDatabase, saveStudio, signIn } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -61,6 +61,7 @@ test.describe("Studio canvas visibility", () => {
     await connect.getByLabel("To").selectOption({ label: "Done" });
     await connect.getByRole("button", { name: "Connect" }).click();
     await expect(connect).toBeHidden();
+    await saveStudio(page);
 
     const draft = await draftOf(page, projectId);
     const [cartId, doneId] = Object.keys(draft.document.nodes);
