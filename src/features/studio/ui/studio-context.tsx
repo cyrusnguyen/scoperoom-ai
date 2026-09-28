@@ -140,8 +140,10 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
    */
   const flush = useCallback(async (): Promise<boolean> => {
     let sent = false;
+    // An acknowledged save always ends with the re-read and "All changes saved", even when this provider unmounted meanwhile.
+    const finish = async () => { await reload(); update(() => ({ save: { state: "saved", message: "" } })); };
     for (;;) {
-      if (!mounted.current || inFlight.current) return false;
+      if (!mounted.current || inFlight.current) { if (sent) await finish(); return false; }
       if (!latest.current.sending) {
         if (!latest.current.entries.length) break;
         if (!editable) return false;
@@ -179,10 +181,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
       else await reload(); // a refusal usually means newer saved data; "Apply my changes again" replays on it
       return false;
     }
-    if (sent) {
-      await reload();
-      update(() => ({ save: { state: "saved", message: "" } }));
-    }
+    if (sent) await finish();
     return true;
   }, [editable, projectId, change, update, reload, onAccessChanged]);
 
