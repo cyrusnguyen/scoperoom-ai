@@ -37,7 +37,7 @@ export async function saveChanges(identity: ProjectIdentity, projectId: string, 
     // The same audit as the single-command and position routes, written in one statement: one event per effective command
     // and one per moved flow. Every event carries the batch's single saved layoutRevision.
     const eventSequence = await recordEvents(tx, project, actorId, [
-      ...applied.saved.map((saved) => ({ action: "DRAFT_COMMAND_SAVED", entityRefs: auditRefs(saved.applied), metadata: { command: saved.command, documentRevision: saved.documentRevision, layoutRevision } })),
+      ...applied.saved.map((saved) => ({ action: "DRAFT_COMMAND_SAVED", entityRefs: auditRefs(saved.applied, saved.entityRef ? [saved.entityRef] : []), metadata: { command: saved.command, documentRevision: saved.documentRevision, layoutRevision } })),
       ...applied.moved.map((group) => ({
         action: "DRAFT_POSITIONS_SAVED", entityRefs: [group.flowId, ...Object.keys(group.positions)].slice(0, 25).map((id) => ({ kind: "DRAFT_ENTITY", id })),
         metadata: { mode: "MOVE_NODES", layoutRevision, moved: Object.keys(group.positions).length },

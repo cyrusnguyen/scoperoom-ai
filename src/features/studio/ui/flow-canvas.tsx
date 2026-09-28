@@ -39,6 +39,7 @@ const HANDLE_ORDER: Record<Direction, { position: Position; type: "source" | "ta
     { position: Position.Top, type: "target" }, { position: Position.Bottom, type: "source" },
   ],
 };
+const otherType = (type: "source" | "target") => (type === "source" ? "target" : "source");
 // Handle ids are the side names themselves (Position's string values), so a connection's handles are its sides directly.
 const isSide = (value: string | null | undefined): value is Side => (SIDES as readonly string[]).includes(value ?? "");
 
@@ -64,8 +65,16 @@ function StepCard({ id, data, isConnectable }: NodeProps<StepNode>) {
   const { editing } = useContext(InlineEditingContext);
   return <div className="step-node" data-kind={data.kind}>
     <KindShape kind={data.kind} />
+    {/* React Flow's edge-drawing lookup only finds a saved *start* handle among `source`-typed handles (never
+        `target`), so every side needs one of each type at the same id and position to draw as either end of a saved
+        connection. The primary pass keeps HANDLE_ORDER's direction-based type first in DOM order, so a plain
+        (handle-less) connection still defaults to bottom→top (TB) or right→left (LR) as before; the secondary pass
+        adds the other type, stacked exactly on top, so it still reads as one dot per side. */}
     {HANDLE_ORDER[data.direction].map(({ position, type }) => (
-      <Handle key={position} id={position} type={type} position={position} isConnectable={isConnectable} />
+      <Handle key={`${position}-${type}`} id={position} type={type} position={position} isConnectable={isConnectable} />
+    ))}
+    {HANDLE_ORDER[data.direction].map(({ position, type }) => (
+      <Handle key={`${position}-${otherType(type)}`} id={position} type={otherType(type)} position={position} isConnectable={isConnectable} />
     ))}
     <div className="step-body">
       <span className="step-kind">{KIND_LABELS[data.kind]}</span>

@@ -971,9 +971,10 @@ test.describe("Studio on a real draft", () => {
     const draft = await draftOf(page, projectId);
     const nodes = Object.fromEntries(Object.values(draft.document.nodes).map((node) => [node.label, node.id]));
     await page.route("**/drafts/*/changes", (route) => route.fulfill({ status: 400, json: { error: { code: "INVALID_INPUT", message: "Connection refused" } } }));
-    // Four handles per step (UI02) are all connectable; the bottom/top pair is the default TB routing.
-    await page.locator(`.react-flow__node[data-id="${nodes.Start}"] .react-flow__handle[data-handleid="bottom"]`).dragTo(
-      page.locator(`.react-flow__node[data-id="${nodes.End}"] .react-flow__handle[data-handleid="top"]`),
+    // Four sides per step (UI02) are all connectable; the bottom/top pair is the default TB routing. Each side is
+    // two stacked handle elements (source- and target-typed, Task 13 fix round 1); `.first()` picks one of the pair.
+    await page.locator(`.react-flow__node[data-id="${nodes.Start}"] .react-flow__handle[data-handleid="bottom"]`).first().dragTo(
+      page.locator(`.react-flow__node[data-id="${nodes.End}"] .react-flow__handle[data-handleid="top"]`).first(),
     );
     await expect(page.locator(".studio-status")).toContainText("1 connection");
     await headerSave(page).click();
@@ -1001,7 +1002,7 @@ test.describe("Studio on a real draft", () => {
       payload: { edgeId: edge.id, fromId: nodes.Remote, toId: nodes.Original } });
     const requests: { commands: Record<string, unknown>[] }[] = [];
     await page.route("**/drafts/*/changes", async (route) => { requests.push(route.request().postDataJSON()); await route.continue(); });
-    await page.locator(".react-flow__edgeupdater-target").dragTo(page.locator(`.react-flow__node[data-id="${nodes.Mine}"] .react-flow__handle[data-handleid="top"]`));
+    await page.locator(".react-flow__edgeupdater-target").dragTo(page.locator(`.react-flow__node[data-id="${nodes.Mine}"] .react-flow__handle[data-handleid="top"]`).first());
     await expect(page.locator(`.react-flow__edge[data-id="${edge.id}"]`)).toBeVisible();
     expect(requests).toHaveLength(0);
     await headerSave(page).click();

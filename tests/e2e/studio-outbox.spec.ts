@@ -55,9 +55,10 @@ async function clickEdge(page: Page, edgeId: string) {
   await page.mouse.click(point.x, point.y);
 }
 
-/** Connects two steps by dragging from one's bottom handle to the other's top handle. */
+/** Connects two steps by dragging from one's bottom handle to the other's top handle. Each side is two stacked
+ * elements (source- and target-typed, Task 13 fix round 1); `.first()` just picks one of the pair. */
 async function connect(page: Page, fromId: string, toId: string) {
-  await nodeAt(page, fromId).locator('.react-flow__handle[data-handleid="bottom"]').dragTo(nodeAt(page, toId).locator('.react-flow__handle[data-handleid="top"]'));
+  await nodeAt(page, fromId).locator('.react-flow__handle[data-handleid="bottom"]').first().dragTo(nodeAt(page, toId).locator('.react-flow__handle[data-handleid="top"]').first());
 }
 
 test.describe("Save covers every change (real draft)", () => {

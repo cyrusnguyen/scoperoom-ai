@@ -245,6 +245,8 @@ export function applyGraphCommand(
           fromId: remap.get(edge.fromId)!,
           toId: remap.get(edge.toId)!,
         };
+        const sides = layout.edgeSides[edge.id];
+        if (sides) layout.edgeSides[edgeId] = sides;
       }
       layoutChanged = true;
       break;
@@ -360,9 +362,11 @@ export function applyGraphCommand(
       const sidesChanged = fromSide ? existingSides?.from !== fromSide || existingSides?.to !== toSide : Boolean(existingSides);
       if (!endpointsChanged && !sidesChanged) return noChange();
       // The endpoints and their sides are one geometry decision: a plain reconnect (no sides given) clears them, a
-      // side-carrying reconnect (endpoints changed or not) writes or replaces them.
+      // side-carrying reconnect (endpoints changed or not) writes or replaces them. Either way the layout changed
+      // exactly when the sides entry did, whether or not the endpoints (and so the document) also changed.
       if (fromSide) layout.edgeSides[edgeId] = { from: fromSide, to: toSide! };
       else delete layout.edgeSides[edgeId];
+      layoutChanged = sidesChanged;
       if (!endpointsChanged) return layoutOnly(); // sides only: no document revision, no behaviour version
       document.edges[edgeId] = { ...edge, fromId, toId, version: bump(edge.version) };
       versions[edgeId] = document.edges[edgeId].version;

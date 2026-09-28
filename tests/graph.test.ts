@@ -197,6 +197,26 @@ test("duplicating a flow allocates fresh identities and copies topology, positio
   assert.deepEqual(applied.document.flows[source], state.draft.document.flows[source]);
 });
 
+test("duplicating a flow carries a source edge's saved connection sides to the copy's edge id", () => {
+  const { state } = run([createFlow, addNode("A"), addNode("B"), connect(0, 1)]);
+  const [a, b] = nodesOf(state);
+  const source = flowOf(state);
+  const edgeId = Object.keys(state.draft.document.edges)[0]!;
+  const withSides = applyGraphCommand(state.draft, state.revision, {
+    commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: state.revision,
+    payload: { edgeId, fromId: a!, toId: b!, fromSide: "right", toSide: "left" },
+  }, ids(89));
+  const applied = applyGraphCommand(withSides, state.revision, {
+    commandSchemaVersion: 1, command: "DUPLICATE_FLOW", expectedDocumentRevision: state.revision, payload: { flowId: source },
+  }, ids(90));
+  const copyId = applied.createdIds[0]!;
+  const copiedEdge = Object.values(applied.document.edges).find((edge) => edge.flowId === copyId)!;
+  assert.notEqual(copiedEdge.id, edgeId);
+  assert.deepEqual(applied.layout.edgeSides[copiedEdge.id], { from: "right", to: "left" });
+  // The source edge keeps its own entry, unaffected.
+  assert.deepEqual(applied.layout.edgeSides[edgeId], { from: "right", to: "left" });
+});
+
 test("duplicating a maximum-length title refuses instead of truncating saved text", () => {
   const { state } = run([createFlow]);
   const source = flowOf(state);
@@ -210,11 +230,17 @@ test("duplicating a maximum-length title refuses instead of truncating saved tex
   assert.equal(state.draft.document.flows[source]!.title, "🧭".repeat(LIMITS.title));
 });
 
-test("deleting a flow removes its nodes, edges, positions and direction together", () => {
+test("deleting a flow removes its nodes, edges, positions, direction and any saved connection sides together", () => {
   const { state } = run([createFlow, addNode("A"), addNode("B"), connect(0, 1)]);
   const flowId = flowOf(state);
-  const plan = dependencyPlan(state.draft.document, flowId);
-  const applied = applyGraphCommand(state.draft, state.revision, {
+  const [a, b] = nodesOf(state);
+  const edgeId = Object.keys(state.draft.document.edges)[0]!;
+  const withSides = applyGraphCommand(state.draft, state.revision, {
+    commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: state.revision,
+    payload: { edgeId, fromId: a!, toId: b!, fromSide: "right", toSide: "left" },
+  }, ids(89));
+  const plan = dependencyPlan(withSides.document, flowId);
+  const applied = applyGraphCommand(withSides, state.revision, {
     commandSchemaVersion: 1,
     command: "DELETE_FLOW",
     expectedDocumentRevision: state.revision,
@@ -222,6 +248,7 @@ test("deleting a flow removes its nodes, edges, positions and direction together
   }, ids(90));
   assert.deepEqual(applied.document.flows, {});
   assert.deepEqual(applied.layout, { schemaVersion: 1, positions: {}, directions: {}, edgeSides: {} });
+  assert.equal(applied.layoutChanged, true);
   assert.equal(applied.document.retiredEntityIds.length, 4);
 });
 
@@ -296,7 +323,16 @@ test("a side-only RECONNECT_EDGE changes the layout without touching the documen
     payload: { edgeId, fromId: b!, toId: a! },
   }, ids(92));
   assert.equal(cleared.documentChanged, true);
+  assert.equal(cleared.layoutChanged, true);
   assert.equal(cleared.layout.edgeSides[edgeId], undefined);
+  // Changing endpoints while also giving new sides advances both: the layout change is not lost behind the document one.
+  const movedWithSides = applyGraphCommand(sideOnly, state.revision, {
+    commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: state.revision,
+    payload: { edgeId, fromId: b!, toId: a!, fromSide: "left", toSide: "right" },
+  }, ids(93));
+  assert.equal(movedWithSides.documentChanged, true);
+  assert.equal(movedWithSides.layoutChanged, true);
+  assert.deepEqual(movedWithSides.layout.edgeSides[edgeId], { from: "left", to: "right" });
 });
 
 test("deleting an edge or its nodes removes its saved connection-point entry", () => {
@@ -312,6 +348,7 @@ test("deleting an edge or its nodes removes its saved connection-point entry", (
     commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: state.revision, payload: { edgeId },
   }, ids(91));
   assert.deepEqual(deletedEdge.layout.edgeSides, {});
+  assert.equal(deletedEdge.layoutChanged, true);
 
   const withSides2 = applyGraphCommand(state.draft, state.revision, {
     commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: state.revision,
@@ -322,6 +359,7 @@ test("deleting an edge or its nodes removes its saved connection-point entry", (
     payload: { flowId, nodeIds: [a!], removeEdgeIds: [edgeId] },
   }, ids(93));
   assert.deepEqual(deletedNode.layout.edgeSides, {});
+  assert.equal(deletedNode.layoutChanged, true);
 });
 
 test("text is stored exactly as typed: spacing, emoji, combining marks and right-to-left text survive", () => {

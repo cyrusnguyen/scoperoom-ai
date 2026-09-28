@@ -94,9 +94,13 @@ export async function draftMutation<T extends object>(
   });
 }
 
-/** Audit names what the command touched, bounded well under the audit payload cap. */
-export function auditRefs(applied: Applied) {
-  const ids = [...new Set([...applied.createdIds, ...Object.keys(applied.versions), ...applied.retiredIds])].slice(0, 25);
+/**
+ * Audit names what the command touched, bounded well under the audit payload cap. `extra` names records an
+ * effective command touched without creating, versioning or retiring them (a layout-only side-only RECONNECT_EDGE
+ * touches only its edge) — audit-row naming only, never fed back into the receipt or `CommandResult`/`ChangesResult`.
+ */
+export function auditRefs(applied: Applied, extra: string[] = []) {
+  const ids = [...new Set([...applied.createdIds, ...Object.keys(applied.versions), ...applied.retiredIds, ...extra])].slice(0, 25);
   return ids.map((id) => ({ kind: "DRAFT_ENTITY", id }));
 }
 
@@ -120,7 +124,8 @@ export async function executeGraphCommand(identity: ProjectIdentity, projectId: 
     const layoutRevision = applied.layoutChanged ? nextRevision(draft.layoutRevision) : draft.layoutRevision;
     await requireStoredSize(tx, applied.document, applied.layout);
     await tx.scopeDraft.update({ where: { id: draft.id }, data: { documentJson: asJson(applied.document), layoutJson: asJson(applied.layout), documentRevision, layoutRevision }, select: { id: true } });
-    const sequence = await recordEvent(tx, project, actorId, "DRAFT_COMMAND_SAVED", auditRefs(applied), { command: command.command, documentRevision, layoutRevision });
+    const extraRef = command.command === "RECONNECT_EDGE" ? [command.payload.edgeId] : [];
+    const sequence = await recordEvent(tx, project, actorId, "DRAFT_COMMAND_SAVED", auditRefs(applied, extraRef), { command: command.command, documentRevision, layoutRevision });
     return { draftId: draft.id, documentRevision, layoutRevision, eventSequence: Number(sequence), createdIds: applied.createdIds, versions: applied.versions, retiredIds: applied.retiredIds };
   });
 }

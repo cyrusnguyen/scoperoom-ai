@@ -15,6 +15,15 @@ async function draftOf(page: Page, projectId: string): Promise<DraftView> {
   return (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: DraftView }).draft;
 }
 
+/** The edge path's own drawn start point in screen coordinates: proof it actually renders from its saved side,
+ * not just that a `.react-flow__edge` element with that id exists (which error 008 can still leave behind empty). */
+async function edgeStartPoint(page: Page, edgeId: string) {
+  return page.locator(`.react-flow__edge[data-id="${edgeId}"] path.react-flow__edge-path`).evaluate((path: SVGPathElement) => {
+    const at = path.getPointAtLength(0).matrixTransform(path.getScreenCTM()!);
+    return { x: at.x, y: at.y };
+  });
+}
+
 async function createFlowInUi(page: Page, title: string) {
   await page.getByRole("button", { name: "New flow" }).click();
   const form = dialog(page, "New flow");
@@ -83,15 +92,17 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
     await expect(reloaded.locator(".step-shape path.step-shape-fill")).toHaveCount(1);
   });
 
-  test("an editor sees four connectable handles per step, and a condition on a new edge shows as a label pill", async ({ page }) => {
+  test("an editor sees four connectable handle sides per step (each a source and a target element), and a condition on a new edge shows as a label pill", async ({ page }) => {
     await addStepInUi(page, "Cart", "Start");
     await addStepInUi(page, "Done", "Outcome");
     await saveStudio(page);
     const draft = await draftOf(page, projectId);
     const cartId = Object.values(draft.document.nodes).find((node) => node.label === "Cart")!.id;
     const cartNode = nodeAt(page, cartId);
-    await expect(cartNode.locator(".react-flow__handle")).toHaveCount(4);
-    await expect(cartNode.locator(".react-flow__handle.connectable")).toHaveCount(4);
+    // Every side draws as one source-typed and one target-typed handle stacked together (so a saved connection can
+    // start from any side: React Flow's edge-drawing lookup only finds a start handle among source-typed ones).
+    await expect(cartNode.locator(".react-flow__handle")).toHaveCount(8);
+    await expect(cartNode.locator(".react-flow__handle.connectable")).toHaveCount(8);
 
     await toolbar(page).getByRole("button", { name: "Connect" }).click();
     const connect = dialog(page, "Connect steps");
@@ -112,22 +123,26 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
     const cartId = Object.values(draft.document.nodes).find((node) => node.label === "Cart")!.id;
     const doneId = Object.values(draft.document.nodes).find((node) => node.label === "Done")!.id;
 
-    // Connecting by dragging Cart's right handle to Done's left handle records those sides (UI02 Task 13).
-    await nodeAt(page, cartId).locator('.react-flow__handle[data-handleid="right"]').dragTo(nodeAt(page, doneId).locator('.react-flow__handle[data-handleid="left"]'));
+    // Connecting by dragging Cart's right handle to Done's left handle records those sides (UI02 Task 13). Each side
+    // is two stacked elements (source- and target-typed); `.first()` just picks one of the pair.
+    await nodeAt(page, cartId).locator('.react-flow__handle[data-handleid="right"]').first().dragTo(nodeAt(page, doneId).locator('.react-flow__handle[data-handleid="left"]').first());
     await expect(page.locator(".react-flow__edge")).toHaveCount(1);
     await saveStudio(page);
     draft = await draftOf(page, projectId);
     const edgeId = Object.keys(draft.document.edges)[0]!;
     expect(draft.layout.edgeSides[edgeId]).toEqual({ from: "right", to: "left" });
 
-    // The saved sides survive a reload.
+    // The saved sides survive a reload: the edge draws from the exact saved side, not just an element with its id.
     await page.reload();
     await expect(page.locator(`.react-flow__edge[data-id="${edgeId}"]`)).toHaveCount(1);
+    const cartBox = (await nodeAt(page, cartId).boundingBox())!;
+    const start = await edgeStartPoint(page, edgeId);
+    expect(start.x).toBeGreaterThan(cartBox.x + cartBox.width - 5); // drawn from Cart's *right* edge, as saved
 
     // Dragging the connected end to another handle on the same two steps is a side-only save: no request until Save.
     const requests: unknown[] = [];
     await page.route("**/drafts/*/changes", async (route) => { requests.push(route.request().postDataJSON()); await route.continue(); });
-    await page.locator(".react-flow__edgeupdater-target").dragTo(nodeAt(page, doneId).locator('.react-flow__handle[data-handleid="top"]'));
+    await page.locator(".react-flow__edgeupdater-target").dragTo(nodeAt(page, doneId).locator('.react-flow__handle[data-handleid="top"]').first());
     await expect(page.locator(`.react-flow__edge[data-id="${edgeId}"]`)).toBeVisible();
     expect(requests).toHaveLength(0);
     await saveStudio(page);
@@ -151,6 +166,29 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
     expect(draft.layout.edgeSides[plainEdgeId]).toBeUndefined();
     await page.reload();
     await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+  });
+
+  test("a connection started from a top or left handle still draws, saves and survives reload", async ({ page }) => {
+    await addStepInUi(page, "Cart", "Start");
+    await addStepInUi(page, "Done", "Outcome");
+    await saveStudio(page);
+    const draft = await draftOf(page, projectId);
+    const cartId = Object.values(draft.document.nodes).find((node) => node.label === "Cart")!.id;
+    const doneId = Object.values(draft.document.nodes).find((node) => node.label === "Done")!.id;
+
+    // Top and left are the direction's *target*-typed side by default (HANDLE_ORDER); starting a drag there used to
+    // build a connection whose saved `fromSide` names a handle that only existed as a target, so React Flow's
+    // edge-drawing lookup (which only searches source-typed handles for the start) refused to draw it at all.
+    await nodeAt(page, cartId).locator('.react-flow__handle[data-handleid="left"]').first().dragTo(nodeAt(page, doneId).locator('.react-flow__handle[data-handleid="top"]').first());
+    await expect(page.locator(".react-flow__edge")).toHaveCount(1);
+    await saveStudio(page);
+    const saved = await draftOf(page, projectId);
+    const edgeId = Object.keys(saved.document.edges)[0]!;
+    expect(saved.layout.edgeSides[edgeId]).toBeTruthy();
+
+    await page.reload();
+    await expect(page.locator(`.react-flow__edge[data-id="${edgeId}"]`)).toHaveCount(1);
+    await expect(page.locator(`.react-flow__edge[data-id="${edgeId}"] path.react-flow__edge-path`)).toBeVisible();
   });
 });
 
@@ -194,10 +232,10 @@ test.describe("Studio canvas handles (read-only, mocked project)", () => {
     try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
-  test("a reader's steps keep their four handles in the DOM, but none are connectable", async ({ page }) => {
+  test("a reader's steps keep their eight handle elements in the DOM, but none are connectable", async ({ page }) => {
     const startNode = nodeAt(page, start);
     await expect(startNode).toBeVisible();
-    await expect(startNode.locator(".react-flow__handle")).toHaveCount(4);
+    await expect(startNode.locator(".react-flow__handle")).toHaveCount(8);
     await expect(startNode.locator(".react-flow__handle.connectable")).toHaveCount(0);
   });
 });

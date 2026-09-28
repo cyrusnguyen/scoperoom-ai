@@ -78,7 +78,7 @@ test("a batch of commands and moves saves atomically with the proposed ids, and 
 });
 
 test("a side-only RECONNECT_EDGE inside a batch saves the layout without a documentRevision of its own", { skip: !canRun }, async () => {
-  await withFixture(async ({ user, project }) => {
+  await withFixture(async ({ database, user, project }) => {
     const owner = await user();
     const { projectId, draftId, base } = await started(project, owner);
     const [flowId, start, next, edgeId] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
@@ -96,6 +96,10 @@ test("a side-only RECONNECT_EDGE inside a batch saves the layout without a docum
     assert.deepEqual(withSides.versions, {});
     const draft = await getDraft(owner, projectId, draftId);
     assert.deepEqual(draft.layout.edgeSides[edgeId], { from: "right", to: "left" });
+    // Even though nothing was created, versioned or retired, the audit row still names the edge it touched.
+    const { rows: [lastEvent] } = await database.query<{ entity_refs: { kind: string; id: string }[] }>(
+      "select entity_refs from app.audit_event where project_id = $1 order by sequence desc limit 1", [projectId]);
+    assert.deepEqual(lastEvent!.entity_refs, [{ kind: "DRAFT_ENTITY", id: edgeId }]);
   });
 });
 

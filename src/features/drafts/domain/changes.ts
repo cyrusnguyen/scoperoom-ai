@@ -14,8 +14,12 @@ export type AppliedChanges = Draft & {
   createdIds: string[];
   versions: Record<string, number>;
   positions: Record<string, SavedPosition>;
-  /** Effective commands, each with the documentRevision it produced. No-ops are left out. */
-  saved: Array<{ command: string; documentRevision: number; applied: Applied }>;
+  /**
+   * Effective commands, each with the documentRevision it produced. No-ops are left out. `entityRef` names a record
+   * the command touched without creating, versioning or retiring it (a layout-only side-only RECONNECT_EDGE touches
+   * only its edge) — for the audit row only, never fed back into the saved receipt.
+   */
+  saved: Array<{ command: string; documentRevision: number; applied: Applied; entityRef?: string }>;
   /** Move groups that moved at least one step. */
   moved: Array<{ flowId: string; positions: Record<string, SavedPosition> }>;
 };
@@ -58,7 +62,7 @@ export function applyChanges(base: Draft, documentRevision: number, changes: Cha
       layoutChanged ||= applied.layoutChanged;
       createdIds.push(...applied.createdIds);
       Object.assign(versions, applied.versions);
-      saved.push({ command: command.command, documentRevision: revision, applied });
+      saved.push({ command: command.command, documentRevision: revision, applied, ...(command.command === "RECONNECT_EDGE" ? { entityRef: command.payload.edgeId } : {}) });
     } catch (error) { at("commands", index, error); }
   }
   for (const [index, group] of changes.moves.entries()) {

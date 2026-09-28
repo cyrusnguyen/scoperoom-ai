@@ -241,7 +241,7 @@ test("deletion needs the exact dependency plan, and a delayed edit to a deleted 
 });
 
 test("a side-only RECONNECT_EDGE saves the layout without moving the document revision or any record version", { skip: !canRun }, async () => {
-  await withFixture(async ({ user, project }) => {
+  await withFixture(async ({ database, user, project }) => {
     const owner = await user();
     const { projectId, draftId, flowId, nodeIds } = await seeded(project, owner, ["A", "B"]);
     let draft = await getDraft(owner, projectId, draftId);
@@ -256,6 +256,10 @@ test("a side-only RECONNECT_EDGE saves the layout without moving the document re
     assert.deepEqual([sideOnly.documentRevision, sideOnly.layoutRevision], [draft.documentRevision, draft.layoutRevision + 1]);
     assert.deepEqual(sideOnly.versions, {});
     assert.equal((await getProjectStatus(owner, projectId)).eventSequence, before.eventSequence + 1, "still audited, its own event");
+    // Even though nothing was created, versioned or retired, the audit row still names the edge it touched.
+    const { rows: [lastEvent] } = await database.query<{ entity_refs: { kind: string; id: string }[] }>(
+      "select entity_refs from app.audit_event where project_id = $1 order by sequence desc limit 1", [projectId]);
+    assert.deepEqual(lastEvent!.entity_refs, [{ kind: "DRAFT_ENTITY", id: edgeId }]);
     const reloaded = await getDraft(owner, projectId, draftId);
     assert.deepEqual(reloaded.layout.edgeSides[edgeId], { from: "right", to: "left" });
     assert.equal(reloaded.document.edges[edgeId]!.version, 1);
