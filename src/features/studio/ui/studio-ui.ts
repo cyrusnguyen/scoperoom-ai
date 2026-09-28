@@ -1,7 +1,7 @@
 import type { CommandResult, GraphCommand } from "../../drafts/contracts/commands.ts";
 import type { DraftLayout } from "../../drafts/contracts/draft-layout.ts";
 import type { MoveNodes } from "../../drafts/contracts/positions.ts";
-import type { DraftView } from "../../drafts/contracts/scope-document.ts";
+import { NODE_KINDS, type DraftView, type NodeKind } from "../../drafts/contracts/scope-document.ts";
 import { dirtyFields, isDirty, type Buffers } from "./buffers.ts";
 
 // The Studio's slice of the shell's per-project UI store (UI00 "Per-project UI state"). Memory only: none of it is
@@ -98,4 +98,25 @@ export function moveTargets(moved: { id: string; position: { x: number; y: numbe
     const x = Math.round(position.x), y = Math.round(position.y);
     return saved && (saved.x !== x || saved.y !== y) ? [{ nodeId: id, x, y }] : [];
   });
+}
+
+// Shape panel drag-and-drop (UI02 Task 7): the payload names a kind and its fixed STEP_SIZE, so a drop never has to
+// trust dataTransfer for anything besides which shape was picked.
+export const SHAPE_DRAG_MIME = "application/x-scoperoom-shape";
+export type ShapeDragPayload = { kind: NodeKind; width: number; height: number };
+
+/** The dropped or dragged payload, or null for anything malformed or an unknown kind (dropped silently). */
+export function parseShapePayload(raw: string): ShapeDragPayload | null {
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return null; }
+  if (!value || typeof value !== "object") return null;
+  const { kind, width, height } = value as Record<string, unknown>;
+  if (typeof kind !== "string" || !(NODE_KINDS as readonly string[]).includes(kind)) return null;
+  if (typeof width !== "number" || typeof height !== "number") return null;
+  return { kind: kind as NodeKind, width, height };
+}
+
+/** A drop or click point, centred to a top-left step position and rounded to whole pixels (Data02 coordinates). */
+export function dropTarget(point: { x: number; y: number }, size: { width: number; height: number }): { x: number; y: number } {
+  return { x: Math.round(point.x - size.width / 2), y: Math.round(point.y - size.height / 2) };
 }

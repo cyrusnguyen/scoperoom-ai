@@ -1,17 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
-  Background, BaseEdge, ConnectionMode, Controls, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow,
-  type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
+  Background, BaseEdge, ConnectionMode, Controls, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
+  useReactFlow, type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
 } from "@xyflow/react";
 import { STEP_SIZE, type Direction } from "@/features/drafts/contracts/draft-layout";
 import { MAX_MOVE_NODES } from "@/features/drafts/contracts/positions";
 import type { NodeKind } from "@/features/drafts/contracts/scope-document";
 import { bufferKey, editFields, refuse, send, type Saved } from "./buffers";
 import { KIND_LABELS, reconnectCommand } from "./fields";
+import ShapePanel from "./shape-panel";
 import { useStudio } from "./studio-context";
-import { moveTargets, selectEdge, selectNodes, type SelectChange, type StudioUi } from "./studio-ui";
+import { dropTarget, moveTargets, parseShapePayload, selectEdge, selectNodes, SHAPE_DRAG_MIME, type SelectChange, type StudioUi } from "./studio-ui";
 
 type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction };
 type StepNode = Node<StepData, "step">;
@@ -31,8 +32,9 @@ const HANDLE_ORDER: Record<Direction, { position: Position; type: "source" | "ta
   ],
 };
 
-/** The DECISION diamond and DATA_STORE cylinder: an SVG that stretches to the node's exact box (UI02). */
-function KindShape({ kind }: { kind: NodeKind }) {
+/** The DECISION diamond and DATA_STORE cylinder: an SVG that stretches to the node's exact box (UI02). Shared by the
+ * canvas node, the shape panel's icons and its drag ghost, so a shape is drawn in exactly one place. */
+export function KindShape({ kind }: { kind: NodeKind }) {
   if (kind === "DECISION") return <svg className="step-shape" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
     <polygon className="step-shape-fill" points="50,4 96,50 50,96 4,50" />
   </svg>;
@@ -77,19 +79,72 @@ const defaultEdgeOptions = { type: "flow" as const };
  * and never become edits; connecting and reconnecting call the same commands as the Connect form and the inspector.
  * A drag shows locally and saves once, on drop, as one MOVE_NODES for every moved step. Keyboard arrow moves are
  * ignored: the inspector's position form is the keyboard path. `preview` renders proposed positions read-only.
+ * A `ReactFlowProvider` wraps this so the shape panel's click path and the canvas wrapper's drop handler can both
+ * convert a screen point to a flow position (`screenToFlowPosition` needs an ancestor provider).
  */
-export default function FlowCanvas({ flowId, preview }: { flowId: string; preview?: { positions: Record<string, Point>; direction: Direction } }) {
+export default function FlowCanvas(props: { flowId: string; preview?: { positions: Record<string, Point>; direction: Direction } }) {
+  return <ReactFlowProvider><CanvasInner {...props} /></ReactFlowProvider>;
+}
+
+function CanvasInner({ flowId, preview }: { flowId: string; preview?: { positions: Record<string, Point>; direction: Direction } }) {
   const { draft, editable, busy, ui, update, run, inspect, attempt, moveSteps } = useStudio();
   const { document, layout } = draft;
+  const { screenToFlowPosition } = useReactFlow();
   const [dragging, setDragging] = useState<Record<string, Point>>({});
   const [note, setNote] = useState("");
   const [measured, setMeasured] = useState<Record<string, { width: number; height: number }>>({});
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const interactive = !preview;
   const connectable = interactive && editable && !busy && !ui.pending;
   // The person's own placement stays on screen while it saves, awaits a retry, or waits for their conflict choice.
   const shown = interactive && attempt?.flowId === flowId ? attempt : null;
   // One unresolved placement at a time: no step can be dragged again until it is saved, retried, reapplied or dropped.
   const draggable = interactive && editable && !busy && !attempt;
+  // The shape panel shares this same "one unresolved placement at a time" gate: adding a step will move it once.
+  const shapesEnabled = interactive && editable && !busy && !attempt;
+  // A created step's move waits for an effect, not the promise chain: `run` returns as soon as its own reload lands,
+  // but that reload's `draft` reaches this component through a state update, one render after this callback resumes.
+  // `placing` (a ref, acted on at most once per id) is set synchronously; the effect fires once the render carrying
+  // that reload has happened, so `moveSteps` sees the new step's saved position (Task 7 brief).
+  const placing = useRef<{ nodeId: string; x: number; y: number } | null>(null);
+  const [placingId, setPlacingId] = useState<string | null>(null);
+  useEffect(() => {
+    const target = placing.current;
+    if (!target || target.nodeId !== placingId || !layout.positions[placingId]) return;
+    placing.current = null;
+    void moveSteps(flowId, [target]);
+  }, [placingId, layout, flowId, moveSteps]);
+  const createShapeAt = useCallback(async (kind: NodeKind, point: Point) => {
+    const size = STEP_SIZE[kind];
+    const target = dropTarget(point, size);
+    const outcome = await run({
+      commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision: draft.documentRevision,
+      payload: { flowId, kind, label: KIND_LABELS[kind], actorLabel: "", description: "" },
+    });
+    if (!outcome.ok) return;
+    const nodeId = outcome.result.createdIds[0];
+    if (!nodeId) return;
+    update(() => ({ selection: { kind: "NODES", ids: [nodeId] } }));
+    placing.current = { nodeId, ...target };
+    setPlacingId(nodeId);
+  }, [flowId, run, draft, update]);
+  const activateShape = useCallback((kind: NodeKind) => {
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    const centre = rect ? { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    void createShapeAt(kind, screenToFlowPosition(centre));
+  }, [createShapeAt, screenToFlowPosition]);
+  const onShapeDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!shapesEnabled || !Array.from(event.dataTransfer.types).includes(SHAPE_DRAG_MIME)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+  const onShapeDrop = (event: DragEvent<HTMLDivElement>) => {
+    if (!shapesEnabled) return;
+    const payload = parseShapePayload(event.dataTransfer.getData(SHAPE_DRAG_MIME));
+    if (!payload) return;
+    event.preventDefault();
+    void createShapeAt(payload.kind, screenToFlowPosition({ x: event.clientX, y: event.clientY }));
+  };
 
   const nodes = useMemo<StepNode[]>(() => {
     const selected = interactive && ui.selection?.kind === "NODES" ? ui.selection.ids : [];
@@ -166,7 +221,7 @@ export default function FlowCanvas({ flowId, preview }: { flowId: string; previe
     }
   };
 
-  return <div className="canvas">
+  return <div className="canvas" ref={wrapperRef} onDragOver={onShapeDragOver} onDrop={onShapeDrop}>
     <ReactFlow<StepNode, FlowEdge> key={preview ? `preview-${preview.direction}` : flowId} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions} connectionMode={ConnectionMode.Loose}
       onNodesChange={interactive ? onNodesChange : measure} onEdgesChange={interactive ? onEdgesChange : undefined}
@@ -178,6 +233,7 @@ export default function FlowCanvas({ flowId, preview }: { flowId: string; previe
       <Background gap={24} size={1} />
       {interactive && <Controls showInteractive={false} />}
     </ReactFlow>
+    {interactive && editable && <ShapePanel disabled={!shapesEnabled} onActivate={activateShape} />}
     {!nodes.length && <div className="canvas-empty"><p>This flow has no steps yet.</p></div>}
     {note && <p className="canvas-note" role="alert">{note}</p>}
   </div>;

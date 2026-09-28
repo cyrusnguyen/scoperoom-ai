@@ -73,6 +73,13 @@ button.item-row { width: 100%; border: 0; border-bottom: var(--panel-border); ba
 .field-error { color: var(--danger-foreground); font-size: var(--font-label); }
 .placement-note { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); flex-shrink: 0; padding: var(--space-2) var(--space-4); border-top: 1px solid var(--warning-border); background: var(--warning-background); color: var(--warning-foreground); font-size: var(--font-label); }
 .canvas-note { position: absolute; bottom: var(--space-4); left: 50%; margin: 0; padding: 6px 10px; border: 1px solid var(--warning-border); border-radius: var(--radius-control); background: var(--warning-background); color: var(--warning-foreground); font-size: var(--font-label); transform: translateX(-50%); }
+
+.shape-panel { position: absolute; z-index: 5; bottom: var(--space-4); left: 50%; display: flex; gap: 4px; max-width: calc(100% - var(--space-4) * 2); padding: 6px; overflow-x: auto; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface-raised); transform: translateX(-50%); }
+.shape-button { display: flex; flex-shrink: 0; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; background: none; }
+.shape-button:hover:not(:disabled) { background: var(--surface-muted); }
+.shape-button:disabled { opacity: 0.5; }
+.shape-icon.step-node { position: relative; width: 22px; height: 22px; padding: 0; }
+.shape-panel-ghosts { position: fixed; top: -9999px; left: -9999px; pointer-events: none; }
 .arrange-preview { position: relative; height: 280px; margin: var(--space-3) 0; border: var(--panel-border); border-radius: var(--radius-card); overflow: hidden; background: var(--canvas-background); }
 .arrange-preview .canvas { position: absolute; inset: 0; }
 .position-form { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-3) 0; }
