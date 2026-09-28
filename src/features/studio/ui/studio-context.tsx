@@ -12,8 +12,8 @@ import { projectErrors } from "@/features/projects/contracts/errors";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
 import { follow } from "./buffers";
 import {
-  acknowledged, addDrop, discardOutbox, enqueue, optimistic, pendingCount, rebase, redo as redoChange, startSave, undo as undoChange, wireBody, withEntries,
-  type Outbox, type Placement, type Sending,
+  acknowledged, addDrop, discardOutbox, enqueue, keepTheirs as keepTheirsChange, optimistic, pendingCount, rebase, redo as redoChange, replay, startSave, undo as undoChange,
+  wireBody, withEntries, type ConflictTarget, type Outbox, type Placement, type Sending,
 } from "./outbox";
 import { afterDraftRead, AUTOSAVE_MS, requireDraftRevision, type SaveState, type StudioUi } from "./studio-ui";
 
@@ -45,6 +45,10 @@ type Studio = {
   /** Any unsaved change, sent or not. */
   unsaved: boolean;
   applyAgain: () => Promise<void>; discardChanges: () => void; dismissDropped: () => void;
+  /** After a refused save: drop one of my conflicting changes and keep what someone else saved. */
+  keepTheirs: (target: ConflictTarget) => void;
+  /** Unsaved changes that no longer apply to the shown draft: listed, never silently dropped (a save leaves them out). */
+  skipped: string[];
   undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean;
   place: (command: PositionCommand, key?: string) => Promise<Outcome<PositionResult>>;
   preview: (request: ArrangementRequest) => Promise<Outcome<ArrangementPreview>>;
@@ -146,7 +150,14 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
         if (!editable) return false;
         const base = saved.current, key = crypto.randomUUID();
         change((current) => startSave(current, base, key));
-        if (!latest.current.sending) continue; // only steps dropped back where they were: nothing to send
+        if (!latest.current.sending) {
+          // Not started: the result would go over the draft's size limit (the server would refuse it every time).
+          if (latest.current.entries.length) {
+            update(() => ({ save: { state: "failed", message: "These changes would make the draft too large, so they weren’t saved. Undo some of them." } }));
+            return false;
+          }
+          continue; // only steps dropped back where they were: nothing to send
+        }
       }
       const sending: Sending = latest.current.sending!;
       if (sending.state === "refused") return false;
@@ -193,22 +204,28 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     if (saveNow) await saveChanges();
   }, [editable, change, saveChanges]);
 
-  /** After a refused save: re-read, replay every unsaved change on the newer draft (listing any that no longer apply), save. */
+  /**
+   * After a refused save: replay every unsaved change on the saved draft the person has been shown (the refusal re-read
+   * it, and the note compared it with their changes), listing any that no longer apply, then save. It never re-reads
+   * first: a change someone makes after the comparison refuses this save again and is shown in turn.
+   */
   const applyAgain = useCallback(async () => {
     if (!editable || inFlight.current || latest.current.sending?.state !== "refused") return;
-    const fresh = await reload();
-    if (!fresh || latest.current.sending?.state !== "refused") return;
-    const names = optimistic(latest.current, saved.current).document;
+    const fresh = saved.current;
+    const names = optimistic(latest.current, fresh).document;
     const rebased = rebase(latest.current, fresh, names);
     change(() => rebased, () => ({ save: { state: "idle", message: "" } }));
     await saveChanges();
-  }, [editable, reload, change, saveChanges]);
+  }, [editable, change, saveChanges]);
   const discardChanges = useCallback(() => {
     if (inFlight.current) return;
     change(discardOutbox, () => ({ save: { state: "idle", message: "" } }));
     void reload();
   }, [change, reload]);
   const dismissDropped = useCallback(() => change((current) => ({ ...current, dropped: [] })), [change]);
+  // Keeping theirs for the last conflicting change leaves nothing refused: the failure status goes with it.
+  const keepTheirs = useCallback((target: ConflictTarget) => change((current) => keepTheirsChange(current, target),
+    (current) => (keepTheirsChange(current.outbox, target).sending ? {} : { save: { state: "idle", message: "" } })), [change]);
   const undo = useCallback(() => change(undoChange), [change]);
   const redo = useCallback(() => change(redoChange), [change]);
 
@@ -266,14 +283,15 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     return () => window.clearInterval(timer);
   }, [editable, waiting, busy, unresolved]);
 
-  const draft = useMemo(() => (editable ? optimistic(outbox, savedDraft) : savedDraft), [editable, outbox, savedDraft]);
+  const replayed = useMemo(() => (editable ? replay(outbox, savedDraft) : { draft: savedDraft, skipped: [] }), [editable, outbox, savedDraft]);
+  const { draft, skipped } = replayed;
   const unsaved = pendingCount(outbox) > 0;
   const canUndo = editable && outbox.entries.length > 0, canRedo = editable && outbox.redo.length > 0;
   const value = useMemo<Studio>(() => ({
     projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, moveSteps, saveChanges, unsaved,
-    applyAgain, discardChanges, dismissDropped, undo, redo, canUndo, canRedo, place, preview, reload, dragActive, inspect: onInspect,
+    applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, reload, dragActive, inspect: onInspect,
   }), [projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, moveSteps, saveChanges, unsaved,
-    applyAgain, discardChanges, dismissDropped, undo, redo, canUndo, canRedo, place, preview, reload, dragActive, onInspect]);
+    applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, reload, dragActive, onInspect]);
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }
 

@@ -251,6 +251,11 @@ test.describe("Inline label editing (real draft)", () => {
     await expect(saveNote(page)).toContainText("Someone else changed this draft first, so your changes weren’t saved.");
     await expect(pay.locator(".step-label")).toHaveText("Mine");
     expect((await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Theirs");
+    // The overlap is shown before anything is sent again (UI02: never resubmit stale text unseen).
+    const compared = saveNote(page).locator(".conflict-list");
+    await expect(compared).toContainText("Saved valueTheirs");
+    await expect(compared).toContainText("Your editMine");
+    await expect(compared).toContainText("Before your editPay");
     await saveNote(page).getByRole("button", { name: "Apply my changes again" }).click();
     await expect(page.locator(".studio-status")).toContainText("All changes saved");
     await expect(saveNote(page)).toHaveCount(0);

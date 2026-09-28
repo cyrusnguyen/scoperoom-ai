@@ -53,13 +53,15 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   const full = flows.length >= LIMITS.flows;
   const duplicateTooLong = Boolean(current && [...`Copy of ${current.title}`].length > LIMITS.title);
   const counts = (flowId: string) => Object.values(document.nodes).filter((node) => node.flowId === flowId).length;
-  const open = async (flowId: string | null) => {
+  const open = async (flowId: string | null, created = false) => {
     // Unsaved changes are saved before another flow opens; if they cannot be, this flow stays open with them. After a
-    // deleted flow (null) the view falls back to another flow of the same draft.
+    // deleted flow (null) the view falls back to another flow of the same draft. A flow just created or duplicated here
+    // opens either way (it is in the same draft; the save note explains the failed save): its form never stays open
+    // to create an identical second one.
     setSaving(true);
     const saved = !flowId || flowId === current?.id || await saveChanges();
     setSaving(false);
-    if (!saved) {
+    if (!saved && !created) {
       setMessage("Your changes aren’t saved yet, so this flow stays open. Resolve them in the Studio, then switch.");
       return;
     }
@@ -78,7 +80,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
       return;
     }
     setMessage("");
-    await open(command.command === "DELETE_FLOW" ? null : outcome.result.createdIds[0]!);
+    await open(command.command === "DELETE_FLOW" ? null : outcome.result.createdIds[0]!, command.command !== "DELETE_FLOW");
   };
   const create = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();

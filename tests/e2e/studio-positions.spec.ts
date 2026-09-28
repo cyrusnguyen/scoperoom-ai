@@ -195,7 +195,7 @@ test.describe("saved positions and arrangement", () => {
     expect(saves).toHaveLength(1);
   });
 
-  test("a save that meets someone else's move keeps my placement until I choose", async ({ page }) => {
+  test("a save that meets someone else's move shows theirs and mine, and keeps my placement until I choose", async ({ page }) => {
     const [, middle, end] = seeded.nodeIds;
     await moveViaApi(page, projectId, seeded, { [middle!]: { x: 900, y: 900 } });
     await drag(page, middle!, 150, 0);
@@ -204,6 +204,13 @@ test.describe("saved positions and arrangement", () => {
     const mine = await nodeAt(page, middle!).getAttribute("style");
     expect(mine).not.toContain("translate(900px, 900px)");
     await expect(saveButton(page)).toBeDisabled(); // the refused save is resolved first
+    // Their position and mine are compared before anything is sent again.
+    const compared = note(page).locator(".conflict-list");
+    await expect(compared).toContainText("Move Middle");
+    await expect(compared).toContainText("Saved value(900, 900)");
+    const mineAt = /translate\((-?\d+)px, (-?\d+)px\)/.exec(mine!)!;
+    await expect(compared).toContainText(`Your edit(${mineAt[1]}, ${mineAt[2]})`);
+    await expect(compared).toContainText("Before your edit");
     await note(page).getByRole("button", { name: "Apply my changes again" }).click();
     await expect(note(page)).toHaveCount(0);
     await expect(status(page)).toContainText("All changes saved");
@@ -215,7 +222,8 @@ test.describe("saved positions and arrangement", () => {
     await drag(page, end!, -120, 0);
     await saveButton(page).click();
     await expect(note(page)).toContainText(STALE);
-    await note(page).getByRole("button", { name: "Discard my changes" }).click();
+    await expect(note(page).locator(".conflict-list")).toContainText("Saved value(700, 700)");
+    await note(page).locator(".conflict-list").getByRole("button", { name: "Keep theirs" }).click();
     await expect(note(page)).toHaveCount(0);
     await expect(nodeAt(page, end!)).toHaveAttribute("style", /translate\(700px, 700px\)/);
     await expect(status(page)).not.toContainText("Unsaved changes");

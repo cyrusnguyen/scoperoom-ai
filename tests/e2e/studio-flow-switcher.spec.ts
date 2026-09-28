@@ -40,11 +40,11 @@ test("closing the switcher when its last flow disappears does not reopen it afte
       data: { commandSchemaVersion: 1, command: "DELETE_FLOW", expectedDocumentRevision: draft.documentRevision, payload: { flowId: flow.id, removeNodeIds: [], removeEdgeIds: [] } },
     }).then((response) => expect(response.status()).toBe(200));
 
-    // The duplicate is local; saving it before the switch meets the deletion, so it is refused and this flow stays.
+    // The duplicate is local and opens; saving it first meets the deletion, so the save is refused and explained.
     await flows.getByRole("button", { name: "Duplicate Original" }).click();
-    await expect(flows.getByRole("alert")).toContainText("Your changes aren’t saved yet");
-    await flows.getByRole("button", { name: "Close" }).click();
     await expect(flows).toBeHidden();
+    await expect(page.locator("#studio-flow-title")).toHaveText("Copy of Original");
+    await expect(page.locator(".save-note")).toContainText("Someone else changed this draft first");
     // Discarding re-reads the now-empty draft.
     await page.locator(".save-note").getByRole("button", { name: "Discard my changes" }).click();
     await expect(page.getByRole("heading", { name: "No flows yet" })).toBeVisible();

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type KeyboardEvent } from "react";
+import { Fragment, useState, type KeyboardEvent } from "react";
 import { graphWarnings } from "@/features/drafts/domain/warnings";
 import { Icon } from "@/features/shell/ui/icon";
 import { ArrangeDialog } from "./arrange-dialog";
@@ -10,7 +10,7 @@ import { FlowsDialog } from "./flows-dialog";
 import GraphList from "./graph-list";
 import { currentFlow, recordOf } from "./graph-view";
 import { AddStepDialog, ConnectDialog, DeleteStepsDialog } from "./step-dialogs";
-import { describeAll, optimistic } from "./outbox";
+import { compareOutbox, describeAll, optimistic } from "./outbox";
 import { ReadRecovery, staleCodes, useStudio } from "./studio-context";
 import { studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
 
@@ -132,8 +132,9 @@ function RemovedRecovery() {
  * changes out lists them (their typed text included), so nothing is dropped silently.
  */
 function SaveNote() {
-  const { ui, editable, busy, savedDraft, saveChanges, applyAgain, discardChanges, dismissDropped, unsaved } = useStudio();
-  const { sending, dropped } = ui.outbox;
+  const { ui, draft, editable, busy, savedDraft, saveChanges, applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, unsaved } = useStudio();
+  const { sending } = ui.outbox;
+  const dropped = [...ui.outbox.dropped, ...skipped];
   const list = (items: string[]) => <ul className="plain-list save-note-list">{items.map((text, index) => <li key={index}>{text}</li>)}</ul>;
   if (sending?.state === "uncertain") return <div className="save-note" role="alert">
     <span>We couldn’t confirm your changes. Retry sends the same request.</span>
@@ -144,13 +145,29 @@ function SaveNote() {
     {list(describeAll(ui.outbox, optimistic(ui.outbox, savedDraft).document))}
     <span className="view-actions"><button type="button" className="button quiet small" onClick={discardChanges} disabled={busy}>Discard my changes</button></span>
   </div>;
-  if (sending?.state === "refused") return <div className="save-note" role="alert">
+  if (sending?.state === "refused") {
+    // Never resubmit over someone else's newer value unseen (UI02): each overlap is compared first, 03.2-style.
+    const conflicts = compareOutbox(ui.outbox, savedDraft, draft.document);
+    return <div className="save-note" role="alert">
     <span>{staleCodes.has(sending.code ?? "") ? "Someone else changed this draft first, so your changes weren’t saved." : `${sending.message ?? ""} Your changes weren’t saved.`} They’re still shown here.</span>
+    {conflicts.length > 0 && <>
+      <span>They also changed what you edited. Compare, then keep theirs or apply yours:</span>
+      <dl className="conflict-list save-note-list">{conflicts.map((conflict, index) => <div key={index}>
+        <dt>{conflict.label}</dt>
+        {conflict.rows.map((row) => <Fragment key={row.field}>
+          <dd><span className="muted">Saved value</span>{row.theirs}</dd>
+          <dd><span className="muted">Your edit</span>{row.mine}</dd>
+          <dd><span className="muted">Before your edit</span>{row.before}</dd>
+        </Fragment>)}
+        <dd><button type="button" className="button quiet small" onClick={() => keepTheirs(conflict.target)} disabled={busy}>Keep theirs</button></dd>
+      </div>)}</dl>
+    </>}
     <span className="view-actions">
       <button type="button" className="button primary small" onClick={() => void applyAgain()} disabled={busy}>Apply my changes again</button>
       <button type="button" className="button quiet small" onClick={discardChanges} disabled={busy}>Discard my changes</button>
     </span>
   </div>;
+  }
   if (dropped.length) return <div className="save-note" role="alert">
     <span>These changes no longer applied, so they were left out:</span>
     {list(dropped)}
@@ -182,6 +199,6 @@ function StudioStatus({ flowId }: { flowId: string }) {
 function SaveStatus({ ui, save, refreshFailed }: { ui: StudioUi; save: SaveState; refreshFailed: boolean }) {
   const state = ui.outbox.sending?.state;
   const text = state === "sending" ? "Saving…" : state === "uncertain" ? "We couldn’t confirm your changes." : state === "refused" ? "Your changes weren’t saved."
-    : studioDirtyCount(ui) ? "Unsaved changes" : save.state === "saved" && !refreshFailed ? "All changes saved" : "";
-  return <span className={state === "uncertain" || state === "refused" ? "status-error" : "muted"} role="status" aria-live="polite">{text}</span>;
+    : save.state === "failed" && save.message ? save.message : studioDirtyCount(ui) ? "Unsaved changes" : save.state === "saved" && !refreshFailed ? "All changes saved" : "";
+  return <span className={state === "uncertain" || state === "refused" || save.state === "failed" ? "status-error" : "muted"} role="status" aria-live="polite">{text}</span>;
 }

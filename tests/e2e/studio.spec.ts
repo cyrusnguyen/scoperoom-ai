@@ -299,11 +299,10 @@ test.describe("Studio on a real draft", () => {
     await expect(form.getByRole("button", { name: "Saving…" })).toBeDisabled();
     await expect(form.getByLabel("Title")).not.toBeEditable();
     releaseFirst();
-    await expect(form.getByRole("alert")).toContainText("Your changes aren’t saved yet");
-    await expect(form.getByLabel("Title")).toBeEditable();
-    await page.keyboard.press("Escape");
+    // The flow was created (locally): it opens, and its form closes, so it can never create an identical second one.
     await expect(form).toHaveCount(0);
     await expect(page.locator("#studio-flow-title")).toHaveText("Retry once");
+    await expect(page.locator(".react-flow")).toBeVisible();
     await note(page).getByRole("button", { name: "Retry" }).click();
     await expect(page.locator(".studio-status")).toContainText("All changes saved");
     expect(attempts).toHaveLength(2);
@@ -355,8 +354,8 @@ test.describe("Studio on a real draft", () => {
     const form = modal(page, "New flow");
     await form.getByLabel("Title").fill("Second");
     await form.getByRole("button", { name: "Create flow" }).click();
-    await expect(form.getByRole("alert")).toContainText("Your changes aren’t saved yet");
-    await page.keyboard.press("Escape");
+    await expect(form).toHaveCount(0);
+    await expect(page.locator("#studio-flow-title")).toHaveText("Second");
     await note(page).getByRole("button", { name: "Retry" }).click();
     await expect(page.locator(".studio-status")).toContainText("All changes saved");
     expect(attempts).toHaveLength(2);
@@ -491,6 +490,12 @@ test.describe("Studio on a real draft", () => {
     await expect(note(page)).toContainText("Someone else changed this draft first, so your changes weren’t saved.");
     await expect(page.getByRole("list", { name: "Steps" })).toContainText("Invoice (mine)");
     expect((await draftOf(page, projectId)).document.nodes[invoice.id]!.label).toBe("Invoice (theirs)");
+    // Before anything is sent again, the overlap is shown: their saved value, my edit and the original.
+    const compared = note(page).locator(".conflict-list");
+    await expect(compared).toContainText("Saved valueInvoice (theirs)");
+    await expect(compared).toContainText("Your editInvoice (mine)");
+    await expect(compared).toContainText("Before your editInvoice");
+    await expect(compared.getByRole("button", { name: "Keep theirs" })).toBeVisible();
     await note(page).getByRole("button", { name: "Apply my changes again" }).click();
     await expect(page.locator(".studio-status")).toContainText("All changes saved");
     const saved = await draftOf(page, projectId);

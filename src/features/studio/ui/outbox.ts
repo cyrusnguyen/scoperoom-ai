@@ -3,7 +3,7 @@ import type { GraphCommand } from "../../drafts/contracts/commands.ts";
 import type { MoveItem } from "../../drafts/contracts/positions.ts";
 import type { DraftView, ScopeDocument } from "../../drafts/contracts/scope-document.ts";
 import { applyChanges } from "../../drafts/domain/changes.ts";
-import { applyGraphCommand, GraphError } from "../../drafts/domain/graph.ts";
+import { applyGraphCommand, checkDraft, GraphError } from "../../drafts/domain/graph.ts";
 import { moveNodes } from "../../drafts/domain/moves.ts";
 import { stepName } from "./graph-view.ts";
 
@@ -59,32 +59,36 @@ const commandsOf = (entries: Entry[]): Change[] => entries.flatMap((entry) => (e
 function applyCommands(view: DraftView, commands: Change[]) {
   try {
     const applied = applyChanges(view, view.documentRevision, { commands, moves: [] });
-    return { kept: commands, document: applied.document, layout: applied.layout, documentRevision: applied.documentRevision, layoutChanged: applied.layoutChanged };
+    return { kept: commands, skipped: [] as Change[], document: applied.document, layout: applied.layout, documentRevision: applied.documentRevision, layoutChanged: applied.layoutChanged };
   } catch (error) {
     if (!(error instanceof GraphError)) throw error;
-    // ponytail: a queued command is always checked against the state it is replayed on, so this only runs if that
-    // state changed under it; skipping it keeps the Studio usable, and the save would then leave it out as well.
+    // A queued command is checked against the state it is replayed on, so this only runs if that state changed under
+    // it (or the whole chain would go over a size limit). Whatever no longer applies is skipped and reported, never
+    // dropped silently: the Studio lists it and a save leaves it out.
     let current = { document: view.document, layout: view.layout, documentRevision: view.documentRevision, layoutChanged: false };
-    const kept: Change[] = [];
+    const kept: Change[] = [], skipped: Change[] = [];
     for (const change of commands) {
       try {
         const applied = applyChanges(current, current.documentRevision, { commands: [change], moves: [] });
         current = { document: applied.document, layout: applied.layout, documentRevision: applied.documentRevision, layoutChanged: current.layoutChanged || applied.layoutChanged };
         kept.push(change);
-      } catch (inner) { if (!(inner instanceof GraphError)) throw inner; }
+      } catch (inner) { if (!(inner instanceof GraphError)) throw inner; skipped.push(change); }
     }
-    return { kept, ...current };
+    return { kept, skipped, ...current };
   }
 }
+
+export type Built = { changes: Changes; draft: DraftView; skipped: Change[]; overLimit: boolean };
 
 /**
  * The batch for a chain of unsent changes and its result. Commands come first, then every moved step's final spot,
  * guarded by the position version the commands left it at (a step created here is at version 1). Steps no longer in
- * the document, or dropped back where they are, send nothing.
+ * the document, or dropped back where they are, send nothing. `skipped` lists commands that no longer apply;
+ * `overLimit` is the server's own final size check (after the moves) failing, so such a batch is never sent.
  */
-export function build(view: DraftView, entries: Entry[]): { changes: Changes; draft: DraftView } {
+export function build(view: DraftView, entries: Entry[]): Built {
   const commands = commandsOf(entries);
-  const applied = commands.length ? applyCommands(view, commands) : { kept: [], document: view.document, layout: view.layout, documentRevision: view.documentRevision, layoutChanged: false };
+  const applied = commands.length ? applyCommands(view, commands) : { kept: [], skipped: [], document: view.document, layout: view.layout, documentRevision: view.documentRevision, layoutChanged: false };
   const final = new Map<string, Placement>();
   for (const entry of entries) if (entry.kind === "drop") for (const item of entry.items) final.set(item.nodeId, item);
   const groups = new Map<string, MoveItem[]>();
@@ -100,16 +104,37 @@ export function build(view: DraftView, entries: Entry[]): { changes: Changes; dr
     ...view, document: applied.document, layout, documentRevision: applied.documentRevision,
     layoutRevision: view.layoutRevision + (applied.layoutChanged || moves.length ? 1 : 0),
   };
-  return { changes: { commands: applied.kept, moves }, draft };
+  // The commands were checked by applyChanges; the server checks the final draft again after the moves.
+  let overLimit = false;
+  if (moves.length) {
+    try { checkDraft(draft); } catch (error) { if (!(error instanceof GraphError)) throw error; overLimit = true; }
+  }
+  return { changes: { commands: applied.kept, moves }, draft, skipped: applied.skipped, overLimit };
 }
 
-/** What every view shows: the saved draft with the segment being saved and the unsent changes replayed on it. */
-export function optimistic(outbox: Outbox, saved: DraftView): DraftView {
+export type Replayed = { draft: DraftView; skipped: string[]; overLimit: boolean };
+
+/**
+ * What every view shows: the saved draft with the segment being saved and the unsent changes replayed on it, plus a
+ * description of anything that no longer applies (so it is listed, not silently missing) and the final size check.
+ */
+export function replay(outbox: Outbox, saved: DraftView): Replayed {
   let view = baseOf(outbox, saved);
+  const names = view.document;
+  const skipped: string[] = [];
   for (const batch of outbox.sending?.batches ?? []) {
-    try { view = applyBatch(view, batch); } catch (error) { if (!(error instanceof GraphError)) throw error; }
+    try { view = applyBatch(view, batch); } catch (error) {
+      if (!(error instanceof GraphError)) throw error;
+      skipped.push(...batch.commands.map(({ command }) => describe(command, names)));
+    }
   }
-  return outbox.entries.length ? build(view, outbox.entries).draft : view;
+  if (!outbox.entries.length) return { draft: view, skipped, overLimit: false };
+  const built = build(view, outbox.entries);
+  return { draft: built.draft, skipped: [...skipped, ...built.skipped.map(({ command }) => describe(command, names))], overLimit: built.overLimit };
+}
+
+export function optimistic(outbox: Outbox, saved: DraftView): DraftView {
+  return replay(outbox, saved).draft;
 }
 
 export type Enqueued = { entries: Entry[]; createdIds: string[]; versions: Record<string, number>; retiredIds: string[]; documentRevision: number };
@@ -217,12 +242,24 @@ export function split({ commands, moves }: Changes): Changes[] {
   return batches;
 }
 
-/** Save pressed (or autosave): the unsent chain becomes the segment to send. Undone changes can no longer be redone. */
+/**
+ * Save pressed (or autosave): the unsent chain becomes the segment to send. Undone changes can no longer be redone.
+ * Commands that no longer apply are left out and listed in `dropped`. A chain whose result would go over the draft's
+ * size limit is not started at all (the outbox is returned unchanged; `overLimit` tells the caller).
+ */
 export function startSave(outbox: Outbox, saved: DraftView, key: string): Outbox {
   if (outbox.sending || !outbox.entries.length) return outbox;
   const base = baseOf(outbox, saved);
-  const batches = split(build(base, outbox.entries).changes);
-  return { ...outbox, base, entries: [], redo: [], sending: batches.length ? { draftId: base.id, key, batches, state: "waiting" } : null };
+  const built = build(base, outbox.entries);
+  if (built.overLimit) return outbox;
+  const batches = split(built.changes);
+  const dropped = [...outbox.dropped, ...built.skipped.map(({ command }) => describe(command, base.document))];
+  return { ...outbox, base, entries: [], redo: [], dropped, sending: batches.length ? { draftId: base.id, key, batches, state: "waiting" } : null };
+}
+
+/** True when saving the unsent chain would go over the draft's size limit (checked like the server does). */
+export function overLimit(outbox: Outbox, saved: DraftView): boolean {
+  return Boolean(outbox.entries.length) && build(baseOf(outbox, saved), outbox.entries).overLimit;
 }
 
 /** The current batch is saved: the base advances by exactly that batch; the next one (if any) waits for its own key. */
@@ -331,4 +368,75 @@ export function rebase(outbox: Outbox, saved: DraftView, names: ScopeDocument): 
     }
   }
   return { base: saved, sending: null, entries, redo: [], dropped };
+}
+
+/** What a conflicting change targets, so "Keep theirs" can drop exactly that change. */
+export type ConflictTarget = { kind: "command"; command: GraphCommand } | { kind: "move"; nodeId: string };
+/** One of my unsaved changes whose record someone else changed first: their saved value, my edit, and the original. */
+export type Conflict = { label: string; rows: { field: string; theirs: string; mine: string; before: string }[]; target: ConflictTarget };
+
+const text = (value: unknown) => (Array.isArray(value) ? value.join("; ") : String(value ?? "")) || "(empty)";
+const point = (at: { x: number; y: number }) => `(${at.x}, ${at.y})`;
+
+/**
+ * After a refused save (UI02 "never auto-resubmit stale text"): every unsaved change whose target (a field, a
+ * connection's endpoints, a step's position) changed between the draft it was made on (\`outbox.base\`) and the newer
+ * saved draft. Each is shown as Saved value / Your edit / Before your edit before anything is sent again; changes to
+ * untouched records need no review. Records created locally, or deleted since, are not listed here: the replay lists
+ * those as no longer applying.
+ */
+export function compareOutbox(outbox: Outbox, saved: DraftView, names: ScopeDocument): Conflict[] {
+  const base = outbox.base;
+  if (!base || base.id !== saved.id) return [];
+  const commands = [
+    ...(outbox.sending?.batches ?? []).flatMap((batch) => batch.commands.map(({ command }) => command)),
+    ...outbox.entries.flatMap((entry) => (entry.kind === "command" ? [entry.command] : [])),
+  ];
+  const conflicts: Conflict[] = [];
+  for (const command of commands) {
+    if (UPDATES.has(command.command)) {
+      const id = recordId(command.payload)!;
+      const before = (base.document.flows[id] ?? base.document.nodes[id] ?? base.document.edges[id]) as Record<string, unknown> | undefined;
+      const now = (saved.document.flows[id] ?? saved.document.nodes[id] ?? saved.document.edges[id]) as Record<string, unknown> | undefined;
+      if (!before || !now) continue;
+      const rows = Object.entries(command.payload as Record<string, unknown>)
+        .filter(([field]) => field !== "flowId" && field !== "nodeId" && field !== "edgeId" && JSON.stringify(now[field]) !== JSON.stringify(before[field]))
+        .map(([field, mine]) => ({ field: FIELD_NAMES[field] ?? field, theirs: text(now[field]), mine: text(mine), before: text(before[field]) }));
+      if (rows.length) conflicts.push({ label: describe(command, names), rows, target: { kind: "command", command } });
+    } else if (command.command === "RECONNECT_EDGE") {
+      const before = base.document.edges[command.payload.edgeId], now = saved.document.edges[command.payload.edgeId];
+      if (!before || !now || (before.fromId === now.fromId && before.toId === now.toId)) continue;
+      const ends = (fromId: string, toId: string) => `${stepName(names, fromId)} → ${stepName(names, toId)}`;
+      conflicts.push({ label: describe(command, names), target: { kind: "command", command },
+        rows: [{ field: "connection", theirs: ends(now.fromId, now.toId), mine: ends(command.payload.fromId, command.payload.toId), before: ends(before.fromId, before.toId) }] });
+    }
+  }
+  const moved = new Map<string, { x: number; y: number }>();
+  for (const batch of outbox.sending?.batches ?? []) for (const group of batch.moves) for (const item of group.items) moved.set(item.nodeId, item);
+  for (const entry of outbox.entries) if (entry.kind === "drop") for (const item of entry.items) moved.set(item.nodeId, item);
+  for (const [nodeId, mine] of moved) {
+    const before = base.layout.positions[nodeId], now = saved.layout.positions[nodeId];
+    if (!before || !now || now.version === before.version) continue;
+    conflicts.push({ label: `Move ${stepName(names, nodeId)}`, target: { kind: "move", nodeId }, rows: [{ field: "position", theirs: point(now), mine: point(mine), before: point(before) }] });
+  }
+  return conflicts;
+}
+
+/** "Keep theirs": drops exactly one of my unsaved changes (a command, or every unsaved move of one step). */
+export function keepTheirs(outbox: Outbox, target: ConflictTarget): Outbox {
+  const same = (command: GraphCommand) => target.kind === "command" && JSON.stringify(command) === JSON.stringify(target.command);
+  const moveless = <T extends { nodeId: string }>(items: T[]) => items.filter((item) => target.kind !== "move" || item.nodeId !== target.nodeId);
+  const sending = outbox.sending && {
+    ...outbox.sending,
+    batches: outbox.sending.batches.map((batch) => ({
+      commands: batch.commands.filter(({ command }) => !same(command)),
+      moves: batch.moves.map((group) => ({ ...group, items: moveless(group.items) })).filter((group) => group.items.length),
+    })).filter((batch) => batch.commands.length || batch.moves.length),
+  };
+  const entries = outbox.entries.flatMap((entry): Entry[] => {
+    if (entry.kind === "command") return same(entry.command) ? [] : [entry];
+    const items = moveless(entry.items);
+    return items.length ? [{ ...entry, items }] : [];
+  });
+  return { ...outbox, sending: sending && sending.batches.length ? sending : null, entries };
 }

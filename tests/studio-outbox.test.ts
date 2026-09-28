@@ -6,8 +6,10 @@ import { emptyDraft, type DraftView } from "../src/features/drafts/contracts/sco
 import { applyChanges } from "../src/features/drafts/domain/changes.ts";
 import { applyGraphCommand, GraphError } from "../src/features/drafts/domain/graph.ts";
 import {
-  acknowledged, addDrop, build, emptyOutbox, enqueue, optimistic, pendingCount, rebase, redo, split, startSave, undo, wireBody, withEntries, type Outbox,
+  acknowledged, addDrop, build, compareOutbox, emptyOutbox, enqueue, keepTheirs, optimistic, overLimit, pendingCount, rebase, redo, replay, split, startSave, undo, wireBody, withEntries,
+  type Outbox,
 } from "../src/features/studio/ui/outbox.ts";
+import { largeDraft } from "./support/large-draft.ts";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 /** Deterministic "crypto.randomUUID" for enqueue. */
@@ -203,4 +205,67 @@ test("Apply my changes again replays on the newer saved draft with fresh guards 
   assert.deepEqual(changes.commands[0]!.proposedIds, [payId], "created ids are kept");
   const server = applyChanges(theirs, theirs.documentRevision, parseChanges(wireBody(changes)));
   assert.deepEqual(server.document, shown.document);
+});
+
+/** Applies commands to a saved draft as another tab's saves would. */
+function theirs(view: DraftView, commands: GraphCommand[], moves: { nodeId: string; x: number; y: number }[] = []): DraftView {
+  let next = view;
+  for (const command of commands) next = { ...next, ...(() => { const applied = applyGraphCommand(next, next.documentRevision, command, () => "unused"); return { document: applied.document, layout: applied.layout }; })(), documentRevision: next.documentRevision + 1 };
+  if (moves.length) {
+    const positions = { ...next.layout.positions };
+    for (const { nodeId, x, y } of moves) positions[nodeId] = { x, y, version: positions[nodeId]!.version + 1 };
+    next = { ...next, layout: { ...next.layout, positions }, layoutRevision: next.layoutRevision + 1 };
+  }
+  return next;
+}
+
+test("after a refused save, each change whose field, endpoints or position someone else changed is shown as theirs, mine and before", () => {
+  const base = saved();
+  let outbox = queue(emptyOutbox, base, rename(1, start, "Mine")).outbox;
+  outbox = queue(outbox, base, describeNode(1, end, "My notes")).outbox;
+  outbox = addDrop(outbox, base, flowId, [{ nodeId: end, x: 300, y: 400 }, { nodeId: start, x: 5, y: 5 }]);
+  outbox = startSave(outbox, base, "key-1");
+  // They renamed Start, changed only End's name (not the description I edited), and moved End.
+  const newer = theirs(base, [rename(1, start, "Theirs"), rename(1, end, "Finish")], [{ nodeId: end, x: 900, y: 900 }]);
+  const conflicts = compareOutbox(outbox, newer, optimistic(outbox, base).document);
+  assert.deepEqual(conflicts.map(({ label, rows }) => [label, rows]), [
+    ["Step “Mine”: name “Mine”", [{ field: "name", theirs: "Theirs", mine: "Mine", before: "Start" }]],
+    ["Move End", [{ field: "position", theirs: "(900, 900)", mine: "(300, 400)", before: "(0, 160)" }]],
+  ]);
+  assert.deepEqual(compareOutbox(outbox, base, base.document), [], "nothing changed underneath: nothing to review");
+
+  // Keep theirs for the rename: it is dropped; applying the rest keeps their name and my other changes.
+  const kept = keepTheirs(keepTheirs(outbox, conflicts[0]!.target), conflicts[1]!.target);
+  assert.equal(pendingCount(kept), 2, "my description and Start's move remain");
+  const rebased = rebase(kept, newer, optimistic(kept, base).document);
+  const shown = optimistic(rebased, newer);
+  assert.deepEqual([shown.document.nodes[start]!.label, shown.document.nodes[end]!.description], ["Theirs", "My notes"]);
+  assert.deepEqual([shown.layout.positions[end]!.x, shown.layout.positions[start]!.x], [900, 5]);
+});
+
+test("a queued change that no longer applies is listed, never dropped silently, and the save leaves it out", () => {
+  const base = saved();
+  const newId = ids(10);
+  let outbox = queue(emptyOutbox, base, addEdge(4, start, end), newId).outbox;
+  outbox = queue(outbox, base, { commandSchemaVersion: 1, command: "UPDATE_EDGE", expectedEntityVersion: 1, payload: { edgeId: id(10), condition: "Yes" } }, newId).outbox;
+  // The chain's base changed under it (as after a failed re-read): the connection it labels can no longer be created.
+  const gone = theirs(base, [{ commandSchemaVersion: 1, command: "DELETE_NODES", expectedDocumentRevision: 4, payload: { flowId, nodeIds: [end], removeEdgeIds: [] } }]);
+  const moved: Outbox = { ...outbox, base: gone };
+  assert.deepEqual(replay(moved, gone).skipped, ["Connection Start → Removed step", "Connection label “Yes”"]);
+  const started = startSave(moved, gone, "key-1");
+  assert.equal(started.sending, null, "nothing left to send");
+  assert.deepEqual(started.dropped, ["Connection Start → Removed step", "Connection label “Yes”"]);
+});
+
+test("the server's final size check runs after the moves too: an over-limit chain is refused locally and never started", () => {
+  const large = largeDraft();
+  const flow = Object.keys(large.document.flows)[0]!;
+  const node = Object.values(large.document.nodes).find((candidate) => candidate.flowId === flow)!;
+  // Someone else's save left the draft just over its byte cap (as a failed re-read could show a stale, smaller one).
+  const over: DraftView = { id: id(98), status: "EDITABLE", documentRevision: 1, layoutRevision: 1, document: { ...large.document, nodes: { ...large.document.nodes, [node.id]: { ...node, description: "ệ".repeat(60_000) } } }, layout: large.layout };
+  const outbox = addDrop(emptyOutbox, over, flow, [{ nodeId: node.id, x: 777, y: 777 }]);
+  assert.equal(build(over, outbox.entries).overLimit, true);
+  assert.equal(overLimit(outbox, over), true);
+  assert.equal(startSave(outbox, over, "key-1"), outbox, "not started, so Apply can never loop on a batch the server refuses");
+  assert.equal(overLimit(addDrop(emptyOutbox, saved(), flowId, [{ nodeId: end, x: 1, y: 1 }]), saved()), false);
 });
