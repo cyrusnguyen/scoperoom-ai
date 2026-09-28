@@ -73,29 +73,40 @@ test("an endpoint pair changes atomically without dropping its captured revision
   assert.deepEqual(next["EDGE:e1"]!.values, { fromId: "a", toId: "new-target" });
 });
 
-// Inline canvas editors (Task 8) close through the inspector's own Save on the same shared buffer.
-test("closing an inline editor sends nothing unless its own field changed", () => {
-  const full: Saved = { kind: "NODE", id: "n1", version: 3, fields: { label: "Pay", kind: "ACTION", actorLabel: "", description: "", assumptionNotes: "" } };
-  assert.deepEqual(inlinePlan(undefined, "NODE", "label"), { kind: "unchanged" });
-  assert.deepEqual(inlinePlan(edit({}, full, "description", "typed in the inspector")[key], "NODE", "label"), { kind: "unchanged" });
-  assert.deepEqual(inlinePlan(edit({}, full, "label", "Pay now")[key], "NODE", "label"), { kind: "send", fields: { label: "Pay now" }, retrying: false });
+// Inline canvas editors (Task 8) close through the inspector's own Save on the same shared buffer, and only for what
+// was typed in the editor itself (`opened` is the text it showed when it opened).
+const full: Saved = { kind: "NODE", id: "n1", version: 3, fields: { label: "Pay", kind: "ACTION", actorLabel: "", description: "", assumptionNotes: "" } };
+
+test("closing an inline editor sends nothing unless its own field changed while it was open", () => {
+  assert.deepEqual(inlinePlan(undefined, "NODE", "label", "Pay"), { kind: "unchanged" });
+  assert.deepEqual(inlinePlan(edit({}, full, "description", "typed in the inspector")[key], "NODE", "label", "Pay"), { kind: "unchanged" });
+  assert.deepEqual(inlinePlan(edit({}, full, "label", "Pay now")[key], "NODE", "label", "Pay"), { kind: "send", fields: { label: "Pay now" }, retrying: false });
+  // Opened on unsaved inspector text and closed without typing: nothing is sent, not even the inspector's fields.
+  const inspector = editFields({}, full, { label: "From inspector", description: "Half-written" });
+  assert.deepEqual(inlinePlan(inspector[key], "NODE", "label", "From inspector"), { kind: "unchanged" });
+  assert.deepEqual(inlinePlan(edit({}, full, "label", "x".repeat(161))[key], "NODE", "label", "x".repeat(161)), { kind: "unchanged" }, "invalid inspector text is not touched either");
 });
 
-test("an inline save sends the whole buffer like Save, retries an unconfirmed request with its sent fields, and leaves conflicts to review", () => {
-  const full: Saved = { kind: "NODE", id: "n1", version: 3, fields: { label: "Pay", kind: "ACTION", actorLabel: "", description: "", assumptionNotes: "" } };
+test("an inline edit never sends other unsaved fields: they go to the inspector for a deliberate Save", () => {
   const both = editFields({}, full, { label: "Pay now", description: "Card only" });
-  assert.deepEqual(inlinePlan(both[key], "NODE", "label"), { kind: "send", fields: { label: "Pay now", description: "Card only" }, retrying: false });
-  const unconfirmed = edit(send(edit({}, full, "label", "First"), key, "k1"), full, "label", "Second");
-  assert.deepEqual(inlinePlan(unconfirmed[key], "NODE", "label"), { kind: "send", fields: { label: "First" }, retrying: true });
-  assert.deepEqual(inlinePlan(refuse(send(edit({}, full, "label", "Mine"), key, "k1"), key, true)[key], "NODE", "label"), { kind: "review" });
+  assert.deepEqual(inlinePlan(both[key], "NODE", "label", "Pay"), { kind: "review" });
   const badOther = editFields({}, full, { label: "Pay now", actorLabel: "x".repeat(101) });
-  assert.deepEqual(inlinePlan(badOther[key], "NODE", "label"), { kind: "review" }, "another invalid field is fixed in the inspector");
+  assert.deepEqual(inlinePlan(badOther[key], "NODE", "label", "Pay"), { kind: "review" });
+  assert.deepEqual(inlinePlan(refuse(send(edit({}, full, "label", "Mine"), key, "k1"), key, true)[key], "NODE", "label", "Pay"), { kind: "review" }, "a conflict is reviewed");
 });
 
-test("an empty or over-limit inline label is refused locally; an empty connection label clears it", () => {
-  assert.deepEqual(inlinePlan(edit({}, node, "label", "  ")[key], "NODE", "label"), { kind: "refused", message: "Enter a name." });
-  assert.deepEqual(inlinePlan(edit({}, node, "label", "\u{1F600}".repeat(161))[key], "NODE", "label"), { kind: "refused", message: "Name can be up to 160 characters (now 161)." });
+test("an unconfirmed inline save retries its exact sent fields with the same key", () => {
+  const unconfirmed = edit(send(edit({}, full, "label", "First"), key, "k1"), full, "label", "Second");
+  assert.deepEqual(inlinePlan(unconfirmed[key], "NODE", "label", "First"), { kind: "send", fields: { label: "First" }, retrying: true });
+});
+
+test("an empty or over-limit inline label is refused without touching the buffer; an empty connection label clears it", () => {
+  const empty = edit({}, node, "label", "  ");
+  assert.deepEqual(inlinePlan(empty[key], "NODE", "label", "Pay"), { kind: "refused", message: "Enter a name." });
+  assert.deepEqual(inlinePlan(edit({}, node, "label", "\u{1F600}".repeat(161))[key], "NODE", "label", "Pay"), { kind: "refused", message: "Name can be up to 160 characters (now 161)." });
+  // The plan is pure: the typed text stays in the buffer for the editor and the inspector.
+  assert.equal(empty[key]!.values.label, "  ");
   const edge: Saved = { kind: "EDGE", id: "e1", version: 2, fields: { condition: "Paid" } };
-  assert.deepEqual(inlinePlan(edit({}, edge, "condition", "")["EDGE:e1"], "EDGE", "condition"), { kind: "send", fields: { condition: "" }, retrying: false });
-  assert.equal(inlinePlan(edit({}, edge, "condition", "y".repeat(241))["EDGE:e1"], "EDGE", "condition").kind, "refused");
+  assert.deepEqual(inlinePlan(edit({}, edge, "condition", "")["EDGE:e1"], "EDGE", "condition", "Paid"), { kind: "send", fields: { condition: "" }, retrying: false });
+  assert.equal(inlinePlan(edit({}, edge, "condition", "y".repeat(241))["EDGE:e1"], "EDGE", "condition", "Paid").kind, "refused");
 });

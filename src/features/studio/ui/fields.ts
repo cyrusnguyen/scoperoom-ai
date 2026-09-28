@@ -1,6 +1,6 @@
 import type { GraphCommand } from "../../drafts/contracts/commands.ts";
 import { CLASSIFICATIONS, INCLUSIONS, LIMITS, NODE_KINDS, type EdgeRecord, type FlowRecord, type NodeRecord } from "../../drafts/contracts/scope-document.ts";
-import { changes, type EntityBuffer, type EntityKind, type Fields, type Saved } from "./buffers.ts";
+import { changes, dirtyFields, type EntityBuffer, type EntityKind, type Fields, type Saved } from "./buffers.ts";
 
 // Form fields for the inspector and the Studio dialogs. Limits come from the draft contract, counted in code points,
 // and are checked on Save — never by truncating what was typed (no `maxLength`: it silently cuts pasted text).
@@ -61,18 +61,18 @@ export function fieldErrors(kind: EntityKind, values: Fields): Record<string, st
 export type InlinePlan = { kind: "unchanged" } | { kind: "refused"; message: string } | { kind: "review" } | { kind: "send"; fields: Fields; retrying: boolean };
 
 /**
- * Closing an inline canvas editor is the inspector's Save for that record's shared buffer (same sent fields, same
- * uncertain retry), but only when the inline field itself changed. A stale conflict, or another typed field that is
- * invalid, is left for explicit review in the inspector; an invalid inline value is refused locally.
+ * Closing an inline canvas editor is the inspector's Save for that record's shared buffer (same command, same key on an
+ * unconfirmed retry), limited to what was typed in the editor: `opened` is the text it showed when it opened, so opening
+ * and closing it never submits anything. Other unsaved fields, and a stale conflict, go to the inspector for deliberate
+ * review. Invalid text is refused but never discarded: the buffer keeps it (UI02 "Invalid fields retain text").
  */
-export function inlinePlan(buffer: EntityBuffer | undefined, kind: EntityKind, field: string): InlinePlan {
-  if (!buffer || buffer.values[field] === buffer.original[field]) return { kind: "unchanged" };
+export function inlinePlan(buffer: EntityBuffer | undefined, kind: EntityKind, field: string, opened: string): InlinePlan {
+  if (!buffer || buffer.values[field] === buffer.original[field] || buffer.values[field] === opened) return { kind: "unchanged" };
   if (buffer.conflict) return { kind: "review" };
   const own = fieldErrors(kind, { [field]: buffer.values[field]! })[field];
   if (own) return { kind: "refused", message: own };
-  const retrying = buffer.sent !== null;
-  const fields = retrying ? buffer.sent! : changes(buffer);
-  return Object.keys(fieldErrors(kind, fields)).length ? { kind: "review" } : { kind: "send", fields, retrying };
+  if (buffer.sent) return { kind: "send", fields: buffer.sent, retrying: true };
+  return dirtyFields(buffer).some((name) => name !== field) ? { kind: "review" } : { kind: "send", fields: changes(buffer), retrying: false };
 }
 
 /** The update command for changed fields, guarded by the version the edits were made against. */

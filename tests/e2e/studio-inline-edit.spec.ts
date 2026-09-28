@@ -132,7 +132,7 @@ test.describe("Inline label editing (real draft)", () => {
     expect(writes.commands).toHaveLength(1);
   });
 
-  test("an empty or over-limit name is refused locally and the saved name comes back", async ({ page }) => {
+  test("an empty or over-limit name is refused locally and the typed text is kept for fixing", async ({ page }) => {
     const writes = recordWrites(page);
     const pay = nodeAt(page, ids.payId);
     await pay.locator(".step-label").dblclick();
@@ -140,16 +140,51 @@ test.describe("Inline label editing (real draft)", () => {
     await editor.fill("");
     await expect(editor).toHaveAttribute("placeholder", "Name this step");
     await editor.press("Enter");
-    await expect(note(page)).toHaveText("Enter a name. The saved name is kept.");
-    await expect(pay.locator(".step-label")).toHaveText("Pay");
+    await expect(note(page)).toHaveText("Enter a name. Your text is kept; fix it here or in the inspector.");
+    await expect(pay.locator(".step-label")).toHaveText("Pay"); // the canvas shows the saved name
 
     await pay.locator(".step-label").dblclick();
-    await expect(stepEditor(page, ids.payId)).toHaveValue("Pay");
-    await stepEditor(page, ids.payId).fill("x".repeat(161));
+    await expect(stepEditor(page, ids.payId)).toHaveValue("");
+    const long = "x".repeat(161);
+    await stepEditor(page, ids.payId).fill(long);
     await page.locator(".studio-flow-title").click(); // blur closes too
-    await expect(note(page)).toHaveText("Name can be up to 160 characters (now 161). The saved name is kept.");
-    await expect(pay.locator(".step-label")).toHaveText("Pay");
+    await expect(note(page)).toHaveText("Name can be up to 160 characters (now 161). Your text is kept; fix it here or in the inspector.");
+    await pay.locator(".step-kind").dblclick();
+    await expect(panel(page).getByLabel("Name")).toHaveValue(long);
+    await panel(page).getByRole("button", { name: "Close panel" }).click();
+    await pay.locator(".step-label").dblclick();
+    await expect(stepEditor(page, ids.payId)).toHaveValue(long);
+    await stepEditor(page, ids.payId).press("Escape"); // unchanged since opening: nothing is sent or discarded
     expect(writes.commands).toHaveLength(0);
+
+    await pay.locator(".step-label").dblclick();
+    await stepEditor(page, ids.payId).fill("x".repeat(160));
+    await stepEditor(page, ids.payId).press("Enter");
+    await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("x".repeat(160));
+    expect(writes.commands).toHaveLength(1);
+  });
+
+  test("opening and closing the editor without typing never submits the inspector's unsaved fields", async ({ page }) => {
+    const writes = recordWrites(page);
+    const pay = nodeAt(page, ids.payId);
+    await pay.locator(".step-kind").dblclick();
+    await panel(page).getByLabel("Name").fill("Pay by card");
+    await panel(page).getByLabel("Description").fill("Half-written");
+    await panel(page).getByRole("button", { name: "Close panel" }).click();
+
+    await pay.locator(".step-label").dblclick();
+    await expect(stepEditor(page, ids.payId)).toHaveValue("Pay by card");
+    await page.locator(".studio-flow-title").click();
+    await expect(stepEditor(page, ids.payId)).toBeHidden();
+
+    // A real inline change with other unsaved fields opens the inspector instead of sending them.
+    await pay.locator(".step-label").dblclick();
+    await stepEditor(page, ids.payId).fill("Pay by bank");
+    await stepEditor(page, ids.payId).press("Enter");
+    await expect(panel(page).getByLabel("Name")).toHaveValue("Pay by bank");
+    await expect(panel(page).getByLabel("Description")).toHaveValue("Half-written");
+    expect(writes.commands).toHaveLength(0);
+    expect((await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay");
   });
 
   test("double-clicking elsewhere on a step opens the inspector, which shares the inline editor's unsaved text", async ({ page }) => {
@@ -202,7 +237,7 @@ test.describe("Inline label editing (real draft)", () => {
     expect((await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Theirs");
   });
 
-  test("an unconfirmed save retries with the same key, and a save while another is in flight keeps the text", async ({ page }) => {
+  test("an unconfirmed save keeps its text and retries with the same key, and a save while another is in flight keeps the text", async ({ page }) => {
     const writes = recordWrites(page);
     await page.route("**/commands", (route) => route.abort("failed"), { times: 1 });
     const pay = nodeAt(page, ids.payId);
@@ -212,10 +247,13 @@ test.describe("Inline label editing (real draft)", () => {
     await expect(page.getByText("We could not confirm the last change. Retry it.")).toBeVisible();
     await pay.locator(".step-label").dblclick();
     await expect(stepEditor(page, ids.payId)).toHaveValue("Pay later");
-    await stepEditor(page, ids.payId).press("Enter");
+    await stepEditor(page, ids.payId).press("Enter"); // unchanged since opening: no new request
+    expect(writes.commands).toHaveLength(1);
+    await page.getByRole("button", { name: "Retry last change" }).click();
     await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay later");
     expect(writes.commands).toHaveLength(2);
     expect(writes.commands[1]!.headers()["idempotency-key"]).toBe(writes.commands[0]!.headers()["idempotency-key"]);
+    await expect(page.locator(".studio-status")).toContainText("All changes saved"); // the retry's read has landed
 
     // Hold the next save in flight, then close another step's editor: its text stays for later.
     let release: Route | null = null;
@@ -230,12 +268,15 @@ test.describe("Inline label editing (real draft)", () => {
     await ship.locator(".step-label").dblclick();
     await stepEditor(page, ids.shipId).fill("Ship fast");
     await stepEditor(page, ids.shipId).press("Enter");
-    await expect(note(page)).toHaveText("Another change is still saving. Your text is kept.");
+    await expect(note(page)).toHaveText("Another change is still saving. Your text is kept; save it in the inspector when that finishes.");
     await release!.continue();
     await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay first");
     await ship.locator(".step-label").dblclick();
     await expect(stepEditor(page, ids.shipId)).toHaveValue("Ship fast");
-    await stepEditor(page, ids.shipId).press("Enter");
+    await stepEditor(page, ids.shipId).press("Escape");
+    await ship.locator(".step-kind").dblclick();
+    await expect(panel(page).getByLabel("Name")).toHaveValue("Ship fast");
+    await panel(page).getByRole("button", { name: "Save", exact: true }).click();
     await expect.poll(async () => (await draftOf(page, projectId)).document.nodes[ids.shipId]!.label).toBe("Ship fast");
   });
 

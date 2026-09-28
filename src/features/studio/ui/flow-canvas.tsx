@@ -24,8 +24,8 @@ type InlineEditing = { editing: Editing; enabled: boolean; close: (refocus: bool
 const InlineEditingContext = createContext<InlineEditing>({ editing: null, enabled: false, close: () => {}, setNote: () => {} });
 
 const INLINE = {
-  NODE: { field: "label", name: "Step name", placeholder: "Name this step", noun: "name" },
-  EDGE: { field: "condition", name: "Connection label", placeholder: "Add label", noun: "label" },
+  NODE: { field: "label", name: "Step name", placeholder: "Name this step" },
+  EDGE: { field: "condition", name: "Connection label", placeholder: "Add label" },
 } as const;
 
 // Every step keeps all four sides connectable (UI02); which one is first of its type per direction decides the
@@ -100,6 +100,8 @@ function InlineEditor({ kind, id }: { kind: "NODE" | "EDGE"; id: string }) {
   const { editing, close, setNote } = useContext(InlineEditingContext);
   const control = useRef<HTMLTextAreaElement & HTMLInputElement>(null);
   const closed = useRef(false);
+  /** The text shown when the editor opened: closing without changing it sends nothing. */
+  const opened = useRef<string | null>(null);
   const selectAll = Boolean(editing?.select);
   useEffect(() => {
     const element = control.current;
@@ -110,27 +112,24 @@ function InlineEditor({ kind, id }: { kind: "NODE" | "EDGE"; id: string }) {
   }, [selectAll]);
   const record = kind === "NODE" ? draft.document.nodes[id] : draft.document.edges[id];
   if (!record) return null;
-  const { field, name, placeholder, noun } = INLINE[kind];
+  const { field, name, placeholder } = INLINE[kind];
   const saved = savedOf(kind, record);
   const key = bufferKey(kind, id);
   const buffer = ui.buffers[key];
   const value = buffer && buffer.values[field] !== buffer.original[field] ? buffer.values[field]! : saved.fields[field]!;
+  opened.current ??= value;
   const review = () => { update(() => ({ selection: kind === "NODE" ? { kind: "NODES", ids: [id] } : { kind: "EDGE", id } })); inspect(); };
 
   const finish = async (refocus: boolean) => {
     if (closed.current) return;
     closed.current = true;
     close(refocus);
-    const plan = inlinePlan(buffer, kind, field);
+    const plan = inlinePlan(buffer, kind, field, opened.current ?? value);
     if (plan.kind === "unchanged") return;
     if (plan.kind === "review") { review(); return; }
-    if (plan.kind === "refused") {
-      update((current) => ({ buffers: edit(current.buffers, saved, field, current.buffers[key]?.original[field] ?? saved.fields[field]!) }));
-      setNote(`${plan.message} The saved ${noun} is kept.`);
-      return;
-    }
-    // One request at a time: the text stays in the buffer until this person closes the editor again or saves it.
-    if (busy) { setNote("Another change is still saving. Your text is kept."); return; }
+    if (plan.kind === "refused") { setNote(`${plan.message} Your text is kept; fix it here or in the inspector.`); return; }
+    // One request at a time: the text stays in the buffer for a deliberate Save (in the inspector, or by editing again).
+    if (busy) { setNote("Another change is still saving. Your text is kept; save it in the inspector when that finishes."); return; }
     setNote("");
     const requestKey = plan.retrying ? buffer!.key! : crypto.randomUUID();
     if (!plan.retrying) update((current) => ({ buffers: send(current.buffers, key, requestKey) }));
@@ -139,7 +138,7 @@ function InlineEditor({ kind, id }: { kind: "NODE" | "EDGE"; id: string }) {
     const stale = outcome.code === "STALE_ENTITY_VERSION";
     update((current) => ({ buffers: refuse(current.buffers, key, stale) }));
     if (stale) review();
-    else setNote(outcome.code === "BUSY" ? "Another change is still saving. Your text is kept." : explain(outcome));
+    else setNote(outcome.code === "BUSY" ? "Another change is still saving. Your text is kept; save it in the inspector when that finishes." : explain(outcome));
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement | HTMLInputElement>) => {
     if (event.key !== "Enter" && event.key !== "Escape") return;
