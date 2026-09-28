@@ -103,6 +103,55 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
     await expect(page.locator(".edge-label")).toHaveText("Payment succeeds");
     await expect(page.locator(".edge-label")).toBeVisible();
   });
+
+  test("dragging right→left handles saves those sides and they survive reload; dragging the edge's end to another handle saves new sides; a plain connection still renders", async ({ page }) => {
+    await addStepInUi(page, "Cart", "Start");
+    await addStepInUi(page, "Done", "Outcome");
+    await saveStudio(page);
+    let draft = await draftOf(page, projectId);
+    const cartId = Object.values(draft.document.nodes).find((node) => node.label === "Cart")!.id;
+    const doneId = Object.values(draft.document.nodes).find((node) => node.label === "Done")!.id;
+
+    // Connecting by dragging Cart's right handle to Done's left handle records those sides (UI02 Task 13).
+    await nodeAt(page, cartId).locator('.react-flow__handle[data-handleid="right"]').dragTo(nodeAt(page, doneId).locator('.react-flow__handle[data-handleid="left"]'));
+    await expect(page.locator(".react-flow__edge")).toHaveCount(1);
+    await saveStudio(page);
+    draft = await draftOf(page, projectId);
+    const edgeId = Object.keys(draft.document.edges)[0]!;
+    expect(draft.layout.edgeSides[edgeId]).toEqual({ from: "right", to: "left" });
+
+    // The saved sides survive a reload.
+    await page.reload();
+    await expect(page.locator(`.react-flow__edge[data-id="${edgeId}"]`)).toHaveCount(1);
+
+    // Dragging the connected end to another handle on the same two steps is a side-only save: no request until Save.
+    const requests: unknown[] = [];
+    await page.route("**/drafts/*/changes", async (route) => { requests.push(route.request().postDataJSON()); await route.continue(); });
+    await page.locator(".react-flow__edgeupdater-target").dragTo(nodeAt(page, doneId).locator('.react-flow__handle[data-handleid="top"]'));
+    await expect(page.locator(`.react-flow__edge[data-id="${edgeId}"]`)).toBeVisible();
+    expect(requests).toHaveLength(0);
+    await saveStudio(page);
+    expect(requests).toHaveLength(1);
+    draft = await draftOf(page, projectId);
+    expect(draft.layout.edgeSides[edgeId]).toEqual({ from: "right", to: "top" });
+    // The endpoints and the document itself never moved: a pure geometry change.
+    expect([draft.document.edges[edgeId]!.fromId, draft.document.edges[edgeId]!.toId]).toEqual([cartId, doneId]);
+
+    // A plain connection made through the dialog (no specific handles) still renders, with no saved sides.
+    await toolbar(page).getByRole("button", { name: "Connect" }).click();
+    const connect = dialog(page, "Connect steps");
+    await connect.getByLabel("From").selectOption({ label: "Done" });
+    await connect.getByLabel("To").selectOption({ label: "Cart" });
+    await connect.getByRole("button", { name: "Connect" }).click();
+    await expect(connect).toBeHidden();
+    await saveStudio(page);
+    await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+    draft = await draftOf(page, projectId);
+    const plainEdgeId = Object.keys(draft.document.edges).find((id) => id !== edgeId)!;
+    expect(draft.layout.edgeSides[plainEdgeId]).toBeUndefined();
+    await page.reload();
+    await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+  });
 });
 
 test.describe("Studio canvas handles (read-only, mocked project)", () => {
