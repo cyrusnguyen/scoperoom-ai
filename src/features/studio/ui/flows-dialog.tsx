@@ -94,7 +94,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     });
   };
   const duplicate = async () => {
-    if (!current || !editable || duplicateTooLong) return;
+    if (!current || !editable || duplicateTooLong || saving) return;
     await send({ commandSchemaVersion: 1, command: "DUPLICATE_FLOW", expectedDocumentRevision: draft.documentRevision, payload: { flowId: current.id } });
   };
   const remove = async () => {
@@ -161,7 +161,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     {editable && <>
       <div className="view-actions">
         <button type="button" className="button small" onClick={() => setMode("create")} disabled={full}>New flow</button>
-        {current && <button type="button" className="button small" onClick={() => void duplicate()} disabled={full || duplicateTooLong}>Duplicate {current.title}</button>}
+        {current && <button type="button" className="button small" onClick={() => void duplicate()} disabled={full || duplicateTooLong || saving}>Duplicate {current.title}</button>}
         {current && <button type="button" className="button danger small" onClick={() => setMode("delete")}>Delete {current.title}…</button>}
       </div>
       <p className="muted">A duplicate gets new identities, keeps its steps, connections and positions, and starts unconfirmed.{full ? ` A project can have up to ${LIMITS.flows} flows.` : duplicateTooLong ? ` This flow title cannot be duplicated because "Copy of " would exceed the ${LIMITS.title}-character limit.` : ""}</p>

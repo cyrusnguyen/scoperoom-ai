@@ -364,6 +364,31 @@ test.describe("Studio on a real draft", () => {
     expect(Object.values((await draftOf(page, projectId)).document.flows).map((flow) => flow.title).sort()).toEqual(["Existing", "Second"]);
   });
 
+  test("Duplicate is disabled while the duplicate's save-first is held, so one click makes exactly one copy", async ({ page }) => {
+    await createFlowInUi(page, "Original");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let writes = 0;
+    await page.route("**/changes", async (route) => {
+      writes++;
+      if (writes === 1) await gate;
+      await route.continue();
+    });
+    await page.locator(".flow-switch").click();
+    const flows = modal(page, "Flows");
+    const duplicate = flows.getByRole("button", { name: "Duplicate Original" });
+    await duplicate.click();
+    await expect.poll(() => writes).toBe(1);
+    await expect(duplicate).toBeDisabled();
+    await duplicate.click({ force: true }); // a second click during the slow save queues nothing
+    release();
+    await expect(flows).toHaveCount(0);
+    await expect(page.locator("#studio-flow-title")).toHaveText("Copy of Original");
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    expect(writes).toBe(1);
+    expect(Object.values((await draftOf(page, projectId)).document.flows).map((flow) => flow.title).sort()).toEqual(["Copy of Original", "Original"]);
+  });
+
   for (const populated of [false, true]) test(`flow creation locks its form while the new flow saves, so no typed value is lost (populated: ${populated})`, async ({ page }) => {
     if (populated) { await createFlowInUi(page, "Existing"); await page.locator(".flow-switch").click(); }
     let release!: () => void;
