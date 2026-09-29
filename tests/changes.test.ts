@@ -111,9 +111,10 @@ test("proposed ids must be unused, unique in the batch and exactly as many as th
 });
 
 test("a stored batch result round-trips and a malformed one is refused", () => {
-  const result = { draftId: id(7), documentRevision: 6, layoutRevision: 4, eventSequence: 12, createdIds: [flowId, start], versions: { [flowId]: 3 }, positions: { [start]: { x: 1, y: 2, version: 2 } } };
+  const result = { draftId: id(7), documentRevision: 6, layoutRevision: 4, eventSequence: 12 };
   assert.deepEqual(parseChangesResult(result), result);
   assert.throws(() => parseChangesResult({ ...result, retiredIds: [] }), /INVALID_INPUT/);
+  assert.throws(() => parseChangesResult({ ...result, createdIds: [flowId], versions: {}, positions: {} }), /INVALID_INPUT/);
   assert.throws(() => parseChangesResult({ ...result, eventSequence: -1 }), /INVALID_INPUT/);
 });
 

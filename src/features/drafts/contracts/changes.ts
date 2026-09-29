@@ -1,8 +1,7 @@
 import { parseGraphCommand, type GraphCommand } from "./commands.ts";
-import type { SavedPosition } from "./draft-layout.ts";
-import { parseMoveItem, parseSavedPositions, type MoveItem } from "./positions.ts";
+import { parseMoveItem, type MoveItem } from "./positions.ts";
 import { LIMITS } from "./scope-document.ts";
-import { id, idList, invalid, keys, object, utf8Bytes, version } from "./strict.ts";
+import { id, idList, invalid, keys, object, version } from "./strict.ts";
 
 // The batch save for POST D/changes: every unsaved draft change in one transaction and one receipt. Commands keep
 // their own guards, checked against the state the earlier items produced; create commands carry the ids the browser
@@ -17,13 +16,10 @@ export type Change = { command: GraphCommand; proposedIds: string[] };
 export type MoveGroup = { flowId: string; items: MoveItem[] };
 export type Changes = { commands: Change[]; moves: MoveGroup[] };
 /**
- * A saved batch and its receipt: the ids it created (in order), the final record version of each live flow, node or
- * edge a command changed, and the saved position of every step a move actually moved.
+ * A saved batch and its receipt: only the counters. The receipt is capped at 64 KiB and a valid batch can create far
+ * more ids than fit, so it never lists them: the browser keeps its proposed ids and re-reads the draft after a save.
  */
-export type ChangesResult = {
-  draftId: string; documentRevision: number; layoutRevision: number; eventSequence: number;
-  createdIds: string[]; versions: Record<string, number>; positions: Record<string, SavedPosition>; replayed: boolean;
-};
+export type ChangesResult = { draftId: string; documentRevision: number; layoutRevision: number; eventSequence: number; replayed: boolean };
 
 export function parseChanges(raw: unknown): Changes {
   const body = object(raw);
@@ -45,16 +41,12 @@ export function parseChanges(raw: unknown): Changes {
   return { commands, moves };
 }
 
-/** Validates a stored receipt result before it is replayed. Created ids are bounded by the request body that proposed them. */
+/** Validates a stored receipt result before it is replayed. */
 export function parseChangesResult(value: unknown): Omit<ChangesResult, "replayed"> {
   const result = object(value);
-  if (utf8Bytes(result) > 2 * CHANGES_BODY_LIMIT) invalid();
-  keys(result, ["draftId", "documentRevision", "layoutRevision", "eventSequence", "createdIds", "versions", "positions"]);
+  keys(result, ["draftId", "documentRevision", "layoutRevision", "eventSequence"]);
   if (typeof result.eventSequence !== "number" || !Number.isSafeInteger(result.eventSequence) || result.eventSequence < 0) invalid();
   return {
     draftId: id(result.draftId), documentRevision: version(result.documentRevision), layoutRevision: version(result.layoutRevision), eventSequence: result.eventSequence,
-    createdIds: idList(result.createdIds, MAX_CHANGE_COMMANDS * MAX_COMMAND_IDS),
-    versions: Object.fromEntries(Object.entries(object(result.versions)).map(([key, entry]) => [id(key), version(entry)])),
-    positions: parseSavedPositions(result.positions),
   };
 }

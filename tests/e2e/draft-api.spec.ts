@@ -150,7 +150,7 @@ test("the batch save route needs a key and same origin, then saves every change 
     }
     const saved = await page.request.post(url, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: batch });
     expect(saved.status()).toBe(200);
-    expect(await saved.json()).toMatchObject({ draftId, documentRevision: 3, layoutRevision: 2, createdIds: [flowId, nodeId], positions: { [nodeId]: { x: 40, y: 80, version: 2 } }, replayed: false });
+    expect(await saved.json()).toMatchObject({ draftId, documentRevision: 3, layoutRevision: 2, replayed: false });
     const draft = await (await page.request.get(`/api/projects/${projectId}/drafts/${draftId}`)).json() as Draft & { layout: { positions: Record<string, unknown> } };
     expect(draft.document.flows[flowId]!.title).toBe("Checkout");
     expect(draft.layout.positions[nodeId]).toEqual({ x: 40, y: 80, version: 2 });

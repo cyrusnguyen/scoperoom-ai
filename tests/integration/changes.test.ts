@@ -55,7 +55,7 @@ test("a batch of commands and moves saves atomically with the proposed ids, and 
     const saved = await saveChanges(owner, projectId, draftId, { ...body, key });
     assert.deepEqual({ ...saved, eventSequence: 0 }, {
       draftId, documentRevision: base.documentRevision + 5, layoutRevision: base.layoutRevision + 1, eventSequence: 0,
-      createdIds: [flowId, start, next, edgeId], versions: { [flowId]: 5, [next]: 2 }, positions: { [next]: { x: 420, y: 360, version: 2 } }, replayed: false,
+      replayed: false,
     });
     const draft = await getDraft(owner, projectId, draftId);
     assert.equal(draft.documentRevision, saved.documentRevision);
@@ -93,7 +93,6 @@ test("a side-only RECONNECT_EDGE inside a batch saves the layout without a docum
     };
     const withSides = await saveChanges(owner, projectId, draftId, { commands: [reconnectSides], moves: [], key: randomUUID() });
     assert.deepEqual([withSides.documentRevision, withSides.layoutRevision], [saved.documentRevision, saved.layoutRevision + 1]);
-    assert.deepEqual(withSides.versions, {});
     const draft = await getDraft(owner, projectId, draftId);
     assert.deepEqual(draft.layout.edgeSides[edgeId], { from: "right", to: "left" });
     // Even though nothing was created, versioned or retired, the audit row still names the edge it touched.
@@ -178,12 +177,46 @@ test("the largest batch on a draft at its size limit saves well inside the trans
     console.log(`largest batch on a ${utf8Bytes(large.document)}-byte draft saved in ${Math.round(elapsed)} ms`);
     assert.equal(saved.documentRevision, base.documentRevision + 100);
     assert.equal(saved.layoutRevision, base.layoutRevision + 1);
-    assert.equal(Object.keys(saved.positions).length, 200);
     const draft = await getDraft(owner, projectId, draftId);
     assert.equal(Object.values(draft.document.nodes).filter((node) => node.label === "Renamed").length, 100);
     const added = (await events(database, projectId)).slice(before.length);
     assert.deepEqual(added, [...Array(100).fill("DRAFT_COMMAND_SAVED"), ...Array(5).fill("DRAFT_POSITIONS_SAVED")]);
     // Before the fix this batch ran past Prisma's 5 s default and failed as UNAVAILABLE (8.9 s); now it is about 1–1.7 s.
     assert(elapsed < 5_000, `the save took ${Math.round(elapsed)} ms`);
+  });
+});
+
+test("a batch whose created ids alone would fill the 64 KiB receipt saves, and its key replays the stored counters", { skip: !canRun }, async () => {
+  await withFixture(async ({ database, user, project }) => {
+    const owner = await user();
+    const { projectId, draftId, base } = await started(project, owner);
+    // One 40-step, 80-connection flow; the batch duplicates it and deletes the copy 15 times, so it creates 1,815 ids.
+    const large = largeDraft();
+    const flowId = Object.keys(large.document.flows)[0]!;
+    const own = <T extends { flowId: string }>(records: Record<string, T>) => Object.fromEntries(Object.entries(records).filter(([, record]) => record.flowId === flowId));
+    const document = { ...large.document, flows: { [flowId]: large.document.flows[flowId] }, nodes: own(large.document.nodes), edges: own(large.document.edges) };
+    const layout = { ...large.layout, directions: { [flowId]: "TB" }, positions: Object.fromEntries(Object.entries(large.layout.positions).filter(([nodeId]) => document.nodes[nodeId])) };
+    await database.query("update app.scope_draft set document_json = $1::jsonb, layout_json = $2::jsonb where id = $3", [JSON.stringify(document), JSON.stringify(layout), draftId]);
+    const commands: unknown[] = [];
+    const created: string[] = [];
+    for (let round = 0; round < 15; round += 1) {
+      const ids = Array.from({ length: 1 + 40 + 80 }, () => randomUUID());
+      created.push(...ids);
+      const revision = base.documentRevision + commands.length;
+      commands.push(
+        { commandSchemaVersion: 1, command: "DUPLICATE_FLOW", expectedDocumentRevision: revision, payload: { flowId }, proposedIds: ids },
+        { commandSchemaVersion: 1, command: "DELETE_FLOW", expectedDocumentRevision: revision + 1, payload: { flowId: ids[0], removeNodeIds: ids.slice(1, 41).sort(), removeEdgeIds: ids.slice(41).sort() } },
+      );
+    }
+    const moves = [{ flowId, items: Object.keys(document.nodes).map((nodeId) => ({ nodeId, expectedPositionVersion: 1, x: 500, y: 500 })) }];
+    const body = { commands, moves };
+    assert(utf8Bytes(body) <= CHANGES_BODY_LIMIT);
+    assert(utf8Bytes(created) > 65_536, "the ids the old receipt stored would already be over the receipt cap");
+    const key = randomUUID();
+    const saved = await saveChanges(owner, projectId, draftId, { ...body, key });
+    assert.deepEqual(Object.keys(saved).sort(), ["documentRevision", "draftId", "eventSequence", "layoutRevision", "replayed"]);
+    assert.equal(saved.documentRevision, base.documentRevision + 30);
+    assert.deepEqual(Object.keys((await getDraft(owner, projectId, draftId)).document.flows), [flowId]);
+    assert.deepEqual(await saveChanges(owner, projectId, draftId, { ...body, key }), { ...saved, replayed: true });
   });
 });

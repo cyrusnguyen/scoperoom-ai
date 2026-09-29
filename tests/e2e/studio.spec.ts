@@ -1262,7 +1262,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await page.route("**/changes", async (route) => {
       attempts.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
       if (attempts.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Response lost" } } });
-      else await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, createdIds: [], versions: {}, positions: {}, replayed: true } });
+      else await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, replayed: true } });
     });
     await page.goto(`/app/projects/${projectId}`);
     await toolbar(page).getByRole("button", { name: "List", exact: true }).click();
@@ -1347,7 +1347,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     });
     await page.route("**/changes", async (route) => {
       writes++;
-      await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, createdIds: [], versions: {}, positions: {}, replayed: false } });
+      await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, replayed: false } });
     });
     await page.goto(`/app/projects/${projectId}`);
     await toolbar(page).getByRole("button", { name: "List", exact: true }).click();
@@ -1382,7 +1382,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await page.route("**/changes", async (route) => {
       attempts.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData()! });
       if (attempts.length === 1) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Acknowledgement lost" } } });
-      else await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, createdIds: [], versions: { [start]: 2 }, positions: {}, replayed: true } });
+      else await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, replayed: true } });
     });
     await page.goto(`/app/projects/${projectId}`);
     await toolbar(page).getByRole("button", { name: "List" }).click();

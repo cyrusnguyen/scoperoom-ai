@@ -26,10 +26,10 @@ export async function saveChanges(identity: ProjectIdentity, projectId: string, 
   return draftMutation(identity, projectId, draftId, key, CHANGES_OPERATION, hash, parseChangesResult, async (tx, project, draft, actorId) => {
     let applied: AppliedChanges;
     try { applied = applyChanges(draft.draft, draft.documentRevision, changes); } catch (error) { graphFailure(error); }
-    const { documentRevision, createdIds, versions, positions } = applied;
+    const { documentRevision } = applied;
     // An effective no-op keeps every counter; only its receipt is saved.
     if (!applied.saved.length && !applied.moved.length) {
-      return { draftId: draft.id, documentRevision, layoutRevision: draft.layoutRevision, eventSequence: Number(project.eventSequence), createdIds, versions, positions };
+      return { draftId: draft.id, documentRevision, layoutRevision: draft.layoutRevision, eventSequence: Number(project.eventSequence) };
     }
     const layoutRevision = applied.layoutChanged ? nextRevision(draft.layoutRevision) : draft.layoutRevision;
     await requireStoredSize(tx, applied.document, applied.layout);
@@ -43,6 +43,6 @@ export async function saveChanges(identity: ProjectIdentity, projectId: string, 
         metadata: { mode: "MOVE_NODES", layoutRevision, moved: Object.keys(group.positions).length },
       })),
     ]);
-    return { draftId: draft.id, documentRevision, layoutRevision, eventSequence: Number(eventSequence), createdIds, versions, positions };
+    return { draftId: draft.id, documentRevision, layoutRevision, eventSequence: Number(eventSequence) };
   }, CHANGES_TIMEOUT_MS);
 }
