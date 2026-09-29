@@ -21,7 +21,7 @@ export const LAYOUT_BYTE_LIMIT = 256 * 1024;
  * arrangement always matches what is drawn. Browser measurements, fonts and label length never take part. */
 export const STEP_SIZE: Record<NodeKind, { width: number; height: number }> = {
   START: { width: 120, height: 120 }, OUTCOME: { width: 120, height: 120 },
-  ACTION: { width: 200, height: 88 }, DECISION: { width: 140, height: 140 }, DATA_STORE: { width: 120, height: 140 },
+  ACTION: { width: 200, height: 88 }, DECISION: { width: 180, height: 140 }, DATA_STORE: { width: 120, height: 140 },
 };
 
 export function coordinate(value: unknown): number {
