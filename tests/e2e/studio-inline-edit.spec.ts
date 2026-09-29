@@ -353,37 +353,40 @@ test.describe("Inline label editing (read-only, mocked project)", () => {
     const admin = adminClient();
     const database = await openDatabase();
     const users: string[] = [];
-    await signIn(page, admin, users, "Inline Reader");
-    const view = emptyDraftView();
-    const step = (id: string, kind: "START" | "OUTCOME", label: string) => ({ id, flowId, version: 1, behaviourVersion: 1, kind, label, description: "", actorLabel: "", origin: "HUMAN" as const, sourceRefs: [] as [], assumptionNotes: [] });
-    const draft: DraftView = {
-      ...view,
-      document: {
-        ...view.document,
-        flows: { [flowId]: { id: flowId, version: 1, behaviourVersion: 1, title: "Intake", purpose: "", classification: "BUSINESS_PROCESS", inclusion: "INCLUDED", confirmation: null, verificationMethod: null } },
-        nodes: { [startId]: step(startId, "START", "Receive form"), [endId]: step(endId, "OUTCOME", "Filed") },
-        edges: { [edgeId]: { id: edgeId, flowId, version: 1, fromId: startId, toId: endId, condition: "", origin: "HUMAN", sourceRefs: [] } },
-      },
-      layout: { schemaVersion: 1, positions: { [startId]: { x: 0, y: 0, version: 1 }, [endId]: { x: 0, y: 240, version: 1 } }, directions: { [flowId]: "TB" }, edgeSides: {} },
-    };
-    await page.unrouteAll({ behavior: "ignoreErrors" });
-    await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: { items: [], truncated: false }, shared: { items: [{ id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerName: "Owner", updatedAt: "2026-09-27T00:00:00.000Z" }], truncated: false }, archived: { items: [], truncated: false }, capacity: { entitled: true, activeOwned: 0, maxOwned: 10, canCreate: true } } }));
-    await page.route("**/api/invitations", (route) => route.fulfill({ json: { items: [], truncated: false } }));
-    await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerId: projectId }, draft } }));
-    await page.goto(`/app/projects/${projectId}`);
-    await expect(nodeAt(page, startId)).toBeVisible();
+    try {
+      await signIn(page, admin, users, "Inline Reader");
+      const view = emptyDraftView();
+      const step = (id: string, kind: "START" | "OUTCOME", label: string) => ({ id, flowId, version: 1, behaviourVersion: 1, kind, label, description: "", actorLabel: "", origin: "HUMAN" as const, sourceRefs: [] as [], assumptionNotes: [] });
+      const draft: DraftView = {
+        ...view,
+        document: {
+          ...view.document,
+          flows: { [flowId]: { id: flowId, version: 1, behaviourVersion: 1, title: "Intake", purpose: "", classification: "BUSINESS_PROCESS", inclusion: "INCLUDED", confirmation: null, verificationMethod: null } },
+          nodes: { [startId]: step(startId, "START", "Receive form"), [endId]: step(endId, "OUTCOME", "Filed") },
+          edges: { [edgeId]: { id: edgeId, flowId, version: 1, fromId: startId, toId: endId, condition: "", origin: "HUMAN", sourceRefs: [] } },
+        },
+        layout: { schemaVersion: 1, positions: { [startId]: { x: 0, y: 0, version: 1 }, [endId]: { x: 0, y: 240, version: 1 } }, directions: { [flowId]: "TB" }, edgeSides: {} },
+      };
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+      await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: { items: [], truncated: false }, shared: { items: [{ id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerName: "Owner", updatedAt: "2026-09-27T00:00:00.000Z" }], truncated: false }, archived: { items: [], truncated: false }, capacity: { entitled: true, activeOwned: 0, maxOwned: 10, canCreate: true } } }));
+      await page.route("**/api/invitations", (route) => route.fulfill({ json: { items: [], truncated: false } }));
+      await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerId: projectId }, draft } }));
+      await page.goto(`/app/projects/${projectId}`);
+      await expect(nodeAt(page, startId)).toBeVisible();
 
-    await nodeAt(page, startId).locator(".step-label").dblclick();
-    await expect(panel(page).getByRole("heading", { name: "Start" })).toBeVisible(); // the inspector, read-only
-    await expect(page.getByRole("textbox", { name: "Step name" })).toHaveCount(0);
-    await panel(page).getByRole("button", { name: "Close panel" }).click();
-    await nodeAt(page, startId).focus();
-    await page.keyboard.press("F2");
-    await expect(page.getByRole("textbox", { name: "Step name" })).toHaveCount(0);
-    const point = await edgePoint(page, edgeId);
-    await page.mouse.dblclick(point.x, point.y);
-    await expect(edgeEditor(page)).toHaveCount(0);
-    await expect(page.locator(".edge-label-hint")).toHaveCount(0);
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
+      await nodeAt(page, startId).locator(".step-label").dblclick();
+      await expect(panel(page).getByRole("heading", { name: "Start" })).toBeVisible(); // the inspector, read-only
+      await expect(page.getByRole("textbox", { name: "Step name" })).toHaveCount(0);
+      await panel(page).getByRole("button", { name: "Close panel" }).click();
+      await nodeAt(page, startId).focus();
+      await page.keyboard.press("F2");
+      await expect(page.getByRole("textbox", { name: "Step name" })).toHaveCount(0);
+      const point = await edgePoint(page, edgeId);
+      await page.mouse.dblclick(point.x, point.y);
+      await expect(edgeEditor(page)).toHaveCount(0);
+      await expect(page.locator(".edge-label-hint")).toHaveCount(0);
+    } finally {
+      try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
+    }
   });
 });
