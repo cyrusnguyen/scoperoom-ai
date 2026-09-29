@@ -102,6 +102,49 @@ export function parseShapePayload(raw: string): ShapeDragPayload | null {
   return { kind: kind as NodeKind, width, height };
 }
 
+// Which end of a drawn connection is "from" (UI02 Task 13). React Flow labels a finished connection's ends by handle
+// TYPE (source-typed handle first), not by gesture: dragging from a target-typed handle (top or left by default) hands
+// `onConnect` the dropped step as `source`. A saved connection's direction must follow the person's gesture instead.
+type Ends = { source: string; target: string; sourceHandle: string | null; targetHandle: string | null };
+export type Oriented = { fromId: string; toId: string; fromHandle: string | null; toHandle: string | null };
+
+/** A new connection: `from` is the step and handle where the drag started, `to` where it was dropped. */
+export function orientConnect(connection: Ends, start: { nodeId: string | null; handleId: string | null } | null): Oriented {
+  const asIs = { fromId: connection.source, toId: connection.target, fromHandle: connection.sourceHandle, toHandle: connection.targetHandle };
+  const swapped = { fromId: connection.target, toId: connection.source, fromHandle: connection.targetHandle, toHandle: connection.sourceHandle };
+  if (!start?.nodeId) return asIs;
+  const atSource = start.nodeId === connection.source, atTarget = start.nodeId === connection.target;
+  if (atSource && atTarget) return start.handleId === connection.targetHandle && start.handleId !== connection.sourceHandle ? swapped : asIs; // a step joined to itself
+  return atTarget ? swapped : asIs;
+}
+
+/**
+ * Reconnecting one end of an existing connection: the dragged end (`dragged`: the end of the OLD edge that was grabbed,
+ * `source` = its from end) takes the drop point; the other end keeps its step and its side (`keptSide`, falling back to
+ * what the connection reports, then to the direction's default handle).
+ */
+export function orientReconnect(
+  connection: Ends, edge: { fromId: string; toId: string }, dragged: "source" | "target" | null,
+  keptSide: string | null | undefined, fallbackSide: string,
+): Oriented {
+  const asIs = { fromId: connection.source, toId: connection.target, fromHandle: connection.sourceHandle, toHandle: connection.targetHandle };
+  if (!dragged) return asIs;
+  const keptId = dragged === "source" ? edge.toId : edge.fromId;
+  const ends = [{ id: connection.source, handle: connection.sourceHandle }, { id: connection.target, handle: connection.targetHandle }];
+  // The kept end is the one still on its step; joined to itself, the one that still has the kept handle, else the one that has not moved role.
+  let keptAt = ends.findIndex((end) => end.id === keptId);
+  if (keptAt >= 0 && ends[1 - keptAt]!.id === keptId) {
+    const byHandle = ends.findIndex((end) => end.handle === keptSide);
+    keptAt = byHandle >= 0 ? byHandle : dragged === "source" ? 1 : 0;
+  }
+  if (keptAt < 0) return asIs;
+  const kept = ends[keptAt]!, moved = ends[1 - keptAt]!;
+  const keptHandle = keptSide ?? kept.handle ?? fallbackSide;
+  return dragged === "source"
+    ? { fromId: moved.id, toId: keptId, fromHandle: moved.handle, toHandle: keptHandle }
+    : { fromId: keptId, toId: moved.id, fromHandle: keptHandle, toHandle: moved.handle };
+}
+
 /** A drop or click point, centred to a top-left step position and rounded to whole pixels (Data02 coordinates). */
 export function dropTarget(point: { x: number; y: number }, size: { width: number; height: number }): { x: number; y: number } {
   return { x: Math.round(point.x - size.width / 2), y: Math.round(point.y - size.height / 2) };

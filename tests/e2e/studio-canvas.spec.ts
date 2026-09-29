@@ -184,11 +184,66 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
     await saveStudio(page);
     const saved = await draftOf(page, projectId);
     const edgeId = Object.keys(saved.document.edges)[0]!;
-    expect(saved.layout.edgeSides[edgeId]).toBeTruthy();
+    // The connection runs from where the drag started (Cart, left) to where it was dropped (Done, top), even though
+    // React Flow reports the dropped step as `source` when a drag starts on a target-typed handle.
+    expect(saved.document.edges[edgeId]).toMatchObject({ fromId: cartId, toId: doneId });
+    expect(saved.layout.edgeSides[edgeId]).toEqual({ from: "left", to: "top" });
 
     await page.reload();
     await expect(page.locator(`.react-flow__edge[data-id="${edgeId}"]`)).toHaveCount(1);
     await expect(page.locator(`.react-flow__edge[data-id="${edgeId}"] path.react-flow__edge-path`)).toBeVisible();
+  });
+
+  test("a connection saves from the step and handle the drag started on to the drop, whichever side it starts from", async ({ page }) => {
+    await addStepInUi(page, "Cart", "Start");
+    await addStepInUi(page, "Done", "Outcome");
+    await saveStudio(page);
+    const draft = await draftOf(page, projectId);
+    const cartId = Object.values(draft.document.nodes).find((node) => node.label === "Cart")!.id;
+    const doneId = Object.values(draft.document.nodes).find((node) => node.label === "Done")!.id;
+    const handle = (nodeId: string, side: string) => nodeAt(page, nodeId).locator(`.react-flow__handle[data-handleid="${side}"]`).first();
+    // Drags starting on top and left (target-typed) and on right and bottom (source-typed), and one starting on Done.
+    const drags: [string, string, string, string][] = [
+      [cartId, "top", doneId, "left"], [cartId, "left", doneId, "top"], [cartId, "right", doneId, "left"], [cartId, "bottom", doneId, "top"],
+      [doneId, "top", cartId, "bottom"], [doneId, "left", cartId, "right"],
+    ];
+    for (const [fromId, from, toId, to] of drags) await handle(fromId, from).dragTo(handle(toId, to));
+    await expect(page.locator(".react-flow__edge")).toHaveCount(drags.length);
+    await saveStudio(page);
+    const saved = await draftOf(page, projectId);
+    const edges = Object.values(saved.document.edges).map((edge) => `${edge.fromId}:${saved.layout.edgeSides[edge.id]?.from}>${edge.toId}:${saved.layout.edgeSides[edge.id]?.to}`);
+    expect(edges.sort()).toEqual(drags.map(([fromId, from, toId, to]) => `${fromId}:${from}>${toId}:${to}`).sort());
+    await page.reload();
+    await expect(page.locator(".react-flow__edge path.react-flow__edge-path")).toHaveCount(drags.length);
+  });
+
+  test("reconnecting an end moves only that end: the other keeps its step and side", async ({ page }) => {
+    await addStepInUi(page, "Cart", "Start");
+    await addStepInUi(page, "Done", "Outcome");
+    await addStepInUi(page, "Other", "Step");
+    await saveStudio(page);
+    let draft = await draftOf(page, projectId);
+    const id = (label: string) => Object.values(draft.document.nodes).find((node) => node.label === label)!.id;
+    const [cartId, doneId, otherId] = [id("Cart"), id("Done"), id("Other")];
+    const handle = (nodeId: string, side: string) => nodeAt(page, nodeId).locator(`.react-flow__handle[data-handleid="${side}"]`).first();
+    await handle(cartId, "right").dragTo(handle(doneId, "left")); // Cart right → Done left
+    await saveStudio(page);
+    draft = await draftOf(page, projectId);
+    const edgeId = Object.keys(draft.document.edges)[0]!;
+    const edgeNow = async () => {
+      await saveStudio(page);
+      const saved = await draftOf(page, projectId);
+      return { fromId: saved.document.edges[edgeId]!.fromId, toId: saved.document.edges[edgeId]!.toId, ...saved.layout.edgeSides[edgeId] };
+    };
+    // Move the to end onto Other's top: from stays Cart/right.
+    await page.locator(".react-flow__edgeupdater-target").dragTo(handle(otherId, "top"));
+    expect(await edgeNow()).toEqual({ fromId: cartId, toId: otherId, from: "right", to: "top" });
+    // Move the from end onto Done's left (a target-typed handle, so React Flow calls the other step "source"): to stays Other/top.
+    await page.locator(".react-flow__edgeupdater-source").dragTo(handle(doneId, "left"));
+    expect(await edgeNow()).toEqual({ fromId: doneId, toId: otherId, from: "left", to: "top" });
+    // Move the from end onto another handle of the same step: only that side changes.
+    await page.locator(".react-flow__edgeupdater-source").dragTo(handle(doneId, "bottom"));
+    expect(await edgeNow()).toEqual({ fromId: doneId, toId: otherId, from: "bottom", to: "top" });
   });
 });
 

@@ -11,7 +11,7 @@ import { bufferKey, discard, edit, editFields, refuse, type Saved } from "./buff
 import { endpointGuard, inlinePlan, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
 import ShapePanel from "./shape-panel";
 import { explain, useStudio } from "./studio-context";
-import { dropTarget, moveTargets, parseShapePayload, selectEdge, selectNodes, SHAPE_DRAG_MIME, type SelectChange, type StudioUi } from "./studio-ui";
+import { dropTarget, moveTargets, orientConnect, orientReconnect, parseShapePayload, selectEdge, selectNodes, SHAPE_DRAG_MIME, type SelectChange, type StudioUi } from "./studio-ui";
 
 type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction };
 type StepNode = Node<StepData, "step">;
@@ -317,17 +317,29 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     event.preventDefault();
     setEditing({ kind: "NODE", id: target.dataset.id });
   };
-  const connect = async ({ source, target, sourceHandle, targetHandle }: Connection) => {
-    if (!source || !target || !connectable) return;
-    const sides = isSide(sourceHandle) && isSide(targetHandle) ? { fromSide: sourceHandle, toSide: targetHandle } : {};
-    const outcome = await run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId: source, toId: target, condition: "", ...sides } });
+  // Which handle a drag began on, so a saved connection runs from the gesture's start to its drop whatever the handle
+  // types are (React Flow labels a finished connection's ends by handle type, not by gesture).
+  const dragStart = useRef<{ nodeId: string | null; handleId: string | null } | null>(null);
+  // React Flow reports the type of the end that stays put, so the grabbed end is the other one.
+  const reconnectEnd = useRef<"source" | "target" | null>(null);
+  const connect = async (connection: Connection) => {
+    if (!connection.source || !connection.target || !connectable) return;
+    const { fromId, toId, fromHandle, toHandle } = orientConnect(connection, dragStart.current);
+    const sides = isSide(fromHandle) && isSide(toHandle) ? { fromSide: fromHandle, toSide: toHandle } : {};
+    const outcome = await run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId, toId, condition: "", ...sides } });
     setNote(outcome.ok ? "" : explain(outcome));
   };
-  const reconnect = async (edge: FlowEdge, { source, target, sourceHandle, targetHandle }: Connection) => {
-    if (!source || !target || !connectable) return;
+  const reconnect = async (edge: FlowEdge, connection: Connection) => {
+    if (!connection.source || !connection.target || !connectable) return;
     const savedEdge = document.edges[edge.id];
     if (!savedEdge) return;
-    const sides = isSide(sourceHandle) && isSide(targetHandle) ? { fromSide: sourceHandle, toSide: targetHandle } : {};
+    // The grabbed end takes the drop point; the other end keeps its step and side (or the direction's default handle).
+    const defaults = HANDLE_ORDER[layout.directions[flowId] ?? "TB"];
+    const defaultSide = (type: "source" | "target") => defaults.find((handle) => handle.type === type)!.position;
+    const dragged = reconnectEnd.current;
+    const keptSide = layout.edgeSides[edge.id]?.[dragged === "source" ? "to" : "from"];
+    const { fromId: source, toId: target, fromHandle, toHandle } = orientReconnect(connection, savedEdge, dragged, keptSide, defaultSide(dragged === "source" ? "target" : "source"));
+    const sides = isSide(fromHandle) && isSide(toHandle) ? { fromSide: fromHandle, toSide: toHandle } : {};
     // Dragging an end to another point on the same two steps only changes which handles it uses: a plain layout-only
     // save (Task 13), never the endpoint-choice review the inspector's dropdown form needs.
     if (source === savedEdge.fromId && target === savedEdge.toId) {
@@ -361,6 +373,8 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
       onNodesChange={interactive ? onNodesChange : measure} onEdgesChange={interactive ? onEdgesChange : undefined}
       onNodeDoubleClick={interactive ? nodeDoubleClick : undefined} onEdgeDoubleClick={interactive ? edgeDoubleClick : undefined} onNodeDragStart={interactive ? () => dragActive(true) : undefined} onNodeDragStop={interactive ? (_event, _node, moved) => drop(moved) : undefined}
       onSelectionDragStart={interactive ? () => dragActive(true) : undefined} onSelectionDragStop={interactive ? (_event, moved) => drop(moved) : undefined}
+      onConnectStart={interactive ? (_event, params) => { dragStart.current = { nodeId: params.nodeId, handleId: params.handleId }; } : undefined}
+      onReconnectStart={interactive ? (_event, _edge, keptType) => { reconnectEnd.current = keptType === "source" ? "target" : "source"; } : undefined}
       onConnect={(connection) => void connect(connection)} onReconnect={reconnect} elementsSelectable={interactive}
       nodesDraggable={draggable} nodesConnectable={connectable} edgesReconnectable={connectable} deleteKeyCode={null}
       fitView fitViewOptions={{ padding: 0.2, maxZoom: 1 }} minZoom={0.1} maxZoom={4}
