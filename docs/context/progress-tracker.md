@@ -1,17 +1,29 @@
 # Progress tracker
 
-Last updated: 2026-09-29. Stages 01, 02, 02R, 03.1 and 03.2 are merged through PR #14 (main `fcedaa0`). The product is project-only. Stage 03.3 (saved positions, arrangement and the canvas addendum) is complete and locally verified on `feat/stage-03-03-positions`; it is unpushed with no PR, awaiting the user's approval. The v1.6 handbook is the plan reference and still needs the 03.3 deviations recorded (Task 10); v1.5 is superseded.
+Last updated: 2026-09-30. Stages 01, 02, 02R, 03.1 and 03.2 are merged through PR #14 (main `fcedaa0`). The product is project-only. Stage 03.3 (saved positions, arrangement and the canvas addendum) is complete and verified locally on `feat/stage-03-03-positions`, and is being published as the Stage 03.3 pull request. The v1.6 handbook is the plan reference and now records 03.3 as built; v1.5 is superseded.
 
-## Stage 03.3 review corrections — 2026-09-29 (uncommitted)
+## Stage 03.3 review corrections and final verification — 2026-09-30
 
-- User requested an independent review against the specs and prior decisions, the intermittent connection-arrow bug, and removal of low-value tests. Reviewed `fcedaa0..4e01fb4`, current v1.6 contracts and the SDD Rulings. Findings and save recommendation: [stage-03-3-review.md](stage-03-3-review.md). This checkpoint supersedes the corresponding deferred findings in the original handoff below.
-- Fixed uncertain split-save Discard retaining never-sent batches; concurrent sides-only reconnects silently overwriting each other; and project navigation overlooking edits queued/typed during the final save read. Reconnect carries an inspected `expectedSides` value guard, with explicit comparison/reapply and no conflict on unrelated node movement. Existing omitted-field receipt hashes remain compatible. Focused regressions went RED then GREEN; integrated save/recovery changes received a separate read-only review with no new substantiated issue.
-- Reproduced a handle-hit defect: the shape's overflow clipping hid the handles' outer hit area, so dragging beside a selected self-loop hit the old edge instead of creating a new one. Removing the clipping passed the previously failing browser regression: old loop retained, new A-to-B IDs/points saved, and arrow tip verified on B after reload. Ordinary all-side drags already passed before the fix; a separate semantic endpoint reversal was not reproduced.
-- Consolidated six redundant browser cases into existing journeys and removed one literal-constant unit test plus arbitrary batch timing assertions. Added two focused browser regressions. Final discovery: **161 Chromium tests** (previously 165). Distinct conflict/authorization/retry/IME/large-batch coverage remains; full-suite time savings were not measured.
-- Fresh verification on Node 24.21.0: **162/162 unit**, zero skipped; full integration **74 pass / 1 environment failure / 0 skipped**, then the Docker-blocked foundation file **4/4 pass** with approved local access (all 75 cases have passing evidence, not one all-green full invocation). Full ESLint/import boundaries, TypeScript and final production build pass. Affected canvas/outbox Chromium run **15/15 pass in 3.5 min**, including the subsequently removed duplicate top/left test; four consolidated UI journeys plus the navigation regression **5/5 pass in 59.6 s**. Final discovery reflects that duplicate's removal; no production change followed the passing browser runs. The complete 161-case suite was not rerun.
-- Tests used the existing loopback Supabase stack on 54321/54322/54329 and the isolated app on 3101. User explicitly approved local Auth admin-key use after automatic approval review initially rejected extraction. No hosted changes, migration, reset, commit, push or PR. NVDA and hosted Realtime remain unverified.
-- Recommendation only: keep Save plus the current 10-second autosave for completed edits; no save timing changed. Autosave ending undo and the header Save excluding unsubmitted inspector buffers are material product qualifications to discuss. Realtime remains Stage 04 advisory delivery with authoritative refetch; it cannot replace PostgreSQL conflict guards. External v1.6 handbook reconciliation remains pending; this review did not edit it.
-- Next action: user reviews the corrected branch and save/undo qualifications. Before a merge candidate is declared, run one complete current Chromium suite and reconcile the handbook; push/PR remain separate actions.
+- An independent review of `fcedaa0..4e01fb4` against the v1.6 contracts and the recorded decisions fixed four defects (`dc29f17`):
+  - an uncertain split-save Discard kept batches that were never sent;
+  - concurrent sides-only reconnects overwrote each other (RECONNECT_EDGE now carries an `expectedSides` guard with an explicit compare-and-reapply step);
+  - a project switch missed edits queued or typed during the final save read;
+  - shape clipping hid part of each handle's hit area.
+- The review also consolidated six redundant browser cases and removed literal and timing-only assertions, bringing Chromium to 161 tests (was 165). The reviewer's notes are kept locally only and are not committed.
+- User design changes after the review:
+  - the DECISION diamond is now 180×140;
+  - START is blue, DECISION violet and DATA_STORE gold (`--kind-*` tokens).
+- The wider diamond, placed at the canvas centre, covered the connection midpoint that one outbox test double-clicks. The test now labels the connection first. Product behaviour is unchanged: a step on top of a connection takes the click.
+- Final gates at `8e3058c` on Node 24.21.0:
+  - `prisma validate`, lint (boundaries + ESLint, 0 warnings), typecheck and build pass;
+  - unit **162/162**;
+  - integration **75/75**, 0 skipped;
+  - full Chromium **161/161**, 0 skipped (19.3 min), on the isolated app at 127.0.0.1:3101 with `SCOPEROOM_E2E=1`.
+- The v1.6 handbook (`.codex/docs/implementation/v1.6`, local and gitignored) now matches 03.3 as built. With the user's approval, 82 exact edits were applied across 15 files, including the Stage 03 checkboxes (03.1–03.3 and the stage exit, with the NVDA caveat). A backup of the pre-edit handbook is kept outside the repo.
+- Still unverified: the manual NVDA screen-reader check, hosted Supabase Realtime and deployment.
+- Product qualifications to revisit:
+  - undo ends at every save, including autosave;
+  - header Save and autosave send only completed outbox edits, not unsubmitted inspector text.
 
 ## Stage 03.3 — saved positions, arrangement and canvas polish (local, unpushed)
 
@@ -34,7 +46,7 @@ Last updated: 2026-09-29. Stages 01, 02, 02R, 03.1 and 03.2 are merged through P
   - Canvas polish: DECISION/DATA_STORE SVGs are simple; the shape-panel drag ghost is clipped in a transformed panel; shape-panel and flow-canvas import each other; `data-handleid` matches two DOM nodes per side; a reconnect dropped on the kept node's own default side may save a same-side pair; shortcuts match `event.key` only (non-Latin layouts); the control bar touches the shape panel at 640 px and overlaps below about 360 px; an edge-label double-click outside the 20 px path misses.
   - Missing tests: over-limit body, refused batch leaves no receipt, selection-box drag, saved waits for the last split batch, Delete while typing in an edge label, archived inline editing, pane-bubbled shape drop; the batch timing bound (5 s) may flake on slow CI.
   - Environment: Chromium only; 200% zoom was emulated (viewport halved, device pixel ratio 2), not a real browser zoom; an unexplained ECONNRESET once in a 03.2 remount test passed on rerun; other people's changes appear after this person's next save, refusal or reload until Stage 04 Realtime; hosted Supabase and deployment untouched; GitHub CI's zero-skip record pending a push.
-- Next action: ask the user to approve pushing `feat/stage-03-03-positions` and opening the 03.3 PR. Task 10 (review and update the v1.6 handbook for the deviations above) is pending and needs the user's confirmation to write outside this worktree. Stage 04 (Supabase Realtime collaboration) follows once Stage 03 is merged.
+- Next action: the Stage 03.3 PR is under review (CodeRabbit and follow-up fixes). After it merges, Stage 03 is complete; Stage 04 (Supabase Realtime collaboration) follows.
 
 ## Stage 03.2 — Studio canvas, toolbox and inspector (merged, PR #14)
 
