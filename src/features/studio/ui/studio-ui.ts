@@ -1,5 +1,5 @@
 import type { CommandResult } from "../../drafts/contracts/commands.ts";
-import type { DraftLayout } from "../../drafts/contracts/draft-layout.ts";
+import { COORDINATE_LIMIT, type DraftLayout } from "../../drafts/contracts/draft-layout.ts";
 import { NODE_KINDS, type DraftView, type NodeKind } from "../../drafts/contracts/scope-document.ts";
 import { dirtyFields, isDirty, type Buffers } from "./buffers.ts";
 import { emptyOutbox, pendingCount, type Outbox } from "./outbox.ts";
@@ -77,11 +77,14 @@ export function afterDraftRead(ui: StudioUi, view: Pick<DraftView, "id" | "docum
   return { acknowledgedRevisions, refreshFailed: false };
 }
 
-/** Final drag positions worth keeping: rounded to whole pixels, and only for steps that moved from where they showed. */
+/** A canvas coordinate as a saved one: whole pixels within +-COORDINATE_LIMIT (auto-pan and far drops can go past it). */
+const saveable = (value: number) => Math.max(-COORDINATE_LIMIT, Math.min(COORDINATE_LIMIT, Math.round(value)));
+
+/** Final drag positions worth keeping: rounded to whole pixels within the coordinate limit, and only for steps that moved from where they showed. */
 export function moveTargets(moved: { id: string; position: { x: number; y: number } }[], layout: DraftLayout): { nodeId: string; x: number; y: number }[] {
   return moved.flatMap(({ id, position }) => {
     const shown = layout.positions[id];
-    const x = Math.round(position.x), y = Math.round(position.y);
+    const x = saveable(position.x), y = saveable(position.y);
     return shown && (shown.x !== x || shown.y !== y) ? [{ nodeId: id, x, y }] : [];
   });
 }
@@ -145,7 +148,7 @@ export function orientReconnect(
     : { fromId: keptId, toId: moved.id, fromHandle: keptHandle, toHandle: moved.handle };
 }
 
-/** A drop or click point, centred to a top-left step position and rounded to whole pixels (Data02 coordinates). */
+/** A drop or click point, centred to a top-left step position, rounded to whole pixels and kept within the coordinate limit (Data02 coordinates). */
 export function dropTarget(point: { x: number; y: number }, size: { width: number; height: number }): { x: number; y: number } {
-  return { x: Math.round(point.x - size.width / 2), y: Math.round(point.y - size.height / 2) };
+  return { x: saveable(point.x - size.width / 2), y: saveable(point.y - size.height / 2) };
 }

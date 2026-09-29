@@ -2,13 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { DraftLayout } from "../src/features/drafts/contracts/draft-layout.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
-import { defaultStudioUi, moveTargets, studioDirtyCount } from "../src/features/studio/ui/studio-ui.ts";
+import { defaultStudioUi, dropTarget, moveTargets, studioDirtyCount } from "../src/features/studio/ui/studio-ui.ts";
 import { shortcutOf } from "../src/features/studio/ui/use-keyboard-shortcuts.ts";
 
 const layout: DraftLayout = { schemaVersion: 1, positions: { a: { x: 0, y: 0, version: 3 }, b: { x: 100, y: 0, version: 5 } }, directions: {}, edgeSides: {} };
 
 test("a drag keeps only steps that moved from where they showed, rounded to whole pixels", () => {
   assert.deepEqual(moveTargets([{ id: "a", position: { x: 0.4, y: -0.2 } }, { id: "b", position: { x: 140.6, y: 20 } }, { id: "gone", position: { x: 1, y: 1 } }], layout), [{ nodeId: "b", x: 141, y: 20 }]);
+});
+
+test("a drag or drop past the coordinate limit is clamped to it, so a saved position is always valid", () => {
+  assert.deepEqual(moveTargets([{ id: "a", position: { x: 250000.4, y: -250000 } }], layout), [{ nodeId: "a", x: 100000, y: -100000 }]);
+  assert.deepEqual(dropTarget({ x: 100000, y: -99990 }, { width: 100, height: 40 }), { x: 99950, y: -100000 });
+  assert.deepEqual(dropTarget({ x: 400000, y: -400000 }, { width: 100, height: 40 }), { x: 100000, y: -100000 });
 });
 
 test("the leave guard counts typed text and every unsaved change, sent or not", () => {

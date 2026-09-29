@@ -107,7 +107,9 @@ export function build(view: DraftView, entries: Entry[]): Built {
   // The commands were checked by applyChanges; the server checks the final draft again after the moves.
   let overLimit = false;
   if (moves.length) {
-    try { checkDraft(draft); } catch (error) { if (!(error instanceof GraphError)) throw error; overLimit = true; }
+    // Anything checkDraft refuses (a size limit, or a coordinate that parses as invalid) is refused locally: a bad queued
+    // state must never throw out of a render and take every unsaved change with it.
+    try { checkDraft(draft); } catch { overLimit = true; }
   }
   return { changes: { commands: applied.kept, moves }, draft, skipped: applied.skipped, overLimit };
 }
@@ -258,11 +260,6 @@ export function startSave(outbox: Outbox, saved: DraftView, key: string): Outbox
   return { ...outbox, base, entries: [], redo: [], dropped, sending: batches.length ? { draftId: base.id, key, batches, state: "waiting" } : null };
 }
 
-/** True when saving the unsent chain would go over the draft's size limit (checked like the server does). */
-export function overLimit(outbox: Outbox, saved: DraftView): boolean {
-  return Boolean(outbox.entries.length) && build(baseOf(outbox, saved), outbox.entries).overLimit;
-}
-
 /** The current batch is saved: the base advances by exactly that batch; the next one (if any) waits for its own key. */
 export function acknowledged(outbox: Outbox, nextKey: string): Outbox {
   const { base, sending } = outbox;
@@ -361,7 +358,7 @@ export function rebase(outbox: Outbox, saved: DraftView, names: ScopeDocument): 
     try {
       const next = applyBatch(current, { commands: [{ command, proposedIds: entry.proposedIds }], moves: [] });
       // Someone already made the same change: nothing is left to save for it.
-      if (next.documentRevision !== current.documentRevision) entries.push({ ...entry, command });
+      if (next.documentRevision !== current.documentRevision || next.layoutRevision !== current.layoutRevision) entries.push({ ...entry, command });
       current = next;
     } catch (error) {
       if (!(error instanceof GraphError)) throw error;

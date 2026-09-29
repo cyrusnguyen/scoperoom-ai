@@ -6,7 +6,7 @@ import { emptyDraft, type DraftView } from "../src/features/drafts/contracts/sco
 import { applyChanges } from "../src/features/drafts/domain/changes.ts";
 import { applyGraphCommand, GraphError } from "../src/features/drafts/domain/graph.ts";
 import {
-  acknowledged, addDrop, build, compareOutbox, emptyOutbox, enqueue, keepTheirs, optimistic, overLimit, pendingCount, rebase, redo, replay, split, startSave, undo, wireBody, withEntries,
+  acknowledged, addDrop, build, compareOutbox, emptyOutbox, enqueue, keepTheirs, optimistic, pendingCount, rebase, redo, replay, split, startSave, undo, wireBody, withEntries,
   type Outbox,
 } from "../src/features/studio/ui/outbox.ts";
 import { largeDraft } from "./support/large-draft.ts";
@@ -265,7 +265,30 @@ test("the server's final size check runs after the moves too: an over-limit chai
   const over: DraftView = { id: id(98), status: "EDITABLE", documentRevision: 1, layoutRevision: 1, document: { ...large.document, nodes: { ...large.document.nodes, [node.id]: { ...node, description: "ệ".repeat(60_000) } } }, layout: large.layout };
   const outbox = addDrop(emptyOutbox, over, flow, [{ nodeId: node.id, x: 777, y: 777 }]);
   assert.equal(build(over, outbox.entries).overLimit, true);
-  assert.equal(overLimit(outbox, over), true);
   assert.equal(startSave(outbox, over, "key-1"), outbox, "not started, so Apply can never loop on a batch the server refuses");
-  assert.equal(overLimit(addDrop(emptyOutbox, saved(), flowId, [{ nodeId: end, x: 1, y: 1 }]), saved()), false);
+  assert.equal(build(saved(), addDrop(emptyOutbox, saved(), flowId, [{ nodeId: end, x: 1, y: 1 }]).entries).overLimit, false);
+});
+
+test("a drop at an invalid coordinate is refused locally as over the limit, never thrown into the render", () => {
+  const base = saved();
+  const outbox = addDrop(emptyOutbox, base, flowId, [{ nodeId: end, x: 200_000, y: 1 }]);
+  const built = build(base, outbox.entries);
+  assert.equal(built.overLimit, true);
+  assert.equal(replay(outbox, base).overLimit, true);
+  assert.doesNotThrow(() => optimistic(outbox, base));
+  assert.equal(startSave(outbox, base, "key-1"), outbox, "never sent");
+});
+
+test("Apply my changes again keeps a sides-only connection change, which advances only the layout revision", () => {
+  const before = saved(), edgeId = id(20);
+  const added = applyGraphCommand(before, before.documentRevision, addEdge(4, start, end), () => edgeId);
+  const base: DraftView = { ...before, document: added.document, layout: added.layout, documentRevision: before.documentRevision + 1 };
+  const sides: GraphCommand = { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: 5, payload: { edgeId, fromId: start, toId: end, fromSide: "right", toSide: "left" } };
+  const outbox = queue(emptyOutbox, base, sides).outbox;
+  assert.equal(pendingCount(outbox), 1);
+  const newer = theirs(base, [], [{ nodeId: end, x: 900, y: 900 }]);
+  const rebased = rebase(startSave(outbox, base, "key-1"), newer, base.document);
+  assert.equal(rebased.entries.length, 1, "re-queued, not silently lost");
+  assert.deepEqual(rebased.dropped, []);
+  assert.deepEqual(optimistic(rebased, newer).layout.edgeSides[edgeId], { from: "right", to: "left" });
 });
