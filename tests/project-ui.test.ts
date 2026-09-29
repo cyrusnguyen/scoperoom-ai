@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { edit, send, type Saved } from "../src/features/studio/ui/buffers.ts";
+import type { Changes } from "../src/features/drafts/contracts/changes.ts";
+import { edit, type Saved } from "../src/features/studio/ui/buffers.ts";
+import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import { afterDraftRead, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
 import { anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
-const closed = { acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, pending: null, buffers: {}, endpointBuffers: {}, flowId: null, selection: null, view: null };
+const closed = { acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, buffers: {}, endpointBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("an unknown or absent project reads the closed default", () => {
@@ -30,16 +32,13 @@ test("drafts belong to one project, and undefined clears a draft", () => {
   assert.equal(anyDirty(store), true);
 });
 
-test("Studio buffers count their dirty fields; an unconfirmed save still counts once", () => {
+test("Studio buffers count their dirty fields", () => {
   let store = updateUi({}, "a", (ui) => ({ buffers: edit(edit(ui.buffers, node, "label", "Pay now"), node, "description", "Card") }));
   assert.equal(dirtyCount(store, "a"), 2);
   store = updateUi(store, "a", (ui) => ({ buffers: edit(ui.buffers, node, "label", "Pay") }));
   store = updateUi(store, "a", (ui) => ({ buffers: edit(ui.buffers, node, "description", "") }));
   assert.equal(dirtyCount(store, "a"), 0, "typing back the saved values is clean again");
-  store = updateUi(store, "a", (ui) => ({ buffers: send(edit(ui.buffers, node, "label", "Sent"), "NODE:n1", "key-1") }));
-  store = updateUi(store, "a", (ui) => ({ buffers: edit(ui.buffers, node, "label", "Pay") }));
-  assert.equal(dirtyCount(store, "a"), 1, "a save in flight is not clean until acknowledged");
-  assert.equal(anyDirty(store), true);
+  assert.equal(anyDirty(store), false);
 });
 
 test("updateUi merges a change computed from the current state", () => {
@@ -74,30 +73,6 @@ test("endpoint choices count as unsaved and discard clears only their project", 
   assert.equal(dirtyCount(discarded, "b"), 1);
 });
 
-test("an uncertain topology receipt guards navigation and survives explicit edit discard", () => {
-  const pending = { inFlight: false, draftId: "d1", key: "receipt-1", command: { commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: 3, payload: { edgeId: "e1" } } } as const;
-  let store = updateUi({}, "a", () => ({ pending }));
-  assert.equal(dirtyCount(store, "a"), 1);
-  assert.equal(anyDirty(store), true);
-  store = setDraft(store, "a", "name", "Local text");
-  const discarded = discardDrafts(store, "a");
-  assert.deepEqual(uiFor(discarded, "a").drafts, {});
-  assert.deepEqual(uiFor(discarded, "a").pending, pending);
-  assert.equal(dirtyCount(discarded, "a"), 1);
-  assert.equal(dirtyCount(discarded, "b"), 0);
-  assert.equal(anyDirty(updateUi(discarded, "a", () => ({ pending: null }))), false);
-});
-
-test("discard clears a certain command failure but preserves an unresolved receipt's status", () => {
-  const failed = { state: "failed", message: "Command refused" } as const;
-  const clean = discardDrafts(updateUi({}, "a", () => ({ save: failed })), "a");
-  assert.deepEqual(uiFor(clean, "a").save, { state: "idle", message: "" });
-  const pending = { inFlight: false, draftId: "d1", key: "receipt-1", command: { commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: 3, payload: { edgeId: "e1" } } } as const;
-  const unresolved = discardDrafts(updateUi({}, "a", () => ({ save: failed, pending })), "a");
-  assert.deepEqual(uiFor(unresolved, "a").save, failed);
-  assert.deepEqual(uiFor(unresolved, "a").pending, pending);
-});
-
 test("reads must cover both acknowledged revision floors and clear only the qualifying draft", () => {
   let floors = requireDraftRevision({}, { draftId: "d1", documentRevision: 5, layoutRevision: 7 });
   floors = requireDraftRevision(floors, { draftId: "d1", documentRevision: 4, layoutRevision: 6 });
@@ -111,4 +86,30 @@ test("reads must cover both acknowledged revision floors and clear only the qual
   assert.equal(read.refreshFailed, false);
   assert.deepEqual(read.acknowledgedRevisions, { d2: floors.d2 });
   assert.deepEqual(ui.acknowledgedRevisions, floors, "the original per-project state is immutable");
+});
+
+const deleteEdge = { commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: 3, payload: { edgeId: "e1" } } as const;
+const batch: Changes = { commands: [{ command: deleteEdge, proposedIds: [] }], moves: [] };
+const withSave = (state: "waiting" | "sending" | "uncertain" | "refused"): Outbox => ({
+  ...emptyOutbox, entries: [{ kind: "drop", flowId: "f", items: [{ nodeId: "n1", x: 1, y: 2 }] }], sending: { draftId: "d1", key: "receipt-1", batches: [batch], state },
+});
+
+test("unsaved changes guard navigation; discard drops them and a refused save, never one that may have committed", () => {
+  const failed = { state: "failed", message: "Your changes weren’t saved." } as const;
+  for (const state of ["waiting", "refused"] as const) {
+    const store = updateUi({}, "a", () => ({ outbox: withSave(state), save: failed }));
+    assert.equal(dirtyCount(store, "a"), 2);
+    assert.equal(anyDirty(store), true);
+    const discarded = uiFor(discardDrafts(store, "a"), "a");
+    assert.deepEqual([discarded.outbox, discarded.save], [emptyOutbox, { state: "idle", message: "" }]);
+  }
+  for (const state of ["sending", "uncertain"] as const) {
+    const store = setDraft(updateUi({}, "a", () => ({ outbox: withSave(state), save: failed })), "a", "name", "Local text");
+    const discarded = uiFor(discardDrafts(store, "a"), "a");
+    assert.deepEqual(discarded.drafts, {});
+    assert.deepEqual(discarded.outbox.entries, [], "local changes behind it go");
+    assert.equal(discarded.outbox.sending?.key, "receipt-1", "the batch stays retryable with its key");
+    assert.deepEqual(discarded.save, failed);
+    assert.equal(dirtyCount(discardDrafts(store, "a"), "a"), 1);
+  }
 });

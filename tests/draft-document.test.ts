@@ -45,6 +45,13 @@ test("the empty draft and a small valid flow both parse", () => {
   assert.deepEqual(parsed.layout.positions[endId], { x: 0, y: 160, version: 1 });
 });
 
+test("a DATA_STORE node parses like any other kind, and an unknown kind is rejected", () => {
+  const draft = stored();
+  at(draft.document, "nodes", startId).kind = "DATA_STORE";
+  assert.equal(parseDraftPair(draft.document, draft.layout).document.nodes[startId]!.kind, "DATA_STORE");
+  rejects((bad) => { at(bad.document, "nodes", startId).kind = "TABLE"; });
+});
+
 test("unknown or missing properties, and unsupported schema versions, are rejected", () => {
   rejects((draft) => { draft.document.extra = true; });
   rejects((draft) => { delete at(draft.document, "nodes", startId).actorLabel; });
@@ -65,6 +72,18 @@ test("every node has exactly one position and every flow one direction", () => {
   rejects((draft) => { at(draft.layout, "positions")[unknownId] = { x: 0, y: 0, version: 1 }; });
   rejects((draft) => { delete at(draft.layout, "directions")[flowId]; });
   rejects((draft) => { at(draft.layout, "directions")[flowId] = "RL"; });
+});
+
+test("edgeSides is optional (an old draft without it parses as {}), and any entry names a live edge and valid sides", () => {
+  const missing = stored();
+  delete missing.layout.edgeSides;
+  assert.deepEqual(parseDraftPair(missing.document, missing.layout).layout.edgeSides, {});
+  const saved = stored();
+  at(saved.layout, "edgeSides")[edgeId] = { from: "right", to: "left" };
+  assert.deepEqual(parseDraftPair(saved.document, saved.layout).layout.edgeSides, { [edgeId]: { from: "right", to: "left" } });
+  rejects((draft) => { at(draft.layout, "edgeSides")[edgeId] = { from: "up", to: "left" }; });
+  rejects((draft) => { at(draft.layout, "edgeSides")[unknownId] = { from: "right", to: "left" }; });
+  rejects((draft) => { at(draft.layout, "edgeSides")[edgeId] = { from: "right" }; });
 });
 
 test("coordinates, versions and text respect their bounds", () => {

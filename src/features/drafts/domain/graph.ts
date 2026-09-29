@@ -11,7 +11,10 @@ export type GraphErrorCode =
   | "STALE_DOCUMENT_REVISION"
   | "DEPENDENCY_CONFLICT"
   | "LIMIT_EXCEEDED"
-  | "VERSION_EXHAUSTED";
+  | "VERSION_EXHAUSTED"
+  | "POSITION_CONFLICT"
+  | "STALE_LAYOUT_REVISION"
+  | "ARRANGEMENT_PREVIEW_CHANGED";
 export type GraphErrorDetails = Record<string, string | number | null>;
 
 export class GraphError extends Error {
@@ -38,6 +41,9 @@ export type Applied = Draft & {
 function fail(code: GraphErrorCode, details?: GraphErrorDetails): never {
   throw new GraphError(code, details);
 }
+
+/** Deterministic record order: stored JSONB sorts keys, a browser copy keeps insertion order. */
+export const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 export function bump(value: number): number {
   if (value >= MAX_VERSION) fail("VERSION_EXHAUSTED");
@@ -86,22 +92,36 @@ function current<T extends { version: number }>(record: T | undefined, entityId:
   return record;
 }
 
+/** The final size and invariant check of a changed draft (LIMIT_EXCEEDED is a refusal; anything else a server fault). */
+export function checkDraft({ document, layout }: Draft) {
+  if (utf8Bytes(document) > LIMITS.documentBytes || utf8Bytes(layout) > LIMITS.layoutBytes) fail("LIMIT_EXCEEDED");
+  try {
+    parseDraftPair(document, layout);
+  } catch {
+    throw new Error("GRAPH_INVARIANT");
+  }
+}
+
 /**
  * Applies one command to a saved draft and returns the next valid draft. GraphError signals a safe command refusal;
  * other errors represent a server invariant failure. An effective no-op returns documentChanged=false.
+ *
+ * `inPlace` is for a batch: `saved` is the caller's private working copy, changed in place and not checked here, and
+ * the caller runs checkDraft once on the final draft. A refusal can leave the copy half-changed, so any error discards it.
  */
 export function applyGraphCommand(
   saved: Draft,
   documentRevision: number,
   command: GraphCommand,
   newId: () => string,
+  { inPlace = false } = {},
 ): Applied {
   if ("expectedDocumentRevision" in command && command.expectedDocumentRevision !== documentRevision) {
     fail("STALE_DOCUMENT_REVISION", { documentRevision });
   }
 
-  const document = structuredClone(saved.document);
-  const layout = structuredClone(saved.layout);
+  const document = inPlace ? saved.document : structuredClone(saved.document);
+  const layout = inPlace ? saved.layout : structuredClone(saved.layout);
   const used = new Set([
     ...Object.keys(document.flows),
     ...Object.keys(document.nodes),
@@ -142,6 +162,12 @@ export function applyGraphCommand(
     versions: {},
     retiredIds: [],
   });
+  /** A layout-only effect (Task 13's side-only RECONNECT_EDGE): the document is untouched, so no revision or version
+   * advances, but the changed layout still needs its own invariant check and its layoutRevision. */
+  const layoutOnly = (): Applied => {
+    if (!inPlace) checkDraft({ document, layout });
+    return { document, layout, documentChanged: false, layoutChanged: true, createdIds: [], versions: {}, retiredIds: [] };
+  };
 
   switch (command.command) {
     case "CREATE_FLOW": {
@@ -174,8 +200,8 @@ export function applyGraphCommand(
     }
     case "DUPLICATE_FLOW": {
       const source = document.flows[command.payload.flowId] ?? fail("INVALID_INPUT");
-      const nodes = Object.values(document.nodes).filter((node) => node.flowId === source.id);
-      const edges = Object.values(document.edges).filter((edge) => edge.flowId === source.id);
+      const nodes = Object.values(document.nodes).filter((node) => node.flowId === source.id).sort(byId);
+      const edges = Object.values(document.edges).filter((edge) => edge.flowId === source.id).sort(byId);
       const title = `Copy of ${source.title}`;
       if ([...title].length > LIMITS.title) fail("LIMIT_EXCEEDED", { limit: LIMITS.title });
       if (
@@ -219,6 +245,8 @@ export function applyGraphCommand(
           fromId: remap.get(edge.fromId)!,
           toId: remap.get(edge.toId)!,
         };
+        const sides = layout.edgeSides[edge.id];
+        if (sides) layout.edgeSides[edgeId] = sides;
       }
       layoutChanged = true;
       break;
@@ -229,7 +257,7 @@ export function applyGraphCommand(
       if (!sameIds(plan.nodeIds, command.payload.removeNodeIds) || !sameIds(plan.edgeIds, command.payload.removeEdgeIds)) {
         fail("DEPENDENCY_CONFLICT");
       }
-      for (const edgeId of plan.edgeIds) delete document.edges[edgeId];
+      for (const edgeId of plan.edgeIds) { delete document.edges[edgeId]; delete layout.edgeSides[edgeId]; }
       for (const nodeId of plan.nodeIds) {
         delete document.nodes[nodeId];
         delete layout.positions[nodeId];
@@ -282,7 +310,7 @@ export function applyGraphCommand(
       }
       const plan = dependencyPlan(document, flowId, nodeIds);
       if (!sameIds(plan.edgeIds, removeEdgeIds)) fail("DEPENDENCY_CONFLICT");
-      for (const edgeId of plan.edgeIds) delete document.edges[edgeId];
+      for (const edgeId of plan.edgeIds) { delete document.edges[edgeId]; delete layout.edgeSides[edgeId]; }
       for (const nodeId of plan.nodeIds) {
         delete document.nodes[nodeId];
         delete layout.positions[nodeId];
@@ -293,7 +321,7 @@ export function applyGraphCommand(
       break;
     }
     case "ADD_EDGE": {
-      const { flowId, fromId, toId, condition } = command.payload;
+      const { flowId, fromId, toId, condition, fromSide, toSide } = command.payload;
       if (
         !document.flows[flowId]
         || document.nodes[fromId]?.flowId !== flowId
@@ -311,6 +339,7 @@ export function applyGraphCommand(
         origin: "HUMAN",
         sourceRefs: [],
       };
+      if (fromSide) { layout.edgeSides[edgeId] = { from: fromSide, to: toSide! }; layoutChanged = true; }
       touchFlow(flowId);
       break;
     }
@@ -323,12 +352,28 @@ export function applyGraphCommand(
       break;
     }
     case "RECONNECT_EDGE": {
-      const { edgeId, fromId, toId } = command.payload;
+      const { edgeId, fromId, toId, fromSide, toSide } = command.payload;
       const edge = document.edges[edgeId] ?? fail("INVALID_INPUT");
       if (document.nodes[fromId]?.flowId !== edge.flowId || document.nodes[toId]?.flowId !== edge.flowId) {
         fail("INVALID_INPUT");
       }
-      if (edge.fromId === fromId && edge.toId === toId) return noChange();
+      const endpointsChanged = edge.fromId !== fromId || edge.toId !== toId;
+      const existingSides = layout.edgeSides[edgeId];
+      // Sides-only saves do not advance documentRevision. Compare the inspected pair so a concurrent reconnect
+      // cannot silently replace it; unrelated node positions and other edges remain independent.
+      const expectedSides = command.payload.expectedSides;
+      if (existingSides?.from !== expectedSides?.from || existingSides?.to !== expectedSides?.to) {
+        fail("STALE_LAYOUT_REVISION", { edgeId });
+      }
+      const sidesChanged = fromSide ? existingSides?.from !== fromSide || existingSides?.to !== toSide : Boolean(existingSides);
+      if (!endpointsChanged && !sidesChanged) return noChange();
+      // The endpoints and their sides are one geometry decision: a plain reconnect (no sides given) clears them, a
+      // side-carrying reconnect (endpoints changed or not) writes or replaces them. Either way the layout changed
+      // exactly when the sides entry did, whether or not the endpoints (and so the document) also changed.
+      if (fromSide) layout.edgeSides[edgeId] = { from: fromSide, to: toSide! };
+      else delete layout.edgeSides[edgeId];
+      layoutChanged = sidesChanged;
+      if (!endpointsChanged) return layoutOnly(); // sides only: no document revision, no behaviour version
       document.edges[edgeId] = { ...edge, fromId, toId, version: bump(edge.version) };
       versions[edgeId] = document.edges[edgeId].version;
       touchFlow(edge.flowId);
@@ -337,17 +382,13 @@ export function applyGraphCommand(
     case "DELETE_EDGE": {
       const edge = document.edges[command.payload.edgeId] ?? fail("INVALID_INPUT");
       delete document.edges[edge.id];
+      if (layout.edgeSides[edge.id]) { delete layout.edgeSides[edge.id]; layoutChanged = true; }
       retire([edge.id]);
       touchFlow(edge.flowId);
       break;
     }
   }
 
-  if (utf8Bytes(document) > LIMITS.documentBytes || utf8Bytes(layout) > LIMITS.layoutBytes) fail("LIMIT_EXCEEDED");
-  try {
-    parseDraftPair(document, layout);
-  } catch {
-    throw new Error("GRAPH_INVARIANT");
-  }
+  if (!inPlace) checkDraft({ document, layout });
   return { document, layout, documentChanged: true, layoutChanged, createdIds, versions, retiredIds };
 }

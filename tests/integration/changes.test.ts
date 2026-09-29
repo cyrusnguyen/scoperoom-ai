@@ -1,0 +1,225 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import test from "node:test";
+import type { Client } from "pg";
+import { executeGraphCommand, getDraft } from "../../src/features/drafts/server/execute-command.ts";
+import { saveChanges } from "../../src/features/drafts/server/changes.ts";
+import { ProjectError } from "../../src/features/projects/server/errors.ts";
+import { archiveProject } from "../../src/features/projects/server/management.ts";
+import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
+import { CHANGES_BODY_LIMIT } from "../../src/features/drafts/contracts/changes.ts";
+import { utf8Bytes } from "../../src/features/drafts/contracts/strict.ts";
+import { largeDraft, largestBatch } from "../support/large-draft.ts";
+import { canRun, withFixture, type Identity } from "./support/fixture.ts";
+
+const refused = (expected: string, details?: Record<string, unknown>) => (error: unknown) =>
+  error instanceof ProjectError && error.code === expected && Object.entries(details ?? {}).every(([key, value]) => error.details?.[key] === value);
+
+const createFlow = (expectedDocumentRevision: number, proposedIds: string[]) => ({
+  commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision, payload: { title: "Flow", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" }, proposedIds,
+});
+const addNode = (expectedDocumentRevision: number, flowId: string, proposedIds: string[], kind = "ACTION") => ({
+  commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision, payload: { flowId, kind, label: "Step", description: "", actorLabel: "" }, proposedIds,
+});
+const addEdge = (expectedDocumentRevision: number, flowId: string, fromId: string, toId: string, proposedIds: string[]) => ({
+  commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision, payload: { flowId, fromId, toId, condition: "" }, proposedIds,
+});
+const updateNode = (expectedEntityVersion: number, nodeId: string, label: string) => ({ commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion, payload: { nodeId, label } });
+
+const events = async (database: Client, projectId: string) =>
+  (await database.query<{ action: string }>("select action from app.audit_event where project_id = $1 order by sequence", [projectId])).rows.map((row) => row.action);
+
+async function started(project: (owner: Identity) => Promise<string>, owner: Identity) {
+  const projectId = await project(owner);
+  const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+  return { projectId, draftId, base: await getDraft(owner, projectId, draftId) };
+}
+
+/** The batch a browser builds from its local replay of the saved draft at `revision`. */
+function localBatch(revision: number) {
+  const [flowId, start, next, edgeId] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+  const commands = [
+    createFlow(revision, [flowId]), addNode(revision + 1, flowId, [start], "START"), addNode(revision + 2, flowId, [next]),
+    addEdge(revision + 3, flowId, start, next, [edgeId]), updateNode(1, next, "Renamed"),
+  ];
+  return { flowId, start, next, edgeId, body: { commands, moves: [{ flowId, items: [{ nodeId: next, expectedPositionVersion: 1, x: 420, y: 360 }] }] } };
+}
+
+test("a batch of commands and moves saves atomically with the proposed ids, and its key replays without re-applying", { skip: !canRun }, async () => {
+  await withFixture(async ({ database, user, project }) => {
+    const owner = await user();
+    const { projectId, draftId, base } = await started(project, owner);
+    const before = await events(database, projectId);
+    const { flowId, start, next, edgeId, body } = localBatch(base.documentRevision);
+    const key = randomUUID();
+    const saved = await saveChanges(owner, projectId, draftId, { ...body, key });
+    assert.deepEqual({ ...saved, eventSequence: 0 }, {
+      draftId, documentRevision: base.documentRevision + 5, layoutRevision: base.layoutRevision + 1, eventSequence: 0,
+      replayed: false,
+    });
+    const draft = await getDraft(owner, projectId, draftId);
+    assert.equal(draft.documentRevision, saved.documentRevision);
+    assert.equal(draft.layoutRevision, saved.layoutRevision);
+    assert.equal(draft.document.flows[flowId]!.version, 5);
+    assert.equal(draft.document.nodes[next]!.label, "Renamed");
+    assert.deepEqual([draft.document.edges[edgeId]!.fromId, draft.document.edges[edgeId]!.toId], [start, next]);
+    assert.deepEqual(draft.layout.positions[next], { x: 420, y: 360, version: 2 });
+    const added = (await events(database, projectId)).slice(before.length);
+    assert.deepEqual(added, [...Array(5).fill("DRAFT_COMMAND_SAVED"), "DRAFT_POSITIONS_SAVED"]);
+    const { rows: [last] } = await database.query<{ sequence: string }>("select max(sequence)::text as sequence from app.audit_event where project_id = $1", [projectId]);
+    assert.equal(saved.eventSequence, Number(last!.sequence));
+
+    const replayed = await saveChanges(owner, projectId, draftId, { ...body, key });
+    assert.deepEqual(replayed, { ...saved, replayed: true });
+    assert.deepEqual(await getDraft(owner, projectId, draftId), draft);
+    assert.equal((await events(database, projectId)).length, before.length + 6);
+    await assert.rejects(saveChanges(owner, projectId, draftId, { ...localBatch(draft.documentRevision).body, key }), refused("KEY_REUSED"));
+  });
+});
+
+test("a side-only RECONNECT_EDGE inside a batch saves the layout without a documentRevision of its own", { skip: !canRun }, async () => {
+  await withFixture(async ({ database, user, project }) => {
+    const owner = await user();
+    const { projectId, draftId, base } = await started(project, owner);
+    const [flowId, start, next, edgeId] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    const setup = {
+      commands: [createFlow(base.documentRevision, [flowId]), addNode(base.documentRevision + 1, flowId, [start], "START"), addNode(base.documentRevision + 2, flowId, [next]), addEdge(base.documentRevision + 3, flowId, start, next, [edgeId])],
+      moves: [],
+    };
+    const saved = await saveChanges(owner, projectId, draftId, { ...setup, key: randomUUID() });
+    const reconnectSides = {
+      commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: saved.documentRevision,
+      payload: { edgeId, fromId: start, toId: next, fromSide: "right", toSide: "left" }, proposedIds: [],
+    };
+    const withSides = await saveChanges(owner, projectId, draftId, { commands: [reconnectSides], moves: [], key: randomUUID() });
+    assert.deepEqual([withSides.documentRevision, withSides.layoutRevision], [saved.documentRevision, saved.layoutRevision + 1]);
+    const draft = await getDraft(owner, projectId, draftId);
+    assert.deepEqual(draft.layout.edgeSides[edgeId], { from: "right", to: "left" });
+    // Neither the document nor edge version advanced, but an uninspected side overwrite must still refuse.
+    const staleKey = randomUUID();
+    const stale = { ...reconnectSides, payload: { ...reconnectSides.payload, fromSide: "bottom", toSide: "top" } };
+    await assert.rejects(saveChanges(owner, projectId, draftId, { commands: [stale], moves: [], key: staleKey }),
+      refused("STALE_LAYOUT_REVISION", { edgeId, part: "commands", index: 0 }));
+    assert.deepEqual(await getDraft(owner, projectId, draftId), draft);
+    const { rows: [receipts] } = await database.query<{ count: number }>("select count(*)::integer as count from app.mutation_receipt where scope_id = $1 and key = $2", [projectId, staleKey]);
+    assert.equal(receipts!.count, 0, "refused saves leave no receipt");
+    // Even though nothing was created, versioned or retired, the audit row still names the edge it touched.
+    const { rows: [lastEvent] } = await database.query<{ entity_refs: { kind: string; id: string }[] }>(
+      "select entity_refs from app.audit_event where project_id = $1 order by sequence desc limit 1", [projectId]);
+    assert.deepEqual(lastEvent!.entity_refs, [{ kind: "DRAFT_ENTITY", id: edgeId }]);
+  });
+});
+
+test("a refusal anywhere in the batch rolls back every item and names the failing one", { skip: !canRun }, async () => {
+  await withFixture(async ({ database, user, project }) => {
+    const owner = await user();
+    const { projectId, draftId, base } = await started(project, owner);
+    const before = await events(database, projectId);
+    const { body } = localBatch(base.documentRevision);
+    const staleCommand = { ...body, commands: body.commands.map((command, index) => (index === 2 ? { ...command, expectedDocumentRevision: base.documentRevision } : command)) };
+    await assert.rejects(saveChanges(owner, projectId, draftId, { ...staleCommand, key: randomUUID() }),
+      refused("STALE_DOCUMENT_REVISION", { part: "commands", index: 2, documentRevision: base.documentRevision + 2 }));
+    const staleMove = { ...body, moves: [{ ...body.moves[0]!, items: [{ ...body.moves[0]!.items[0]!, expectedPositionVersion: 2 }] }] };
+    await assert.rejects(saveChanges(owner, projectId, draftId, { ...staleMove, key: randomUUID() }),
+      refused("POSITION_CONFLICT", { part: "moves", index: 0, currentVersion: 1 }));
+    assert.deepEqual(await getDraft(owner, projectId, draftId), base);
+    assert.deepEqual(await events(database, projectId), before);
+  });
+});
+
+test("a foreign save between the local edit and Save refuses the batch", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, join }) => {
+    const owner = await user("Owner"); const editor = await user("Editor");
+    const { projectId, draftId, base } = await started(project, owner);
+    await join(owner, projectId, editor);
+    const { body } = localBatch(base.documentRevision);
+    const foreign = await executeGraphCommand(editor, projectId, draftId, {
+      commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision: base.documentRevision, payload: { title: "Theirs", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" }, key: randomUUID(),
+    });
+    await assert.rejects(saveChanges(owner, projectId, draftId, { ...body, key: randomUUID() }),
+      refused("STALE_DOCUMENT_REVISION", { part: "commands", index: 0, documentRevision: foreign.documentRevision }));
+    const after = await getDraft(owner, projectId, draftId);
+    assert.deepEqual(Object.keys(after.document.flows), foreign.createdIds);
+  });
+});
+
+test("proposed ids must be new and unique, readers and archived projects are refused, and limits are enforced", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, join }) => {
+    const owner = await user("Owner"); const viewer = await user("Viewer");
+    const { projectId, draftId, base } = await started(project, owner);
+    await join(owner, projectId, viewer, "VIEWER");
+    const send = (who: Identity, body: Record<string, unknown>) => saveChanges(who, projectId, draftId, { ...body, key: randomUUID() });
+    const flowId = randomUUID();
+    await send(owner, { commands: [createFlow(base.documentRevision, [flowId])], moves: [] });
+    const revision = base.documentRevision + 1;
+    await assert.rejects(send(owner, { commands: [addNode(revision, flowId, [flowId])], moves: [] }), refused("INVALID_INPUT", { part: "commands", index: 0 }));
+    const twice = randomUUID();
+    await assert.rejects(send(owner, { commands: [addNode(revision, flowId, [twice]), addNode(revision + 1, flowId, [twice])], moves: [] }), refused("INVALID_INPUT", { part: "commands", index: 1 }));
+    await assert.rejects(send(owner, { commands: [addNode(revision, flowId, [])], moves: [] }), refused("INVALID_INPUT", { part: "commands", index: 0 }));
+    assert.deepEqual((await getDraft(owner, projectId, draftId)).document.nodes, {});
+
+    await assert.rejects(send(viewer, { commands: [addNode(revision, flowId, [randomUUID()])], moves: [] }), refused("FORBIDDEN"));
+    await assert.rejects(send(owner, { commands: [], moves: [] }), refused("INVALID_INPUT"));
+    await assert.rejects(send(owner, { commands: Array.from({ length: 101 }, () => updateNode(1, flowId, "x")), moves: [] }), refused("INVALID_INPUT"));
+    await assert.rejects(send(owner, { commands: [], moves: [{ flowId, items: Array.from({ length: 201 }, () => ({ nodeId: randomUUID(), expectedPositionVersion: 1, x: 0, y: 0 })) }] }), refused("INVALID_INPUT"));
+    await assert.rejects(saveChanges(owner, projectId, draftId, { commands: [addNode(revision, flowId, [randomUUID()])], moves: [] }), refused("INVALID_INPUT"));
+
+    const status = await getProjectStatus(owner, projectId);
+    await archiveProject(owner, projectId, { expectedProjectVersion: status.version, reason: "Done", key: randomUUID() });
+    await assert.rejects(send(owner, { commands: [addNode(revision, flowId, [randomUUID()])], moves: [] }), refused("CONFLICT"));
+  });
+});
+
+test("the largest batch on a draft at its size limit saves with all commands and moves", { skip: !canRun }, async () => {
+  await withFixture(async ({ database, user, project }) => {
+    const owner = await user();
+    const { projectId, draftId, base } = await started(project, owner);
+    const large = largeDraft();
+    await database.query("update app.scope_draft set document_json = $1::jsonb, layout_json = $2::jsonb where id = $3", [JSON.stringify(large.document), JSON.stringify(large.layout), draftId]);
+    const before = await events(database, projectId);
+    const body = largestBatch(large);
+    assert(utf8Bytes(body) <= CHANGES_BODY_LIMIT);
+    const saved = await saveChanges(owner, projectId, draftId, { ...body, key: randomUUID() });
+    assert.equal(saved.documentRevision, base.documentRevision + 100);
+    assert.equal(saved.layoutRevision, base.layoutRevision + 1);
+    const draft = await getDraft(owner, projectId, draftId);
+    assert.equal(Object.values(draft.document.nodes).filter((node) => node.label === "Renamed").length, 100);
+    const added = (await events(database, projectId)).slice(before.length);
+    assert.deepEqual(added, [...Array(100).fill("DRAFT_COMMAND_SAVED"), ...Array(5).fill("DRAFT_POSITIONS_SAVED")]);
+  });
+});
+
+test("a batch whose created ids alone would fill the 64 KiB receipt saves, and its key replays the stored counters", { skip: !canRun }, async () => {
+  await withFixture(async ({ database, user, project }) => {
+    const owner = await user();
+    const { projectId, draftId, base } = await started(project, owner);
+    // One 40-step, 80-connection flow; the batch duplicates it and deletes the copy 15 times, so it creates 1,815 ids.
+    const large = largeDraft();
+    const flowId = Object.keys(large.document.flows)[0]!;
+    const own = <T extends { flowId: string }>(records: Record<string, T>) => Object.fromEntries(Object.entries(records).filter(([, record]) => record.flowId === flowId));
+    const document = { ...large.document, flows: { [flowId]: large.document.flows[flowId] }, nodes: own(large.document.nodes), edges: own(large.document.edges) };
+    const layout = { ...large.layout, directions: { [flowId]: "TB" }, positions: Object.fromEntries(Object.entries(large.layout.positions).filter(([nodeId]) => document.nodes[nodeId])) };
+    await database.query("update app.scope_draft set document_json = $1::jsonb, layout_json = $2::jsonb where id = $3", [JSON.stringify(document), JSON.stringify(layout), draftId]);
+    const commands: unknown[] = [];
+    const created: string[] = [];
+    for (let round = 0; round < 15; round += 1) {
+      const ids = Array.from({ length: 1 + 40 + 80 }, () => randomUUID());
+      created.push(...ids);
+      const revision = base.documentRevision + commands.length;
+      commands.push(
+        { commandSchemaVersion: 1, command: "DUPLICATE_FLOW", expectedDocumentRevision: revision, payload: { flowId }, proposedIds: ids },
+        { commandSchemaVersion: 1, command: "DELETE_FLOW", expectedDocumentRevision: revision + 1, payload: { flowId: ids[0], removeNodeIds: ids.slice(1, 41).sort(), removeEdgeIds: ids.slice(41).sort() } },
+      );
+    }
+    const moves = [{ flowId, items: Object.keys(document.nodes).map((nodeId) => ({ nodeId, expectedPositionVersion: 1, x: 500, y: 500 })) }];
+    const body = { commands, moves };
+    assert(utf8Bytes(body) <= CHANGES_BODY_LIMIT);
+    assert(utf8Bytes(created) > 65_536, "the ids the old receipt stored would already be over the receipt cap");
+    const key = randomUUID();
+    const saved = await saveChanges(owner, projectId, draftId, { ...body, key });
+    assert.deepEqual(Object.keys(saved).sort(), ["documentRevision", "draftId", "eventSequence", "layoutRevision", "replayed"]);
+    assert.equal(saved.documentRevision, base.documentRevision + 30);
+    assert.deepEqual(Object.keys((await getDraft(owner, projectId, draftId)).document.flows), [flowId]);
+    assert.deepEqual(await saveChanges(owner, projectId, draftId, { ...body, key }), { ...saved, replayed: true });
+  });
+});

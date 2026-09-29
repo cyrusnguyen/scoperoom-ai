@@ -49,3 +49,13 @@ test("a mutation sends JSON with its Idempotency-Key, and reads are no-store", a
     assert.equal(seen[1].cache, "no-store");
   } finally { restore(); }
 });
+
+test("a preview POST without a key sends no Idempotency-Key header", async () => {
+  const seen: RequestInit[] = [];
+  const restore = stubFetch(async (_url, init) => { seen.push(init ?? {}); return Response.json({ ok: 1 }); });
+  try {
+    await apiMutate("/api/projects/p/drafts/d/arrangement-preview", null, { direction: "TB" });
+    assert.equal(new Headers(seen[0].headers).get("idempotency-key"), null);
+    assert.equal(seen[0].body, JSON.stringify({ direction: "TB" }));
+  } finally { restore(); }
+});

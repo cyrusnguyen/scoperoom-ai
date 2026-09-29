@@ -4,7 +4,7 @@ import { id, invalid, keys, object, oneOf, records, text, utf8Bytes, version } f
 // ScopeDocument storage schema v3 (Data02). Stage 03 activates flows, nodes and edges only: the other collections
 // must stay empty, and confirmation, verification and source references stay unset, until the stages whose
 // validators own them (07–09) widen this parser.
-export const NODE_KINDS = ["START", "ACTION", "DECISION", "OUTCOME"] as const;
+export const NODE_KINDS = ["START", "ACTION", "DECISION", "OUTCOME", "DATA_STORE"] as const;
 export const CLASSIFICATIONS = ["USER_JOURNEY", "BUSINESS_PROCESS"] as const;
 export const INCLUSIONS = ["INCLUDED", "EXCLUDED", "UNDECIDED"] as const;
 export const ORIGINS = ["HUMAN", "AI_EXTRACTED", "AI_SUGGESTED", "IMPORTED"] as const;
@@ -104,7 +104,7 @@ export function parseDocument(value: unknown): ScopeDocument {
 export function parseDraftPair(document: unknown, layout: unknown): { document: ScopeDocument; layout: DraftLayout } {
   if (utf8Bytes(document) > LIMITS.documentBytes || utf8Bytes(layout) > LIMITS.layoutBytes) invalid();
   const parsed = parseDocument(document);
-  return { document: parsed, layout: parseLayout(layout, new Set(Object.keys(parsed.nodes)), new Set(Object.keys(parsed.flows))) };
+  return { document: parsed, layout: parseLayout(layout, new Set(Object.keys(parsed.nodes)), new Set(Object.keys(parsed.flows)), new Set(Object.keys(parsed.edges))) };
 }
 
 /** The one empty-draft factory project creation uses (Data02). */
@@ -114,6 +114,6 @@ export function emptyDraft(): { document: ScopeDocument; layout: DraftLayout } {
       schemaVersion: 3, projectGoal: "", flows: {}, nodes: {}, edges: {},
       requirements: {}, traceLinks: {}, scenarios: {}, questions: {}, decisions: {}, dependencies: {}, waivers: {}, retiredEntityIds: [],
     },
-    layout: { schemaVersion: 1, positions: {}, directions: {} },
+    layout: { schemaVersion: 1, positions: {}, directions: {}, edgeSides: {} },
   };
 }

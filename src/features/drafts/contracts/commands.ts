@@ -1,3 +1,4 @@
+import { SIDES, type Side } from "./draft-layout.ts";
 import { CLASSIFICATIONS, INCLUSIONS, LIMITS, NODE_KINDS, type Classification, type Inclusion, type NodeKind } from "./scope-document.ts";
 import { id, idList, invalid, keys, object, oneOf, text, utf8Bytes, version } from "./strict.ts";
 
@@ -23,9 +24,9 @@ export type GraphCommand =
   | Command<"ADD_NODE", ByDocument, { flowId: string } & Omit<NodeFields, "assumptionNotes">>
   | Command<"UPDATE_NODE", ByEntity, { nodeId: string } & Partial<NodeFields>>
   | Command<"DELETE_NODES", ByDocument, { flowId: string; nodeIds: string[]; removeEdgeIds: string[] }>
-  | Command<"ADD_EDGE", ByDocument, { flowId: string; fromId: string; toId: string; condition: string }>
+  | Command<"ADD_EDGE", ByDocument, { flowId: string; fromId: string; toId: string; condition: string; fromSide?: Side; toSide?: Side }>
   | Command<"UPDATE_EDGE", ByEntity, { edgeId: string; condition: string }>
-  | Command<"RECONNECT_EDGE", ByDocument, { edgeId: string; fromId: string; toId: string }>
+  | Command<"RECONNECT_EDGE", ByDocument, { edgeId: string; fromId: string; toId: string; fromSide?: Side; toSide?: Side; expectedSides?: { from: Side; to: Side } | null }>
   | Command<"DELETE_EDGE", ByDocument, { edgeId: string }>;
 
 /**
@@ -52,10 +53,17 @@ function optional<K extends string, T>(payload: Record<string, unknown>, key: K,
   return (Object.hasOwn(payload, key) ? { [key]: parse(payload[key]) } : {}) as { [P in K]?: T };
 }
 
-function envelope(body: Record<string, unknown>, guard: keyof ByDocument | keyof ByEntity, required: readonly string[], updatable: readonly string[] = []) {
+/** `fromSide`/`toSide` (UI02 Task 13): both present or neither; each a valid side. */
+function sides(payload: Record<string, unknown>): { fromSide?: Side; toSide?: Side } {
+  const hasFrom = Object.hasOwn(payload, "fromSide"), hasTo = Object.hasOwn(payload, "toSide");
+  if (hasFrom !== hasTo) invalid();
+  return hasFrom ? { fromSide: oneOf(payload.fromSide, SIDES), toSide: oneOf(payload.toSide, SIDES) } : {};
+}
+
+function envelope(body: Record<string, unknown>, guard: keyof ByDocument | keyof ByEntity, required: readonly string[], updatable: readonly string[] = [], extra: readonly string[] = []) {
   keys(body, ["commandSchemaVersion", "command", guard, "payload"]);
   const payload = object(body.payload);
-  keys(payload, required, updatable);
+  keys(payload, required, [...updatable, ...extra]);
   if (updatable.length && !updatable.some((key) => Object.hasOwn(payload, key))) invalid(); // an update changes something
   return { guard: version(body[guard]), payload };
 }
@@ -109,9 +117,9 @@ export function parseGraphCommand(raw: unknown): GraphCommand {
       } };
     }
     case "ADD_EDGE": {
-      const { guard, payload } = envelope(body, "expectedDocumentRevision", ["flowId", "fromId", "toId", "condition"]);
+      const { guard, payload } = envelope(body, "expectedDocumentRevision", ["flowId", "fromId", "toId", "condition"], [], ["fromSide", "toSide"]);
       return { commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: guard, payload: {
-        flowId: id(payload.flowId), fromId: id(payload.fromId), toId: id(payload.toId), condition: condition(payload.condition),
+        flowId: id(payload.flowId), fromId: id(payload.fromId), toId: id(payload.toId), condition: condition(payload.condition), ...sides(payload),
       } };
     }
     case "UPDATE_EDGE": {
@@ -119,8 +127,19 @@ export function parseGraphCommand(raw: unknown): GraphCommand {
       return { commandSchemaVersion: 1, command: "UPDATE_EDGE", expectedEntityVersion: guard, payload: { edgeId: id(payload.edgeId), condition: condition(payload.condition) } };
     }
     case "RECONNECT_EDGE": {
-      const { guard, payload } = envelope(body, "expectedDocumentRevision", ["edgeId", "fromId", "toId"]);
-      return { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: guard, payload: { edgeId: id(payload.edgeId), fromId: id(payload.fromId), toId: id(payload.toId) } };
+      const { guard, payload } = envelope(body, "expectedDocumentRevision", ["edgeId", "fromId", "toId"], [], ["fromSide", "toSide", "expectedSides"]);
+      // Older callers implicitly inspected an edge without remembered sides. They cannot overwrite a later pair.
+      let expectedSides: { from: Side; to: Side } | null = null;
+      if (payload.expectedSides !== undefined && payload.expectedSides !== null) {
+        const expected = object(payload.expectedSides);
+        keys(expected, ["from", "to"]);
+        expectedSides = { from: oneOf(expected.from, SIDES), to: oneOf(expected.to, SIDES) };
+      }
+      return { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: guard, payload: {
+        edgeId: id(payload.edgeId), fromId: id(payload.fromId), toId: id(payload.toId), ...sides(payload),
+        // Preserve an omitted field in the parsed request so pre-existing receipt hashes still match on retry.
+        ...(Object.hasOwn(payload, "expectedSides") ? { expectedSides } : {}),
+      } };
     }
     case "DELETE_EDGE": {
       const { guard, payload } = envelope(body, "expectedDocumentRevision", ["edgeId"]);

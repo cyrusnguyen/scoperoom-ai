@@ -10,6 +10,11 @@ const paths = {
   link: ["m10 13 4-4m-6 7-1 1a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m0 2 1-1a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0"],
   chevron: ["m8 10 4 4 4-4"],
   check: ["m5 12 4 4L19 6"],
+  grid: ["M3 3h7v7H3V3Zm11 0h7v7h-7V3ZM3 14h7v7H3v-7Zm11 0h7v7h-7v-7Z"],
+  undo: ["M3 10h11a6 6 0 0 1 0 12M3 10l5-5m-5 5 5 5"],
+  redo: ["M21 10H10a6 6 0 0 0 0 12M21 10l-5-5m5 5-5 5"],
+  minus: ["M5 12h14"],
+  fit: ["M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"],
 } as const;
 
 export type IconName = keyof typeof paths;

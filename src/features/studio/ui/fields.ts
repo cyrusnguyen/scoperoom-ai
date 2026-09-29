@@ -1,10 +1,12 @@
 import type { GraphCommand } from "../../drafts/contracts/commands.ts";
+import type { Side } from "../../drafts/contracts/draft-layout.ts";
 import { CLASSIFICATIONS, INCLUSIONS, LIMITS, NODE_KINDS, type EdgeRecord, type FlowRecord, type NodeRecord } from "../../drafts/contracts/scope-document.ts";
-import type { EntityKind, Fields } from "./buffers.ts";
+import { changes, dirtyFields, type EntityBuffer, type EntityKind, type Fields, type Saved } from "./buffers.ts";
 
 // Form fields for the inspector and the Studio dialogs. Limits come from the draft contract, counted in code points,
 // and are checked on Save — never by truncating what was typed (no `maxLength`: it silently cuts pasted text).
-export const KIND_LABELS = { START: "Start", ACTION: "Step", DECISION: "Decision", OUTCOME: "Outcome" } as const;
+// OUTCOME keeps "Outcome" (not "End"): existing e2e specs select the Add step "Shape" option by this label.
+export const KIND_LABELS = { START: "Start", ACTION: "Step", DECISION: "Decision", OUTCOME: "Outcome", DATA_STORE: "Data store" } as const;
 export const INCLUSION_LABELS = { INCLUDED: "Included", EXCLUDED: "Excluded", UNDECIDED: "Exploratory" } as const;
 export const CLASSIFICATION_LABELS = { USER_JOURNEY: "User journey", BUSINESS_PROCESS: "Business process" } as const;
 
@@ -35,6 +37,11 @@ export const flowFields = (flow: FlowRecord): Fields => ({ title: flow.title, pu
 export const nodeFields = (node: NodeRecord): Fields => ({ label: node.label, kind: node.kind, actorLabel: node.actorLabel, description: node.description, assumptionNotes: node.assumptionNotes.join("\n") });
 export const edgeFields = (edge: EdgeRecord): Fields => ({ condition: edge.condition });
 
+export function savedOf(kind: EntityKind, record: FlowRecord | NodeRecord | EdgeRecord): Saved {
+  const fields = kind === "FLOW" ? flowFields(record as FlowRecord) : kind === "NODE" ? nodeFields(record as NodeRecord) : edgeFields(record as EdgeRecord);
+  return { kind, id: record.id, version: record.version, fields };
+}
+
 /** Field errors for the given values, in form order. Empty when the values can be sent. */
 export function fieldErrors(kind: EntityKind, values: Fields): Record<string, string> {
   const errors: Record<string, string> = {};
@@ -52,6 +59,22 @@ export function fieldErrors(kind: EntityKind, values: Fields): Record<string, st
   return errors;
 }
 
+export type InlinePlan = { kind: "unchanged" } | { kind: "refused"; message: string } | { kind: "review" } | { kind: "send"; fields: Fields };
+
+/**
+ * Closing an inline canvas editor applies that record's shared buffer like the inspector does (the same command, queued
+ * in the outbox), limited to what was typed in the editor: `opened` is the text it showed when it opened, so opening
+ * and closing it never queues anything. Other unsaved fields, and a stale conflict, go to the inspector for deliberate
+ * review. Invalid text is refused but never discarded: the buffer keeps it (UI02 "Invalid fields retain text").
+ */
+export function inlinePlan(buffer: EntityBuffer | undefined, kind: EntityKind, field: string, opened: string): InlinePlan {
+  if (!buffer || buffer.values[field] === buffer.original[field] || buffer.values[field] === opened) return { kind: "unchanged" };
+  if (buffer.conflict) return { kind: "review" };
+  const own = fieldErrors(kind, { [field]: buffer.values[field]! })[field];
+  if (own) return { kind: "refused", message: own };
+  return dirtyFields(buffer).some((name) => name !== field) ? { kind: "review" } : { kind: "send", fields: changes(buffer) };
+}
+
 /** The update command for changed fields, guarded by the version the edits were made against. */
 export function updateCommand(kind: EntityKind, id: string, expectedEntityVersion: number, changed: Fields): GraphCommand {
   if (kind === "NODE") {
@@ -63,8 +86,18 @@ export function updateCommand(kind: EntityKind, id: string, expectedEntityVersio
   return { commandSchemaVersion: 1, command: "UPDATE_EDGE", expectedEntityVersion, payload: { edgeId: id, condition: changed.condition } };
 }
 
-/** Endpoint choices are a topology command, never fields of UPDATE_EDGE. */
-export function reconnectCommand(id: string, expectedDocumentRevision: number, values: Fields): GraphCommand {
+/** Endpoint choices are a topology command, never fields of UPDATE_EDGE. `sides` carries the handles a canvas drag
+ * used (UI02 Task 13); the inspector's dropdown form leaves them out, which clears any previously saved sides. */
+export function reconnectCommand(id: string, expectedDocumentRevision: number, values: Fields, sides: { fromSide?: Side; toSide?: Side } = {}): GraphCommand {
   return { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision,
-    payload: { edgeId: id, fromId: values.fromId!, toId: values.toId! } };
+    payload: { edgeId: id, fromId: values.fromId!, toId: values.toId!, ...sides } };
+}
+
+/**
+ * The guard for applying an endpoint choice (Task 14b). Every local change advances the shown document revision, so the
+ * revision the choice began at says little; what matters is whether the connection's endpoints changed since. If they
+ * still match where the choice began, it applies at the shown revision; otherwise (null) it needs explicit review.
+ */
+export function endpointGuard(buffer: EntityBuffer, edge: { fromId: string; toId: string }, documentRevision: number): number | null {
+  return buffer.original.fromId === edge.fromId && buffer.original.toId === edge.toId ? documentRevision : null;
 }

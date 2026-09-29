@@ -1,5 +1,6 @@
 // Per-project UI store (UI00 "Per-project UI state"), held in memory above the keyed project subtree.
 // Unsaved field values live here, so closing the panel or navigating away never drops them silently.
+import { discardOutbox } from "../../studio/ui/outbox.ts";
 import { defaultStudioUi, studioDirtyCount, type StudioUi } from "../../studio/ui/studio-ui.ts";
 
 export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; drafts: Record<string, string> } & StudioUi;
@@ -32,7 +33,7 @@ export function updateUi(store: UiStore, projectId: string, change: (ui: Project
   return { ...store, [projectId]: { ...current, ...change(current) } };
 }
 
-/** Unsaved Details fields plus unsaved Studio fields (an unconfirmed save or an open conflict counts as one). */
+/** Unsaved Details fields plus unsaved Studio fields and changes (an unconfirmed or refused save still counts). */
 export function dirtyCount(store: UiStore, projectId: string | undefined): number {
   const ui = uiFor(store, projectId);
   return Object.keys(ui.drafts).length + studioDirtyCount(ui);
@@ -42,10 +43,14 @@ export function anyDirty(store: UiStore): boolean {
   return Object.keys(store).some((projectId) => dirtyCount(store, projectId) > 0);
 }
 
-/** Discard local input only. A sent command may already have committed, so its receipt must remain recoverable. */
+/**
+ * Discard local input only: typed values and unsaved changes (including a refused save). A save that is in flight or
+ * unconfirmed may already have committed, so it stays retryable with its key, and its status stays with it.
+ */
 export function discardDrafts(store: UiStore, projectId: string): UiStore {
   const current = uiFor(store, projectId);
-  return { ...store, [projectId]: { ...current, drafts: {}, buffers: {}, endpointBuffers: {}, save: current.pending ? current.save : { state: "idle", message: "" } } };
+  const outbox = discardOutbox(current.outbox);
+  return { ...store, [projectId]: { ...current, drafts: {}, buffers: {}, endpointBuffers: {}, outbox, save: outbox.sending ? current.save : { state: "idle", message: "" } } };
 }
 
 /** Access loss or leaving: forget everything held for that project. */

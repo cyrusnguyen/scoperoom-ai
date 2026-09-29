@@ -20,19 +20,48 @@
 .canvas { position: relative; flex: 1; min-height: 0; }
 .canvas > .react-flow { position: absolute; inset: 0; }
 .canvas-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--foreground-muted); pointer-events: none; }
-.step-node { display: flex; flex-direction: column; gap: 4px; width: 200px; min-height: 72px; padding: 10px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: var(--surface); color: var(--foreground); }
-.step-node[data-kind="START"], .step-node[data-kind="OUTCOME"] { border-radius: 22px; }
-.step-node[data-kind="DECISION"] { border-left: 3px solid var(--accent); background: var(--accent-soft); }
+/* Handles straddle the shape border; clipping this box lets the underlying edge steal their outer hit area. */
+.step-node { position: relative; display: flex; align-items: center; justify-content: center; box-sizing: border-box; width: 100%; height: 100%; padding: 10px 14px; color: var(--kind-action); }
+.step-node[data-kind="ACTION"] { border: 1px solid var(--kind-action-border); border-radius: var(--radius-card); background: var(--kind-action-background); }
+.step-node[data-kind="START"] { border: 1px solid var(--kind-start-border); border-radius: 50%; background: var(--kind-start-background); color: var(--kind-start); }
+.step-node[data-kind="OUTCOME"] { border: 3px solid var(--kind-outcome-border); border-radius: 50%; background: var(--kind-outcome-background); color: var(--kind-outcome); }
+.step-node[data-kind="DECISION"] { color: var(--kind-decision); }
+.step-node[data-kind="DATA_STORE"] { color: var(--kind-data-store); }
+.step-shape { position: absolute; inset: 0; width: 100%; height: 100%; }
+.step-shape-fill { vector-effect: non-scaling-stroke; stroke: var(--kind-decision-border); stroke-width: 1.5; fill: var(--kind-decision-background); }
+.step-node[data-kind="DATA_STORE"] .step-shape-fill { stroke: var(--kind-data-store-border); fill: var(--kind-data-store-background); }
+.step-shape-lid { vector-effect: non-scaling-stroke; stroke: var(--kind-data-store-border); stroke-width: 1.5; fill: none; }
+.step-body { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; max-width: 100%; text-align: center; }
 .step-kind { color: var(--foreground-muted); font-size: var(--font-label); }
 .step-label { display: -webkit-box; overflow: hidden; font-size: 13px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
-.step-actor { overflow: hidden; color: var(--foreground-subtle); font-size: var(--font-label); text-overflow: ellipsis; white-space: nowrap; }
-.edge-label { position: absolute; max-width: 180px; padding: 2px 6px; border: var(--panel-border); border-radius: 3px; background: var(--canvas-background); color: var(--foreground); font-size: var(--font-label); overflow-wrap: anywhere; text-align: center; pointer-events: none; }
+.step-node[data-kind="START"] .step-label, .step-node[data-kind="OUTCOME"] .step-label { -webkit-line-clamp: 2; }
+.step-actor { overflow: hidden; color: var(--foreground-subtle); font-size: var(--font-label); text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.edge-label { position: absolute; max-width: 180px; padding: 3px 10px; border: var(--panel-border); border-radius: 999px; background: var(--surface-raised); color: var(--foreground); font-size: var(--font-label); overflow-wrap: anywhere; text-align: center; pointer-events: none; }
+.edge-label-hint { border-style: dashed; background: var(--canvas-background); color: var(--foreground-subtle); }
+.edge-label-editor { max-width: 320px; pointer-events: all; }
+/* Inline editors: a hidden copy of the text (same classes and font) sizes one grid cell that the control fills, so the
+   editor covers the label exactly and grows with typing. */
+.inline-edit { display: inline-grid; max-width: 100%; }
+.step-label.inline-edit { display: grid; overflow: visible; }
+.inline-edit > * { grid-area: 1 / 1; min-width: 0; }
+.inline-edit > [aria-hidden] { visibility: hidden; white-space: pre-wrap; }
+.edge-label-editor .inline-edit > [aria-hidden] { white-space: pre; }
+.inline-edit > :is(textarea, input) { box-sizing: border-box; width: 100%; max-width: none; height: 100%; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 2px; background: transparent; color: inherit; font: inherit; line-height: inherit; letter-spacing: inherit; text-align: center; overflow: hidden; overflow-wrap: inherit; resize: none; }
+.inline-edit > :is(textarea, input):focus { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.inline-edit > :is(textarea, input)::placeholder { color: var(--foreground-subtle); opacity: 1; }
 .react-flow__node.selected .step-node { border-color: var(--accent-hover); outline: 2px solid var(--accent); outline-offset: 3px; }
+.react-flow__node.selected .step-shape-fill { stroke: var(--accent-hover); stroke-width: 2; }
 .react-flow__node:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 5px; }
-.react-flow__handle { width: 8px; height: 8px; border: 2px solid var(--canvas-background); background: var(--accent-hover); }
-.react-flow__edge.selected .react-flow__edge-path { stroke-width: 2; }
-.react-flow__controls { overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-control); box-shadow: none; }
-.react-flow__controls-button { width: 32px; height: 32px; }
+.react-flow__handle { width: 9px; height: 9px; border: 2px solid var(--canvas-background); border-radius: 50%; background: var(--foreground); opacity: 0; transition: opacity var(--duration) var(--ease); }
+.react-flow__node:hover .react-flow__handle, .react-flow__node:focus-within .react-flow__handle,
+.react-flow__handle.connectionindicator, .react-flow__handle.connectingfrom, .react-flow__handle.connectingto { opacity: 1; }
+.react-flow__edge-path { stroke-linecap: round; opacity: 0.65; transition: opacity var(--duration) var(--ease); }
+.react-flow__edge:hover .react-flow__edge-path, .react-flow__edge.selected .react-flow__edge-path { stroke-width: 2; opacity: 1; }
+.canvas-controls { position: absolute; z-index: 5; bottom: var(--space-4); left: var(--space-4); display: flex; align-items: center; gap: 2px; padding: 4px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface-raised); }
+.canvas-control { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: none; }
+.canvas-control:hover:not(:disabled) { background: var(--surface-muted); }
+.canvas-control:disabled { opacity: 0.4; }
+.canvas-controls-divider { align-self: stretch; width: 1px; margin: 4px 4px; background: var(--border-strong); }
 .react-flow__attribution a { color: var(--foreground-muted); }
 
 .graph-list { flex: 1; min-height: 0; padding: var(--space-3) var(--space-4); overflow: auto; background: var(--background); }
@@ -58,13 +87,30 @@ button.item-row { width: 100%; border: 0; border-bottom: var(--panel-border); ba
 .conflict-list dt { font-weight: 600; }
 .conflict-list dd { display: grid; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .field-error { color: var(--danger-foreground); font-size: var(--font-label); }
+.save-note { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); flex-shrink: 0; padding: var(--space-2) var(--space-4); border-top: 1px solid var(--warning-border); background: var(--warning-background); color: var(--warning-foreground); font-size: var(--font-label); }
+.save-note-list { flex-basis: 100%; margin: 0; user-select: text; }
+.canvas-note { position: absolute; bottom: var(--space-4); left: 50%; margin: 0; padding: 6px 10px; border: 1px solid var(--warning-border); border-radius: var(--radius-control); background: var(--warning-background); color: var(--warning-foreground); font-size: var(--font-label); transform: translateX(-50%); }
+
+.shape-panel { position: absolute; z-index: 5; bottom: var(--space-4); left: 50%; display: flex; gap: 4px; max-width: calc(100% - var(--space-4) * 2); padding: 6px; overflow-x: auto; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface-raised); transform: translateX(-50%); }
+.shape-button { display: flex; flex-shrink: 0; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; background: none; }
+.shape-button:hover:not(:disabled) { background: var(--surface-muted); }
+.shape-button:disabled { opacity: 0.5; }
+.shape-icon.step-node { position: relative; width: 22px; height: 22px; padding: 0; }
+.shape-panel-ghosts { position: fixed; top: -9999px; left: -9999px; pointer-events: none; }
+.arrange-preview { position: relative; height: 280px; margin: var(--space-3) 0; border: var(--panel-border); border-radius: var(--radius-card); overflow: hidden; background: var(--canvas-background); }
+.arrange-preview .canvas { position: absolute; inset: 0; }
+.position-form { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-3) 0; }
+.position-form input { width: 96px; }
 
 @container editor (max-width: 639px) {
   .studio-toolbar, .studio-status { padding-inline: var(--space-3); }
   .studio-flow-title { max-width: 100%; flex-basis: 100%; }
   .studio button, .studio .button.small, .editor-header .flow-switch, .segmented button, .step-open { min-height: 44px; }
   .step-check { display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
-  .studio .react-flow__controls-button { min-width: 44px; min-height: 44px; }
+  .studio .canvas-control { min-width: 44px; min-height: 44px; }
+  /* A column at the left edge: the shape panel is centred below 640 px and a row would run under it. */
+  .canvas-controls { left: var(--space-2); flex-direction: column; border-radius: 26px; }
+  .canvas-controls-divider { align-self: auto; width: auto; height: 1px; margin: 4px; }
   .studio .field :is(input:not([type="checkbox"]), select, textarea) { min-height: 44px; }
   .modal :is(button, input:not([type="checkbox"]), select, textarea) { min-height: 44px; }
 }

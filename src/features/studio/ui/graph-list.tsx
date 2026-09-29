@@ -11,7 +11,7 @@ import { toggleNode } from "./studio-ui";
  * and Clear, and the flow's connections with Delete. Filtering never clears a hidden selection.
  */
 export default function GraphList({ flowId, onDeleteSelected }: { flowId: string; onDeleteSelected?: () => void }) {
-  const { draft, editable, busy, ui, update, run } = useStudio();
+  const { draft, editable, ui, update, run } = useStudio();
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
   const { document, layout } = draft;
@@ -31,7 +31,7 @@ export default function GraphList({ flowId, onDeleteSelected }: { flowId: string
       <input id="step-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a step by name or ID" />
       <span className="muted" role="status">{selected.length} selected</span>
       {selected.length > 0 && <button type="button" className="button quiet small" onClick={() => update(() => ({ selection: null }))}>Clear</button>}
-      {editable && onDeleteSelected && selected.length > 0 && <button type="button" className="button danger small" onClick={onDeleteSelected} disabled={busy}>Delete selected…</button>}
+      {editable && onDeleteSelected && selected.length > 0 && <button type="button" className="button danger small" onClick={onDeleteSelected}>Delete selected…</button>}
     </div>
     <h3 className="list-heading">Steps <span className="muted">{query ? `Showing ${shown.length} of ${steps.length}` : steps.length}</span></h3>
     {!steps.length ? <p className="muted">No steps yet.</p> : !shown.length ? <p className="muted">No steps match “{query}”.</p>
@@ -53,7 +53,7 @@ export default function GraphList({ flowId, onDeleteSelected }: { flowId: string
           <button type="button" className="step-open" onClick={() => update(() => ({ selection: { kind: "EDGE", id: edge.id } }))}>
             <strong>{route}</strong>{edge.condition && <span>{edge.condition}</span>}
           </button>
-          {editable && <button type="button" className="button quiet small" onClick={() => void deleteConnection(edge.id)} disabled={busy} aria-label={`Delete connection ${route}`}>Delete</button>}
+          {editable && <button type="button" className="button quiet small" onClick={() => void deleteConnection(edge.id)} aria-label={`Delete connection ${route}`}>Delete</button>}
         </li>;
       })}</ul>}
     <p className="muted" role="status" aria-live="polite">{message}</p>

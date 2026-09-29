@@ -17,7 +17,7 @@ const COMMAND_OPERATION = "DRAFT_COMMAND_V1";
 export type LockedDraft = { id: string; documentRevision: number; layoutRevision: number; draft: Draft };
 
 /** A stored draft that fails its own schema is a server fault, never something to repair or show. */
-function storedDraft(document: unknown, layout: unknown): Draft {
+export function storedDraft(document: unknown, layout: unknown): Draft {
   try { return parseDraftPair(document, layout); } catch { throw new ProjectError("UNAVAILABLE"); }
 }
 
@@ -35,7 +35,7 @@ export function nextRevision(value: number): number {
 export const asJson = (value: unknown) => value as Prisma.InputJsonValue;
 
 /** PostgreSQL checks JSONB's formatted text, which is larger than compact JSON.stringify output. */
-async function requireStoredSize(tx: Transaction, document: unknown, layout: unknown) {
+export async function requireStoredSize(tx: Transaction, document: unknown, layout: unknown) {
   const [size] = await tx.$queryRaw<Array<{ documentBytes: number; layoutBytes: number }>>`
     SELECT octet_length(${JSON.stringify(document)}::jsonb::text)::integer AS "documentBytes",
            octet_length(${JSON.stringify(layout)}::jsonb::text)::integer AS "layoutBytes"`;
@@ -62,12 +62,13 @@ async function lockDraft(tx: Transaction, project: ProjectRow, draftId: string):
 /**
  * Draft mutation skeleton, in the Data03 order: actor → project lock → current read access → matching receipt replay →
  * (new work only) owner/editor capability → ACTIVE project → current draft lock → work. `work` returns the safe result
- * that is saved as the receipt and replayed for the same key.
+ * that is saved as the receipt and replayed for the same key. `timeout` overrides Prisma's 5 s interactive-transaction limit.
  */
 export async function draftMutation<T extends object>(
   identity: ProjectIdentity, projectId: string, draftId: string, key: string, operation: string, hash: string,
   parseStored: (value: unknown) => T,
   work: (tx: Transaction, project: ProjectRow, draft: LockedDraft, actorId: string) => Promise<T>,
+  timeout?: number,
 ): Promise<T & { replayed: boolean }> {
   if (!uuid.test(projectId) || !uuid.test(draftId)) throw new ProjectError("NOT_FOUND");
   return withDatabase(async (database) => {
@@ -89,13 +90,17 @@ export async function draftMutation<T extends object>(
       const value = parseStored(await work(tx, project, draft, profile.id));
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, operation, hash, asJson(value));
       return { ...value, replayed: false };
-    });
+    }, timeout ? { timeout } : undefined);
   });
 }
 
-/** Audit names what the command touched, bounded well under the audit payload cap. */
-function auditRefs(applied: Applied) {
-  const ids = [...new Set([...applied.createdIds, ...Object.keys(applied.versions), ...applied.retiredIds])].slice(0, 25);
+/**
+ * Audit names what the command touched, bounded well under the audit payload cap. `extra` names records an
+ * effective command touched without creating, versioning or retiring them (a layout-only side-only RECONNECT_EDGE
+ * touches only its edge) — audit-row naming only, never fed back into the receipt or `CommandResult`/`ChangesResult`.
+ */
+export function auditRefs(applied: Applied, extra: string[] = []) {
+  const ids = [...new Set([...applied.createdIds, ...Object.keys(applied.versions), ...applied.retiredIds, ...extra])].slice(0, 25);
   return ids.map((id) => ({ kind: "DRAFT_ENTITY", id }));
 }
 
@@ -110,15 +115,17 @@ export async function executeGraphCommand(identity: ProjectIdentity, projectId: 
   return draftMutation(identity, projectId, draftId, key, COMMAND_OPERATION, hash, parseCommandResult, async (tx, project, draft, actorId) => {
     let applied: Applied;
     try { applied = applyGraphCommand(draft.draft, draft.documentRevision, command, randomUUID); } catch (error) { graphFailure(error); }
-    // An effective no-op keeps every counter; only its receipt is saved.
-    if (!applied.documentChanged) {
+    // An effective no-op keeps every counter; only its receipt is saved. A layout-only effect (Task 13's side-only
+    // RECONNECT_EDGE) still writes and advances layoutRevision, just never documentRevision or a record version.
+    if (!applied.documentChanged && !applied.layoutChanged) {
       return { draftId: draft.id, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, eventSequence: Number(project.eventSequence), createdIds: [], versions: {}, retiredIds: [] };
     }
-    const documentRevision = nextRevision(draft.documentRevision);
+    const documentRevision = applied.documentChanged ? nextRevision(draft.documentRevision) : draft.documentRevision;
     const layoutRevision = applied.layoutChanged ? nextRevision(draft.layoutRevision) : draft.layoutRevision;
     await requireStoredSize(tx, applied.document, applied.layout);
     await tx.scopeDraft.update({ where: { id: draft.id }, data: { documentJson: asJson(applied.document), layoutJson: asJson(applied.layout), documentRevision, layoutRevision }, select: { id: true } });
-    const sequence = await recordEvent(tx, project, actorId, "DRAFT_COMMAND_SAVED", auditRefs(applied), { command: command.command, documentRevision, layoutRevision });
+    const extraRef = command.command === "RECONNECT_EDGE" ? [command.payload.edgeId] : [];
+    const sequence = await recordEvent(tx, project, actorId, "DRAFT_COMMAND_SAVED", auditRefs(applied, extraRef), { command: command.command, documentRevision, layoutRevision });
     return { draftId: draft.id, documentRevision, layoutRevision, eventSequence: Number(sequence), createdIds: applied.createdIds, versions: applied.versions, retiredIds: applied.retiredIds };
   });
 }

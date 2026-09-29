@@ -6,7 +6,7 @@ ScopeRoom helps small teams and stakeholders turn vague ideas into editable work
 
 1. Sign in and open an admitted project.
 2. Start blank, import native JSON or describe a flow to AI; no requirements or approver prerequisite.
-3. Edit shapes and text together, saving content and positions with explicit conflict recovery.
+3. Edit shapes (start, step, decision, data store, outcome) and text together; changes stay unsaved until Save or autosave sends content and positions in one version-checked save with explicit conflict recovery.
 4. Add evidence, answer questions, record decisions and select/review acceptance checks.
 5. Freeze a candidate and approve it while keeping newer work in the current draft.
 6. Export the exact agreement or resolve a captured change request into the next baseline.
