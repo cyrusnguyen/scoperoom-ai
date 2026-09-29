@@ -80,12 +80,12 @@
   --kind-action: var(--foreground);
   --kind-action-background: var(--surface);
   --kind-action-border: var(--border-strong);
-  --kind-decision: var(--warning-foreground);
-  --kind-decision-background: var(--warning-background);
-  --kind-decision-border: var(--warning-border);
-  --kind-data-store: #d3c0ee;
-  --kind-data-store-background: #2e2839;
-  --kind-data-store-border: #8a77ad;
+  --kind-decision: #d3c0ee;
+  --kind-decision-background: #2e2839;
+  --kind-decision-border: #8a77ad;
+  --kind-data-store: var(--warning-foreground);
+  --kind-data-store-background: var(--warning-background);
+  --kind-data-store-border: var(--warning-border);
   --participant-1: #c7ad73;
   --participant-2: #9cbbb4;
   --participant-3: #c6abc3;

@@ -16,7 +16,7 @@ Unavailable future actions are hidden; simulated screens never claim real saved,
 
 ## Studio canvas
 
-- **Shapes** are fixed per kind (sizes in `STEP_SIZE`, `contracts/draft-layout.ts`): START thin circle, OUTCOME bold circle (both 120×120), ACTION rectangle (200×88), DECISION diamond (180×140), DATA_STORE cylinder (120×140). Colours are token-based (`--kind-*` in `tokens.css`): START blue, OUTCOME green, ACTION neutral, DECISION gold, DATA_STORE violet. DATA_STORE is a saved fifth kind that behaves like ACTION in graph checks.
+- **Shapes** are fixed per kind (sizes in `STEP_SIZE`, `contracts/draft-layout.ts`): START thin circle, OUTCOME bold circle (both 120×120), ACTION rectangle (200×88), DECISION diamond (180×140), DATA_STORE cylinder (120×140). Colours are token-based (`--kind-*` in `tokens.css`): START blue, OUTCOME green, ACTION neutral, DECISION violet, DATA_STORE gold. DATA_STORE is a saved fifth kind that behaves like ACTION in graph checks.
 - **Shape panel:** five buttons; drag one onto the canvas or click it to create a step of that kind (new steps get a kind-name label, then open inline editing).
 - **Inline editing:** double-click, Enter or F2 edits a step's or connection's label in place; Enter, Escape or blur queues it (Shift+Enter adds a line in a step name), sharing one buffer with the inspector's field, and invalid text stays visible with an error. IME composition is respected (WebKit's Enter included).
 - **Connections:** every step has four-sided handles (top, right, bottom, left); a connection may start from any handle, and the chosen sides are remembered (`layout.edgeSides`). Delete on a selected connection queues its removal without a dialog; steps keep their confirmation.
