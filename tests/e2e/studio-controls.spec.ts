@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { Client } from "pg";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, type Page, type Request } from "@playwright/test";
+import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
-import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, headerSave, openDatabase, signIn } from "./support";
+import { createProjectViaApi, e2eReady, emptyDraftView, headerSave, seedStudioChanges } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -11,7 +10,6 @@ test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 const status = (page: Page) => page.locator(".studio-status");
 const bar = (page: Page) => page.getByRole("group", { name: "Canvas controls" });
 const nodeAt = (page: Page, nodeId: string) => page.locator(`.react-flow__node[data-id="${nodeId}"]`);
-const headers = () => ({ Origin: appUrl, "Idempotency-Key": randomUUID() });
 const hasScale = (page: Page) => page.locator(".react-flow__viewport").evaluate((element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).a);
 /** The viewport's scale once React Flow's 200 ms zoom animation has settled. */
 async function scale(page: Page) {
@@ -29,21 +27,14 @@ async function draftOf(page: Page, projectId: string): Promise<DraftView> {
   return (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: DraftView }).draft;
 }
 
-/** Start, Pay and Ship steps with a Start → Pay connection, created through the real command route. */
+/** Start, Pay and Ship steps with a Start → Pay connection, created in one real batch. */
 async function seed(page: Page, projectId: string) {
-  const draftId = (await draftOf(page, projectId)).id;
-  const send = async (body: Record<string, unknown>) => {
-    const { documentRevision } = await draftOf(page, projectId);
-    const response = await page.request.post(`/api/projects/${projectId}/drafts/${draftId}/commands`, { headers: headers(), data: { commandSchemaVersion: 1, expectedDocumentRevision: documentRevision, ...body } });
-    expect(response.status()).toBe(200);
-    return (await response.json() as { createdIds: string[] }).createdIds[0]!;
-  };
-  const flowId = await send({ command: "CREATE_FLOW", payload: { title: "Controls", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" } });
-  const node = (kind: string, label: string) => send({ command: "ADD_NODE", payload: { flowId, kind, label, description: "", actorLabel: "" } });
-  const startId = await node("START", "Start");
-  const payId = await node("ACTION", "Pay");
-  const shipId = await node("ACTION", "Ship");
-  await send({ command: "ADD_EDGE", payload: { flowId, fromId: startId, toId: payId, condition: "" } });
+  const [flowId, startId, payId, shipId, edgeId] = Array.from({ length: 5 }, () => randomUUID());
+  await seedStudioChanges(page, projectId, [
+    { command: "CREATE_FLOW", payload: { title: "Controls", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" }, proposedIds: [flowId!] },
+    ...[[startId, "START", "Start"], [payId, "ACTION", "Pay"], [shipId, "ACTION", "Ship"]].map(([id, kind, label]) => ({ command: "ADD_NODE", payload: { flowId, kind, label, description: "", actorLabel: "" }, proposedIds: [id!] })),
+    { command: "ADD_EDGE", payload: { flowId, fromId: startId, toId: payId, condition: "" }, proposedIds: [edgeId!] },
+  ]);
   return { flowId, startId, payId, shipId };
 }
 
@@ -60,20 +51,12 @@ const acted = (page: Page, init: { key: string; ctrlKey?: boolean; metaKey?: boo
 }, init);
 
 test.describe("Canvas control bar and shortcuts (real draft)", () => {
-  let admin: SupabaseClient;
-  let database: Client;
-  let users: string[];
   let projectId: string;
   let ids: Awaited<ReturnType<typeof seed>>;
   let saves: Request[];
 
   test.beforeEach(async ({ page }) => {
     test.setTimeout(90_000);
-    admin = adminClient();
-    database = await openDatabase();
-    users = [];
-    const { authUserId } = await signIn(page, admin, users, "Controls Owner");
-    await entitle(database, authUserId);
     projectId = await createProjectViaApi(page, "Controls project");
     ids = await seed(page, projectId);
     saves = [];
@@ -81,10 +64,6 @@ test.describe("Canvas control bar and shortcuts (real draft)", () => {
     page.on("request", (request) => { if (request.method() === "POST" && /\/(commands|positions|changes)$/.test(request.url())) saves.push(request); });
     await page.goto(`/app/projects/${projectId}`);
     await expect(nodeAt(page, ids.payId)).toBeVisible();
-  });
-
-  test.afterEach(async ({ page }) => {
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("the bar replaces React Flow's controls; zoom buttons and + / - change the viewport, double-clicking the pane does not", async ({ page }) => {
@@ -232,15 +211,8 @@ test.describe("Canvas control bar (reader, mocked project)", () => {
   const projectId = "c1111111-1111-4111-8111-111111111111";
   const flowId = "d1111111-1111-4111-8111-111111111111";
   const start = "e1111111-1111-4111-8111-111111111111";
-  let admin: SupabaseClient;
-  let database: Client;
-  let users: string[];
 
   test.beforeEach(async ({ page }) => {
-    admin = adminClient();
-    database = await openDatabase();
-    users = [];
-    await signIn(page, admin, users, "Controls Reader");
     await page.unrouteAll({ behavior: "ignoreErrors" });
     const view = emptyDraftView();
     const draft = {
@@ -257,10 +229,6 @@ test.describe("Canvas control bar (reader, mocked project)", () => {
     await page.route("**/api/invitations", (route) => route.fulfill({ json: { items: [], truncated: false } }));
     await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerId: projectId }, draft } }));
     await page.goto(`/app/projects/${projectId}`);
-  });
-
-  test.afterEach(async ({ page }) => {
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("a reader gets only the zoom group, zoom shortcuts work, and undo and save keys are left alone", async ({ page }) => {

@@ -1,17 +1,15 @@
 import { randomUUID } from "node:crypto";
-import type { Client } from "pg";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, type Page, type Request } from "@playwright/test";
+import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { STEP_SIZE } from "../../src/features/drafts/contracts/draft-layout.ts";
-import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, entitle, headerSave, openDatabase, saveStudio, signIn } from "./support";
+import { createProjectViaApi, e2eReady, headerSave, saveStudio, seedStudioChanges } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
 const panel = (page: Page) => page.locator(".shape-panel");
 const canvas = (page: Page) => page.locator(".canvas");
 const nodeAt = (page: Page, nodeId: string) => page.locator(`.react-flow__node[data-id="${nodeId}"]`);
-const headers = () => ({ Origin: appUrl, "Idempotency-Key": randomUUID() });
 type Batch = { commands: { command: string; proposedIds: string[]; payload: Record<string, unknown> }[]; moves: { flowId: string; items: { nodeId: string; expectedPositionVersion: number; x: number; y: number }[] }[] };
 const WRITES = /\/(commands|positions|changes)$/;
 /** Every write the Studio sends (Task 14b: only batch saves). */
@@ -25,18 +23,14 @@ async function draftOf(page: Page, projectId: string): Promise<DraftView> {
   return (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: DraftView }).draft;
 }
 
-/** One flow with a single Start step, created through the real command route (no dialog needed for these tests). */
+/** One flow with a Start step, created in one real batch for tests that need saved prerequisites. */
 async function seedFlow(page: Page, projectId: string, title = "Shapes"): Promise<{ draftId: string; flowId: string; startId: string }> {
-  const draftId = (await draftOf(page, projectId)).id;
-  const send = async (body: Record<string, unknown>) => {
-    const { documentRevision } = await draftOf(page, projectId);
-    const response = await page.request.post(`/api/projects/${projectId}/drafts/${draftId}/commands`, { headers: headers(), data: { commandSchemaVersion: 1, expectedDocumentRevision: documentRevision, ...body } });
-    expect(response.status()).toBe(200);
-    return (await response.json() as { createdIds: string[] }).createdIds;
-  };
-  const [flowId] = await send({ command: "CREATE_FLOW", payload: { title, purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" } });
-  const [startId] = await send({ command: "ADD_NODE", payload: { flowId, kind: "START", label: "Start", description: "", actorLabel: "" } });
-  return { draftId, flowId: flowId!, startId: startId! };
+  const [flowId, startId] = [randomUUID(), randomUUID()];
+  const draftId = await seedStudioChanges(page, projectId, [
+    { command: "CREATE_FLOW", payload: { title, purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" }, proposedIds: [flowId] },
+    { command: "ADD_NODE", payload: { flowId, kind: "START", label: "Start", description: "", actorLabel: "" }, proposedIds: [startId] },
+  ]);
+  return { draftId, flowId, startId };
 }
 
 /** Converts a viewport (client) point to the flow position React Flow's own `screenToFlowPosition` would report,
@@ -61,23 +55,11 @@ async function dropShape(page: Page, kind: string, clientX: number, clientY: num
 }
 
 test.describe("Shape panel (real draft)", () => {
-  let admin: SupabaseClient;
-  let database: Client;
-  let users: string[];
   let projectId: string;
 
   test.beforeEach(async ({ page }) => {
     test.setTimeout(90_000);
-    admin = adminClient();
-    database = await openDatabase();
-    users = [];
-    const { authUserId } = await signIn(page, admin, users, "Shapes Owner");
-    await entitle(database, authUserId);
     projectId = await createProjectViaApi(page, "Shapes project");
-  });
-
-  test.afterEach(async ({ page }) => {
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("a dropped shape shows at the rounded drop point at once, with no request; Save sends its creation and placement in one batch", async ({ page }) => {

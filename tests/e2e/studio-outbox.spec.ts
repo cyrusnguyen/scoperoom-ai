@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { Client } from "pg";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, type Page, type Request } from "@playwright/test";
+import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
-import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, entitle, headerSave, openDatabase, saveStudio, signIn } from "./support";
+import { createProjectViaApi, e2eReady, headerSave, saveStudio, seedStudioChanges } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -12,7 +11,6 @@ type Batch = { commands: { command: string; proposedIds: string[] }[]; moves: { 
 const status = (page: Page) => page.locator(".studio-status");
 const nodeAt = (page: Page, nodeId: string) => page.locator(`.react-flow__node[data-id="${nodeId}"]`);
 const edgeAt = (page: Page, edgeId: string) => page.locator(`.react-flow__edge[data-id="${edgeId}"]`);
-const headers = () => ({ Origin: appUrl, "Idempotency-Key": randomUUID() });
 const warnsBeforeUnload = (page: Page) => page.evaluate(() => {
   const event = new Event("beforeunload", { cancelable: true });
   window.dispatchEvent(event);
@@ -23,21 +21,14 @@ async function draftOf(page: Page, projectId: string): Promise<DraftView> {
   return (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: DraftView }).draft;
 }
 
-/** Start, Pay and Ship steps with a Start → Pay connection, created through the real command route. */
+/** Start, Pay and Ship steps with a Start → Pay connection, created in one real batch. */
 async function seed(page: Page, projectId: string) {
-  const draftId = (await draftOf(page, projectId)).id;
-  const send = async (body: Record<string, unknown>) => {
-    const { documentRevision } = await draftOf(page, projectId);
-    const response = await page.request.post(`/api/projects/${projectId}/drafts/${draftId}/commands`, { headers: headers(), data: { commandSchemaVersion: 1, expectedDocumentRevision: documentRevision, ...body } });
-    expect(response.status()).toBe(200);
-    return (await response.json() as { createdIds: string[] }).createdIds[0]!;
-  };
-  const flowId = await send({ command: "CREATE_FLOW", payload: { title: "Outbox", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" } });
-  const node = (kind: string, label: string) => send({ command: "ADD_NODE", payload: { flowId, kind, label, description: "", actorLabel: "" } });
-  const startId = await node("START", "Start");
-  const payId = await node("ACTION", "Pay");
-  const shipId = await node("ACTION", "Ship");
-  const edgeId = await send({ command: "ADD_EDGE", payload: { flowId, fromId: startId, toId: payId, condition: "" } });
+  const [flowId, startId, payId, shipId, edgeId] = Array.from({ length: 5 }, () => randomUUID());
+  await seedStudioChanges(page, projectId, [
+    { command: "CREATE_FLOW", payload: { title: "Outbox", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" }, proposedIds: [flowId!] },
+    ...[[startId, "START", "Start"], [payId, "ACTION", "Pay"], [shipId, "ACTION", "Ship"]].map(([id, kind, label]) => ({ command: "ADD_NODE", payload: { flowId, kind, label, description: "", actorLabel: "" }, proposedIds: [id!] })),
+    { command: "ADD_EDGE", payload: { flowId, fromId: startId, toId: payId, condition: "" }, proposedIds: [edgeId!] },
+  ]);
   return { flowId, startId, payId, shipId, edgeId };
 }
 
@@ -62,30 +53,18 @@ async function connect(page: Page, fromId: string, toId: string) {
 }
 
 test.describe("Save covers every change (real draft)", () => {
-  let admin: SupabaseClient;
-  let database: Client;
-  let users: string[];
   let projectId: string;
   let ids: Awaited<ReturnType<typeof seed>>;
   let saves: Request[];
 
   test.beforeEach(async ({ page }) => {
     test.setTimeout(90_000);
-    admin = adminClient();
-    database = await openDatabase();
-    users = [];
-    const { authUserId } = await signIn(page, admin, users, "Outbox Owner");
-    await entitle(database, authUserId);
     projectId = await createProjectViaApi(page, "Outbox project");
     ids = await seed(page, projectId);
     saves = [];
     page.on("request", (request) => { if (request.method() === "POST" && /\/(commands|positions|changes)$/.test(request.url())) saves.push(request); });
     await page.goto(`/app/projects/${projectId}`);
     await expect(nodeAt(page, ids.payId)).toBeVisible();
-  });
-
-  test.afterEach(async ({ page }) => {
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("connecting two steps enables Save and the leave guard; nothing is sent until Save", async ({ page }) => {

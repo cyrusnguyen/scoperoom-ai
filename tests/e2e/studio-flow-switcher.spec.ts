@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { Client } from "pg";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
-import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, entitle, openDatabase, signIn } from "./support";
+import { appUrl, createProjectViaApi, e2eReady } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -15,13 +14,7 @@ async function draftOf(page: Page, projectId: string): Promise<DraftView> {
 
 test("closing the switcher when its last flow disappears does not reopen it after the next flow is created", async ({ page }) => {
   test.setTimeout(90_000);
-  const admin: SupabaseClient = adminClient();
-  const database: Client = await openDatabase();
-  const users: string[] = [];
-  try {
-    const { authUserId } = await signIn(page, admin, users, "Flow switcher owner");
-    await entitle(database, authUserId);
-    const projectId = await createProjectViaApi(page, "Flow switcher project");
+  const projectId = await createProjectViaApi(page, "Flow switcher project");
     await page.goto(`/app/projects/${projectId}`);
     await expect(page.getByRole("heading", { level: 1, name: "Flow switcher project" })).toBeVisible();
 
@@ -55,7 +48,4 @@ test("closing the switcher when its last flow disappears does not reopen it afte
     await next.getByRole("button", { name: "Create flow" }).click();
     await expect(page.locator("#studio-flow-title")).toHaveText("Next");
     await expect(dialog(page, "Flows")).toBeHidden();
-  } finally {
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
-  }
 });

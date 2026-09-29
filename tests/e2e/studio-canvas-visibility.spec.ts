@@ -1,8 +1,7 @@
-import type { Client } from "pg";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
-import { adminClient, cleanupUsers, createProjectViaApi, e2eReady, entitle, openDatabase, saveStudio, signIn } from "./support";
+import { createProjectViaApi, e2eReady, saveStudio } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -31,24 +30,12 @@ async function addStep(page: Page, label: string, shape: "Start" | "Outcome") {
 }
 
 test.describe("Studio canvas visibility", () => {
-  let admin: SupabaseClient;
-  let database: Client;
-  let users: string[];
   let projectId: string;
 
   test.beforeEach(async ({ page }) => {
     test.setTimeout(90_000);
-    admin = adminClient();
-    database = await openDatabase();
-    users = [];
-    const { authUserId } = await signIn(page, admin, users, "Canvas Owner");
-    await entitle(database, authUserId);
     projectId = await createProjectViaApi(page, "Canvas visibility project");
     await page.goto(`/app/projects/${projectId}`);
-  });
-
-  test.afterEach(async ({ page }) => {
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("keeps measured steps and their connection visible through selection and a save", async ({ page }) => {

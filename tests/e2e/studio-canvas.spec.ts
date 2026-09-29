@@ -1,9 +1,9 @@
-import type { Client } from "pg";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { expect, test, type Page } from "@playwright/test";
+import { randomUUID } from "node:crypto";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./studio-fixtures";
 import type { DraftView, NodeKind } from "../../src/features/drafts/contracts/scope-document.ts";
 import { STEP_SIZE } from "../../src/features/drafts/contracts/draft-layout.ts";
-import { adminClient, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, openDatabase, saveStudio, signIn } from "./support";
+import { createProjectViaApi, e2eReady, emptyDraftView, saveStudio, seedStudioChanges } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -43,26 +43,26 @@ async function addStepInUi(page: Page, label: string, shape: "Start" | "Step" | 
 }
 
 test.describe("Studio canvas shapes and handles (real draft)", () => {
-  let admin: SupabaseClient;
-  let database: Client;
-  let users: string[];
   let projectId: string;
 
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page }, testInfo) => {
     test.setTimeout(90_000);
-    admin = adminClient();
-    database = await openDatabase();
-    users = [];
-    const { authUserId } = await signIn(page, admin, users, "Canvas Owner");
-    await entitle(database, authUserId);
     projectId = await createProjectViaApi(page, "Canvas project");
+    if (!testInfo.title.startsWith("every kind renders")) {
+      const flowId = randomUUID();
+      const labels = testInfo.title.startsWith("reconnecting an end") || testInfo.title.startsWith("click-to-connect saves")
+        ? [["Cart", "START"], ["Done", "OUTCOME"], ["Other", "ACTION"]]
+        : [["Cart", "START"], ["Done", "OUTCOME"]];
+      const nodeIds = labels.map(() => randomUUID());
+      await seedStudioChanges(page, projectId, [
+        { command: "CREATE_FLOW", payload: { title: "Shapes", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" }, proposedIds: [flowId] },
+        ...labels.map(([label, kind], index) => ({ command: "ADD_NODE", payload: { flowId, kind, label, description: "", actorLabel: "" }, proposedIds: [nodeIds[index]!] })),
+      ], [{ flowId, items: nodeIds.map((nodeId, index) => ({ nodeId, expectedPositionVersion: 1, x: index * 320, y: 0 })) }]);
+    }
     await page.goto(`/app/projects/${projectId}`);
     await expect(page.getByRole("heading", { level: 1, name: "Canvas project" })).toBeVisible();
-    await createFlowInUi(page, "Shapes");
-  });
-
-  test.afterEach(async ({ page }) => {
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
+    if (testInfo.title.startsWith("every kind renders")) await createFlowInUi(page, "Shapes");
+    else await expect(page.locator("#studio-flow-title")).toHaveText("Shapes");
   });
 
   test("every kind renders at its fixed STEP_SIZE, and a DATA_STORE step draws as a cylinder that survives reload", async ({ page }) => {
@@ -93,9 +93,6 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
   });
 
   test("an editor sees four connectable handle sides per step (each a source and a target element), and a condition on a new edge shows as a label pill", async ({ page }) => {
-    await addStepInUi(page, "Cart", "Start");
-    await addStepInUi(page, "Done", "Outcome");
-    await saveStudio(page);
     const draft = await draftOf(page, projectId);
     const cartId = Object.values(draft.document.nodes).find((node) => node.label === "Cart")!.id;
     const cartNode = nodeAt(page, cartId);
@@ -116,9 +113,6 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
   });
 
   test("dragging right→left handles saves those sides and they survive reload; dragging the edge's end to another handle saves new sides; a plain connection still renders", async ({ page }) => {
-    await addStepInUi(page, "Cart", "Start");
-    await addStepInUi(page, "Done", "Outcome");
-    await saveStudio(page);
     let draft = await draftOf(page, projectId);
     const cartId = Object.values(draft.document.nodes).find((node) => node.label === "Cart")!.id;
     const doneId = Object.values(draft.document.nodes).find((node) => node.label === "Done")!.id;
@@ -169,9 +163,6 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
   });
 
   test("a connection saves from the step and handle the drag started on to the drop, whichever side it starts from", async ({ page }) => {
-    await addStepInUi(page, "Cart", "Start");
-    await addStepInUi(page, "Done", "Outcome");
-    await saveStudio(page);
     const draft = await draftOf(page, projectId);
     const cartId = Object.values(draft.document.nodes).find((node) => node.label === "Cart")!.id;
     const doneId = Object.values(draft.document.nodes).find((node) => node.label === "Done")!.id;
@@ -192,9 +183,6 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
   });
 
   test("dragging a visible handle beside a selected loop creates an outgoing connection", async ({ page }) => {
-    await addStepInUi(page, "Cart", "Start");
-    await addStepInUi(page, "Done", "Outcome");
-    await saveStudio(page);
     const draft = await draftOf(page, projectId);
     const cartId = Object.values(draft.document.nodes).find((node) => node.label === "Cart")!.id;
     const doneId = Object.values(draft.document.nodes).find((node) => node.label === "Done")!.id;
@@ -234,10 +222,6 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
   });
 
   test("reconnecting an end moves only that end: the other keeps its step and side", async ({ page }) => {
-    await addStepInUi(page, "Cart", "Start");
-    await addStepInUi(page, "Done", "Outcome");
-    await addStepInUi(page, "Other", "Step");
-    await saveStudio(page);
     let draft = await draftOf(page, projectId);
     const id = (label: string) => Object.values(draft.document.nodes).find((node) => node.label === label)!.id;
     const [cartId, doneId, otherId] = [id("Cart"), id("Done"), id("Other")];
@@ -263,10 +247,6 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
   });
 
   test("click-to-connect saves from the first handle clicked to the second, and a reconnect leaves nothing behind to misdirect it", async ({ page }) => {
-    await addStepInUi(page, "Cart", "Start");
-    await addStepInUi(page, "Done", "Outcome");
-    await addStepInUi(page, "Other", "Step");
-    await saveStudio(page);
     const draft = await draftOf(page, projectId);
     const id = (label: string) => Object.values(draft.document.nodes).find((node) => node.label === label)!.id;
     const [cartId, doneId, otherId] = [id("Cart"), id("Done"), id("Other")];
@@ -289,9 +269,6 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
   });
 
   test("a pending click-to-connect keeps its first handle when a jittery press (a small drag) happens before the completing click", async ({ page }) => {
-    await addStepInUi(page, "Cart", "Start");
-    await addStepInUi(page, "Done", "Outcome");
-    await saveStudio(page);
     const draft = await draftOf(page, projectId);
     const id = (label: string) => Object.values(draft.document.nodes).find((node) => node.label === label)!.id;
     const [cartId, doneId] = [id("Cart"), id("Done")];
@@ -333,24 +310,13 @@ test.describe("Studio canvas handles (read-only, mocked project)", () => {
     };
   };
 
-  let admin: SupabaseClient;
-  let database: Client;
-  let users: string[];
 
   test.beforeEach(async ({ page }) => {
-    admin = adminClient();
-    database = await openDatabase();
-    users = [];
-    await signIn(page, admin, users, "Canvas Reader");
     await page.unrouteAll({ behavior: "ignoreErrors" });
     await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: { items: [], truncated: false }, shared: { items: [{ id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerName: "Owner", updatedAt: "2026-09-27T00:00:00.000Z" }], truncated: false }, archived: { items: [], truncated: false }, capacity: { entitled: true, activeOwned: 0, maxOwned: 10, canCreate: true } } }));
     await page.route("**/api/invitations", (route) => route.fulfill({ json: { items: [], truncated: false } }));
     await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerId: projectId }, draft: draft() } }));
     await page.goto(`/app/projects/${projectId}`);
-  });
-
-  test.afterEach(async ({ page }) => {
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("a reader's steps keep their eight handle elements in the DOM, but none are connectable", async ({ page }) => {

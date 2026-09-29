@@ -103,6 +103,34 @@ export async function cleanupUsers(database: Client, admin: SupabaseClient, user
   await Promise.all(users.map((id) => admin.auth.admin.deleteUser(id)));
 }
 
+/** Save prerequisite graph data in one real batch, with client-proposed ids and sequential guards. */
+export async function seedStudioChanges(
+  page: Page,
+  projectId: string,
+  commands: { command: string; payload: Record<string, unknown>; proposedIds: string[] }[],
+  moves: { flowId: string; items: { nodeId: string; expectedPositionVersion: number; x: number; y: number }[] }[] = [],
+) {
+  const bootstrap = await page.request.get(`/api/projects/${projectId}/bootstrap`);
+  expect(bootstrap.status()).toBe(200);
+  const { draft } = await bootstrap.json() as { draft: { id: string; documentRevision: number } };
+  const response = await page.request.post(`/api/projects/${projectId}/drafts/${draft.id}/changes`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: {
+      commands: commands.map((command, index) => ({ commandSchemaVersion: 1, expectedDocumentRevision: draft.documentRevision + index, ...command })),
+      moves,
+    },
+  });
+  expect(response.status()).toBe(200);
+  return draft.id;
+}
+
+/** Clear every project and scoped receipt for a reusable Studio worker account between tests. */
+export async function cleanupWorkerProjects(database: Client, authUserId: string) {
+  const profiles = "(select id from app.user_profile where auth_user_id = $1::uuid)";
+  await database.query(`delete from app.mutation_receipt where actor_id in ${profiles}`, [authUserId]);
+  await database.query(`delete from app.project where owner_id in ${profiles}`, [authUserId]);
+}
+
 /** The project header's Save (Task 14b): every Studio change waits for it, the 10-second autosave or a save-first action. */
 export const headerSave = (page: Page) => page.locator(".editor-header").getByRole("button", { name: "Save", exact: true });
 
