@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { Client } from "pg";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, type Page, type Request } from "@playwright/test";
+import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
-import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, entitle, headerSave, openDatabase, signIn } from "./support";
+import { appUrl, createProjectViaApi, e2eReady, headerSave, seedStudioChanges } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -28,23 +27,19 @@ async function draftOf(page: Page, projectId: string): Promise<DraftView> {
   return (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: DraftView }).draft;
 }
 
-/** One flow with steps (a chain unless `connect` is false), created through the real command route. */
+/** One flow with steps (a chain unless `connect` is false), created in one real batch. */
 async function seedFlow(page: Page, projectId: string, labels: string[], { title = "Positions", connect = true } = {}): Promise<Seeded> {
-  const draftId = (await draftOf(page, projectId)).id;
-  const send = async (body: Record<string, unknown>) => {
-    const { documentRevision } = await draftOf(page, projectId);
-    const response = await page.request.post(`/api/projects/${projectId}/drafts/${draftId}/commands`, { headers: headers(), data: { commandSchemaVersion: 1, expectedDocumentRevision: documentRevision, ...body } });
-    expect(response.status()).toBe(200);
-    return (await response.json() as { createdIds: string[] }).createdIds;
-  };
-  const [flowId] = await send({ command: "CREATE_FLOW", payload: { title, purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" } });
-  const nodeIds: string[] = [];
+  const flowId = randomUUID();
+  const nodeIds = labels.map(() => randomUUID());
+  const commands: { command: string; payload: Record<string, unknown>; proposedIds: string[] }[] = [
+    { command: "CREATE_FLOW", payload: { title, purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" }, proposedIds: [flowId] },
+  ];
   for (const [index, label] of labels.entries()) {
-    const [nodeId] = await send({ command: "ADD_NODE", payload: { flowId, kind: index ? "ACTION" : "START", label, description: "", actorLabel: "" } });
-    if (index && connect) await send({ command: "ADD_EDGE", payload: { flowId, fromId: nodeIds[index - 1], toId: nodeId, condition: "" } });
-    nodeIds.push(nodeId!);
+    commands.push({ command: "ADD_NODE", payload: { flowId, kind: index ? "ACTION" : "START", label, description: "", actorLabel: "" }, proposedIds: [nodeIds[index]!] });
+    if (index && connect) commands.push({ command: "ADD_EDGE", payload: { flowId, fromId: nodeIds[index - 1], toId: nodeIds[index], condition: "" }, proposedIds: [randomUUID()] });
   }
-  return { draftId, flowId: flowId!, nodeIds };
+  const draftId = await seedStudioChanges(page, projectId, commands);
+  return { draftId, flowId, nodeIds };
 }
 
 /** A move from "another tab" of the same account, at the versions that tab last read (at most 20 steps). */
@@ -67,9 +62,6 @@ async function drag(page: Page, nodeId: string, dx: number, dy: number) {
 }
 
 test.describe("saved positions and arrangement", () => {
-  let admin: SupabaseClient;
-  let database: Client;
-  let users: string[];
   let projectId: string;
   let seeded: Seeded;
   /** Batch saves (POST D/changes): the only way the Studio saves a move now. */
@@ -78,11 +70,6 @@ test.describe("saved positions and arrangement", () => {
 
   test.beforeEach(async ({ page }) => {
     test.setTimeout(90_000);
-    admin = adminClient();
-    database = await openDatabase();
-    users = [];
-    const { authUserId } = await signIn(page, admin, users, "Positions Owner");
-    await entitle(database, authUserId);
     projectId = await createProjectViaApi(page, "Positions project");
     seeded = await seedFlow(page, projectId, ["Start", "Middle", "End"]);
     saves = [];
@@ -94,10 +81,6 @@ test.describe("saved positions and arrangement", () => {
     });
     await page.goto(`/app/projects/${projectId}`);
     await expect(nodeAt(page, seeded.nodeIds[1]!)).toBeVisible();
-  });
-
-  test.afterEach(async ({ page }) => {
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("a drag stays unsaved and sends nothing; Save sends it once, it survives a reload, and never touches the document", async ({ page }) => {
@@ -457,13 +440,7 @@ test.describe("saved positions and arrangement", () => {
 test.describe("large moves", () => {
   test("22 steps dragged at once save in one all-or-nothing batch (no 20-step cap per drag)", async ({ page }) => {
     test.setTimeout(150_000);
-    const admin = adminClient();
-    const database = await openDatabase();
-    const users: string[] = [];
-    try {
-      const { authUserId } = await signIn(page, admin, users, "Many Owner");
-      await entitle(database, authUserId);
-      const projectId = await createProjectViaApi(page, "Many project");
+    const projectId = await createProjectViaApi(page, "Many project");
       const seeded = await seedFlow(page, projectId, Array.from({ length: 23 }, (_, index) => `S${index + 1}`), { title: "Many", connect: false });
       // A 6-column grid, so every step is on screen and clickable.
       const grid = Object.fromEntries(seeded.nodeIds.map((nodeId, index) => [nodeId, { x: (index % 6) * 260, y: Math.floor(index / 6) * 180 }]));
@@ -489,8 +466,5 @@ test.describe("large moves", () => {
       const after = await draftOf(page, projectId);
       expect(seeded.nodeIds.filter((nodeId) => after.layout.positions[nodeId]!.version === before.layout.positions[nodeId]!.version + 1)).toHaveLength(22);
       expect(after.layout.positions[rest[21]!]).toEqual(before.layout.positions[rest[21]!]);
-    } finally {
-      try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
-    }
   });
 });

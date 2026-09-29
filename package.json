@@ -21,7 +21,8 @@
     "db:reset": "node --env-file-if-exists=.env.local scripts/db/reset.mjs",
     "db:generate": "prisma generate",
     "test:integration": "node --env-file-if-exists=.env.local --experimental-strip-types --test tests/integration/*.test.ts",
-    "test:e2e:chromium": "playwright test --project=chromium"
+    "test:e2e:chromium": "playwright test --project=chromium",
+    "test:e2e:production": "node --env-file-if-exists=.env.local scripts/e2e/production.mjs"
   },
   "dependencies": {
     "@dagrejs/dagre": "3.1.1",

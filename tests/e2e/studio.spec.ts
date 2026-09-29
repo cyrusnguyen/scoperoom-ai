@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { Client } from "pg";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
+import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
-import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, headerSave, openDatabase, saveStudio, signIn } from "./support";
+import { appUrl, createProjectViaApi, e2eReady, emptyDraftView, headerSave, saveStudio } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -48,25 +47,13 @@ async function addStepInUi(page: Page, label: string, shape?: "Start" | "Step" |
 const saveButton = (page: Page) => panel(page).getByRole("button", { name: "Save", exact: true });
 
 test.describe("Studio on a real draft", () => {
-  let admin: SupabaseClient;
-  let database: Client;
-  let users: string[];
   let projectId: string;
 
   test.beforeEach(async ({ page }) => {
     test.setTimeout(90_000);
-    admin = adminClient();
-    database = await openDatabase();
-    users = [];
-    const { authUserId } = await signIn(page, admin, users, "Studio Owner");
-    await entitle(database, authUserId);
     projectId = await createProjectViaApi(page, "Studio project");
     await page.goto(`/app/projects/${projectId}`);
     await expect(page.getByRole("heading", { level: 1, name: "Studio project" })).toBeVisible();
-  });
-
-  test.afterEach(async ({ page }) => {
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("an editor creates flows from the empty state and the Flows dialog, and filters them by scope", async ({ page }) => {
@@ -1132,20 +1119,6 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: draft(extraFlows) } }));
   }
 
-  let admin: SupabaseClient;
-  let database: Client;
-  let users: string[];
-
-  test.beforeEach(async ({ page }) => {
-    admin = adminClient();
-    database = await openDatabase();
-    users = [];
-    await signIn(page, admin, users, "Studio Reader");
-  });
-
-  test.afterEach(async ({ page }) => {
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
-  });
 
   test("a viewer reads Canvas and List without authoring controls or opening Inspect on selection", async ({ page }) => {
     await mock(page, "VIEWER");

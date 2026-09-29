@@ -1,7 +1,6 @@
-import type { Client } from "pg";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { expect, test, type Page } from "@playwright/test";
-import { adminClient, cleanupUsers, createProjectViaApi, e2eReady, entitle, openDatabase, signIn } from "./support";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./studio-fixtures";
+import { createProjectViaApi, e2eReady } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -19,25 +18,13 @@ async function createFlow(page: Page, title: string) {
 }
 
 test.describe("Studio review polish", () => {
-  let admin: SupabaseClient;
-  let database: Client;
-  let users: string[];
   let projectId: string;
 
   test.beforeEach(async ({ page }) => {
     test.setTimeout(90_000);
-    admin = adminClient();
-    database = await openDatabase();
-    users = [];
-    const { authUserId } = await signIn(page, admin, users, "Studio review owner");
-    await entitle(database, authUserId);
     projectId = await createProjectViaApi(page, "Studio review project");
     await page.goto(`/app/projects/${projectId}`);
     await expect(page.getByRole("heading", { level: 1, name: "Studio review project" })).toBeVisible();
-  });
-
-  test.afterEach(async ({ page }) => {
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
   test("duplicates a source whose generated title is exactly 120 code points, then blocks longer sources", async ({ page }) => {
