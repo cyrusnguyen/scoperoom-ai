@@ -5,7 +5,7 @@ import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import type { ErrorDetails } from "@/contracts/http";
 import type { ChangesResult } from "@/features/drafts/contracts/changes";
 import type { GraphCommand } from "@/features/drafts/contracts/commands";
-import type { ArrangementPreview, ArrangementRequest, PositionCommand, PositionResult } from "@/features/drafts/contracts/positions";
+import type { ArrangementPreview, ArrangeFlow, ArrangementRequest, PositionResult } from "@/features/drafts/contracts/positions";
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import { GraphError } from "@/features/drafts/domain/graph";
 import { projectErrors } from "@/features/projects/contracts/errors";
@@ -50,7 +50,7 @@ type Studio = {
   /** Unsaved changes that no longer apply to the shown draft: listed, never silently dropped (a save leaves them out). */
   skipped: string[];
   undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean;
-  place: (command: PositionCommand, key?: string) => Promise<Outcome<PositionResult>>;
+  place: (command: ArrangeFlow, key?: string) => Promise<Outcome<PositionResult>>;
   preview: (request: ArrangementRequest) => Promise<Outcome<ArrangementPreview>>;
   reload: () => Promise<DraftView | null>;
   /** The canvas reports a pointer drag in progress, so autosave never sends mid-drag. */
@@ -233,7 +233,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   const redo = useCallback(() => change(redoChange), [change]);
 
   /** An arrangement save (Arrange's Apply), on the same one-request-at-a-time lock as the batch save. */
-  const place = useCallback(async (command: PositionCommand, key: string = crypto.randomUUID()): Promise<Outcome<PositionResult>> => {
+  const place = useCallback(async (command: ArrangeFlow, key: string = crypto.randomUUID()): Promise<Outcome<PositionResult>> => {
     if (inFlight.current) return busyOutcome;
     if (!editable) return readOnly;
     inFlight.current = key;
@@ -312,7 +312,7 @@ export function explain(outcome: Extract<RunOutcome, { ok: false }>): string {
 /** Studio forms: Enter never submits during IME composition, and Ctrl/Cmd+Enter submits from a text area (UI00). */
 export function formKeys(event: KeyboardEvent<HTMLFormElement>) {
   if (event.key !== "Enter") return;
-  if (event.nativeEvent.isComposing) { event.preventDefault(); return; }
+  if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) { event.preventDefault(); return; } // 229: WebKit's IME-confirming Enter
   if ((event.ctrlKey || event.metaKey) && event.target instanceof HTMLTextAreaElement) { event.preventDefault(); event.currentTarget.requestSubmit(); }
 }
 

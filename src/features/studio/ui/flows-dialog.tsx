@@ -11,6 +11,8 @@ import { CLASSIFICATION_LABELS, fieldErrors, INCLUSION_LABELS } from "./fields";
 import { currentFlow, flowsInOrder } from "./graph-view";
 import { explain, formKeys, useCommandSubmit, useStudio } from "./studio-context";
 
+const UNSAVED = "Your changes aren’t saved yet, so this flow stays open. Resolve them in the Studio, then switch.";
+
 /** Header control naming the open flow; it opens the Flows dialog. Hidden until the project has a flow. */
 export function FlowSwitcher() {
   const { draft, ui } = useStudio();
@@ -62,7 +64,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     const saved = !flowId || flowId === current?.id || await saveChanges();
     setSaving(false);
     if (!saved && !created) {
-      setMessage("Your changes aren’t saved yet, so this flow stays open. Resolve them in the Studio, then switch.");
+      setMessage(UNSAVED);
       return;
     }
     // Commit the destination and native dialog close before focusing outside its modal focus trap.
@@ -95,6 +97,11 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   };
   const duplicate = async () => {
     if (!current || !editable || duplicateTooLong || saving) return;
+    // The copy is made from saved positions: unsaved drags are saved first, or the copy would keep the old ones.
+    setSaving(true);
+    const saved = await saveChanges();
+    setSaving(false);
+    if (!saved) { setMessage(UNSAVED); return; }
     await send({ commandSchemaVersion: 1, command: "DUPLICATE_FLOW", expectedDocumentRevision: draft.documentRevision, payload: { flowId: current.id } });
   };
   const remove = async () => {

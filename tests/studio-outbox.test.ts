@@ -243,6 +243,15 @@ test("after a refused save, each change whose field, endpoints or position someo
   assert.deepEqual([shown.layout.positions[end]!.x, shown.layout.positions[start]!.x], [900, 5]);
 });
 
+test("the comparison shows shape, type and scope as the forms label them, not as stored codes", () => {
+  const base = saved();
+  const change: GraphCommand = { commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId: start, kind: "DECISION" } };
+  const outbox = startSave(queue(emptyOutbox, base, change).outbox, base, "key-1");
+  const newer = theirs(base, [{ commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId: start, kind: "ACTION" } }]);
+  const [conflict] = compareOutbox(outbox, newer, base.document);
+  assert.deepEqual(conflict!.rows, [{ field: "shape", theirs: "Step", mine: "Decision", before: "Start" }]);
+});
+
 test("a queued change that no longer applies is listed, never dropped silently, and the save leaves it out", () => {
   const base = saved();
   const newId = ids(10);

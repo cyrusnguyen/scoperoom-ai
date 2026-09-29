@@ -7,14 +7,14 @@ test("the shape panel drag payload MIME is a stable custom type", () => {
   assert.equal(SHAPE_DRAG_MIME, "application/x-scoperoom-shape");
 });
 
-test("a valid shape payload parses to its kind, width and height", () => {
-  assert.deepEqual(parseShapePayload(JSON.stringify({ kind: "DATA_STORE", width: 180, height: 110 })), { kind: "DATA_STORE", width: 180, height: 110 });
+test("a valid shape payload parses to its kind", () => {
+  assert.deepEqual(parseShapePayload(JSON.stringify({ kind: "DATA_STORE" })), { kind: "DATA_STORE" });
 });
 
 test("an unknown kind, malformed JSON or wrong-typed field is ignored", () => {
-  assert.equal(parseShapePayload(JSON.stringify({ kind: "ROCKET", width: 1, height: 1 })), null);
+  assert.equal(parseShapePayload(JSON.stringify({ kind: "ROCKET" })), null);
   assert.equal(parseShapePayload("not json"), null);
-  assert.equal(parseShapePayload(JSON.stringify({ kind: "START", width: "120", height: 120 })), null);
+  assert.equal(parseShapePayload(JSON.stringify({ kind: 7 })), null);
   assert.equal(parseShapePayload(JSON.stringify(null)), null);
   assert.equal(parseShapePayload(JSON.stringify("START")), null);
 });

@@ -134,6 +134,7 @@ test.describe("Inline label editing (real draft)", () => {
     await editor.fill("Pay now");
     await editor.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true });
     await editor.dispatchEvent("keydown", { key: "Escape", code: "Escape", isComposing: true });
+    await editor.dispatchEvent("keydown", { key: "Enter", code: "Enter", keyCode: 229 }); // WebKit's IME-confirming Enter
     await expect(editor).toBeVisible();
     await expect(headerSave(page)).toBeDisabled();
     await editor.press("Escape");

@@ -16,7 +16,7 @@ function ControlButton({ label, icon, onClick, disabled }: { label: string; icon
 export default function CanvasControls() {
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const { editable, canUndo, canRedo, undo, redo } = useStudio();
-  return <div className="canvas-controls" role="toolbar" aria-label="Canvas controls">
+  return <div className="canvas-controls" role="group" aria-label="Canvas controls">
     <ControlButton label="Zoom Out" icon="minus" onClick={() => void zoomOut({ duration: 200 })} />
     <ControlButton label="Fit View" icon="fit" onClick={() => void fitView({ padding: 0.2, maxZoom: 1, duration: 200 })} />
     <ControlButton label="Zoom In" icon="plus" onClick={() => void zoomIn({ duration: 200 })} />

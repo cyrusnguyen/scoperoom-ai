@@ -154,7 +154,7 @@ function InlineEditor({ kind, id }: { kind: "NODE" | "EDGE"; id: string }) {
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement | HTMLInputElement>) => {
     if (event.key !== "Enter" && event.key !== "Escape") return;
     event.stopPropagation(); // React Flow would otherwise select or deselect the element
-    if (event.nativeEvent.isComposing || (event.key === "Enter" && event.shiftKey)) return;
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || (event.key === "Enter" && event.shiftKey)) return; // 229: WebKit reports the IME-confirming Enter this way
     event.preventDefault();
     void finish(true);
   };
@@ -203,11 +203,8 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   // A canvas unmounted mid-drag (flow removed elsewhere) must not leave autosave paused.
   useEffect(() => () => dragActive(false), [dragActive]);
   // Inline editors exist only on an editable, live canvas (never read-only, archived or the arrangement preview).
-  const inlineEnabled = interactive && editable;
+  const canEdit = interactive && editable;
   // Every edit is local (queued in the outbox), so a save in flight never locks the canvas: new edits queue behind it.
-  const connectable = interactive && editable;
-  const draggable = interactive && editable;
-  const shapesEnabled = interactive && editable;
   // A new shape is one local ADD_NODE plus its drop point, joined for undo; both show at once, with no request, in
   // the flow captured when the drop or click happened.
   const createShapeAt = useCallback(async (kind: NodeKind, point: Point) => {
@@ -234,12 +231,12 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     void createShapeAt(kind, screenToFlowPosition(centre));
   }, [createShapeAt, screenToFlowPosition]);
   const onShapeDragOver = (event: DragEvent<HTMLDivElement>) => {
-    if (!shapesEnabled || !Array.from(event.dataTransfer.types).includes(SHAPE_DRAG_MIME)) return;
+    if (!canEdit || !Array.from(event.dataTransfer.types).includes(SHAPE_DRAG_MIME)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   };
   const onShapeDrop = (event: DragEvent<HTMLDivElement>) => {
-    if (!shapesEnabled) return;
+    if (!canEdit) return;
     const payload = parseShapePayload(event.dataTransfer.getData(SHAPE_DRAG_MIME));
     if (!payload) return;
     event.preventDefault();
@@ -305,21 +302,21 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     if (refocus && editing) wrapperRef.current?.querySelector<HTMLElement>(`.react-flow__${editing.kind === "NODE" ? "node" : "edge"}[data-id="${CSS.escape(editing.id)}"]`)?.focus();
     setEditing(null);
   }, [editing]);
-  const inline = useMemo<InlineEditing>(() => ({ editing: inlineEnabled ? editing : null, enabled: inlineEnabled, close: closeEditor, setNote }), [inlineEnabled, editing, closeEditor]);
+  const inline = useMemo<InlineEditing>(() => ({ editing: canEdit ? editing : null, enabled: canEdit, close: closeEditor, setNote }), [canEdit, editing, closeEditor]);
   // Double-clicking a step's label names it in place; anywhere else on the step still opens the inspector.
   const nodeDoubleClick = (event: MouseEvent, node: StepNode) => {
     const target = event.target as Element;
     if (target.closest(".inline-edit")) return;
-    if (inlineEnabled && target.closest(".step-label")) setEditing({ kind: "NODE", id: node.id });
+    if (canEdit && target.closest(".step-label")) setEditing({ kind: "NODE", id: node.id });
     else inspect();
   };
   const edgeDoubleClick = (event: MouseEvent, edge: FlowEdge) => {
-    if (inlineEnabled && !(event.target as Element).closest(".inline-edit")) setEditing({ kind: "EDGE", id: edge.id });
+    if (canEdit && !(event.target as Element).closest(".inline-edit")) setEditing({ kind: "EDGE", id: edge.id });
   };
   // The keyboard path: F2 or Enter on a focused step opens its editor.
   const canvasKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
-    if (!inlineEnabled || (event.key !== "F2" && event.key !== "Enter") || event.nativeEvent.isComposing || !target.classList.contains("react-flow__node") || !target.dataset.id) return;
+    if (!canEdit || (event.key !== "F2" && event.key !== "Enter") || event.nativeEvent.isComposing || !target.classList.contains("react-flow__node") || !target.dataset.id) return;
     event.preventDefault();
     setEditing({ kind: "NODE", id: target.dataset.id });
   };
@@ -339,14 +336,14 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   const endClickConnect = () => { clickStart.current = null; };
   const endGesture = () => { dragStart.current = null; reconnectEnd.current = null; };
   const connect = async (connection: Connection) => {
-    if (!connection.source || !connection.target || !connectable) return;
+    if (!connection.source || !connection.target || !canEdit) return;
     const { fromId, toId, fromHandle, toHandle } = orientConnect(connection, dragStart.current ?? clickStart.current);
     const sides = isSide(fromHandle) && isSide(toHandle) ? { fromSide: fromHandle, toSide: toHandle } : {};
     const outcome = await run({ commandSchemaVersion: 1, command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { flowId, fromId, toId, condition: "", ...sides } });
     setNote(outcome.ok ? "" : explain(outcome));
   };
   const reconnect = async (edge: FlowEdge, connection: Connection) => {
-    if (!connection.source || !connection.target || !connectable) return;
+    if (!connection.source || !connection.target || !canEdit) return;
     const savedEdge = document.edges[edge.id];
     if (!savedEdge) return;
     // The grabbed end takes the drop point; the other end keeps its step and side (or the direction's default handle).
@@ -393,13 +390,13 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
       onConnectEnd={interactive ? endGesture : undefined} onClickConnectEnd={interactive ? endClickConnect : undefined} onReconnectEnd={interactive ? endGesture : undefined}
       onReconnectStart={interactive ? (_event, _edge, keptType) => { reconnectEnd.current = keptType === "source" ? "target" : "source"; } : undefined}
       onConnect={(connection) => void connect(connection)} onReconnect={reconnect} elementsSelectable={interactive}
-      nodesDraggable={draggable} nodesConnectable={connectable} edgesReconnectable={connectable} deleteKeyCode={null} zoomOnDoubleClick={false}
+      nodesDraggable={canEdit} nodesConnectable={canEdit} edgesReconnectable={canEdit} deleteKeyCode={null} zoomOnDoubleClick={false}
       fitView fitViewOptions={{ padding: 0.2, maxZoom: 1 }} minZoom={0.1} maxZoom={4}
       aria-label={preview ? "Arrangement preview" : `${editable ? "Editable" : "Read-only"} flow canvas: ${document.flows[flowId]?.title ?? ""}`}>
       <Background gap={24} size={1} />
     </ReactFlow>
     {interactive && <CanvasControls />}
-    {interactive && editable && <ShapePanel disabled={!shapesEnabled} onActivate={activateShape} />}
+    {canEdit && <ShapePanel onActivate={activateShape} />}
     {!nodes.length && <div className="canvas-empty"><p>This flow has no steps yet.</p></div>}
     {note && <p className="canvas-note" role="alert">{note}</p>}
   </div></InlineEditingContext.Provider>;

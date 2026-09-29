@@ -5,6 +5,7 @@ import type { DraftView, ScopeDocument } from "../../drafts/contracts/scope-docu
 import { applyChanges } from "../../drafts/domain/changes.ts";
 import { applyGraphCommand, checkDraft, GraphError } from "../../drafts/domain/graph.ts";
 import { moveNodes } from "../../drafts/domain/moves.ts";
+import { FIELDS } from "./fields.ts";
 import { stepName } from "./graph-view.ts";
 
 // The Studio's local outbox (Stage 03.3 Task 14b): every draft change is applied locally first and saved later with
@@ -373,7 +374,12 @@ export type ConflictTarget = { kind: "command"; command: GraphCommand } | { kind
 /** One of my unsaved changes whose record someone else changed first: their saved value, my edit, and the original. */
 export type Conflict = { label: string; rows: { field: string; theirs: string; mine: string; before: string }[]; target: ConflictTarget };
 
-const text = (value: unknown) => (Array.isArray(value) ? value.join("; ") : String(value ?? "")) || "(empty)";
+// Shape, type and scope are stored as codes (ACTION, USER_JOURNEY): the comparison shows the labels the forms show.
+const OPTION_LABELS = new Map(Object.values(FIELDS).flat().flatMap((field) => (field.options ? [[field.name, new Map(field.options)] as const] : [])));
+const text = (value: unknown, field?: string) => {
+  const shown = Array.isArray(value) ? value.join("; ") : String(value ?? "");
+  return (OPTION_LABELS.get(field ?? "")?.get(shown) ?? shown) || "(empty)";
+};
 const point = (at: { x: number; y: number }) => `(${at.x}, ${at.y})`;
 
 /**
@@ -399,7 +405,7 @@ export function compareOutbox(outbox: Outbox, saved: DraftView, names: ScopeDocu
       if (!before || !now) continue;
       const rows = Object.entries(command.payload as Record<string, unknown>)
         .filter(([field]) => field !== "flowId" && field !== "nodeId" && field !== "edgeId" && JSON.stringify(now[field]) !== JSON.stringify(before[field]))
-        .map(([field, mine]) => ({ field: FIELD_NAMES[field] ?? field, theirs: text(now[field]), mine: text(mine), before: text(before[field]) }));
+        .map(([field, mine]) => ({ field: FIELD_NAMES[field] ?? field, theirs: text(now[field], field), mine: text(mine, field), before: text(before[field], field) }));
       if (rows.length) conflicts.push({ label: describe(command, names), rows, target: { kind: "command", command } });
     } else if (command.command === "RECONNECT_EDGE") {
       const before = base.document.edges[command.payload.edgeId], now = saved.document.edges[command.payload.edgeId];

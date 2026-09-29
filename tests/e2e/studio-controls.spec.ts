@@ -9,7 +9,7 @@ test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
 // Task 9: the floating control bar (zoom, undo, redo) and the canvas keyboard shortcuts.
 const status = (page: Page) => page.locator(".studio-status");
-const bar = (page: Page) => page.getByRole("toolbar", { name: "Canvas controls" });
+const bar = (page: Page) => page.getByRole("group", { name: "Canvas controls" });
 const nodeAt = (page: Page, nodeId: string) => page.locator(`.react-flow__node[data-id="${nodeId}"]`);
 const headers = () => ({ Origin: appUrl, "Idempotency-Key": randomUUID() });
 const hasScale = (page: Page) => page.locator(".react-flow__viewport").evaluate((element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).a);

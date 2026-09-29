@@ -89,20 +89,19 @@ export function moveTargets(moved: { id: string; position: { x: number; y: numbe
   });
 }
 
-// Shape panel drag-and-drop (UI02 Task 7): the payload names a kind and its fixed STEP_SIZE, so a drop never has to
-// trust dataTransfer for anything besides which shape was picked.
+// Shape panel drag-and-drop (UI02 Task 7): the payload names only the kind (its size is the fixed STEP_SIZE), so a drop
+// never has to trust dataTransfer for anything besides which shape was picked.
 export const SHAPE_DRAG_MIME = "application/x-scoperoom-shape";
-export type ShapeDragPayload = { kind: NodeKind; width: number; height: number };
+export type ShapeDragPayload = { kind: NodeKind };
 
 /** The dropped or dragged payload, or null for anything malformed or an unknown kind (dropped silently). */
 export function parseShapePayload(raw: string): ShapeDragPayload | null {
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return null; }
   if (!value || typeof value !== "object") return null;
-  const { kind, width, height } = value as Record<string, unknown>;
+  const { kind } = value as Record<string, unknown>;
   if (typeof kind !== "string" || !(NODE_KINDS as readonly string[]).includes(kind)) return null;
-  if (typeof width !== "number" || typeof height !== "number") return null;
-  return { kind: kind as NodeKind, width, height };
+  return { kind: kind as NodeKind };
 }
 
 // Which end of a drawn connection is "from" (UI02 Task 13). React Flow labels a finished connection's ends by handle
