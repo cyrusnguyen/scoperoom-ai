@@ -271,6 +271,30 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
     const edges = Object.values(saved.document.edges).map((edge) => `${edge.fromId}:${saved.layout.edgeSides[edge.id]?.from}>${edge.toId}:${saved.layout.edgeSides[edge.id]?.to}`);
     expect(edges.sort()).toEqual([`${cartId}:right>${otherId}:top`, `${otherId}:right>${cartId}:top`, `${cartId}:left>${doneId}:right`].sort());
   });
+
+  test("a pending click-to-connect keeps its first handle when a jittery press (a small drag) happens before the completing click", async ({ page }) => {
+    await addStepInUi(page, "Cart", "Start");
+    await addStepInUi(page, "Done", "Outcome");
+    await saveStudio(page);
+    const draft = await draftOf(page, projectId);
+    const id = (label: string) => Object.values(draft.document.nodes).find((node) => node.label === label)!.id;
+    const [cartId, doneId] = [id("Cart"), id("Done")];
+    const handle = (nodeId: string, side: string) => nodeAt(page, nodeId).locator(`.react-flow__handle[data-handleid="${side}"]`).first();
+    // Cart's left is target-typed: a start cleared by the second click's drag would save this connection reversed (Done -> Cart).
+    await handle(cartId, "left").click();
+    // A press on Done right, 3 px of movement and a release is a drag gesture (it ends with onConnectEnd), not a click, so the click-connect stays pending.
+    const box = (await handle(doneId, "right").boundingBox())!;
+    const [x, y] = [box.x + box.width / 2, box.y + box.height / 2];
+    await handle(doneId, "right").hover();
+    await page.mouse.down();
+    await page.mouse.move(x + 3, y, { steps: 3 });
+    await page.mouse.up();
+    await handle(doneId, "right").click();
+    await saveStudio(page);
+    const saved = await draftOf(page, projectId);
+    const edges = Object.values(saved.document.edges).map((edge) => ({ fromId: edge.fromId, toId: edge.toId, ...saved.layout.edgeSides[edge.id] }));
+    expect(edges).toEqual([{ fromId: cartId, toId: doneId, from: "left", to: "right" }]);
+  });
 });
 
 test.describe("Studio canvas handles (read-only, mocked project)", () => {
