@@ -20,7 +20,8 @@
 .canvas { position: relative; flex: 1; min-height: 0; }
 .canvas > .react-flow { position: absolute; inset: 0; }
 .canvas-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--foreground-muted); pointer-events: none; }
-.step-node { position: relative; display: flex; align-items: center; justify-content: center; box-sizing: border-box; width: 100%; height: 100%; padding: 10px 14px; overflow: hidden; color: var(--kind-action); }
+/* Handles straddle the shape border; clipping this box lets the underlying edge steal their outer hit area. */
+.step-node { position: relative; display: flex; align-items: center; justify-content: center; box-sizing: border-box; width: 100%; height: 100%; padding: 10px 14px; color: var(--kind-action); }
 .step-node[data-kind="ACTION"] { border: 1px solid var(--kind-action-border); border-radius: var(--radius-card); background: var(--kind-action-background); }
 .step-node[data-kind="START"] { border: 1px solid var(--kind-start-border); border-radius: 50%; background: var(--kind-start-background); color: var(--kind-start); }
 .step-node[data-kind="OUTCOME"] { border: 3px solid var(--kind-outcome-border); border-radius: 50%; background: var(--kind-outcome-background); color: var(--kind-outcome); }

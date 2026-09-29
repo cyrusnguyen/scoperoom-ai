@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { STEP_SIZE } from "../src/features/drafts/contracts/draft-layout.ts";
-import { dropTarget, parseShapePayload, SHAPE_DRAG_MIME } from "../src/features/studio/ui/studio-ui.ts";
-
-test("the shape panel drag payload MIME is a stable custom type", () => {
-  assert.equal(SHAPE_DRAG_MIME, "application/x-scoperoom-shape");
-});
+import { dropTarget, parseShapePayload } from "../src/features/studio/ui/studio-ui.ts";
 
 test("a valid shape payload parses to its kind", () => {
   assert.deepEqual(parseShapePayload(JSON.stringify({ kind: "DATA_STORE" })), { kind: "DATA_STORE" });

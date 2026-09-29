@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
 import { apiRead, sessionEnded } from "@/client/api";
@@ -65,6 +65,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const [listsState, setListsState] = useState<"loading" | "ready" | "error">("loading");
   const [opened, setOpened] = useState<Opened | null>(null);
   const [store, setStore] = useState<UiStore>({});
+  const latestStore = useRef(store);
+  useLayoutEffect(() => { latestStore.current = store; }, [store]);
   const saveChangesRef = useRef<(() => Promise<boolean>) | null>(null);
   const opening = useRef(false);
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
@@ -178,10 +180,13 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (id === projectId || opening.current) return;
     opening.current = true;
     try {
-      let remaining = store;
+      let allSaved = false;
       // Unsaved changes are saved first. Once all are acknowledged they no longer need resolving (the store has not
       // re-rendered yet); typed but unapplied text still does.
-      if (projectId && pendingCount(ui.outbox) && await saveChangesRef.current?.()) remaining = updateUi(store, projectId, () => ({ outbox: emptyOutbox }));
+      if (projectId && pendingCount(ui.outbox)) allSaved = await saveChangesRef.current?.() ?? false;
+      const remaining = projectId && allSaved
+        ? updateUi(latestStore.current, projectId, () => ({ outbox: emptyOutbox }))
+        : latestStore.current;
       // Browser history may have moved on while the save ran: the guard belongs to the project still open.
       if (projectIdRef.current !== projectId) return;
       // Switching projects resolves unsaved edits first (UI00): Stay, or an explicit Discard, never silent.

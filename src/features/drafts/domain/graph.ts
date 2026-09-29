@@ -359,6 +359,12 @@ export function applyGraphCommand(
       }
       const endpointsChanged = edge.fromId !== fromId || edge.toId !== toId;
       const existingSides = layout.edgeSides[edgeId];
+      // Sides-only saves do not advance documentRevision. Compare the inspected pair so a concurrent reconnect
+      // cannot silently replace it; unrelated node positions and other edges remain independent.
+      const expectedSides = command.payload.expectedSides;
+      if (existingSides?.from !== expectedSides?.from || existingSides?.to !== expectedSides?.to) {
+        fail("STALE_LAYOUT_REVISION", { edgeId });
+      }
       const sidesChanged = fromSide ? existingSides?.from !== fromSide || existingSides?.to !== toSide : Boolean(existingSides);
       if (!endpointsChanged && !sidesChanged) return noChange();
       // The endpoints and their sides are one geometry decision: a plain reconnect (no sides given) clears them, a

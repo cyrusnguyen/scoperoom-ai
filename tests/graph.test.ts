@@ -313,14 +313,14 @@ test("a side-only RECONNECT_EDGE changes the layout without touching the documen
   // Repeating the exact same sides is now a true no-op.
   const repeat = applyGraphCommand(sideOnly, state.revision, {
     commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: state.revision,
-    payload: { edgeId, fromId: a!, toId: b!, fromSide: "bottom", toSide: "top" },
+    payload: { edgeId, fromId: a!, toId: b!, fromSide: "bottom", toSide: "top", expectedSides: sideOnly.layout.edgeSides[edgeId] },
   }, ids(91));
   assert.equal(repeat.documentChanged, false);
   assert.equal(repeat.layoutChanged, false);
   // An endpoint change without sides clears any previously saved sides.
   const cleared = applyGraphCommand(sideOnly, state.revision, {
     commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: state.revision,
-    payload: { edgeId, fromId: b!, toId: a! },
+    payload: { edgeId, fromId: b!, toId: a!, expectedSides: sideOnly.layout.edgeSides[edgeId] },
   }, ids(92));
   assert.equal(cleared.documentChanged, true);
   assert.equal(cleared.layoutChanged, true);
@@ -328,7 +328,7 @@ test("a side-only RECONNECT_EDGE changes the layout without touching the documen
   // Changing endpoints while also giving new sides advances both: the layout change is not lost behind the document one.
   const movedWithSides = applyGraphCommand(sideOnly, state.revision, {
     commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: state.revision,
-    payload: { edgeId, fromId: b!, toId: a!, fromSide: "left", toSide: "right" },
+    payload: { edgeId, fromId: b!, toId: a!, fromSide: "left", toSide: "right", expectedSides: sideOnly.layout.edgeSides[edgeId] },
   }, ids(93));
   assert.equal(movedWithSides.documentChanged, true);
   assert.equal(movedWithSides.layoutChanged, true);

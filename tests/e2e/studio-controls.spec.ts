@@ -117,6 +117,21 @@ test.describe("Canvas control bar and shortcuts (real draft)", () => {
     await page.mouse.dblclick(pane.x + 60, pane.y + 60); // empty pane: double-click belongs to editing, not zoom
     expect(await scale(page)).toBe(fitted);
     expect(saves).toHaveLength(0);
+
+    // The same controls remain usable when the canvas is narrowed.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole("button", { name: "Canvas", exact: true }).click();
+    const buttons = bar(page).getByRole("button");
+    await expect(buttons).toHaveCount(5);
+    const shapePanel = (await page.locator(".shape-panel").boundingBox())!;
+    const box = (await bar(page).boundingBox())!;
+    const apart = box.x + box.width <= shapePanel.x || shapePanel.x + shapePanel.width <= box.x || box.y + box.height <= shapePanel.y || shapePanel.y + shapePanel.height <= box.y;
+    expect(apart).toBe(true);
+    for (const button of await buttons.all()) {
+      const size = (await button.boundingBox())!;
+      expect(size.width).toBeGreaterThanOrEqual(44);
+      expect(size.height).toBeGreaterThanOrEqual(44);
+    }
   });
 
   test("Undo and Redo (bar buttons and Ctrl/Cmd+Z, Ctrl+Shift+Z, Ctrl+Y) act on unsaved changes only", async ({ page }) => {
@@ -211,22 +226,6 @@ test.describe("Canvas control bar and shortcuts (real draft)", () => {
     await expect(status(page)).toContainText("2 connections");
     expect(saves).toHaveLength(0);
   });
-
-  test("at 390 px the bar sits clear of the shape panel and its buttons are touch-sized", async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole("button", { name: "Canvas", exact: true }).click();
-    const buttons = bar(page).getByRole("button");
-    await expect(buttons).toHaveCount(5);
-    const panel = (await page.locator(".shape-panel").boundingBox())!;
-    const box = (await bar(page).boundingBox())!;
-    const apart = box.x + box.width <= panel.x || panel.x + panel.width <= box.x || box.y + box.height <= panel.y || panel.y + panel.height <= box.y;
-    expect(apart).toBe(true);
-    for (const button of await buttons.all()) {
-      const size = (await button.boundingBox())!;
-      expect(size.width).toBeGreaterThanOrEqual(44);
-      expect(size.height).toBeGreaterThanOrEqual(44);
-    }
-  });
 });
 
 test.describe("Canvas control bar (reader, mocked project)", () => {
@@ -267,6 +266,7 @@ test.describe("Canvas control bar (reader, mocked project)", () => {
   test("a reader gets only the zoom group, zoom shortcuts work, and undo and save keys are left alone", async ({ page }) => {
     await expect(nodeAt(page, start)).toBeVisible();
     await expect(bar(page).getByRole("button")).toHaveCount(3);
+    await expect(page.locator(".shape-panel")).toHaveCount(0);
     await expect(bar(page).getByRole("button", { name: "Undo" })).toHaveCount(0);
     await expect(bar(page).getByRole("button", { name: "Redo" })).toHaveCount(0);
     const initial = await scale(page);

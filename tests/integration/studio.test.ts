@@ -268,7 +268,7 @@ test("a side-only RECONNECT_EDGE saves the layout without moving the document re
     const beforeRepeat = await getProjectStatus(owner, projectId);
     const repeat = await send(owner, projectId, draftId, {
       command: "RECONNECT_EDGE", expectedDocumentRevision: reloaded.documentRevision,
-      payload: { edgeId, fromId: nodeIds[0], toId: nodeIds[1], fromSide: "right", toSide: "left" },
+      payload: { edgeId, fromId: nodeIds[0], toId: nodeIds[1], fromSide: "right", toSide: "left", expectedSides: reloaded.layout.edgeSides[edgeId] },
     });
     assert.deepEqual([repeat.documentRevision, repeat.layoutRevision], [reloaded.documentRevision, reloaded.layoutRevision]);
     assert.equal((await getProjectStatus(owner, projectId)).eventSequence, beforeRepeat.eventSequence);

@@ -70,7 +70,7 @@ export function useStudio(): Studio {
 /** Codes that mean this person's access or the project's lifecycle changed: the shell re-reads the project. */
 const accessCodes = new Set(["FORBIDDEN", "CONFLICT", "NOT_FOUND", "DRAFT_REPLACED"]);
 /** A save refused because someone else saved first: the person reviews and applies their changes again. */
-export const staleCodes = new Set(["STALE_DOCUMENT_REVISION", "STALE_ENTITY_VERSION", "POSITION_CONFLICT", "DEPENDENCY_CONFLICT"]);
+export const staleCodes = new Set(["STALE_DOCUMENT_REVISION", "STALE_ENTITY_VERSION", "STALE_LAYOUT_REVISION", "POSITION_CONFLICT", "DEPENDENCY_CONFLICT"]);
 const busyOutcome = { ok: false as const, code: "BUSY", message: "Another change is still saving.", uncertain: false };
 const readOnly = { ok: false as const, code: "FORBIDDEN", message: "This draft is read-only.", uncertain: false };
 
@@ -193,7 +193,8 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
       return false;
     }
     if (sent) await finish();
-    return true;
+    // Editing remains enabled during the final read; a switch must still guard anything queued in that window.
+    return pendingCount(latest.current) === 0;
   }, [editable, projectId, change, update, reload, onAccessChanged]);
 
   // Saves run one after another: a Save pressed during another waits for it, then sends what is left.

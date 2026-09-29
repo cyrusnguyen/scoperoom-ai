@@ -6,7 +6,7 @@ import { emptyDraft, type DraftView } from "../src/features/drafts/contracts/sco
 import { applyChanges } from "../src/features/drafts/domain/changes.ts";
 import { applyGraphCommand, GraphError } from "../src/features/drafts/domain/graph.ts";
 import {
-  acknowledged, addDrop, build, compareOutbox, emptyOutbox, enqueue, keepTheirs, optimistic, pendingCount, rebase, redo, replay, split, startSave, undo, wireBody, withEntries,
+  acknowledged, addDrop, build, compareOutbox, discardOutbox, emptyOutbox, enqueue, keepTheirs, optimistic, pendingCount, rebase, redo, replay, split, startSave, undo, wireBody, withEntries,
   type Outbox,
 } from "../src/features/studio/ui/outbox.ts";
 import { largeDraft } from "./support/large-draft.ts";
@@ -173,6 +173,24 @@ test("the outbox splits at the batch limits into sequential batches that apply l
   for (const batch of byBytes) assert.ok(new TextEncoder().encode(JSON.stringify(wireBody(batch))).length <= CHANGES_BODY_LIMIT);
 });
 
+test("discarding an uncertain split save retains only the sent batch for its exact retry", () => {
+  const base = saved();
+  const first = { commands: [{ command: rename(1, start, "Sent"), proposedIds: [] }], moves: [] };
+  const later = { commands: [{ command: rename(1, end, "Never sent"), proposedIds: [] }], moves: [] };
+  const outbox: Outbox = {
+    ...emptyOutbox, base,
+    sending: { draftId: base.id, key: "uncertain-key", state: "uncertain", batches: [first, later] },
+    entries: [{ kind: "command", command: describeNode(2, start, "Also unsent"), proposedIds: [] }],
+  };
+  const discarded = discardOutbox(outbox);
+  assert.equal(discarded.sending!.key, "uncertain-key");
+  assert.deepEqual(discarded.sending!.batches, [first], "never-sent split batches are discarded");
+  assert.deepEqual(discarded.entries, []);
+  const recovered = acknowledged(discarded, "unused-next-key");
+  assert.equal(recovered.sending, null, "the retry cannot continue into discarded edits");
+  assert.equal(optimistic(recovered, base).document.nodes[end]!.label, "End");
+});
+
 test("Apply my changes again replays on the newer saved draft with fresh guards and drops only what no longer applies", () => {
   const base = saved();
   let outbox = emptyOutbox;
@@ -300,4 +318,21 @@ test("Apply my changes again keeps a sides-only connection change, which advance
   assert.equal(rebased.entries.length, 1, "re-queued, not silently lost");
   assert.deepEqual(rebased.dropped, []);
   assert.deepEqual(optimistic(rebased, newer).layout.edgeSides[edgeId], { from: "right", to: "left" });
+});
+
+test("connection-side conflicts compare saved points and only explicit reapply refreshes their guard", () => {
+  const before = saved(), edgeId = id(20);
+  const added = applyGraphCommand(before, before.documentRevision, addEdge(4, start, end), () => edgeId);
+  const base: DraftView = { ...before, document: added.document, layout: { ...added.layout, edgeSides: { [edgeId]: { from: "bottom", to: "top" } } }, documentRevision: 5 };
+  const change: GraphCommand = { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: 5, payload: { edgeId, fromId: start, toId: end, fromSide: "right", toSide: "left" } };
+  const outbox = startSave(queue(emptyOutbox, base, change).outbox, base, "key-1");
+  const wire = wireBody(outbox.sending!.batches[0]!).commands[0]!;
+  assert.deepEqual((wire.payload as Record<string, unknown>).expectedSides, { from: "bottom", to: "top" });
+  const newer: DraftView = { ...base, layoutRevision: base.layoutRevision + 1, layout: { ...base.layout, edgeSides: { [edgeId]: { from: "left", to: "right" } } } };
+  const [conflict] = compareOutbox(outbox, newer, base.document);
+  assert.deepEqual(conflict!.rows, [{ field: "connection points", theirs: "left → right", mine: "right → left", before: "bottom → top" }]);
+  const rebased = rebase(outbox, newer, base.document);
+  assert.deepEqual(rebased.dropped, []);
+  assert.deepEqual(optimistic(rebased, newer).layout.edgeSides[edgeId], { from: "right", to: "left" });
+  assert.equal(pendingCount(keepTheirs(outbox, conflict!.target)), 0);
 });

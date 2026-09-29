@@ -158,6 +158,9 @@ function coalesces(last: Entry | undefined, command: GraphCommand): last is Extr
  */
 export function enqueue(outbox: Outbox, saved: DraftView, command: GraphCommand, newId: () => string = () => crypto.randomUUID()): Enqueued {
   const current = optimistic(outbox, saved);
+  if (command.command === "RECONNECT_EDGE") command = {
+    ...command, payload: { ...command.payload, expectedSides: current.layout.edgeSides[command.payload.edgeId] ?? null },
+  };
   const applied = applyGraphCommand(current, current.documentRevision, command, newId);
   // A layout-only effect (a side-only RECONNECT_EDGE) still queues: it changes what is shown, just not documentRevision.
   if (!applied.documentChanged && !applied.layoutChanged) return { entries: outbox.entries, createdIds: [], versions: {}, retiredIds: [], documentRevision: current.documentRevision };
@@ -277,7 +280,8 @@ export function acknowledged(outbox: Outbox, nextKey: string): Outbox {
  */
 export function discardOutbox(outbox: Outbox): Outbox {
   const { sending, base } = outbox;
-  return { ...emptyOutbox, base, sending: sending && (sending.state === "sending" || sending.state === "uncertain") ? sending : null };
+  return { ...emptyOutbox, base, sending: sending && (sending.state === "sending" || sending.state === "uncertain")
+    ? { ...sending, batches: sending.batches.slice(0, 1) } : null };
 }
 
 /** Unsent and unconfirmed changes both wait to be saved: each command and each moved step counts once. */
@@ -288,6 +292,10 @@ export function pendingCount(outbox: Outbox): number {
 
 /** The command's guard refreshed from the current draft: the person chose to apply it over what is saved now. */
 function refreshed(command: GraphCommand, current: DraftView): GraphCommand {
+  if (command.command === "RECONNECT_EDGE") return {
+    ...command, expectedDocumentRevision: current.documentRevision,
+    payload: { ...command.payload, expectedSides: current.layout.edgeSides[command.payload.edgeId] ?? null },
+  };
   if ("expectedDocumentRevision" in command) return { ...command, expectedDocumentRevision: current.documentRevision };
   const id = recordId(command.payload)!;
   const record = current.document.flows[id] ?? current.document.nodes[id] ?? current.document.edges[id];
@@ -409,10 +417,17 @@ export function compareOutbox(outbox: Outbox, saved: DraftView, names: ScopeDocu
       if (rows.length) conflicts.push({ label: describe(command, names), rows, target: { kind: "command", command } });
     } else if (command.command === "RECONNECT_EDGE") {
       const before = base.document.edges[command.payload.edgeId], now = saved.document.edges[command.payload.edgeId];
-      if (!before || !now || (before.fromId === now.fromId && before.toId === now.toId)) continue;
+      if (!before || !now) continue;
       const ends = (fromId: string, toId: string) => `${stepName(names, fromId)} → ${stepName(names, toId)}`;
-      conflicts.push({ label: describe(command, names), target: { kind: "command", command },
-        rows: [{ field: "connection", theirs: ends(now.fromId, now.toId), mine: ends(command.payload.fromId, command.payload.toId), before: ends(before.fromId, before.toId) }] });
+      const rows: Conflict["rows"] = [];
+      if (before.fromId !== now.fromId || before.toId !== now.toId) rows.push({ field: "connection", theirs: ends(now.fromId, now.toId), mine: ends(command.payload.fromId, command.payload.toId), before: ends(before.fromId, before.toId) });
+      const oldSides = base.layout.edgeSides[before.id], newSides = saved.layout.edgeSides[now.id];
+      if (oldSides?.from !== newSides?.from || oldSides?.to !== newSides?.to) {
+        const sides = (value: { from: string; to: string } | undefined) => value ? `${value.from} → ${value.to}` : "Automatic";
+        const mine = command.payload.fromSide && command.payload.toSide ? { from: command.payload.fromSide, to: command.payload.toSide } : undefined;
+        rows.push({ field: "connection points", theirs: sides(newSides), mine: sides(mine), before: sides(oldSides) });
+      }
+      if (rows.length) conflicts.push({ label: describe(command, names), target: { kind: "command", command }, rows });
     }
   }
   const moved = new Map<string, { x: number; y: number }>();

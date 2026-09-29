@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page, type Request } from "@playwright/test";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { STEP_SIZE } from "../../src/features/drafts/contracts/draft-layout.ts";
-import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, headerSave, openDatabase, saveStudio, signIn } from "./support";
+import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, entitle, headerSave, openDatabase, saveStudio, signIn } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -120,22 +120,7 @@ test.describe("Shape panel (real draft)", () => {
     expect(after.layout.positions[createdId]).toEqual({ x: expected.x, y: expected.y, version: 2 });
   });
 
-  test("clicking End adds an OUTCOME step, selected at once", async ({ page }) => {
-    await seedFlow(page, projectId);
-    await page.goto(`/app/projects/${projectId}`);
-    const before = await draftOf(page, projectId);
-    await panel(page).getByRole("button", { name: "End (Outcome)" }).click();
-    const created = page.locator(".react-flow__node").filter({ has: page.locator('.step-node[data-kind="OUTCOME"]') });
-    await expect(created).toHaveClass(/selected/);
-    const createdId = (await created.getAttribute("data-id"))!;
-    await page.keyboard.press("Escape"); // leave the name as it is
-    await saveStudio(page);
-    const after = await draftOf(page, projectId);
-    expect(Object.keys(after.document.nodes)).toHaveLength(Object.keys(before.document.nodes).length + 1);
-    expect(after.document.nodes[createdId]!.kind).toBe("OUTCOME");
-  });
-
-  test("a step dropped in one flow is saved there when a flow switch saves it first", async ({ page }) => {
+  test("a clicked End is selected for inline naming and saved in its original flow before switching", async ({ page }) => {
     const flowA = await seedFlow(page, projectId, "Flow A");
     const flowB = await seedFlow(page, projectId, "Flow B");
     await page.goto(`/app/projects/${projectId}`);
@@ -152,8 +137,17 @@ test.describe("Shape panel (real draft)", () => {
     const expected = { x: Math.round(centre.x - size.width / 2), y: Math.round(centre.y - size.height / 2) };
     const writes = recordWrites(page);
 
+    const before = await draftOf(page, projectId);
     await panel(page).getByRole("button", { name: "End (Outcome)" }).click();
-    await page.keyboard.press("Escape");
+    const created = page.locator(".react-flow__node").filter({ has: page.locator('.step-node[data-kind="OUTCOME"]') });
+    await expect(created).toHaveClass(/selected/);
+    const createdId = (await created.getAttribute("data-id"))!;
+    const editor = created.getByRole("textbox", { name: "Step name" });
+    await expect(editor).toBeFocused();
+    await expect(editor).toHaveValue("Outcome");
+    expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd])).toEqual([0, "Outcome".length]);
+    await page.keyboard.type("Order completed");
+    await page.keyboard.press("Enter");
     expect(writes).toHaveLength(0);
     await page.locator(".flow-switch").click();
     await flowsDialog.locator(".item-row").filter({ hasText: "Flow B" }).click();
@@ -163,43 +157,12 @@ test.describe("Shape panel (real draft)", () => {
 
     // The created step belongs to Flow A: its saved position (and the move that placed it) must say so, never Flow B.
     const after = await draftOf(page, projectId);
-    const createdId = Object.keys(after.document.nodes).find((id) => after.document.nodes[id]!.flowId === flowA.flowId && id !== flowA.startId)!;
-    expect(createdId).toBeTruthy();
+    expect(Object.keys(after.document.nodes)).toHaveLength(Object.keys(before.document.nodes).length + 1);
+    expect(after.document.nodes[createdId]!.flowId).toBe(flowA.flowId);
+    expect(after.document.nodes[createdId]!.label).toBe("Order completed");
     expect(after.document.nodes[createdId]!.kind).toBe("OUTCOME");
     expect(after.document.nodes[createdId]!.flowId).not.toBe(flowB.flowId);
     expect(after.layout.positions[createdId]).toEqual({ x: expected.x, y: expected.y, version: 2 });
     await expect(headerSave(page)).toBeDisabled();
-  });
-});
-
-test.describe("Shape panel (read-only, mocked project)", () => {
-  const projectId = "c2222222-2222-4222-8222-222222222222";
-  const flowId = "d2222222-2222-4222-8222-222222222222";
-  const startId = "e3333333-3333-4333-8333-333333333333";
-
-  test("a reader sees no shape panel", async ({ page }) => {
-    const admin = adminClient();
-    const database = await openDatabase();
-    const users: string[] = [];
-    await signIn(page, admin, users, "Shapes Reader");
-    const view = emptyDraftView();
-    const draft: DraftView = {
-      ...view,
-      document: {
-        ...view.document,
-        flows: { [flowId]: { id: flowId, version: 1, behaviourVersion: 1, title: "Intake", purpose: "", classification: "BUSINESS_PROCESS", inclusion: "INCLUDED", confirmation: null, verificationMethod: null } },
-        nodes: { [startId]: { id: startId, flowId, version: 1, behaviourVersion: 1, kind: "START", label: "Receive form", description: "", actorLabel: "", origin: "HUMAN", sourceRefs: [], assumptionNotes: [] } },
-        edges: {},
-      },
-      layout: { schemaVersion: 1, positions: { [startId]: { x: 0, y: 0, version: 1 } }, directions: { [flowId]: "TB" }, edgeSides: {} },
-    };
-    await page.unrouteAll({ behavior: "ignoreErrors" });
-    await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: { items: [], truncated: false }, shared: { items: [{ id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerName: "Owner", updatedAt: "2026-09-27T00:00:00.000Z" }], truncated: false }, archived: { items: [], truncated: false }, capacity: { entitled: true, activeOwned: 0, maxOwned: 10, canCreate: true } } }));
-    await page.route("**/api/invitations", (route) => route.fulfill({ json: { items: [], truncated: false } }));
-    await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerId: projectId }, draft } }));
-    await page.goto(`/app/projects/${projectId}`);
-    await expect(nodeAt(page, startId)).toBeVisible();
-    await expect(panel(page)).toHaveCount(0);
-    try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 });

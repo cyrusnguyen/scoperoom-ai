@@ -194,4 +194,41 @@ test.describe("Save covers every change (real draft)", () => {
     expect((saves[0]!.postDataJSON() as Batch).commands.map((command) => command.command)).toEqual(["ADD_EDGE", "UPDATE_NODE"]);
     expect((await draftOf(page, projectId)).document.nodes[ids.payId]!.label).toBe("Pay now");
   });
+
+  test("switching projects guards edits made during the save's final read", async ({ page }) => {
+    await createProjectViaApi(page, "Other outbox project");
+    await page.reload();
+    await expect(nodeAt(page, ids.payId)).toBeVisible();
+    // Both queued canvas edits and unapplied inspector text can arrive after the batch was acknowledged.
+    for (const mode of ["queued", "buffered"] as const) {
+      await nodeAt(page, ids.payId).locator(".step-label").dblclick();
+      await nodeAt(page, ids.payId).getByRole("textbox", { name: "Step name" }).fill(`Pay ${mode}`);
+      await page.keyboard.press("Enter");
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let reading = false;
+      const readUrl = `**/api/projects/${projectId}/drafts/*`;
+      await page.route(readUrl, async (route) => { reading = true; await held; await route.continue(); });
+      try {
+        await page.locator("#projects-nav").getByRole("button", { name: "Other outbox project", exact: true }).click();
+        await expect.poll(() => reading).toBe(true);
+        if (mode === "queued") {
+          await nodeAt(page, ids.shipId).locator(".step-label").dblclick();
+          await nodeAt(page, ids.shipId).getByRole("textbox", { name: "Step name" }).fill("Ship after read");
+          await page.keyboard.press("Enter");
+        } else {
+          await nodeAt(page, ids.shipId).click();
+          await page.getByRole("button", { name: "Inspect", exact: true }).click();
+          await page.locator("#right-panel").getByLabel("Description", { exact: true }).fill("Text typed during read");
+        }
+        release();
+        const guard = page.getByRole("dialog", { name: "Unsaved changes in Outbox project" });
+        await expect(guard).toBeVisible();
+        await guard.getByRole("button", { name: "Stay" }).click();
+        await expect(page).toHaveURL(new RegExp(`/app/projects/${projectId}$`));
+      } finally { release(); await page.unroute(readUrl); }
+      if (mode === "queued") await saveStudio(page);
+      else await expect(page.locator("#right-panel").getByLabel("Description", { exact: true })).toHaveValue("Text typed during read");
+    }
+  });
 });

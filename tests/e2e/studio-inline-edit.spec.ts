@@ -83,7 +83,7 @@ test.describe("Inline label editing (real draft)", () => {
     try { await cleanupUsers(database, admin, users, page); } finally { await database.end(); }
   });
 
-  test("double-clicking a step's label renames it in place; Save sends one UPDATE_NODE and no move", async ({ page }) => {
+  test("step labels support pointer and keyboard editing; Save sends one UPDATE_NODE and no move", async ({ page }) => {
     const writes = recordWrites(page);
     const before = await draftOf(page, projectId);
     const pay = nodeAt(page, ids.payId);
@@ -119,6 +119,18 @@ test.describe("Inline label editing (real draft)", () => {
     expect(writes.changes).toHaveLength(1);
     expect(batchOf(writes.changes[0]!)).toEqual({ commands: [{ commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: before.document.nodes[ids.payId]!.version, payload: { nodeId: ids.payId, label: "Pay by card" }, proposedIds: [] }], moves: [] });
     expect([writes.commands, writes.positions]).toEqual([[], []]);
+
+    // Keyboard entry and focus restoration share this same rename journey.
+    await pay.focus();
+    await page.keyboard.press("F2");
+    await expect(editor).toBeFocused();
+    await editor.fill("Pay online");
+    await editor.press("Escape");
+    await expect(pay).toBeFocused();
+    await expect(pay.locator(".step-label")).toHaveText("Pay online");
+    await page.keyboard.press("Enter");
+    await expect(editor).toBeFocused();
+    await expect(editor).toHaveValue("Pay online");
   });
 
   test("Escape applies, unchanged text queues nothing, and composition never commits", async ({ page }) => {
@@ -224,21 +236,6 @@ test.describe("Inline label editing (real draft)", () => {
     await expect(panel(page).getByRole("button", { name: "Save", exact: true })).toBeDisabled();
   });
 
-  test("F2 or Enter on a focused step opens its editor, and closing by keyboard returns focus to the step", async ({ page }) => {
-    const pay = nodeAt(page, ids.payId);
-    await pay.focus();
-    await page.keyboard.press("F2");
-    const editor = stepEditor(page, ids.payId);
-    await expect(editor).toBeFocused();
-    await editor.fill("Pay online");
-    await editor.press("Escape");
-    await expect(pay).toBeFocused();
-    await expect(pay.locator(".step-label")).toHaveText("Pay online");
-    await page.keyboard.press("Enter");
-    await expect(editor).toBeFocused();
-    await expect(editor).toHaveValue("Pay online");
-  });
-
   test("a save that meets someone else's rename keeps the typed name on screen; Apply my changes again saves it", async ({ page }) => {
     const pay = nodeAt(page, ids.payId);
     await pay.locator(".step-label").dblclick();
@@ -342,20 +339,6 @@ test.describe("Inline label editing (real draft)", () => {
     expect((await draftOf(page, projectId)).document.edges[ids.edgeId]!.condition).toBe("");
     expect(writes.changes.map((request) => batchOf(request).commands.map((command) => command.command))).toEqual([["UPDATE_EDGE"], ["UPDATE_EDGE"]]);
     expect(writes.changes.every((request) => batchOf(request).moves.length === 0)).toBe(true);
-  });
-
-  test("a step added from the shape panel opens its editor with the default name selected", async ({ page }) => {
-    await page.locator(".shape-panel").getByRole("button", { name: "Decision" }).click();
-    const created = page.locator(".react-flow__node").filter({ has: page.locator('.step-node[data-kind="DECISION"]') });
-    const createdId = (await created.getAttribute("data-id"))!;
-    const editor = stepEditor(page, createdId);
-    await expect(editor).toBeFocused();
-    await expect(editor).toHaveValue("Decision");
-    expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd])).toEqual([0, "Decision".length]);
-    await page.keyboard.type("Paid?");
-    await page.keyboard.press("Enter");
-    await saveStudio(page);
-    expect((await draftOf(page, projectId)).document.nodes[createdId]!.label).toBe("Paid?");
   });
 });
 

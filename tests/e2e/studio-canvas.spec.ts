@@ -168,32 +168,6 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
     await expect(page.locator(".react-flow__edge")).toHaveCount(2);
   });
 
-  test("a connection started from a top or left handle still draws, saves and survives reload", async ({ page }) => {
-    await addStepInUi(page, "Cart", "Start");
-    await addStepInUi(page, "Done", "Outcome");
-    await saveStudio(page);
-    const draft = await draftOf(page, projectId);
-    const cartId = Object.values(draft.document.nodes).find((node) => node.label === "Cart")!.id;
-    const doneId = Object.values(draft.document.nodes).find((node) => node.label === "Done")!.id;
-
-    // Top and left are the direction's *target*-typed side by default (HANDLE_ORDER); starting a drag there used to
-    // build a connection whose saved `fromSide` names a handle that only existed as a target, so React Flow's
-    // edge-drawing lookup (which only searches source-typed handles for the start) refused to draw it at all.
-    await nodeAt(page, cartId).locator('.react-flow__handle[data-handleid="left"]').first().dragTo(nodeAt(page, doneId).locator('.react-flow__handle[data-handleid="top"]').first());
-    await expect(page.locator(".react-flow__edge")).toHaveCount(1);
-    await saveStudio(page);
-    const saved = await draftOf(page, projectId);
-    const edgeId = Object.keys(saved.document.edges)[0]!;
-    // The connection runs from where the drag started (Cart, left) to where it was dropped (Done, top), even though
-    // React Flow reports the dropped step as `source` when a drag starts on a target-typed handle.
-    expect(saved.document.edges[edgeId]).toMatchObject({ fromId: cartId, toId: doneId });
-    expect(saved.layout.edgeSides[edgeId]).toEqual({ from: "left", to: "top" });
-
-    await page.reload();
-    await expect(page.locator(`.react-flow__edge[data-id="${edgeId}"]`)).toHaveCount(1);
-    await expect(page.locator(`.react-flow__edge[data-id="${edgeId}"] path.react-flow__edge-path`)).toBeVisible();
-  });
-
   test("a connection saves from the step and handle the drag started on to the drop, whichever side it starts from", async ({ page }) => {
     await addStepInUi(page, "Cart", "Start");
     await addStepInUi(page, "Done", "Outcome");
@@ -215,6 +189,48 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
     expect(edges.sort()).toEqual(drags.map(([fromId, from, toId, to]) => `${fromId}:${from}>${toId}:${to}`).sort());
     await page.reload();
     await expect(page.locator(".react-flow__edge path.react-flow__edge-path")).toHaveCount(drags.length);
+  });
+
+  test("dragging a visible handle beside a selected loop creates an outgoing connection", async ({ page }) => {
+    await addStepInUi(page, "Cart", "Start");
+    await addStepInUi(page, "Done", "Outcome");
+    await saveStudio(page);
+    const draft = await draftOf(page, projectId);
+    const cartId = Object.values(draft.document.nodes).find((node) => node.label === "Cart")!.id;
+    const doneId = Object.values(draft.document.nodes).find((node) => node.label === "Done")!.id;
+    const handle = (id: string, side: string) => nodeAt(page, id).locator(`.react-flow__handle[data-handleid="${side}"]`).first();
+    await handle(cartId, "right").dragTo(handle(cartId, "left"));
+    await saveStudio(page);
+    const loopId = Object.keys((await draftOf(page, projectId)).document.edges)[0]!;
+    // Select by keyboard so this test does not depend on the loop path's routing.
+    await page.locator(`.react-flow__edge[data-id="${loopId}"]`).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(`.react-flow__edge[data-id="${loopId}"]`)).toHaveClass(/selected/);
+    const source = (await handle(cartId, "right").boundingBox())!;
+    const target = (await handle(doneId, "top").boundingBox())!;
+    // Handles straddle the shape border. Its old overflow clipping sent an outer-half press to the underlying edge.
+    await page.mouse.move(source.x + source.width / 2 + 2, source.y + source.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 12 });
+    await page.mouse.up();
+    await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+    await saveStudio(page);
+    const saved = await draftOf(page, projectId);
+    expect(saved.document.edges[loopId]).toMatchObject({ fromId: cartId, toId: cartId });
+    const added = Object.values(saved.document.edges).find((edge) => edge.id !== loopId)!;
+    expect(added).toMatchObject({ fromId: cartId, toId: doneId });
+    expect(saved.layout.edgeSides[added.id]).toEqual({ from: "right", to: "top" });
+    await page.reload();
+    const path = page.locator(`.react-flow__edge[data-id="${added.id}"] path.react-flow__edge-path`);
+    await expect(path).toBeVisible();
+    await expect(path).toHaveAttribute("marker-end", /url\(/);
+    const tip = await path.evaluate((element: SVGPathElement) => {
+      const point = element.getPointAtLength(element.getTotalLength()).matrixTransform(element.getScreenCTM()!);
+      return { x: point.x, y: point.y };
+    });
+    const end = (await handle(doneId, "top").boundingBox())!;
+    expect(Math.abs(tip.x - (end.x + end.width / 2))).toBeLessThan(1);
+    expect(Math.abs(tip.y - end.y)).toBeLessThan(1);
   });
 
   test("reconnecting an end moves only that end: the other keeps its step and side", async ({ page }) => {

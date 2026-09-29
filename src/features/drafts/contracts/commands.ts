@@ -26,7 +26,7 @@ export type GraphCommand =
   | Command<"DELETE_NODES", ByDocument, { flowId: string; nodeIds: string[]; removeEdgeIds: string[] }>
   | Command<"ADD_EDGE", ByDocument, { flowId: string; fromId: string; toId: string; condition: string; fromSide?: Side; toSide?: Side }>
   | Command<"UPDATE_EDGE", ByEntity, { edgeId: string; condition: string }>
-  | Command<"RECONNECT_EDGE", ByDocument, { edgeId: string; fromId: string; toId: string; fromSide?: Side; toSide?: Side }>
+  | Command<"RECONNECT_EDGE", ByDocument, { edgeId: string; fromId: string; toId: string; fromSide?: Side; toSide?: Side; expectedSides?: { from: Side; to: Side } | null }>
   | Command<"DELETE_EDGE", ByDocument, { edgeId: string }>;
 
 /**
@@ -127,8 +127,19 @@ export function parseGraphCommand(raw: unknown): GraphCommand {
       return { commandSchemaVersion: 1, command: "UPDATE_EDGE", expectedEntityVersion: guard, payload: { edgeId: id(payload.edgeId), condition: condition(payload.condition) } };
     }
     case "RECONNECT_EDGE": {
-      const { guard, payload } = envelope(body, "expectedDocumentRevision", ["edgeId", "fromId", "toId"], [], ["fromSide", "toSide"]);
-      return { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: guard, payload: { edgeId: id(payload.edgeId), fromId: id(payload.fromId), toId: id(payload.toId), ...sides(payload) } };
+      const { guard, payload } = envelope(body, "expectedDocumentRevision", ["edgeId", "fromId", "toId"], [], ["fromSide", "toSide", "expectedSides"]);
+      // Older callers implicitly inspected an edge without remembered sides. They cannot overwrite a later pair.
+      let expectedSides: { from: Side; to: Side } | null = null;
+      if (payload.expectedSides !== undefined && payload.expectedSides !== null) {
+        const expected = object(payload.expectedSides);
+        keys(expected, ["from", "to"]);
+        expectedSides = { from: oneOf(expected.from, SIDES), to: oneOf(expected.to, SIDES) };
+      }
+      return { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: guard, payload: {
+        edgeId: id(payload.edgeId), fromId: id(payload.fromId), toId: id(payload.toId), ...sides(payload),
+        // Preserve an omitted field in the parsed request so pre-existing receipt hashes still match on retry.
+        ...(Object.hasOwn(payload, "expectedSides") ? { expectedSides } : {}),
+      } };
     }
     case "DELETE_EDGE": {
       const { guard, payload } = envelope(body, "expectedDocumentRevision", ["edgeId"]);
