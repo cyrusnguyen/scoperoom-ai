@@ -53,7 +53,7 @@ async function connect(page: Page, fromId: string, toId: string) {
 }
 
 /** Dispatches a key press on the window and reports whether a shortcut acted (called preventDefault). */
-const acted = (page: Page, init: KeyboardEventInit) => page.evaluate((keyInit) => {
+const acted = (page: Page, init: { key: string; ctrlKey?: boolean; metaKey?: boolean }) => page.evaluate((keyInit) => {
   const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...keyInit });
   window.dispatchEvent(event);
   return event.defaultPrevented;
