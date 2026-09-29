@@ -131,6 +131,11 @@ test.describe("Save covers every change (real draft)", () => {
   });
 
   test("one Save sends one request with every kind of change: a new step, a connection, a rename, a label, a deletion and a move", async ({ page }) => {
+    // Label the connection first: the new step lands at the canvas centre and can cover its midpoint.
+    const labelPoint = await edgePoint(page, ids.edgeId);
+    await page.mouse.dblclick(labelPoint.x, labelPoint.y);
+    await page.getByRole("textbox", { name: "Connection label" }).fill("Always");
+    await page.keyboard.press("Enter");
     await page.locator(".shape-panel").getByRole("button", { name: "Decision" }).click();
     const created = page.locator(".react-flow__node").filter({ has: page.locator('.step-node[data-kind="DECISION"]') });
     const createdId = (await created.getAttribute("data-id"))!;
@@ -144,10 +149,6 @@ test.describe("Save covers every change (real draft)", () => {
     await expect(dialog).toBeHidden();
     await nodeAt(page, ids.shipId).locator(".step-label").dblclick();
     await nodeAt(page, ids.shipId).getByRole("textbox", { name: "Step name" }).fill("Ship fast");
-    await page.keyboard.press("Enter");
-    const labelPoint = await edgePoint(page, ids.edgeId);
-    await page.mouse.dblclick(labelPoint.x, labelPoint.y);
-    await page.getByRole("textbox", { name: "Connection label" }).fill("Always");
     await page.keyboard.press("Enter");
     const box = (await nodeAt(page, ids.startId).boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -165,8 +166,8 @@ test.describe("Save covers every change (real draft)", () => {
     await saveStudio(page);
     expect(saves).toHaveLength(1);
     const body = saves[0]!.postDataJSON() as Batch;
-    expect(body.commands.map((command) => command.command)).toEqual(["ADD_NODE", "UPDATE_NODE", "ADD_EDGE", "UPDATE_NODE", "UPDATE_EDGE", "DELETE_NODES"]);
-    expect(body.commands[0]!.proposedIds).toEqual([createdId]);
+    expect(body.commands.map((command) => command.command)).toEqual(["UPDATE_EDGE", "ADD_NODE", "UPDATE_NODE", "ADD_EDGE", "UPDATE_NODE", "DELETE_NODES"]);
+    expect(body.commands[1]!.proposedIds).toEqual([createdId]);
     expect(body.moves.flatMap((group) => group.items.map((item) => item.nodeId)).sort()).toEqual([createdId, ids.startId].sort());
     const saved = await draftOf(page, projectId);
     expect(saved.documentRevision).toBe(before.documentRevision + 6);
