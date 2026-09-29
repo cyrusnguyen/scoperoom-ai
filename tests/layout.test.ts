@@ -3,7 +3,7 @@ import test from "node:test";
 import { parseArrangementRequest, parsePositionCommand, type MoveNodes } from "../src/features/drafts/contracts/positions.ts";
 import { emptyDraft, type NodeRecord } from "../src/features/drafts/contracts/scope-document.ts";
 import { GraphError, type Draft } from "../src/features/drafts/domain/graph.ts";
-import { ALGORITHM_VERSION, applyArrangement, arrange, arrangementCanonical, moveNodes } from "../src/features/drafts/domain/layout.ts";
+import { ALGORITHM_VERSION, applyArrangement, arrange, arrangementCanonical, moveNodes } from "../src/features/drafts/server/layout.ts";
 
 const flowId = "f0000000-0000-4000-8000-000000000000";
 const otherFlow = "f1000000-0000-4000-8000-000000000000";

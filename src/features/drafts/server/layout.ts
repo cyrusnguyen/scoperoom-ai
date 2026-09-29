@@ -1,10 +1,10 @@
 import { Graph, layout as dagreLayout, type EdgeLabel, type GraphLabel, type NodeLabel } from "@dagrejs/dagre";
 import { COORDINATE_LIMIT, STEP_SIZE, type Direction, type SavedPosition } from "../contracts/draft-layout.ts";
 import type { ScopeDocument } from "../contracts/scope-document.ts";
-import { bump, byId, GraphError, type Draft } from "./graph.ts";
-import { checked, type Placed } from "./moves.ts";
+import { bump, byId, GraphError, type Draft } from "../domain/graph.ts";
+import { checked, type Placed } from "../domain/moves.ts";
 
-export { moveNodes, type Placed } from "./moves.ts";
+export { moveNodes, type Placed } from "../domain/moves.ts";
 
 // Saved geometry (Data02 "Saved layout and position invariants", "Exact arrangement preview"). Moves and arrangements
 // change position versions and the layout only; they never touch the document or any behaviour version.

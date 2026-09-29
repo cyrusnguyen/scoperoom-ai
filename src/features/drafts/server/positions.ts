@@ -6,7 +6,7 @@ import {
   parseArrangementRequest, parsePositionCommand, parsePositionResult, type ArrangementPreview, type ArrangementRequest, type PositionCommand, type PositionResult,
 } from "../contracts/positions.ts";
 import { GraphError } from "../domain/graph.ts";
-import { ALGORITHM_VERSION, applyArrangement, arrange, arrangementCanonical, moveNodes, type Placed } from "../domain/layout.ts";
+import { ALGORITHM_VERSION, applyArrangement, arrange, arrangementCanonical, moveNodes, type Placed } from "./layout.ts";
 import { asJson, draftMutation, graphFailure, nextRevision, storedDraft } from "./execute-command.ts";
 
 // Final position saves and whole-flow arrangement (Data03 "Final position save"; API "POST D/positions", "D/arrangement-preview").

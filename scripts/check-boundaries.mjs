@@ -50,6 +50,10 @@ export function checkBoundaries(root = process.cwd()) {
     const { imports, computedDynamicImport } = importsAt(absoluteFile);
     if (computedDynamicImport) findings.push(`${relative(absoluteRoot, absoluteFile)} uses a computed dynamic import.`);
     for (const specifier of imports) {
+      if (mode === "client" && specifier === "@dagrejs/dagre") { // Dagre is server-only: arranging runs in the save transaction
+        findings.push(`${relative(absoluteRoot, absoluteFile)} client import reaches server-only ${specifier}.`);
+        continue;
+      }
       if (mode === "worker" && (specifier === "next" || specifier.startsWith("next/"))) {
         findings.push(`${relative(absoluteRoot, absoluteFile)} worker import reaches Next module ${specifier}.`);
         continue;
