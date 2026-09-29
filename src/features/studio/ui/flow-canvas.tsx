@@ -322,6 +322,11 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   const dragStart = useRef<{ nodeId: string | null; handleId: string | null } | null>(null);
   // React Flow reports the type of the end that stays put, so the grabbed end is the other one.
   const reconnectEnd = useRef<"source" | "target" | null>(null);
+  // Every gesture (drag, click-to-connect, reconnect) overwrites the start when it begins and clears it when it ends or is
+  // cancelled, so a connection is never oriented by what an earlier gesture left behind. Both callbacks run after
+  // onConnect / onReconnect, which read the refs synchronously.
+  const beginConnect = (_event: unknown, params: { nodeId: string | null; handleId: string | null }) => { dragStart.current = { nodeId: params.nodeId, handleId: params.handleId }; };
+  const endGesture = () => { dragStart.current = null; reconnectEnd.current = null; };
   const connect = async (connection: Connection) => {
     if (!connection.source || !connection.target || !connectable) return;
     const { fromId, toId, fromHandle, toHandle } = orientConnect(connection, dragStart.current);
@@ -373,7 +378,8 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
       onNodesChange={interactive ? onNodesChange : measure} onEdgesChange={interactive ? onEdgesChange : undefined}
       onNodeDoubleClick={interactive ? nodeDoubleClick : undefined} onEdgeDoubleClick={interactive ? edgeDoubleClick : undefined} onNodeDragStart={interactive ? () => dragActive(true) : undefined} onNodeDragStop={interactive ? (_event, _node, moved) => drop(moved) : undefined}
       onSelectionDragStart={interactive ? () => dragActive(true) : undefined} onSelectionDragStop={interactive ? (_event, moved) => drop(moved) : undefined}
-      onConnectStart={interactive ? (_event, params) => { dragStart.current = { nodeId: params.nodeId, handleId: params.handleId }; } : undefined}
+      onConnectStart={interactive ? beginConnect : undefined} onClickConnectStart={interactive ? beginConnect : undefined}
+      onConnectEnd={interactive ? endGesture : undefined} onClickConnectEnd={interactive ? endGesture : undefined} onReconnectEnd={interactive ? endGesture : undefined}
       onReconnectStart={interactive ? (_event, _edge, keptType) => { reconnectEnd.current = keptType === "source" ? "target" : "source"; } : undefined}
       onConnect={(connection) => void connect(connection)} onReconnect={reconnect} elementsSelectable={interactive}
       nodesDraggable={draggable} nodesConnectable={connectable} edgesReconnectable={connectable} deleteKeyCode={null}

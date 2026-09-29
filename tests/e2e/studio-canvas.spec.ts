@@ -245,6 +245,32 @@ test.describe("Studio canvas shapes and handles (real draft)", () => {
     await page.locator(".react-flow__edgeupdater-source").dragTo(handle(doneId, "bottom"));
     expect(await edgeNow()).toEqual({ fromId: doneId, toId: otherId, from: "bottom", to: "top" });
   });
+
+  test("click-to-connect saves from the first handle clicked to the second, and a reconnect leaves nothing behind to misdirect it", async ({ page }) => {
+    await addStepInUi(page, "Cart", "Start");
+    await addStepInUi(page, "Done", "Outcome");
+    await addStepInUi(page, "Other", "Step");
+    await saveStudio(page);
+    const draft = await draftOf(page, projectId);
+    const id = (label: string) => Object.values(draft.document.nodes).find((node) => node.label === label)!.id;
+    const [cartId, doneId, otherId] = [id("Cart"), id("Done"), id("Other")];
+    const handle = (nodeId: string, side: string) => nodeAt(page, nodeId).locator(`.react-flow__handle[data-handleid="${side}"]`).first();
+    // A reconnect of Cart -> Done's to end onto Other leaves the kept end's start (Cart, right) with React Flow's
+    // reconnect callbacks; a later click-connect must not be oriented by it.
+    await handle(cartId, "right").dragTo(handle(doneId, "left"));
+    await page.locator(".react-flow__edgeupdater-target").dragTo(handle(otherId, "top"));
+    await saveStudio(page);
+    // Click Other's right (source-typed) then Cart's top: Other -> Cart.
+    await handle(otherId, "right").click();
+    await handle(cartId, "top").click();
+    // Click Cart's left (target-typed) then Done's right: Cart -> Done.
+    await handle(cartId, "left").click();
+    await handle(doneId, "right").click();
+    await saveStudio(page);
+    const saved = await draftOf(page, projectId);
+    const edges = Object.values(saved.document.edges).map((edge) => `${edge.fromId}:${saved.layout.edgeSides[edge.id]?.from}>${edge.toId}:${saved.layout.edgeSides[edge.id]?.to}`);
+    expect(edges.sort()).toEqual([`${cartId}:right>${otherId}:top`, `${otherId}:right>${cartId}:top`, `${cartId}:left>${doneId}:right`].sort());
+  });
 });
 
 test.describe("Studio canvas handles (read-only, mocked project)", () => {
