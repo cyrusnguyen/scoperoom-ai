@@ -2,15 +2,17 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import {
-  Background, BaseEdge, ConnectionMode, Controls, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
+  Background, BaseEdge, ConnectionMode, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
   useReactFlow, type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
 } from "@xyflow/react";
 import { SIDES, STEP_SIZE, type Direction, type Side } from "@/features/drafts/contracts/draft-layout";
 import type { NodeKind } from "@/features/drafts/contracts/scope-document";
 import { bufferKey, discard, edit, editFields, refuse, type Saved } from "./buffers";
 import { endpointGuard, inlinePlan, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
+import CanvasControls from "./canvas-controls";
 import ShapePanel from "./shape-panel";
 import { explain, useStudio } from "./studio-context";
+import { useKeyboardShortcuts } from "./use-keyboard-shortcuts";
 import { dropTarget, moveTargets, orientConnect, orientReconnect, parseShapePayload, selectEdge, selectNodes, SHAPE_DRAG_MIME, type SelectChange, type StudioUi } from "./studio-ui";
 
 type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction };
@@ -185,15 +187,19 @@ export default function FlowCanvas(props: { flowId: string; preview?: { position
 }
 
 function CanvasInner({ flowId, preview }: { flowId: string; preview?: { positions: Record<string, Point>; direction: Direction } }) {
-  const { draft, editable, ui, update, run, inspect, moveSteps, dragActive } = useStudio();
+  const { draft, editable, ui, update, run, inspect, moveSteps, dragActive, undo, redo, canUndo, canRedo, unsaved, busy, saveChanges } = useStudio();
   const { document, layout } = draft;
-  const { screenToFlowPosition } = useReactFlow();
+  const flow = useReactFlow();
+  const { screenToFlowPosition } = flow;
   const [dragging, setDragging] = useState<Record<string, Point>>({});
   const [note, setNote] = useState("");
   const [measured, setMeasured] = useState<Record<string, { width: number; height: number }>>({});
   const [editing, setEditing] = useState<Editing>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const interactive = !preview;
+  // Ctrl/Cmd+S is the Save button: nothing to save (or a refused save awaiting its choice) is a no-op that still keeps the browser's save dialog away.
+  const save = () => { if (unsaved && !busy && ui.outbox.sending?.state !== "refused") void saveChanges(); };
+  useKeyboardShortcuts(flow, { undo: canUndo ? undo : undefined, redo: canRedo ? redo : undefined, save: editable ? save : undefined }, interactive);
   // A canvas unmounted mid-drag (flow removed elsewhere) must not leave autosave paused.
   useEffect(() => () => dragActive(false), [dragActive]);
   // Inline editors exist only on an editable, live canvas (never read-only, archived or the arrangement preview).
@@ -387,12 +393,12 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
       onConnectEnd={interactive ? endGesture : undefined} onClickConnectEnd={interactive ? endClickConnect : undefined} onReconnectEnd={interactive ? endGesture : undefined}
       onReconnectStart={interactive ? (_event, _edge, keptType) => { reconnectEnd.current = keptType === "source" ? "target" : "source"; } : undefined}
       onConnect={(connection) => void connect(connection)} onReconnect={reconnect} elementsSelectable={interactive}
-      nodesDraggable={draggable} nodesConnectable={connectable} edgesReconnectable={connectable} deleteKeyCode={null}
+      nodesDraggable={draggable} nodesConnectable={connectable} edgesReconnectable={connectable} deleteKeyCode={null} zoomOnDoubleClick={false}
       fitView fitViewOptions={{ padding: 0.2, maxZoom: 1 }} minZoom={0.1} maxZoom={4}
       aria-label={preview ? "Arrangement preview" : `${editable ? "Editable" : "Read-only"} flow canvas: ${document.flows[flowId]?.title ?? ""}`}>
       <Background gap={24} size={1} />
-      {interactive && <Controls showInteractive={false} />}
     </ReactFlow>
+    {interactive && <CanvasControls />}
     {interactive && editable && <ShapePanel disabled={!shapesEnabled} onActivate={activateShape} />}
     {!nodes.length && <div className="canvas-empty"><p>This flow has no steps yet.</p></div>}
     {note && <p className="canvas-note" role="alert">{note}</p>}

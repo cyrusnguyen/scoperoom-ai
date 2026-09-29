@@ -3,6 +3,7 @@ import test from "node:test";
 import type { DraftLayout } from "../src/features/drafts/contracts/draft-layout.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import { defaultStudioUi, moveTargets, studioDirtyCount } from "../src/features/studio/ui/studio-ui.ts";
+import { shortcutOf } from "../src/features/studio/ui/use-keyboard-shortcuts.ts";
 
 const layout: DraftLayout = { schemaVersion: 1, positions: { a: { x: 0, y: 0, version: 3 }, b: { x: 100, y: 0, version: 5 } }, directions: {}, edgeSides: {} };
 
@@ -19,4 +20,22 @@ test("the leave guard counts typed text and every unsaved change, sent or not", 
   };
   assert.equal(studioDirtyCount({ ...defaultStudioUi, outbox }), 5);
   assert.equal(studioDirtyCount(defaultStudioUi), 0);
+});
+
+const key = (k: string, mods: Partial<Record<"ctrlKey" | "metaKey" | "shiftKey" | "altKey", boolean>> = {}) => ({ key: k, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...mods });
+
+test("canvas shortcuts: zoom on + = -, undo/redo/save on Ctrl or Cmd, and nothing for browser zoom or other keys", () => {
+  assert.equal(shortcutOf(key("+")), "zoomIn");
+  assert.equal(shortcutOf(key("=")), "zoomIn");
+  assert.equal(shortcutOf(key("-")), "zoomOut");
+  assert.equal(shortcutOf(key("z", { ctrlKey: true })), "undo");
+  assert.equal(shortcutOf(key("z", { metaKey: true })), "undo");
+  assert.equal(shortcutOf(key("Z", { ctrlKey: true, shiftKey: true })), "redo");
+  assert.equal(shortcutOf(key("y", { ctrlKey: true })), "redo");
+  assert.equal(shortcutOf(key("s", { metaKey: true })), "save");
+  assert.equal(shortcutOf(key("=", { ctrlKey: true })), null); // the browser's own zoom
+  assert.equal(shortcutOf(key("-", { metaKey: true })), null);
+  assert.equal(shortcutOf(key("z", { ctrlKey: true, altKey: true })), null);
+  assert.equal(shortcutOf(key("s", { ctrlKey: true, shiftKey: true })), null);
+  assert.equal(shortcutOf(key("a")), null);
 });
