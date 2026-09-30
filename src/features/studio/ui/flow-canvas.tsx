@@ -5,6 +5,8 @@ import {
   Background, BaseEdge, ConnectionMode, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
   useReactFlow, type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
 } from "@xyflow/react";
+import { SelectedBy, useParticipants } from "@/features/collaboration/ui/use-participants";
+import type { Person } from "@/features/collaboration/ui/participants";
 import { SIDES, STEP_SIZE, type Direction, type Side } from "@/features/drafts/contracts/draft-layout";
 import type { NodeKind } from "@/features/drafts/contracts/scope-document";
 import { bufferKey, discard, edit, editFields, refuse, type Saved } from "./buffers";
@@ -15,7 +17,7 @@ import { explain, useStudio } from "./studio-context";
 import { useKeyboardShortcuts } from "./use-keyboard-shortcuts";
 import { dropTarget, moveTargets, orientConnect, orientReconnect, parseShapePayload, selectEdge, selectNodes, SHAPE_DRAG_MIME, type SelectChange, type StudioUi } from "./studio-ui";
 
-type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction };
+type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction; selectedBy?: Person[] };
 type StepNode = Node<StepData, "step">;
 type FlowEdge = Edge<{ condition: string }, "flow">;
 type Point = { x: number; y: number };
@@ -67,6 +69,7 @@ function StepCard({ id, data, isConnectable }: NodeProps<StepNode>) {
   const { editing } = useContext(InlineEditingContext);
   return <div className="step-node" data-kind={data.kind}>
     <KindShape kind={data.kind} />
+    <SelectedBy people={data.selectedBy} />
     {/* React Flow's edge-drawing lookup only finds a saved *start* handle among `source`-typed handles (never
         `target`), so every side needs one of each type at the same id and position to draw as either end of a saved
         connection. The primary pass is the one interactive, visible handle per side, keeping HANDLE_ORDER's
@@ -197,6 +200,7 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   const [editing, setEditing] = useState<Editing>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const interactive = !preview;
+  const { selectedBy } = useParticipants(flowId);
   // Ctrl/Cmd+S is the Save button: nothing to save (or a refused save awaiting its choice) is a no-op that still keeps the browser's save dialog away.
   const save = () => { if (unsaved && !busy && ui.outbox.sending?.state !== "refused") void saveChanges(); };
   useKeyboardShortcuts(flow, { undo: canUndo ? undo : undefined, redo: canRedo ? redo : undefined, save: editable ? save : undefined }, interactive);
@@ -251,10 +255,10 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
       return {
         id: node.id, type: "step", width: size.width, height: size.height,
         position: preview?.positions[node.id] ?? dragging[node.id] ?? { x: layout.positions[node.id]!.x, y: layout.positions[node.id]!.y },
-        data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction }, selected: selected.includes(node.id), measured: measured[node.id],
+        data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction, selectedBy: selectedBy.get(node.id) }, selected: selected.includes(node.id), measured: measured[node.id],
       };
     });
-  }, [document, layout, flowId, ui.selection, preview, dragging, interactive, measured]);
+  }, [document, layout, flowId, ui.selection, preview, dragging, interactive, measured, selectedBy]);
 
   const edges = useMemo<FlowEdge[]>(() => Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => {
     // A saved connection point (UI02 Task 13); absent, an edge renders with today's direction-based default.

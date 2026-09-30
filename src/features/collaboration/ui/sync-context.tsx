@@ -6,6 +6,7 @@ import { createSupabaseTransport } from "@/client/realtime";
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { ProjectStatusView } from "@/features/projects/contracts/project";
 import type { PresenceState } from "../contracts/messages";
+import { createDirectory, type DirectoryMember } from "./participants";
 import { createProjectLive, savedViewOf, type ProjectLive } from "./project-live";
 import type { PreviewSnapshot } from "./preview-store";
 import type { LiveState } from "./realtime-transport";
@@ -48,6 +49,8 @@ type Sync = {
   liveState: LiveState;
   /** Other sessions of this project and draft, from Presence; advisory names and places, never authority. */
   roster: PresenceState[];
+  /** The authorized members list (names and roles for the roster); null until first read. Peers' own claims never supply a name. */
+  directory: DirectoryMember[] | null;
   /** Remote cursors and drag ghosts: `snapshot()` is referentially stable while unchanged; read it when notified and again before `PREVIEW_TTL_MS` passes (expiry only shows on a read). */
   previews: Pick<ProjectLive, "snapshot" | "subscribe">;
   sendCursor: ProjectLive["sendCursor"];
@@ -120,6 +123,16 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
   useEffect(() => () => realtime.setScope(null), [realtime]); // StrictMode's simulated unmount disposes the connection; the effect above joins again
   const liveState = useSyncExternalStore(realtime.subscribe, realtime.state, realtime.state);
   const roster = useSyncExternalStore(realtime.subscribe, realtime.roster, realtime.roster);
+  const [directory, setDirectory] = useState<DirectoryMember[] | null>(null);
+  const directoryLoader = useMemo(() => createDirectory({
+    read: async () => {
+      const result = await apiRead<{ members: DirectoryMember[] }>(`/api/projects/${projectId}/members`);
+      return sessionEnded(result) || !result.ok ? null : result.data.members;
+    },
+    fence: sync.fence, publish: setDirectory,
+  }), [projectId, sync]);
+  // Once, and again when membership changes; a failed read is tried again on the next roster change.
+  useEffect(() => { void directoryLoader.update(state.status.membershipVersion); }, [directoryLoader, state.status.membershipVersion, roster]);
   const setSavedDraft = useCallback((draft: DraftView) => realtime.setSavedView(savedViewOf(draft)), [realtime]);
   // A bootstrap installed outside the controller (Restore, Details, Retry) can be newer than its last read: prove authority again before the next write.
   const installed = useRef(initial);
@@ -128,7 +141,7 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
   const previews = useMemo(() => ({ snapshot: realtime.snapshot, subscribe: realtime.subscribe }), [realtime]);
   const value = useMemo<Sync>(() => ({
     ...state, revalidate: sync.revalidate, beforeWrite: sync.beforeWrite, invalidate: sync.invalidate, fence: sync.fence, setReader, setSavedDraft,
-    liveState, roster, previews, sendCursor: realtime.sendCursor, sendDrag: realtime.sendDrag, endDrag: realtime.endDrag, setPresence: realtime.setPresence,
-  }), [state, sync, setReader, setSavedDraft, liveState, roster, previews, realtime]);
+    liveState, roster, directory, previews, sendCursor: realtime.sendCursor, sendDrag: realtime.sendDrag, endDrag: realtime.endDrag, setPresence: realtime.setPresence,
+  }), [state, sync, setReader, setSavedDraft, liveState, roster, directory, previews, realtime]);
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;
 }

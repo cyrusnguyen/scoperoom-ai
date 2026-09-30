@@ -2,6 +2,7 @@
 
 import { Fragment, useState, type KeyboardEvent } from "react";
 import { graphWarnings } from "@/features/drafts/domain/warnings";
+import { Participants } from "@/features/collaboration/ui/use-participants";
 import { Icon } from "@/features/shell/ui/icon";
 import { ArrangeDialog } from "./arrange-dialog";
 import { INCLUSION_LABELS } from "./fields";
@@ -66,6 +67,7 @@ export default function Studio() {
       <h2 id="studio-flow-title" className="studio-flow-title" tabIndex={-1} title={flow.title}>{flow.title}</h2>
       <span className="badge" data-inclusion={flow.inclusion}>{INCLUSION_LABELS[flow.inclusion]}</span>
       <span className="editor-spacer" />
+      <Participants flowId={flow.id} />
       <div className="segmented" role="group" aria-label="Studio view">
         <button type="button" aria-pressed={view === "canvas"} onClick={() => update(() => ({ view: "canvas" }))}><Icon name="flow" size={14} />Canvas</button>
         <button type="button" aria-pressed={view === "list"} onClick={() => update(() => ({ view: "list" }))}><Icon name="list" size={14} />List</button>

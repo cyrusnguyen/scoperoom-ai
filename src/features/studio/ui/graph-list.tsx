@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { SelectedBy, useParticipants } from "@/features/collaboration/ui/use-participants";
 import { KIND_LABELS } from "./fields";
 import { connectionsInOrder, matchesStep, stepName, stepsInOrder } from "./graph-view";
 import { explain, useStudio } from "./studio-context";
@@ -12,6 +13,7 @@ import { toggleNode } from "./studio-ui";
  */
 export default function GraphList({ flowId, onDeleteSelected }: { flowId: string; onDeleteSelected?: () => void }) {
   const { draft, editable, ui, update, run } = useStudio();
+  const { selectedBy } = useParticipants(flowId);
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
   const { document, layout } = draft;
@@ -39,6 +41,7 @@ export default function GraphList({ flowId, onDeleteSelected }: { flowId: string
         const name = stepName(document, node.id);
         const picked = selected.includes(node.id);
         return <li key={node.id} className="step-row" data-selected={picked || undefined}>
+          <SelectedBy people={selectedBy.get(node.id)} />
           <label className="step-check"><input type="checkbox" checked={picked} onChange={() => update((current) => ({ selection: toggleNode(current.selection, node.id) }))} aria-label={`Select ${name}`} /></label>
           <button type="button" className="step-open" onClick={() => update(() => ({ selection: { kind: "NODES", ids: [node.id] } }))} aria-current={picked && selected.length === 1 ? "true" : undefined}>
             <small>{KIND_LABELS[node.kind]}</small><strong>{name}</strong>{node.actorLabel && <span>{node.actorLabel}</span>}
@@ -50,6 +53,7 @@ export default function GraphList({ flowId, onDeleteSelected }: { flowId: string
       : <ul className="step-list" aria-label="Connections">{connections.map((edge) => {
         const route = `${stepName(document, edge.fromId)} → ${stepName(document, edge.toId)}`;
         return <li key={edge.id} className="step-row" data-selected={(ui.selection?.kind === "EDGE" && ui.selection.id === edge.id) || undefined}>
+          <SelectedBy people={selectedBy.get(edge.id)} />
           <button type="button" className="step-open" onClick={() => update(() => ({ selection: { kind: "EDGE", id: edge.id } }))}>
             <strong>{route}</strong>{edge.condition && <span>{edge.condition}</span>}
           </button>
