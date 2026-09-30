@@ -128,7 +128,8 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
   const name = drafts.name ?? project.name;
   // A failed read disables the forms, as before: their versions would be a guess.
   const status = loadError ? null : shared;
-  const savedApprover = status?.designatedApproverId ?? "";
+  // The approver is shown from the same bootstrap as its guard (`shownVersions`), never from the polled status.
+  const savedApprover = status ? shownVersions.designatedApproverId ?? "" : "";
   const approver = drafts.approver ?? savedApprover;
   const ownerName = members?.find((member) => member.role === "OWNER")?.displayName;
   const flowCount = Object.keys(draft.document.flows).length;

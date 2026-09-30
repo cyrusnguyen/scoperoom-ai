@@ -17,6 +17,13 @@ async function poll(page: Page) {
   await page.clock.runFor(11_000);
   await answered;
 }
+async function designateElsewhere(page: Page, projectId: string, profileId: string) {
+  const before = await (await page.request.get(`/api/projects/${projectId}/status`)).json() as { approvalPolicyVersion: number };
+  const response = await page.request.patch(`/api/projects/${projectId}/approval-policy`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { designatedApproverId: profileId, expectedApprovalPolicyVersion: before.approvalPolicyVersion } });
+  expect(response.status()).toBe(200);
+}
+const ownerOf = async (page: Page, projectId: string) => (await (await page.request.get(`/api/projects/${projectId}/members`)).json() as { members: { profileId: string; role: string }[] }).members.find((member) => member.role === "OWNER")!.profileId;
+const policyVersion = async (page: Page, projectId: string) => (await (await page.request.get(`/api/projects/${projectId}/status`)).json() as { approvalPolicyVersion: number }).approvalPolicyVersion;
 const savedName = async (page: Page, projectId: string) => (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { project: { name: string } }).project.name;
 
 test.describe("Details after another tab renames", () => {
@@ -50,5 +57,52 @@ test.describe("Details after another tab renames", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Their name" })).toBeVisible();
     await expect(nameField).toHaveValue("My name");
     expect(await savedName(page, projectId)).toBe("Their name");
+  });
+
+  test("with no approver chosen, a poll shows the approver designated elsewhere", async ({ page }) => {
+    const projectId = await createProjectViaApi(page, "Approver project");
+    const ownerId = await ownerOf(page, projectId);
+    await page.clock.install();
+    await page.goto(`/app/projects/${projectId}`);
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    const select = page.locator("#right-panel").getByLabel("Designated approver");
+    await expect(select).toHaveValue("");
+    await designateElsewhere(page, projectId, ownerId);
+    await poll(page);
+    await expect(select).toHaveValue(ownerId);
+  });
+
+  test("an approver chosen before the poll is kept, and its save conflicts instead of being accepted on the new version", async ({ page }) => {
+    const projectId = await createProjectViaApi(page, "Approver project");
+    const ownerId = await ownerOf(page, projectId);
+    await page.clock.install();
+    await page.goto(`/app/projects/${projectId}`);
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    const panel = page.locator("#right-panel");
+    const select = panel.getByLabel("Designated approver");
+    await select.selectOption(ownerId);
+    await designateElsewhere(page, projectId, ownerId);
+    const version = await policyVersion(page, projectId);
+    await poll(page);
+    await expect(select).toHaveValue(ownerId);
+    await panel.getByRole("button", { name: "Save approver" }).click();
+    await expect(panel.getByRole("alert")).toHaveText("That change conflicts with current data. Refresh and try again.");
+    expect(await policyVersion(page, projectId)).toBe(version); // the save was refused, not applied on the polled version
+  });
+
+  test("a bootstrap read newer than the last poll shows the approver it guards with", async ({ page }) => {
+    const projectId = await createProjectViaApi(page, "Approver project");
+    const ownerId = await ownerOf(page, projectId);
+    await page.clock.install();
+    await page.goto(`/app/projects/${projectId}`);
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    const panel = page.locator("#right-panel");
+    const select = panel.getByLabel("Designated approver");
+    await expect(select).toHaveValue("");
+    await designateElsewhere(page, projectId, ownerId);
+    // Cancelling a lifecycle dialog re-reads the bootstrap without any status poll in between.
+    await panel.getByRole("button", { name: "Archive project…" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+    await expect(select).toHaveValue(ownerId);
   });
 });
