@@ -29,6 +29,7 @@ export function ArrangeDialog({ flowId, onClose }: { flowId: string; onClose: ()
   const load = async () => {
     setLoading(true);
     setMessage("");
+    setChecking(false);
     const outcome = await preview({ flowId, expectedDocumentRevision: draft.documentRevision, expectedLayoutRevision: draft.layoutRevision, direction });
     setLoading(false);
     if (outcome.ok) setShown(outcome.result);

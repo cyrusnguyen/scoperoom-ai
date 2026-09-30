@@ -65,8 +65,8 @@ export default function LifecycleDialog({ kind, project, viewer, onClose, onDone
     if (sessionEnded(fresh)) return;
     if (!fresh.ok) {
       setBusy(false);
-      // An uncertain Leave may have committed: a former member can't read status (404). That read can't say which account left, so nothing is sent and nothing is reported as done; Cancel reloads the lists.
-      if (kind === "leave" && uncertain && fresh.status === 404) { setUncertain(false); setVersion(null); setError("You’re no longer a member of this project."); return; }
+      // An uncertain Leave may have committed: a former member can't read status (NOT_FOUND). That read can't say which account left, so nothing is sent and nothing is reported as done; Cancel reloads the lists.
+      if (kind === "leave" && uncertain && fresh.code === "NOT_FOUND") { setUncertain(false); setVersion(null); setError("You’re no longer a member of this project."); return; }
       setError(fresh.message);
       return;
     }

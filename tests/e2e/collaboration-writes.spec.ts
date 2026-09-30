@@ -206,6 +206,13 @@ test.describe("writes wait for the status controller (real draft)", () => {
     await expect(arrange.getByRole("alert")).toHaveCount(0);
     await expect(arrange.getByRole("button", { name: "Apply arrangement" })).toBeVisible(); // the preview is kept
     expect(writes).toHaveLength(0);
+    // A failing preview afterwards is an error again, not the muted access note.
+    await page.route("**/arrangement-preview", (route) => route.fulfill({ status: 400, json: envelope("VALIDATION_FAILED", "Preview failed.") }), { times: 1 });
+    await arrange.getByRole("button", { name: "Preview again" }).click();
+    await expect(arrange.getByRole("alert")).toHaveText("Preview failed.");
+    await expect(arrange.getByRole("status").filter({ hasText: "Checking your access…" })).toHaveCount(0);
+    await arrange.getByRole("button", { name: "Preview again" }).click();
+    await expect(arrange.getByRole("button", { name: "Apply arrangement" })).toBeVisible();
     gate.pass();
     await arrange.getByRole("button", { name: "Apply arrangement" }).click();
     await expect(arrange).toBeHidden();
