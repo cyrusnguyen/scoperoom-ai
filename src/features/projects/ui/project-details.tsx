@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type SubmitEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type SubmitEvent } from "react";
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import { useSync } from "@/features/collaboration/ui/sync-context";
 import { MAX_COLLABORATORS, projectMemberRoles, type ProjectMemberRole } from "../contracts/invitation";
@@ -54,6 +54,16 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
   // Both are fenced: an answer that the controller has since replaced (project switch, replaced draft) changes nothing.
   const { status: shared, revalidate, fence } = sync;
   const membershipVersion = shared.membershipVersion;
+  // Guards come from the data shown (the bootstrap's name and approver), never from the polled status: a version that has
+  // moved without the shown value moving would let a save overwrite another tab's change unseen. When the polled
+  // version passes the shown one and the person has not typed into that field, the bootstrap is refreshed so the shown
+  // value and its guard move together; a typed draft is kept, and its save conflicts into the re-read recovery.
+  const shownVersions = bootstrap.status;
+  const settingsAhead = shared.settingsVersion > shownVersions.settingsVersion, policyAhead = shared.approvalPolicyVersion > shownVersions.approvalPolicyVersion;
+  const stale = (settingsAhead && "name" in drafts) || (policyAhead && "approver" in drafts);
+  const refresh = useRef(onChanged);
+  useLayoutEffect(() => { refresh.current = onChanged; });
+  useEffect(() => { if ((settingsAhead || policyAhead) && !stale) refresh.current(); }, [settingsAhead, policyAhead, stale]);
   const load = useCallback(async (signal?: AbortSignal) => {
     const current = fence();
     const [authority, nextMembers] = await Promise.all([revalidate("manual"), apiRead<{ members: Member[] }>(`/api/projects/${project.id}/members`, signal)]);
@@ -125,11 +135,11 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
 
   const saveName = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (status) void mutate({ url: `/api/projects/${project.id}/settings`, body: { name, expectedSettingsVersion: status.settingsVersion }, confirmation: "Project name updated.", clears: "name", focus: "project-settings-name" });
+    if (status) void mutate({ url: `/api/projects/${project.id}/settings`, body: { name, expectedSettingsVersion: shownVersions.settingsVersion }, confirmation: "Project name updated.", clears: "name", focus: "project-settings-name" });
   };
   const saveApprover = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (status) void mutate({ url: `/api/projects/${project.id}/approval-policy`, body: { designatedApproverId: approver || null, expectedApprovalPolicyVersion: status.approvalPolicyVersion }, confirmation: "Approver updated.", clears: "approver", focus: "designated-approver" });
+    if (status) void mutate({ url: `/api/projects/${project.id}/approval-policy`, body: { designatedApproverId: approver || null, expectedApprovalPolicyVersion: shownVersions.approvalPolicyVersion }, confirmation: "Approver updated.", clears: "approver", focus: "designated-approver" });
   };
   const changeRole = (member: Member, role: ProjectMemberRole) => void mutate({ url: `/api/projects/${project.id}/members/${member.profileId}`, body: { role, expectedMemberVersion: member.version }, confirmation: "Member role updated.", focus: `role-${member.profileId}` });
   const removeMember = (member: Member) => void mutate({ url: `/api/projects/${project.id}/members/${member.profileId}`, method: "DELETE", body: { expectedMemberVersion: member.version }, confirmation: "Member removed.", focus: "details-members" });

@@ -65,7 +65,7 @@ test.describe("project details", () => {
     const member = { profileId: "44444444-4444-4444-8444-444444444444", displayName: "Casey Collaborator", role: "VIEWER", version: 1 };
     let removed = false;
     await mockOwnerLists(page);
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { ...project, status: status.status, role: "OWNER" }, draft }) }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { ...withStatus({ project: { ...project, status: status.status, role: "OWNER" }, draft }), status } }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner, ...(removed ? [] : [{ ...member, designatedApprover: status.designatedApproverId === member.profileId }])] } }));
     await page.route(`**/api/projects/${project.id}/members/${member.profileId}`, async (route) => {
@@ -182,7 +182,7 @@ test.describe("project details", () => {
   test("unsaved Details edits survive panel close, tab changes and history, and a sidebar switch asks first", async ({ page }) => {
     let status = { ...baseStatus };
     await mockOwnerLists(page);
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { ...project, status: "ACTIVE", role: "OWNER" }, draft }) }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { ...withStatus({ project: { ...project, status: "ACTIVE", role: "OWNER" }, draft }), status } }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner] } }));
     await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
@@ -242,7 +242,7 @@ test.describe("project details", () => {
     const keys: string[] = [];
     const member = { profileId: "44444444-4444-4444-8444-444444444444", displayName: "Casey Collaborator", role: "EDITOR", version: 1, designatedApprover: false };
     await mockOwnerLists(page);
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { ...project, name: savedName, status: "ACTIVE", role: "OWNER" }, draft }) }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { ...withStatus({ project: { ...project, name: savedName, status: "ACTIVE", role: "OWNER" }, draft }), status } }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner, member] } }));
     await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
@@ -294,7 +294,7 @@ test.describe("project details", () => {
     let release = () => {};
     const held = new Promise<void>((resolve) => { release = resolve; });
     await mockOwnerLists(page);
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { ...project, status: "ACTIVE", role: "OWNER" }, draft }) }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { ...withStatus({ project: { ...project, status: "ACTIVE", role: "OWNER" }, draft }), status } }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner] } }));
     await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
@@ -321,7 +321,7 @@ test.describe("project details", () => {
   test("an unsaved edit does not linger as dirty after the project is archived", async ({ page }) => {
     let status = { ...baseStatus };
     await mockOwnerLists(page);
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { ...project, status: status.status, role: "OWNER" }, draft }) }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { ...withStatus({ project: { ...project, status: status.status, role: "OWNER" }, draft }), status } }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner] } }));
     await page.route(`**/api/projects/${project.id}/archive`, async (route) => {

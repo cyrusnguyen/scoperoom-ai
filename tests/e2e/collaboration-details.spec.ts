@@ -1,0 +1,54 @@
+import { randomUUID } from "node:crypto";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./studio-fixtures";
+import { appUrl, createProjectViaApi, e2eReady } from "./support";
+
+test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
+
+// Details' guards come from the name it shows; a poll that sees another tab's rename either moves both or keeps the
+// person's typed name and lets the save conflict into the re-read recovery.
+async function renameElsewhere(page: Page, projectId: string, name: string) {
+  const before = await (await page.request.get(`/api/projects/${projectId}/status`)).json() as { settingsVersion: number };
+  const response = await page.request.patch(`/api/projects/${projectId}/settings`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { name, expectedSettingsVersion: before.settingsVersion } });
+  expect(response.status()).toBe(200);
+}
+async function poll(page: Page) {
+  const answered = page.waitForResponse((response) => /\/status$/.test(new URL(response.url()).pathname));
+  await page.clock.runFor(11_000);
+  await answered;
+}
+const savedName = async (page: Page, projectId: string) => (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { project: { name: string } }).project.name;
+
+test.describe("Details after another tab renames", () => {
+  test("with nothing typed, a poll shows the new name", async ({ page }) => {
+    const projectId = await createProjectViaApi(page, "Original name");
+    await page.clock.install();
+    await page.goto(`/app/projects/${projectId}`);
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    const nameField = page.locator("#right-panel").getByLabel("Project name");
+    await expect(nameField).toHaveValue("Original name");
+    await renameElsewhere(page, projectId, "Renamed elsewhere");
+    await poll(page);
+    await expect(page.getByRole("heading", { level: 1, name: "Renamed elsewhere" })).toBeVisible();
+    await expect(nameField).toHaveValue("Renamed elsewhere");
+  });
+
+  test("a name typed before the poll is kept, and its save conflicts instead of overwriting the rename", async ({ page }) => {
+    const projectId = await createProjectViaApi(page, "Original name");
+    await page.clock.install();
+    await page.goto(`/app/projects/${projectId}`);
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    const panel = page.locator("#right-panel");
+    const nameField = panel.getByLabel("Project name");
+    await nameField.fill("My name");
+    await renameElsewhere(page, projectId, "Their name");
+    await poll(page);
+    await expect(nameField).toHaveValue("My name");
+    await expect(page.getByRole("heading", { level: 1, name: "Original name" })).toBeVisible();
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(panel.getByRole("alert")).toHaveText("That change conflicts with current data. Refresh and try again.");
+    await expect(page.getByRole("heading", { level: 1, name: "Their name" })).toBeVisible();
+    await expect(nameField).toHaveValue("My name");
+    expect(await savedName(page, projectId)).toBe("Their name");
+  });
+});
