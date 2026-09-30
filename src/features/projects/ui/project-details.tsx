@@ -87,6 +87,14 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
     setRetry(null);
     setMessage("");
     setMessageError(false);
+    // The write barrier: another window may have signed in as someone else since the last status read.
+    const authority = await sync.beforeWrite();
+    if (authority.kind !== "current") {
+      setBusy(false);
+      if (retry?.key === key) setRetry(retry);
+      if (authority.kind === "unavailable") { setMessage("Not saved. We couldn’t reach ScopeRoom."); setMessageError(true); }
+      return; // denied: the shell's teardown or recovery view takes over
+    }
     const result = await apiMutate(mutation.url, key, mutation.body, mutation.method ?? "PATCH");
     if (sessionEnded(result)) { setBusy(false); return; }
     if (!result.ok) {

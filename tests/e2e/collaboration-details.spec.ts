@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Route } from "@playwright/test";
 import { test } from "./studio-fixtures";
 import { appUrl, createProjectViaApi, e2eReady } from "./support";
 
@@ -104,5 +104,76 @@ test.describe("Details after another tab renames", () => {
     await panel.getByRole("button", { name: "Archive project…" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
     await expect(select).toHaveValue(ownerId);
+  });
+});
+
+// Details and Share writes go through the same write barrier as the Studio: after a focus the click waits for a status read
+// (another window may have signed in as someone else), and nothing is sent before it answers.
+test.describe("Details writes wait for the status controller", () => {
+  async function holdAfterFocus(page: Page, projectId: string) {
+    await page.waitForLoadState("networkidle"); // Details' own load has finished: a request in flight would already cover the focus
+    const held: Route[] = [];
+    let hold = false;
+    await page.route(`**/api/projects/${projectId}/status`, async (route) => { if (hold) held.push(route); else await route.continue(); });
+    hold = true;
+    await page.evaluate(() => { window.dispatchEvent(new Event("focus")); });
+    await expect.poll(() => held.length).toBe(1);
+    return async () => { hold = false; for (const route of held.splice(0)) await route.continue(); };
+  }
+  const quiet = (page: Page) => page.waitForTimeout(500); // a bounded window in which a premature write would already have shown
+
+  test("Save name sends nothing until status answers, then exactly one request", async ({ page }) => {
+    const projectId = await createProjectViaApi(page, "Barrier name");
+    const writes: string[] = [];
+    page.on("request", (request) => { if (request.method() === "PATCH" && /\/settings$/.test(request.url())) writes.push(request.url()); });
+    await page.goto(`/app/projects/${projectId}`);
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    const panel = page.locator("#right-panel");
+    const nameField = panel.getByLabel("Project name");
+    await expect(nameField).toBeEnabled();
+    await nameField.fill("Renamed behind the barrier");
+    const release = await holdAfterFocus(page, projectId);
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await quiet(page);
+    expect(writes).toHaveLength(0);
+    await release();
+    await expect(page.getByRole("heading", { level: 1, name: "Renamed behind the barrier" })).toBeVisible();
+    expect(writes).toHaveLength(1);
+  });
+
+  test("an unavailable status refuses Save name without a request and keeps the typed name", async ({ page }) => {
+    const projectId = await createProjectViaApi(page, "Barrier unavailable");
+    const writes: string[] = [];
+    page.on("request", (request) => { if (request.method() === "PATCH" && /\/settings$/.test(request.url())) writes.push(request.url()); });
+    await page.goto(`/app/projects/${projectId}`);
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    const panel = page.locator("#right-panel");
+    const nameField = panel.getByLabel("Project name");
+    await expect(nameField).toBeEnabled();
+    await nameField.fill("Kept name");
+    await page.waitForLoadState("networkidle"); // Details' own load has finished: a request in flight would already cover the focus
+    await page.route(`**/api/projects/${projectId}/status`, (route) => route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "No.", requestId: "00000000-0000-4000-8000-000000000000", retryable: true } } }));
+    await page.evaluate(() => { window.dispatchEvent(new Event("focus")); });
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(panel.getByRole("alert").filter({ hasText: "Not saved. We couldn’t reach ScopeRoom." })).toBeVisible();
+    expect(writes).toHaveLength(0);
+    await expect(nameField).toHaveValue("Kept name");
+  });
+
+  test("Create invitation sends nothing until status answers", async ({ page }) => {
+    const projectId = await createProjectViaApi(page, "Barrier invite");
+    const writes: string[] = [];
+    page.on("request", (request) => { if (request.method() === "POST" && /\/invitations$/.test(request.url())) writes.push(request.url()); });
+    await page.goto(`/app/projects/${projectId}`);
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    const panel = page.locator("#right-panel");
+    await panel.getByLabel("Verified email").fill("someone@example.test");
+    const release = await holdAfterFocus(page, projectId);
+    await panel.getByRole("button", { name: "Create invitation" }).click();
+    await quiet(page);
+    expect(writes).toHaveLength(0);
+    await release();
+    await expect.poll(() => writes.length).toBe(1);
+    await expect(panel.getByLabel("One-time invitation link")).toBeVisible();
   });
 });
