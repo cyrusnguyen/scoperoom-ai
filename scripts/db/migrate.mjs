@@ -3,9 +3,11 @@ import { readdirSync } from "node:fs";
 import { Client } from "pg";
 import { historyProblem } from "./history.mjs";
 
-function run(command, args) {
+function run(command, args, { cleanup } = {}) {
   const result = spawnSync(command, args, { stdio: "inherit", env: process.env, shell: process.platform === "win32" && command.endsWith(".cmd") });
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  if (result.status === 0) return;
+  if (cleanup) spawnSync(process.execPath, cleanup, { stdio: "inherit", env: process.env });
+  process.exit(result.status ?? 1);
 }
 
 run(process.execPath, ["scripts/db/guard.mjs"]);
@@ -33,7 +35,8 @@ migrationUrl.searchParams.set("schema", "app");
 process.env.MIGRATION_DATABASE_URL = migrationUrl.toString();
 
 run(process.execPath, ["scripts/db/realtime.mjs", "prepare"]);
-run(process.platform === "win32" ? "corepack.cmd" : "corepack", ["pnpm", "exec", "prisma", "migrate", "deploy"]);
+// A failed deploy must not leave the reader lent to app_migrator (prepare lends it so a migration can replace the helper).
+run(process.platform === "win32" ? "corepack.cmd" : "corepack", ["pnpm", "exec", "prisma", "migrate", "deploy"], { cleanup: ["scripts/db/realtime.mjs", "release"] });
 run(process.execPath, ["scripts/db/guard.mjs"]);
 run(process.execPath, ["scripts/db/realtime.mjs", "apply"]);
 run(process.execPath, ["scripts/db/realtime.mjs", "verify"]);

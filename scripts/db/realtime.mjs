@@ -3,30 +3,36 @@ import { createHmac } from "node:crypto";
 import { Client } from "pg";
 import { inspectLocalContainer, localConfig, targetInput, verifyTarget } from "./guard.mjs";
 
-// Guarded operator setup for private Realtime (Stage 04.1). Idempotent configuration, not a second migration ledger:
-//   prepare  before Prisma deploy: fixed roles and the app_private schema (owned by app_migrator)
-//   apply    after deploy: helper ownership/privileges, browser grants, provider policies, private-only tenant
+// Guarded operator setup for private Realtime (Stage 04.1, scoped credential role from 04.3). Idempotent configuration, not a second migration ledger:
+//   prepare  before Prisma deploy: fixed roles and the app_private schema (owned by app_migrator); lends the reader to app_migrator when a
+//            migration may need to replace the reader-owned helper
+//   apply    after deploy: ends that loan, helper ownership/privileges, browser grants, provider policies, private-only tenant
+//   release  ends the loan alone (a failed deploy must not leave it open)
 //   verify   read-only assertion of everything above
 const READER = "app_realtime_reader";
 const NOTIFIER = "app_realtime_notifier";
+const CLIENT = "app_realtime_client"; // the role of the server-minted scoped Realtime credential (E36); never an Auth role
 const HELPER = "app_private.can_realtime(text,text)";
 const ADAPTER = "app_private.enqueue_project_hint(jsonb,text)";
 const TRIGGER_FN = "app_private.notify_project_changed()";
 const OWNED = [[HELPER, READER], [ADAPTER, NOTIFIER], [TRIGGER_FN, NOTIFIER]]; // function -> restricted owner
 // md5 of each body with whitespace collapsed and trimmed (matches the migration source). A deliberate body change updates the constant in the same PR.
-const BODY_MD5 = { [HELPER]: "22006d3ee045a46dda7f71d8c07ff5dd", [ADAPTER]: "40fe2880c0393d55e06747fe6b8fb7d4", [TRIGGER_FN]: "835571f242df0171811a5a42c7f7c683" };
+const BODY_MD5 = { [HELPER]: "97e7b75596d2aee627fdcd585db9cddc", [ADAPTER]: "40fe2880c0393d55e06747fe6b8fb7d4", [TRIGGER_FN]: "835571f242df0171811a5a42c7f7c683" };
 const BODY = "md5(trim(regexp_replace(p.prosrc, '\\s+', ' ', 'g')))";
 const HINT_TOPIC = "^project:[0-9a-f-]{36}:[0-9a-f-]{36}:events$";
 const TENANT = "realtime-dev"; // fixed external id of the local Supabase CLI tenant
 const TENANT_WAIT_MS = 60_000;
 const ROLE_ATTRIBUTES = "nologin noinherit nosuperuser nocreatedb nocreaterole noreplication nobypassrls";
+const RECEIVE = `(extension = 'broadcast' and app_private.can_realtime((select realtime.topic()), 'receive_broadcast'))
+    or (extension = 'presence' and app_private.can_realtime((select realtime.topic()), 'presence'))`;
+const SEND = `(extension = 'broadcast' and app_private.can_realtime((select realtime.topic()), 'send_broadcast'))
+    or (extension = 'presence' and app_private.can_realtime((select realtime.topic()), 'presence'))`;
+// The same two policies serve both browser roles: Auth sessions (authenticated) and the scoped credential (app_realtime_client).
+const BROWSERS = { scoperoom_rt_select: ["select", "authenticated"], scoperoom_rt_insert: ["insert", "authenticated"], scoperoom_rt_client_select: ["select", CLIENT], scoperoom_rt_client_insert: ["insert", CLIENT] };
 const POLICIES = {
-  scoperoom_rt_select: `create policy scoperoom_rt_select on realtime.messages for select to authenticated using (
-    (extension = 'broadcast' and app_private.can_realtime((select realtime.topic()), 'receive_broadcast'))
-    or (extension = 'presence' and app_private.can_realtime((select realtime.topic()), 'presence')))`,
-  scoperoom_rt_insert: `create policy scoperoom_rt_insert on realtime.messages for insert to authenticated with check (
-    (extension = 'broadcast' and app_private.can_realtime((select realtime.topic()), 'send_broadcast'))
-    or (extension = 'presence' and app_private.can_realtime((select realtime.topic()), 'presence')))`,
+  ...Object.fromEntries(Object.entries(BROWSERS).map(([name, [command, role]]) => [name, command === "select"
+    ? `create policy ${name} on realtime.messages for select to ${role} using (${RECEIVE})`
+    : `create policy ${name} on realtime.messages for insert to ${role} with check (${SEND})`])),
   // The notifier is not a table owner, so provider row level security applies to its realtime.send insert: allow exactly the hint shape.
   scoperoom_rt_hint: `create policy scoperoom_rt_hint on realtime.messages for insert to ${NOTIFIER} with check (
     extension = 'broadcast' and private and event = 'PROJECT_CHANGED' and topic ~ '${HINT_TOPIC}')`,
@@ -92,12 +98,19 @@ async function requirePrivateOnly(configure) {
 }
 
 async function prepare(client) {
-  for (const role of [READER, NOTIFIER]) {
+  for (const role of [READER, NOTIFIER, CLIENT]) {
     await client.query(`do $$ begin create role ${role} ${ROLE_ATTRIBUTES}; exception when duplicate_object then null; end $$`);
   }
   await client.query("create schema if not exists app_private authorization app_migrator");
   const { rows: [schema] } = await client.query("select pg_get_userbyid(nspowner) as owner from pg_namespace where nspname = 'app_private'");
   if (schema.owner !== "app_migrator") throw new Error("Realtime setup found app_private with an unexpected owner.");
+  // A later migration may replace the helper, and only its owner can. Lend the reader to app_migrator until apply/release ends the loan.
+  const { rows: [helper] } = await client.query(`select pg_get_userbyid(proowner) as owner from pg_proc where oid = to_regprocedure('${HELPER}')`);
+  if (helper?.owner === READER) await client.query(`grant ${READER} to app_migrator with inherit true, set true`);
+}
+
+async function release(client) {
+  await client.query(`revoke ${READER} from app_migrator`);
 }
 
 /** Provider RLS must already be on, and no unrelated permissive policy may widen browser access to realtime.messages. */
@@ -106,21 +119,22 @@ async function requireProviderTable(client) {
   if (!table?.relrowsecurity) throw new Error("Realtime setup expected provider row level security on realtime.messages.");
   const { rows: foreign } = await client.query(`
     select polname from pg_policy where polrelid = 'realtime.messages'::regclass and polpermissive and polname <> all($1)
-      and (0 = any(polroles) or 'authenticated'::regrole::oid = any(polroles) or 'anon'::regrole::oid = any(polroles))`, [Object.keys(POLICIES)]);
+      and (0 = any(polroles) or 'authenticated'::regrole::oid = any(polroles) or 'anon'::regrole::oid = any(polroles) or '${CLIENT}'::regrole::oid = any(polroles))`, [Object.keys(POLICIES)]);
   if (foreign.length) throw new Error(`Realtime setup found unrelated policies on realtime.messages: ${foreign.map((row) => row.polname).join(", ")}. Review them before continuing.`);
 }
 
 async function helperProblems(client) {
   const problems = [];
   const expect = (ok, message) => { if (!ok) problems.push(message); };
-  const { rows: roles } = await client.query(`select rolname, rolsuper, rolinherit, rolcanlogin, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication from pg_roles where rolname in ('${READER}', '${NOTIFIER}')`);
-  expect(roles.length === 2, "restricted Realtime roles are missing");
+  const { rows: roles } = await client.query(`select rolname, rolsuper, rolinherit, rolcanlogin, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication from pg_roles where rolname in ('${READER}', '${NOTIFIER}', '${CLIENT}')`);
+  expect(roles.length === 3, "restricted Realtime roles are missing");
   for (const role of roles) expect(!(role.rolsuper || role.rolinherit || role.rolcanlogin || role.rolbypassrls || role.rolcreatedb || role.rolcreaterole || role.rolreplication), `${role.rolname} has unexpected attributes`);
-  const { rows: members } = await client.query(`select 1 from pg_auth_members where roleid in ('${READER}'::regrole, '${NOTIFIER}'::regrole) and (member <> 'postgres'::regrole or inherit_option or set_option)`); // postgres keeps only the ADMIN option it received as creator
-  expect(members.length === 0, "restricted Realtime roles must not be usable by any other role");
+  const { rows: members } = await client.query(`select 1 from pg_auth_members where (roleid in ('${READER}'::regrole, '${NOTIFIER}'::regrole, '${CLIENT}'::regrole) and (member <> 'postgres'::regrole or inherit_option or set_option))
+      or member = '${CLIENT}'::regrole`); // postgres keeps only the ADMIN option it received as creator; the client role belongs to no other role (never authenticated or authenticator)
+  expect(members.length === 0, "restricted Realtime roles must not be usable by any other role, and the client role must join none");
   const { rows: [fn] } = await client.query(`
     select pg_get_userbyid(p.proowner) as owner, p.prosecdef, p.provolatile, p.prorettype = 'boolean'::regtype as boolean_only, l.lanname, p.proconfig, ${BODY} as body,
-      exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where a.grantee not in (p.proowner, 'authenticated'::regrole)) as shared
+      exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where a.grantee not in (p.proowner, 'authenticated'::regrole, '${CLIENT}'::regrole)) as shared
     from pg_proc p join pg_language l on l.oid = p.prolang where p.oid = to_regprocedure('${HELPER}')`);
   expect(fn, "the Realtime helper is missing");
   if (fn) {
@@ -128,14 +142,14 @@ async function helperProblems(client) {
     expect(fn.prosecdef && fn.provolatile === "s" && fn.boolean_only && fn.lanname === "sql", "the Realtime helper is not a stable boolean SQL SECURITY DEFINER function");
     expect(fn.proconfig?.length === 1 && fn.proconfig[0] === 'search_path=""', "the Realtime helper does not pin an empty search_path");
     expect(fn.body === BODY_MD5[HELPER], `${HELPER} body differs from the migration`);
-    expect(!fn.shared, `${HELPER} is executable by a role other than its owner and authenticated`);
+    expect(!fn.shared, `${HELPER} is executable by a role other than its owner, authenticated and the client role`);
   }
   // The hint adapter and trigger function: notifier-owned SECURITY DEFINER plpgsql, empty search path, executable by nobody else.
   for (const [signature, kind] of [[ADAPTER, "void"], [TRIGGER_FN, "trigger"]]) {
     const { rows: [hint] } = await client.query(`
       select pg_get_userbyid(p.proowner) as owner, p.prosecdef, p.prorettype = '${kind}'::regtype as returns_kind, l.lanname, p.proconfig, ${BODY} as body,
         exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where a.grantee <> p.proowner) as shared,
-        (select bool_or(has_function_privilege(r, p.oid, 'EXECUTE')) from unnest(array['authenticated', 'anon', 'app_web', 'app_worker', 'app_web_runtime', 'app_worker_runtime', 'app_migrator_runtime', '${READER}']) as r) as roles_execute
+        (select bool_or(has_function_privilege(r, p.oid, 'EXECUTE')) from unnest(array['authenticated', 'anon', 'app_web', 'app_worker', 'app_web_runtime', 'app_worker_runtime', 'app_migrator_runtime', '${READER}', '${CLIENT}']) as r) as roles_execute
       from pg_proc p join pg_language l on l.oid = p.prolang where p.oid = to_regprocedure('${signature}')`);
     expect(hint, `${signature} is missing`);
     if (!hint) continue;
@@ -160,6 +174,11 @@ async function helperProblems(client) {
       has_schema_privilege('${NOTIFIER}', 'realtime', 'USAGE') and has_function_privilege('${NOTIFIER}', 'realtime.send(jsonb,text,text,boolean)', 'EXECUTE')
         and has_schema_privilege('${NOTIFIER}', 'app_private', 'USAGE') and has_table_privilege('${NOTIFIER}', 'realtime.messages', 'INSERT') as notifier_send,
       has_schema_privilege('${NOTIFIER}', 'app', 'USAGE') or has_table_privilege('${NOTIFIER}', 'realtime.messages', 'SELECT,UPDATE,DELETE') or has_function_privilege('${NOTIFIER}', '${HELPER}', 'EXECUTE') as notifier_reads,
+      exists (select 1 from pg_class c where c.relnamespace in ('app'::regnamespace, 'public'::regnamespace, 'auth'::regnamespace, 'storage'::regnamespace) and c.relkind in ('r', 'p', 'v', 'm', 'f')
+        and (has_any_column_privilege('${CLIENT}', c.oid, 'SELECT,INSERT,UPDATE,REFERENCES') or has_table_privilege('${CLIENT}', c.oid, 'DELETE,TRUNCATE,TRIGGER'))) as client_data,
+      has_schema_privilege('${CLIENT}', 'app', 'USAGE') or has_schema_privilege('${CLIENT}', 'auth', 'USAGE') or has_schema_privilege('${CLIENT}', 'storage', 'USAGE') as client_schemas,
+      has_schema_privilege('${CLIENT}', 'realtime', 'USAGE') and has_table_privilege('${CLIENT}', 'realtime.messages', 'SELECT') and has_table_privilege('${CLIENT}', 'realtime.messages', 'INSERT') as client_messages,
+      has_table_privilege('${CLIENT}', 'realtime.messages', 'UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') as client_message_writes,
       exists (select 1 from pg_proc p, aclexplode(p.proacl) a where p.oid = to_regprocedure('${HELPER}') and a.grantee = 0) as helper_public,
       bool_or(has_function_privilege(r, '${HELPER}', 'EXECUTE') or has_schema_privilege(r, 'app_private', 'USAGE')) as others_reach_helper
     from unnest(array['anon', 'app_web', 'app_worker', 'app_web_runtime', 'app_worker_runtime', 'app_migrator_runtime']) as r`);
@@ -167,6 +186,8 @@ async function helperProblems(client) {
   expect(!access.reader_writes, "the reader can write application tables");
   expect(access.reader_auth, "the reader cannot call the Auth functions");
   expect(access.notifier_send, "the notifier cannot enqueue Realtime hints");
+  expect(!access.client_data && !access.client_schemas, "the client role can reach application, Auth, Storage or Data API objects");
+  expect(access.client_messages && !access.client_message_writes, "the client role needs exactly SELECT and INSERT on realtime.messages");
   expect(!access.notifier_reads, "the notifier can reach application data, the helper or provider messages beyond inserting hints");
   expect(!access.helper_public && !access.others_reach_helper, "the helper is reachable by PUBLIC or a non-browser role");
   return problems;
@@ -175,20 +196,22 @@ async function helperProblems(client) {
 async function browserProblems(client) {
   const problems = [];
   const { rows: [access] } = await client.query(`
-    select has_schema_privilege('authenticated', 'app_private', 'USAGE') and has_function_privilege('authenticated', '${HELPER}', 'EXECUTE') as helper,
+    select bool_and(has_schema_privilege(r, 'app_private', 'USAGE') and has_function_privilege(r, '${HELPER}', 'EXECUTE')) as helper,
       has_schema_privilege('authenticated', 'app', 'USAGE') or has_schema_privilege('anon', 'app', 'USAGE') as app_schema,
-      exists (select 1 from pg_class c where c.relnamespace = 'app'::regnamespace and c.relkind = 'r' and (has_table_privilege('authenticated', c.oid, 'SELECT') or has_any_column_privilege('authenticated', c.oid, 'SELECT'))) as app_tables`);
-  if (!access.helper) problems.push("authenticated cannot execute the Realtime helper");
+      exists (select 1 from pg_class c where c.relnamespace = 'app'::regnamespace and c.relkind = 'r' and (has_table_privilege('authenticated', c.oid, 'SELECT') or has_any_column_privilege('authenticated', c.oid, 'SELECT'))) as app_tables
+    from unnest(array['authenticated', '${CLIENT}']) as r`);
+  if (!access.helper) problems.push("authenticated or the client role cannot execute the Realtime helper");
   if (access.app_schema || access.app_tables) problems.push("authenticated can reach application data");
   const { rows: [table] } = await client.query("select relrowsecurity from pg_class where oid = 'realtime.messages'::regclass");
   if (!table?.relrowsecurity) problems.push("provider row level security is off on realtime.messages");
   const { rows: policies } = await client.query(`select policyname::text, cmd::text, roles::text[] as roles, regexp_replace(coalesce(qual, with_check), '\\s+', ' ', 'g') as expression from pg_policies where schemaname = 'realtime' and tablename = 'messages' order by policyname`);
+  const receive = "(((extension = 'broadcast'::text) AND app_private.can_realtime(( SELECT realtime.topic() AS topic), 'receive_broadcast'::text)) OR ((extension = 'presence'::text) AND app_private.can_realtime(( SELECT realtime.topic() AS topic), 'presence'::text)))";
+  const send = "(((extension = 'broadcast'::text) AND app_private.can_realtime(( SELECT realtime.topic() AS topic), 'send_broadcast'::text)) OR ((extension = 'presence'::text) AND app_private.can_realtime(( SELECT realtime.topic() AS topic), 'presence'::text)))";
   const expected = {
-    scoperoom_rt_select: ["SELECT", "(((extension = 'broadcast'::text) AND app_private.can_realtime(( SELECT realtime.topic() AS topic), 'receive_broadcast'::text)) OR ((extension = 'presence'::text) AND app_private.can_realtime(( SELECT realtime.topic() AS topic), 'presence'::text)))"],
-    scoperoom_rt_insert: ["INSERT", "(((extension = 'broadcast'::text) AND app_private.can_realtime(( SELECT realtime.topic() AS topic), 'send_broadcast'::text)) OR ((extension = 'presence'::text) AND app_private.can_realtime(( SELECT realtime.topic() AS topic), 'presence'::text)))"],
+    ...Object.fromEntries(Object.entries(BROWSERS).map(([name, [command, role]]) => [name, command === "select" ? ["SELECT", receive, role] : ["INSERT", send, role]])),
     scoperoom_rt_hint: ["INSERT", `((extension = 'broadcast'::text) AND private AND (event = 'PROJECT_CHANGED'::text) AND (topic ~ '${HINT_TOPIC}'::text))`, NOTIFIER],
   };
-  for (const [name, [cmd, expression, role = "authenticated"]] of Object.entries(expected)) {
+  for (const [name, [cmd, expression, role]] of Object.entries(expected)) {
     const policy = policies.find((row) => row.policyname === name);
     if (!policy || policy.cmd !== cmd || policy.roles.join() !== role || policy.expression !== expression) problems.push(`policy ${name} is missing or differs`);
   }
@@ -215,8 +238,9 @@ async function transferOwner(client, signature, owner) {
 
 async function apply(client) {
   if (!(await client.query(`select to_regprocedure('${HELPER}') as fn, to_regprocedure('${ADAPTER}') as adapter, to_regprocedure('${TRIGGER_FN}') as trigger`)).rows.every((row) => row.fn && row.adapter && row.trigger)) throw new Error("Realtime setup needs the private Realtime migration applied first.");
+  await release(client); // the migration is done: the reader is no longer lent to app_migrator
   await requireProviderTable(client);
-  providerSql(`GRANT USAGE ON SCHEMA auth TO ${READER}; GRANT EXECUTE ON FUNCTION auth.uid(), auth.jwt() TO ${READER}; GRANT USAGE ON SCHEMA realtime TO ${NOTIFIER}; GRANT EXECUTE ON FUNCTION realtime.send(jsonb, text, text, boolean) TO ${NOTIFIER}; GRANT INSERT ON realtime.messages TO ${NOTIFIER};`);
+  providerSql(`GRANT USAGE ON SCHEMA realtime TO ${CLIENT}; GRANT SELECT, INSERT ON realtime.messages TO ${CLIENT}; GRANT USAGE ON SCHEMA auth TO ${READER}; GRANT EXECUTE ON FUNCTION auth.uid(), auth.jwt() TO ${READER}; GRANT USAGE ON SCHEMA realtime TO ${NOTIFIER}; GRANT EXECUTE ON FUNCTION realtime.send(jsonb, text, text, boolean) TO ${NOTIFIER}; GRANT INSERT ON realtime.messages TO ${NOTIFIER};`);
   await client.query(`
     grant usage on schema app to ${READER};
     grant usage on schema app_private to ${NOTIFIER};
@@ -230,9 +254,9 @@ async function apply(client) {
   // Only after the helper is verified do browsers get access and the provider policies appear.
   await client.query("begin");
   try {
-    await client.query("grant usage on schema app_private to authenticated");
+    await client.query(`grant usage on schema app_private to authenticated, ${CLIENT}`);
     await client.query(`grant ${READER} to current_user with inherit true, set true`);
-    await client.query(`grant execute on function ${HELPER} to authenticated`);
+    await client.query(`grant execute on function ${HELPER} to authenticated, ${CLIENT}`);
     await client.query(`revoke ${READER} from current_user`);
     for (const [name, create] of Object.entries(POLICIES)) {
       await client.query(`drop policy if exists ${name} on realtime.messages`);
@@ -255,8 +279,8 @@ async function verify(client) {
 
 if (import.meta.main) {
   const command = process.argv[2];
-  const steps = { prepare, apply, verify };
-  if (!steps[command]) throw new Error("Usage: realtime.mjs prepare [--initial] | apply | verify");
+  const steps = { prepare, apply, release, verify };
+  if (!steps[command]) throw new Error("Usage: realtime.mjs prepare [--initial] | apply | release | verify");
   // A fresh bootstrap has no bound identity yet; guard.mjs --initial already verified the empty loopback target in this run.
   let connectionString;
   if (command === "prepare" && process.argv.includes("--initial")) ({ connectionString } = targetInput());
