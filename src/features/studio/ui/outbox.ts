@@ -283,8 +283,58 @@ export function acknowledged(outbox: Outbox, nextKey: string): Outbox {
   return { ...outbox, base: next, sending: rest.length ? { draftId: sending.draftId, key: nextKey, batches: rest, state: "waiting" } : null };
 }
 
+const ADVANCE_MAX_PREFIXES = 16;
+const ADVANCE_WORK_BUDGET_BYTES = 8 * 1024 * 1024;
+const advanceEncoder = new TextEncoder();
+
+// Undo/redo traverses one ordered chain. Joined entries form one undo unit, so only its end is reachable.
+function reachableEnds(entries: Entry[]): number[] {
+  const ends = [0];
+  for (let end = 1; end <= entries.length; end++) {
+    if (end === entries.length || !entries[end]!.joined) ends.push(end);
+  }
+  return ends;
+}
+
 /**
- * "Discard my changes": local changes go. A save in flight or unconfirmed may already have committed, so it stays with
+ * Moves the frozen base to an adopted saved read (`fresh`) only when no request the outbox could still send would
+ * change: every undo/redo-reachable prefix of the chain must build the same request body and the same size verdict on
+ * both. Returns the same object when it declines (or `sending` is pending). A redo path that cannot be proved is
+ * cleared, so a later redo cannot restore an obsolete base. Bounded work: at most ADVANCE_MAX_PREFIXES prefix pairs and
+ * ADVANCE_WORK_BUDGET_BYTES of serialized input; an unproved active prefix freezes the base.
+ */
+export function advance(outbox: Outbox, fresh: DraftView): Outbox {
+  const { base } = outbox;
+  if (outbox.sending || !base || !isNewer(fresh, base)) return outbox;
+  const activeEnd = outbox.entries.length;
+  const chain = [...outbox.entries, ...[...outbox.redo].reverse().flat()];
+  const pairBytes = advanceEncoder.encode(JSON.stringify(base)).byteLength
+    + advanceEncoder.encode(JSON.stringify(fresh)).byteLength;
+  let compared = 0;
+  let keepRedo = true;
+  for (const end of reachableEnds(chain)) {
+    if (end === 0) continue; // The empty request is identical and build(empty).overLimit is false.
+    let same = false;
+    if (compared < ADVANCE_MAX_PREFIXES && (compared + 1) * pairBytes <= ADVANCE_WORK_BUDGET_BYTES) {
+      const prefix = chain.slice(0, end);
+      // Each (base, prefix) is built once; do not rebuild these results for the full-chain check.
+      const before = build(base, prefix), after = build(fresh, prefix);
+      compared++;
+      same = before.overLimit === after.overLimit
+        && (end !== activeEnd || !after.overLimit)
+        && JSON.stringify(wireBody(before.changes)) === JSON.stringify(wireBody(after.changes));
+    }
+    if (!same) {
+      if (end <= activeEnd) return outbox; // Mismatch or exhausted budget: keep every active attempt frozen.
+      keepRedo = false; // Active prefixes were proved; discard unproved redo before moving their base.
+      break;
+    }
+  }
+  return { ...outbox, base: fresh, redo: keepRedo ? outbox.redo : [] };
+}
+
+/**
+ * “Discard my changes”: local changes go. A save in flight or unconfirmed may already have committed, so it stays with
  * its key for an exact retry. The base stays too: after an acknowledged save whose re-read failed it is what was saved.
  */
 export function discardOutbox(outbox: Outbox): Outbox {
