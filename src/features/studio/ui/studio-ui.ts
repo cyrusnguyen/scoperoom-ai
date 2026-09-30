@@ -2,15 +2,14 @@ import type { CommandResult } from "../../drafts/contracts/commands.ts";
 import { COORDINATE_LIMIT, type DraftLayout } from "../../drafts/contracts/draft-layout.ts";
 import { NODE_KINDS, type DraftView, type NodeKind } from "../../drafts/contracts/scope-document.ts";
 import { dirtyFields, isDirty, type Buffers } from "./buffers.ts";
-import { emptyOutbox, pendingCount, type Outbox } from "./outbox.ts";
+import { advance, covers, emptyOutbox, isNewer, pendingCount, type Outbox, type RevisionFloor } from "./outbox.ts";
 
-export { isNewer } from "./outbox.ts";
+export { covers, isNewer } from "./outbox.ts";
 
 // The Studio's slice of the shell's per-project UI store (UI00 "Per-project UI state"). Memory only: none of it is
 // written to browser storage, and a project switch keeps it until the project is dropped or its edits discarded.
 export type Selection = { kind: "NODES"; ids: string[] } | { kind: "EDGE"; id: string } | { kind: "FLOW"; id: string } | null;
 export type StudioView = "canvas" | "list";
-type RevisionFloor = Pick<DraftView, "documentRevision" | "layoutRevision">;
 export type SaveState = { state: "idle" | "saving" | "saved" | "failed"; message: string };
 /** Unsaved changes are saved every this many milliseconds while the Studio is idle (Save sends them sooner). */
 export const AUTOSAVE_MS = 10_000;
@@ -66,10 +65,55 @@ export function requireDraftRevision(floors: StudioUi["acknowledgedRevisions"], 
   } };
 }
 
+/**
+ * The one admission gate for every draft-bearing read (bootstrap, adopt, Studio reload, polling): the same draft, not
+ * older than the adopted one, and covering the draft's acknowledged floor. A rejected read changes nothing.
+ */
+export function admits(ui: Pick<StudioUi, "acknowledgedRevisions">, adopted: DraftView, candidate: DraftView): boolean {
+  return isNewer(candidate, adopted) && covers(candidate, ui.acknowledgedRevisions[candidate.id]);
+}
+
+/**
+ * Unsent or unconfirmed work whose base is another draft than the current one (the draft was replaced): it is never
+ * retargeted. The Studio keeps it in the read-only copy/discard recovery until the person discards it.
+ */
+export function stranded(outbox: Outbox, currentDraftId: string): boolean {
+  return Boolean(outbox.base && outbox.base.id !== currentDraftId && pendingCount(outbox) > 0);
+}
+
+/** "Apply my changes again" rebases onto the shown saved draft, so it waits for one that is readable and covers the floor. */
+export function canApplyAgain(ui: Pick<StudioUi, "acknowledgedRevisions" | "refreshFailed">, saved: DraftView): boolean {
+  return !ui.refreshFailed && covers(saved, ui.acknowledgedRevisions[saved.id]);
+}
+
+/**
+ * What the Studio does with an adopted saved read: never while a save is pending (its captured guards stay frozen), and
+ * only when the read covers the acknowledged floor; otherwise `advance`. Returns the same outbox when nothing changes.
+ * With no active entries it keeps a compatible redo and clears an incompatible or unproved one, so a later redo cannot
+ * switch back to an old base. The caller compares the result: `=== outbox` with the read ahead of `outbox.base` means
+ * newer saved changes wait behind the frozen view; a shorter `redo` means redo history was cleared.
+ */
+export function advanceOnRead(outbox: Outbox, saved: DraftView, floor: RevisionFloor | undefined): Outbox {
+  return outbox.sending || !covers(saved, floor) ? outbox : advance(outbox, saved);
+}
+
+/**
+ * The frozen view: an adopted read that covers the floor and is strictly newer than the shown base while there is pending
+ * work, and `advanceOnRead` declined it. (Derived, never stored: no separate flag can outlive the state it describes.)
+ */
+export function frozenBehind(outbox: Outbox, saved: DraftView, floor: RevisionFloor | undefined): boolean {
+  const { base } = outbox;
+  if (!base || !(outbox.sending || outbox.entries.length) || !covers(saved, floor) || !isNewer(saved, base)) return false;
+  if (saved.documentRevision === base.documentRevision && saved.layoutRevision === base.layoutRevision) return false;
+  return advanceOnRead(outbox, saved, floor) === outbox;
+}
+
+/** `advanceOnRead` only ever shortens `redo` by clearing it: the caller announces that once, at its own call site. */
+export const clearedRedo = (before: Outbox, after: Outbox) => after.redo.length < before.redo.length;
+
 /** Only a read covering every acknowledged revision can clear this draft's outstanding read failure/floor. */
 export function afterDraftRead(ui: StudioUi, view: Pick<DraftView, "id" | "documentRevision" | "layoutRevision">): Pick<StudioUi, "acknowledgedRevisions" | "refreshFailed"> {
-  const floor = ui.acknowledgedRevisions[view.id];
-  if (floor && (view.documentRevision < floor.documentRevision || view.layoutRevision < floor.layoutRevision)) {
+  if (!covers(view, ui.acknowledgedRevisions[view.id])) {
     return { acknowledgedRevisions: ui.acknowledgedRevisions, refreshFailed: true };
   }
   const acknowledgedRevisions = { ...ui.acknowledgedRevisions };

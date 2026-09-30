@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import type { ErrorDetails } from "@/contracts/http";
 import type { ChangesResult } from "@/features/drafts/contracts/changes";
@@ -10,12 +10,13 @@ import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import { GraphError } from "@/features/drafts/domain/graph";
 import { projectErrors } from "@/features/projects/contracts/errors";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
+import { useSync, useSyncReader } from "@/features/collaboration/ui/sync-context";
 import { follow } from "./buffers";
 import {
   acknowledged, addDrop, discardOutbox, enqueue, keepTheirs as keepTheirsChange, optimistic, pendingCount, rebase, redo as redoChange, replay, startSave, undo as undoChange,
   wireBody, withEntries, type ConflictTarget, type Outbox, type Placement, type Sending,
 } from "./outbox";
-import { afterDraftRead, AUTOSAVE_MS, requireDraftRevision, type SaveState, type StudioUi } from "./studio-ui";
+import { advanceOnRead, afterDraftRead, AUTOSAVE_MS, clearedRedo, covers, frozenBehind, requireDraftRevision, stranded, type SaveState, type StudioUi } from "./studio-ui";
 
 export type Outcome<T> =
   | { ok: true; result: T }
@@ -35,6 +36,12 @@ type Studio = {
   /** True while a save or arrangement request is in flight (one request at a time per tab). Editing continues. */
   busy: boolean;
   save: SaveState; refreshFailed: boolean;
+  /** Consecutive saved reads that failed or fell below the acknowledged floor (reset by a covering read). */
+  readFailures: number;
+  /** An adopted saved read waits behind the shown (frozen) draft because unsaved or unconfirmed changes would change. */
+  frozen: boolean;
+  /** A saved read was adopted and cleared a nonempty redo history; one message until dismissed. */
+  redoCleared: boolean; dismissRedoCleared: () => void;
   /** Applies a command to the shown draft and queues it for the next save; a refusal is the server's own. */
   run: (command: GraphCommand) => Promise<RunOutcome>;
   /** Queues dropped steps. `save` saves every unsaved change at once (the position form's Move); `joined` makes the
@@ -52,7 +59,7 @@ type Studio = {
   undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean;
   place: (command: ArrangeFlow, key?: string) => Promise<Outcome<PositionResult>>;
   preview: (request: ArrangementRequest) => Promise<Outcome<ArrangementPreview>>;
-  reload: () => Promise<DraftView | null>;
+  reload: (fence?: () => boolean) => Promise<DraftView | null>;
   /** The canvas reports a pointer drag in progress, so autosave never sends mid-drag. */
   dragActive: (active: boolean) => void;
   /** Opens the right panel on its Details tab (the Inspect toggle). */
@@ -71,6 +78,7 @@ export function useStudio(): Studio {
 const accessCodes = new Set(["FORBIDDEN", "CONFLICT", "NOT_FOUND", "DRAFT_REPLACED"]);
 /** A save refused because someone else saved first: the person reviews and applies their changes again. */
 export const staleCodes = new Set(["STALE_DOCUMENT_REVISION", "STALE_ENTITY_VERSION", "STALE_LAYOUT_REVISION", "POSITION_CONFLICT", "DEPENDENCY_CONFLICT"]);
+type Admission = { blocked: { code: string; message: string }; stillCurrent?: undefined } | { blocked: null; stillCurrent: () => boolean };
 const busyOutcome = { ok: false as const, code: "BUSY", message: "Another change is still saving.", uncertain: false };
 const readOnly = { ok: false as const, code: "FORBIDDEN", message: "This draft is read-only.", uncertain: false };
 
@@ -84,26 +92,38 @@ const readOnly = { ok: false as const, code: "FORBIDDEN", message: "This draft i
 export function StudioProvider({ projectId, draft: savedDraft, role, archived, narrow, ui, update, adopt, onAccessChanged, onInspect, saveRef, children }: {
   projectId: string; draft: DraftView; role: ProjectAccessRole; archived: boolean; narrow: boolean;
   ui: StudioUi; update: (change: (ui: StudioUi) => Partial<StudioUi>) => void;
-  adopt: (view: DraftView) => void; onAccessChanged: () => void; onInspect: () => void;
+  adopt: (view: DraftView) => boolean; onAccessChanged: () => void; onInspect: () => void;
   /** Lets the shell save unsaved changes before a project switch. */
   saveRef?: RefObject<(() => Promise<boolean>) | null>; children: ReactNode;
 }) {
   const { outbox, request, save, refreshFailed } = ui;
+  const { beforeWrite, fence, invalidate } = useSync();
   // Another instance may still own the request after browser history remounts this keyed provider.
   const busy = Boolean(request);
   const draftId = savedDraft.id;
-  const editable = !archived && (role === "OWNER" || role === "EDITOR");
+  // Unsent work on a replaced draft is never retargeted: the draft is read-only and the work waits in copy/discard recovery.
+  const editable = !archived && (role === "OWNER" || role === "EDITOR") && !stranded(outbox, draftId);
 
   // Synchronous copies, so actions in one event (a shape's step and its drop point) and async saves see every change
   // already made; each render catches them up with the store, which also changes from outside (discard, remounts).
   const latest = useRef(outbox);
   const saved = useRef(savedDraft);
   const inFlight = useRef(request);
+  // The acknowledged floor of this draft, kept like the copies above so a change made in the same event sees it.
+  const floorRef = useRef(ui.acknowledgedRevisions[savedDraft.id]);
+  const floor = ui.acknowledgedRevisions[draftId];
   const mounted = useRef(true);
   useLayoutEffect(() => { latest.current = outbox; }, [outbox]);
   useLayoutEffect(() => { saved.current = savedDraft; }, [savedDraft]);
   useLayoutEffect(() => { inFlight.current = request; }, [request]);
+  useLayoutEffect(() => { floorRef.current = floor; }, [floor]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  // A different draft is another authority to establish before the next write.
+  const shownDraft = useRef(draftId);
+  useEffect(() => { if (shownDraft.current !== draftId) { shownDraft.current = draftId; invalidate(); } }, [draftId, invalidate]);
+  const [readFailures, setReadFailures] = useState(0);
+  const [redoCleared, setRedoCleared] = useState(false);
+  if (!refreshFailed && readFailures) setReadFailures(0); // any covering read, from any path, starts the count over
 
   /** One pure outbox change, applied to the synchronous copy now and to the store in order. */
   const change = useCallback((next: (current: Outbox) => Outbox, also?: (current: StudioUi) => Partial<StudioUi>) => {
@@ -111,29 +131,78 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     update((current) => ({ outbox: next(current.outbox), ...(also ? also(current) : {}) }));
   }, [update]);
 
-  const reload = useCallback(async (): Promise<DraftView | null> => {
+  // Every adopted saved read (shell bootstrap or adoption, and `reload`) lands here as a new `savedDraft`. The frozen base
+  // follows it through `advanceOnRead` (never while a save is pending; only once the read covers the acknowledged floor).
+  // It runs again when a save resolves (`pending`) and whenever the active entries change (Keep theirs, undo, redo, a new
+  // edit): the base must follow the adopted read as soon as no request would change, or the shown draft and the frozen
+  // notice (derived from the same test) disagree, and an undo to empty must not let a redo switch back to an old base.
+  // The store's updater advances the store's own current outbox, because the shell also writes it outside `change`
+  // (Discard) between this render and the effect.
+  const pending = Boolean(outbox.sending), { entries } = outbox;
+  useEffect(() => {
+    const before = latest.current, next = advanceOnRead(before, savedDraft, floor);
+    if (next === before) return;
+    // Only this call clears redo on a read (the person's own undo, redo and edits do not go through here), and an
+    // unchanged re-read leaves an already-empty redo alone: one message per clearing.
+    if (clearedRedo(before, next)) setRedoCleared(true);
+    change((current) => (current === before ? next : advanceOnRead(current, savedDraft, floor)));
+  }, [savedDraft, floor, pending, entries, change]);
+  const frozen = useMemo(() => frozenBehind(outbox, savedDraft, floor), [outbox, savedDraft, floor]);
+
+  // `fence` (polling only) drops a response the sync controller has since replaced, right before anything is adopted.
+  const reload = useCallback(async (stillCurrent?: () => boolean): Promise<DraftView | null> => {
     const result = await apiRead<DraftView>(`/api/projects/${projectId}/drafts/${draftId}`);
-    if (sessionEnded(result)) return null;
-    update((current) => result.ok ? afterDraftRead(current, result.data) : { refreshFailed: true });
-    if (result.ok) { adopt(result.data); return result.data; }
-    if (result.status === 404) onAccessChanged();
+    if (sessionEnded(result) || (stillCurrent && !stillCurrent())) return null;
+    if (!result.ok) {
+      if (result.uncertain) invalidate();
+      update(() => ({ refreshFailed: true }));
+      setReadFailures((count) => count + 1);
+      if (result.status === 404) onAccessChanged();
+      return null;
+    }
+    // One gate (the shell's adopt): a rejected read changes nothing and leaves the floor. Only a read installed there
+    // may clear it. A read below the floor keeps conflict actions disabled until one covers it.
+    if (adopt(result.data)) { update((current) => afterDraftRead(current, result.data)); return result.data; }
+    if (!covers(result.data, floorRef.current)) { update(() => ({ refreshFailed: true })); setReadFailures((count) => count + 1); }
     return null;
-  }, [projectId, draftId, adopt, onAccessChanged, update]);
+  }, [projectId, draftId, adopt, onAccessChanged, update, invalidate]);
+
+  useSyncReader(reload); // polling adopts through this same gated read
 
   const run = useCallback(async (command: GraphCommand): Promise<RunOutcome> => {
     if (!editable) return readOnly;
     const base = saved.current;
     let queued: ReturnType<typeof enqueue>;
-    try { queued = enqueue(latest.current, base, command); } catch (error) {
+    try { queued = enqueue(latest.current, base, command, undefined, floorRef.current); } catch (error) {
       if (!(error instanceof GraphError)) throw error;
       return { ok: false, code: error.code, message: projectErrors[error.code].message, uncertain: false, ...(error.details ? { details: error.details } : {}) };
     }
     const { entries, createdIds, versions, retiredIds, documentRevision } = queued;
     // Our own change may advance records other buffers were typed against. (Endpoint choices are checked against the
     // connection itself when applied: see endpointGuard.)
-    change((current) => withEntries(current, base, entries), (current) => ({ buffers: follow(current.buffers, versions) }));
+    change((current) => withEntries(current, base, entries, floorRef.current), (current) => ({ buffers: follow(current.buffers, versions) }));
     return { ok: true, result: { createdIds, versions, retiredIds, documentRevision } };
   }, [editable, change]);
+
+  /**
+   * The write barrier. Authority comes from the status controller, never from an earlier answer: after focus, reconnect,
+   * a failed request or a draft change it waits for a fresh status read. A new batch needs an ACTIVE project, an owner or
+   * editor and the draft it was made on; an uncertain retry only needs the person to still be a member (server guards stay
+   * final). Null admits the write; otherwise the reason. DENIED means the shell is dropping the project or recovering, and says so meanwhile.
+   */
+  const admit = useCallback(async (write: boolean, target: string): Promise<Admission> => {
+    const authority = await beforeWrite();
+    if (authority.kind === "unavailable") return { blocked: { code: "UNAVAILABLE", message: "Not saved. We couldn’t reach ScopeRoom." } };
+    if (authority.kind === "denied") return { blocked: { code: "DENIED", message: "Checking your access…" } };
+    const stillCurrent = fence(authority.generation);
+    if (!stillCurrent()) return { blocked: { code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message } };
+    if (write) {
+      const { role: current, status, currentDraftId } = authority.status;
+      if (currentDraftId !== target) return { blocked: { code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message } };
+      if (status !== "ACTIVE" || (current !== "OWNER" && current !== "EDITOR")) return { blocked: { code: "FORBIDDEN", message: "Not saved. This project is read-only now." } };
+    }
+    return { blocked: null, stillCurrent };
+  }, [beforeWrite, fence]);
 
   /**
    * One flush: start a save of the queued changes if none is pending, then send its batches one after another, and
@@ -145,11 +214,23 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     const finish = async () => { await reload(); update(() => ({ save: { state: "saved", message: "" } })); };
     for (;;) {
       if (!mounted.current || inFlight.current) { if (sent) await finish(); return false; }
+      const waiting = latest.current.sending;
+      if (waiting?.state === "refused") return false;
+      if (!waiting && !latest.current.entries.length) break;
+      if (!editable && waiting?.state !== "uncertain") return false;
+      // Before every new batch and every retry of an unconfirmed one. Nothing between this check and the request awaits.
+      const { blocked, stillCurrent } = await admit(waiting?.state !== "uncertain", waiting ? waiting.draftId : saved.current.id);
+      if (blocked) {
+        update(() => ({ save: { state: "failed", message: blocked.message } }));
+        return false;
+      }
+      // Recheck right before the request: the person may have discarded, undone or unmounted, or the generation may have been
+      // replaced, while the barrier waited. Start over from the current state (and a fresh barrier).
+      if (!mounted.current || inFlight.current || latest.current.sending?.key !== waiting?.key || !stillCurrent()) continue;
       if (!latest.current.sending) {
-        if (!latest.current.entries.length) break;
         if (!editable) return false;
         const base = saved.current, key = crypto.randomUUID();
-        change((current) => startSave(current, base, key));
+        change((current) => startSave(current, base, key, floorRef.current));
         if (!latest.current.sending) {
           // Not started: the result would go over the draft's size limit (the server would refuse it every time).
           if (latest.current.entries.length) {
@@ -160,9 +241,6 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
         }
       }
       const sending: Sending = latest.current.sending!;
-      if (sending.state === "refused") return false;
-      // An admitted reader may still resolve an already-sent batch, but only with its exact key and body.
-      if (!editable && sending.state !== "uncertain") return false;
       const { key, draftId: target } = sending;
       const mark = (state: Sending["state"], extra: Partial<Sending> = {}) => (current: Outbox) =>
         current.sending?.key === key ? { ...current, sending: { ...current.sending, state, ...extra } } : current;
@@ -181,6 +259,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
         continue;
       }
       if (result.uncertain) {
+        invalidate(); // the API may be down: the retry waits for a status read
         change(mark("uncertain"), (current) => ({ ...release(current), save: { state: "failed", message: "We couldn’t confirm your changes." } }));
         return false;
       }
@@ -195,7 +274,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     if (sent) await finish();
     // Editing remains enabled during the final read; a switch must still guard anything queued in that window.
     return pendingCount(latest.current) === 0;
-  }, [editable, projectId, change, update, reload, onAccessChanged]);
+  }, [editable, projectId, change, update, reload, onAccessChanged, admit, invalidate]);
 
   // Saves run one after another: a Save pressed during another waits for it, then sends what is left.
   const chain = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -204,7 +283,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   const moveSteps = useCallback(async (flowId: string, targets: Placement[], { save: saveNow = false, joined = false } = {}) => {
     if (!editable || !targets.length) return;
     const base = saved.current;
-    change((current) => addDrop(current, base, flowId, targets, joined));
+    change((current) => addDrop(current, base, flowId, targets, joined, floorRef.current));
     if (saveNow) await saveChanges();
   }, [editable, change, saveChanges]);
 
@@ -216,7 +295,9 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   const applyAgain = useCallback(async () => {
     if (!editable || inFlight.current || latest.current.sending?.state !== "refused") return;
     const fresh = saved.current;
-    const names = optimistic(latest.current, fresh).document;
+    // Rebasing onto a saved draft below the acknowledged floor would drop an acknowledged edit from view.
+    if (!covers(fresh, floorRef.current)) return;
+    const names = optimistic(latest.current, fresh, floorRef.current).document;
     const rebased = rebase(latest.current, fresh, names);
     change(() => rebased, () => ({ save: { state: "idle", message: "" } }));
     await saveChanges();
@@ -230,7 +311,8 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   // Keeping theirs for the last conflicting change leaves nothing refused: the failure status goes with it.
   const keepTheirs = useCallback((target: ConflictTarget) => change((current) => keepTheirsChange(current, target),
     (current) => (keepTheirsChange(current.outbox, target).sending ? {} : { save: { state: "idle", message: "" } })), [change]);
-  const undo = useCallback(() => change(undoChange), [change]);
+  const undo = useCallback(() => { setRedoCleared(false); change(undoChange); }, [change]);
+  const dismissRedoCleared = useCallback(() => setRedoCleared(false), []);
   const redo = useCallback(() => change(redoChange), [change]);
 
   /** An arrangement save (Arrange's Apply), on the same one-request-at-a-time lock as the batch save. */
@@ -240,6 +322,9 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     inFlight.current = key;
     update(() => ({ request: key }));
     try {
+      const { blocked, stillCurrent } = await admit(true, draftId);
+      if (blocked) return { ok: false, code: blocked.code, message: blocked.message, uncertain: false };
+      if (!stillCurrent()) return { ok: false, code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message, uncertain: false };
       const result = await apiMutate<PositionResult>(`/api/projects/${projectId}/drafts/${draftId}/positions`, key, command);
       if (sessionEnded(result)) return { ok: false, code: "UNAUTHENTICATED", message: "", uncertain: false };
       if (result.ok) {
@@ -248,6 +333,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
         await reload();
         return { ok: true, result: result.data };
       }
+      if (result.uncertain) invalidate();
       if (accessCodes.has(result.code)) onAccessChanged();
       else if (!result.uncertain) await reload();
       return { ok: false, code: result.code, message: result.message, uncertain: result.uncertain, ...(result.details ? { details: result.details } : {}) };
@@ -255,7 +341,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
       if (inFlight.current === key) inFlight.current = null;
       update((current) => (current.request === key ? { request: null } : {}));
     }
-  }, [editable, projectId, draftId, update, reload, onAccessChanged]);
+  }, [editable, projectId, draftId, update, reload, onAccessChanged, admit, invalidate]);
 
   /** A nonmutating arrangement preview: no key, no lock, and a certain refusal re-reads the draft it was stale against. */
   const preview = useCallback(async (request: ArrangementRequest): Promise<Outcome<ArrangementPreview>> => {
@@ -287,14 +373,14 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     return () => window.clearInterval(timer);
   }, [editable, waiting, busy, unresolved]);
 
-  const replayed = useMemo(() => (editable ? replay(outbox, savedDraft) : { draft: savedDraft, skipped: [] }), [editable, outbox, savedDraft]);
+  const replayed = useMemo(() => (editable ? replay(outbox, savedDraft, floor) : { draft: savedDraft, skipped: [] }), [editable, outbox, savedDraft, floor]);
   const { draft, skipped } = replayed;
   const unsaved = pendingCount(outbox) > 0;
   const canUndo = editable && outbox.entries.length > 0, canRedo = editable && outbox.redo.length > 0;
   const value = useMemo<Studio>(() => ({
-    projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, moveSteps, saveChanges, unsaved,
+    projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, readFailures, frozen, redoCleared, dismissRedoCleared, run, moveSteps, saveChanges, unsaved,
     applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, reload, dragActive, inspect: onInspect,
-  }), [projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, moveSteps, saveChanges, unsaved,
+  }), [projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, readFailures, frozen, redoCleared, dismissRedoCleared, run, moveSteps, saveChanges, unsaved,
     applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, reload, dragActive, onInspect]);
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }
@@ -317,12 +403,19 @@ export function formKeys(event: KeyboardEvent<HTMLFormElement>) {
   if ((event.ctrlKey || event.metaKey) && event.target instanceof HTMLTextAreaElement) { event.preventDefault(); event.currentTarget.requestSubmit(); }
 }
 
-/** A save whose follow-up read failed: say so, and offer the read again. */
+/**
+ * A read that has not landed: a failed or below-the-floor saved read (or a failing status poll). Polling keeps trying, so
+ * the first line just says so; a screen reader hears it once, not per poll. After two consecutive failures (the poll's
+ * backoff at its 30 s cap) it becomes the recovery line with Retry.
+ */
 export function ReadRecovery() {
-  const { reload, save, refreshFailed } = useStudio();
+  const { reload, save, refreshFailed, readFailures } = useStudio();
+  const { failures, revalidate } = useSync();
   if (!refreshFailed) return null;
+  const gaveUp = readFailures >= 2 || failures >= 2;
+  const retry = () => { void reload(); if (failures) void revalidate("manual"); };
   return <>
-    <span className="status-error" role="alert">{save.state === "saved" ? "Changes saved. " : ""}The latest draft could not load.</span>
-    <button type="button" className="button small" onClick={() => void reload()}>Retry read</button>
+    <span className={gaveUp ? "status-error" : "muted"} role="status">{save.state === "saved" ? "Changes saved. " : ""}{gaveUp ? "Couldn't refresh saved changes" : "Refreshing saved changes…"}</span>
+    {gaveUp && <button type="button" className="button small" onClick={retry}>Retry</button>}
   </>;
 }

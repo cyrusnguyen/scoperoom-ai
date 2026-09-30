@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, type Page, type Request } from "@playwright/test";
 import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
-import { createProjectViaApi, e2eReady, emptyDraftView, headerSave, seedStudioChanges } from "./support";
+import { createProjectViaApi, e2eReady, emptyDraftView, headerSave, seedStudioChanges, withStatus } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -227,7 +227,7 @@ test.describe("Canvas control bar (reader, mocked project)", () => {
     };
     await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: { items: [], truncated: false }, shared: { items: [{ id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerName: "Owner", updatedAt: "2026-09-27T00:00:00.000Z" }], truncated: false }, archived: { items: [], truncated: false }, capacity: { entitled: true, activeOwned: 0, maxOwned: 10, canCreate: true } } }));
     await page.route("**/api/invitations", (route) => route.fulfill({ json: { items: [], truncated: false } }));
-    await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerId: projectId }, draft } }));
+    await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status: "ACTIVE", role: "VIEWER", ownerId: projectId }, draft }) }));
     await page.goto(`/app/projects/${projectId}`);
   });
 

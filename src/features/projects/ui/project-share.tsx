@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type SubmitEvent } from "react";
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
+import { useSync } from "@/features/collaboration/ui/sync-context";
 import { projectMemberRoles, type ProjectMemberRole } from "../contracts/invitation";
 import { roleLabel } from "./format";
 
@@ -13,6 +14,7 @@ type Issue = Invitation & { url?: string; linkUnavailable: boolean; replayed: bo
  * for the invitation's metadata but never its link, so the owner is offered Revoke and reissue.
  */
 export default function ProjectShare({ projectId, email, onEmailChange }: { projectId: string; email: string; onEmailChange: (value: string) => void }) {
+  const sync = useSync();
   const [inviteRole, setInviteRole] = useState<ProjectMemberRole>("EDITOR");
   const [key, setKey] = useState("");
   const [issuing, setIssuing] = useState(false);
@@ -42,14 +44,25 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [refresh]);
 
+  /** The write barrier: another window may have signed in as someone else since the last status read. */
+  const writable = async () => {
+    const authority = await sync.beforeWrite();
+    if (authority.kind === "current") return true;
+    // Denied: the shell's teardown or recovery view replaces this; if the Studio stays up, the person sees why nothing happened.
+    setMessage(authority.kind === "unavailable" ? "Not saved. We couldn’t reach ScopeRoom." : "Checking your access…"); setMessageError(authority.kind === "unavailable");
+    return false;
+  };
+
   const issue = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     const requestKey = key || crypto.randomUUID();
-    setKey(requestKey);
+    const wasUncertain = uncertain;
     setIssuing(true);
     setUncertain(false);
     setMessage("");
     setMessageError(false);
+    if (!await writable()) { setIssuing(false); setUncertain(wasUncertain); return; }
+    setKey(requestKey);
     const result = await apiMutate<Issue>(`/api/projects/${projectId}/invitations`, requestKey, { verifiedEmail: email, role: inviteRole });
     setIssuing(false);
     if (sessionEnded(result)) return;
@@ -93,10 +106,11 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
   /** An uncertain result keeps this row's key for Retry; a CONFLICT re-reads the list before the row's button re-enables. */
   const revoke = async (invitation: Invitation) => {
     const key = revokeKeys[invitation.id] ?? crypto.randomUUID();
-    setRevokeKey(invitation.id, key);
     setRevoking(invitation.id);
     setMessage("");
     setMessageError(false);
+    if (!await writable()) { setRevoking(null); return; }
+    setRevokeKey(invitation.id, key);
     const result = await apiMutate(`/api/projects/${projectId}/invitations/${invitation.id}/revoke`, key, { expectedVersion: invitation.version });
     if (sessionEnded(result)) { setRevoking(null); return; }
     if (!result.ok && result.uncertain) {

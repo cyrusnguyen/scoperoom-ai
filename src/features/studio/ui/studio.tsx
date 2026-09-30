@@ -10,9 +10,9 @@ import { FlowsDialog } from "./flows-dialog";
 import GraphList from "./graph-list";
 import { currentFlow, recordOf } from "./graph-view";
 import { AddStepDialog, ConnectDialog, DeleteStepsDialog } from "./step-dialogs";
-import { compareOutbox, describeAll, optimistic } from "./outbox";
+import { compareOutbox, describeAll, optimistic, type Conflict } from "./outbox";
 import { ReadRecovery, staleCodes, useStudio } from "./studio-context";
-import { studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
+import { canApplyAgain, stranded, studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
 
 type StudioDialog = "add" | "connect" | "delete" | "arrange" | null;
 
@@ -132,42 +132,54 @@ function RemovedRecovery() {
  * changes out lists them (their typed text included), so nothing is dropped silently.
  */
 function SaveNote() {
-  const { ui, draft, editable, busy, savedDraft, saveChanges, applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, unsaved } = useStudio();
+  const { ui, draft, editable, busy, savedDraft, saveChanges, applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, unsaved, frozen } = useStudio();
   const { sending } = ui.outbox;
+  // Conflict actions wait for a readable saved draft that covers the acknowledged floor, as Apply my changes again does.
+  const resolvable = canApplyAgain(ui, savedDraft);
+  const newer = frozen && <strong>Newer saved changes are available.</strong>;
+  // Never resubmit over someone else's newer value unseen (UI02): each overlap is compared first, 03.2-style.
+  // Below the floor or while a read has failed, the saved draft can be the person's own older text: no comparison is shown.
+  const conflictList = (conflicts: Conflict[]) => resolvable && conflicts.length > 0 && <>
+    <span>They also changed what you edited. Compare, then keep theirs or apply yours:</span>
+    <dl className="conflict-list save-note-list">{conflicts.map((conflict, index) => <div key={index}>
+      <dt>{conflict.label}</dt>
+      {conflict.rows.map((row) => <Fragment key={row.field}>
+        <dd><span className="muted">Saved value</span>{row.theirs}</dd>
+        <dd><span className="muted">Your edit</span>{row.mine}</dd>
+        <dd><span className="muted">Before your edit</span>{row.before}</dd>
+      </Fragment>)}
+      <dd><button type="button" className="button quiet small" onClick={() => keepTheirs(conflict.target)} disabled={busy}>Keep theirs</button></dd>
+    </div>)}</dl>
+  </>;
   const dropped = [...ui.outbox.dropped, ...skipped];
   const list = (items: string[]) => <ul className="plain-list save-note-list">{items.map((text, index) => <li key={index}>{text}</li>)}</ul>;
   if (sending?.state === "uncertain") return <div className="save-note" role="alert">
+    {newer}
     <span>We couldn’t confirm your changes. Retry sends the same request.</span>
     <span className="view-actions"><button type="button" className="button primary small" onClick={() => void saveChanges()} disabled={busy}>Retry</button></span>
   </div>;
   if (!editable && unsaved) return <div className="save-note" role="alert">
-    <span>This draft is read-only now, so your unsaved changes can’t be saved. They’re listed here for copying:</span>
-    {list(describeAll(ui.outbox, optimistic(ui.outbox, savedDraft).document))}
+    <span>{stranded(ui.outbox, savedDraft.id) ? "This project’s draft was replaced, so your unsaved changes can’t be saved to it. They’re listed here for copying:" : "This draft is read-only now, so your unsaved changes can’t be saved. They’re listed here for copying:"}</span>
+    {list(describeAll(ui.outbox, optimistic(ui.outbox, savedDraft, ui.acknowledgedRevisions[savedDraft.id]).document))}
     <span className="view-actions"><button type="button" className="button quiet small" onClick={discardChanges} disabled={busy}>Discard my changes</button></span>
   </div>;
-  if (sending?.state === "refused") {
-    // Never resubmit over someone else's newer value unseen (UI02): each overlap is compared first, 03.2-style.
-    const conflicts = compareOutbox(ui.outbox, savedDraft, draft.document);
-    return <div className="save-note" role="alert">
+  if (sending?.state === "refused") return <div className="save-note" role="alert">
+    {newer}
     <span>{staleCodes.has(sending.code ?? "") ? "Someone else changed this draft first, so your changes weren’t saved." : `${sending.message ?? ""} Your changes weren’t saved.`} They’re still shown here.</span>
-    {conflicts.length > 0 && <>
-      <span>They also changed what you edited. Compare, then keep theirs or apply yours:</span>
-      <dl className="conflict-list save-note-list">{conflicts.map((conflict, index) => <div key={index}>
-        <dt>{conflict.label}</dt>
-        {conflict.rows.map((row) => <Fragment key={row.field}>
-          <dd><span className="muted">Saved value</span>{row.theirs}</dd>
-          <dd><span className="muted">Your edit</span>{row.mine}</dd>
-          <dd><span className="muted">Before your edit</span>{row.before}</dd>
-        </Fragment>)}
-        <dd><button type="button" className="button quiet small" onClick={() => keepTheirs(conflict.target)} disabled={busy}>Keep theirs</button></dd>
-      </div>)}</dl>
-    </>}
+    {conflictList(compareOutbox(ui.outbox, savedDraft, draft.document))}
     <span className="view-actions">
-      <button type="button" className="button primary small" onClick={() => void applyAgain()} disabled={busy}>Apply my changes again</button>
+      <button type="button" className="button primary small" onClick={() => void applyAgain()} disabled={busy || !resolvable}>Apply my changes again</button>
       <button type="button" className="button quiet small" onClick={discardChanges} disabled={busy}>Discard my changes</button>
     </span>
   </div>;
-  }
+  // Frozen without a refused or unconfirmed save: what is shown stays put until these changes are saved or resolved.
+  // Deleted targets and document-revision conflicts that the comparison cannot describe still get this general notice.
+  if (frozen) return <div className="save-note" role="status">
+    {newer}
+    <span>Your changes stay shown until they are saved.</span>
+    {conflictList(compareOutbox(ui.outbox, savedDraft, draft.document))}
+    <span className="view-actions"><button type="button" className="button primary small" onClick={() => void saveChanges()} disabled={busy}>Save</button></span>
+  </div>;
   if (dropped.length) return <div className="save-note" role="alert">
     <span>These changes no longer applied, so they were left out:</span>
     {list(dropped)}
@@ -178,7 +190,7 @@ function SaveNote() {
 
 /** One status line for every change (UI02, Task 14b): "Unsaved changes" → "Saving…" → "All changes saved". */
 function StudioStatus({ flowId }: { flowId: string }) {
-  const { draft, ui, update, save, refreshFailed, inspect, canUndo, canRedo, undo, redo } = useStudio();
+  const { draft, ui, update, save, refreshFailed, inspect, canUndo, canRedo, undo, redo, redoCleared, dismissRedoCleared } = useStudio();
   const steps = Object.values(draft.document.nodes).filter((node) => node.flowId === flowId).length;
   const connections = Object.values(draft.document.edges).filter((edge) => edge.flowId === flowId).length;
   const checks = graphWarnings(draft.document, flowId).length;
@@ -190,6 +202,9 @@ function StudioStatus({ flowId }: { flowId: string }) {
     <RemovedRecovery />
     {canUndo && <button type="button" className="button quiet small" onClick={undo} title="Undo the last unsaved change"><Icon name="undo" size={14} />Undo</button>}
     {canRedo && <button type="button" className="button quiet small" onClick={redo} title="Redo the change you undid">Redo</button>}
+    {/* Always mounted so the one message is announced when it appears, and repeated polls never re-announce it. */}
+    <span className={redoCleared ? "muted" : "sr-only"} role="status">{redoCleared ? "Saved updates loaded. Redo history was cleared." : ""}</span>
+    {redoCleared && <button type="button" className="button quiet small" onClick={dismissRedoCleared}>Dismiss</button>}
     <span className="editor-spacer" />
     <ReadRecovery />
     <SaveStatus ui={ui} save={save} refreshFailed={refreshFailed} />

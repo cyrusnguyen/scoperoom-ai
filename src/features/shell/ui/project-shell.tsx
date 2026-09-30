@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
-import { apiRead, sessionEnded } from "@/client/api";
+import { accountChanged, apiRead, SESSION_ENDED, sessionEnded } from "@/client/api";
+import type { Live } from "@/features/collaboration/ui/project-sync";
+import { SyncProvider } from "@/features/collaboration/ui/sync-context";
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { MyInvitation } from "@/features/projects/contracts/invitation";
 import type { CreatedProject, ProjectBootstrap, ProjectLists } from "@/features/projects/contracts/project";
@@ -12,7 +14,7 @@ import ProjectDetails from "@/features/projects/ui/project-details";
 import Inspector from "@/features/studio/ui/inspector";
 import { StudioProvider } from "@/features/studio/ui/studio-context";
 import { emptyOutbox, pendingCount } from "@/features/studio/ui/outbox";
-import { afterDraftRead, isNewer, type StudioUi } from "@/features/studio/ui/studio-ui";
+import { admits, afterDraftRead, type StudioUi } from "@/features/studio/ui/studio-ui";
 import Dialog, { CancelFocus } from "./dialog";
 import { resolveDock } from "./dock";
 import LifecycleDialog, { type LifecycleKind } from "./lifecycle-dialog";
@@ -40,12 +42,6 @@ function readPrefs(): Prefs {
   return { leftOpen: saved.leftOpen !== false, listTab: LIST_TABS.includes(saved.listTab as ListTab) ? saved.listTab as ListTab : "owned" };
 }
 
-/** A project re-read that raced a Studio save must not roll the draft back: keep whichever read is newer. */
-function keepNewerDraft(bootstrap: ProjectBootstrap, previous: Opened | null): ProjectBootstrap {
-  const kept = previous?.projectId === bootstrap.project.id ? previous.bootstrap?.draft : undefined;
-  return kept && isNewer(kept, bootstrap.draft) ? { ...bootstrap, draft: kept } : bootstrap;
-}
-
 export default function ProjectShell({ signOut, children }: { signOut: () => Promise<void>; children: ReactNode }) {
   const router = useRouter();
   const [navigating, startNavigation] = useTransition();
@@ -64,6 +60,14 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const [invites, setInvites] = useState<{ items: InviteRow[]; truncated: boolean } | null>(null);
   const [listsState, setListsState] = useState<"loading" | "ready" | "error">("loading");
   const [opened, setOpened] = useState<Opened | null>(null);
+  // Synchronous copy of `opened`: the admission gate must see a draft adopted in the same event.
+  const openedRef = useRef<Opened | null>(null);
+  // A 401 anywhere ends the session: what the shell holds is cleared before the page is replaced, and late responses install nothing.
+  const [ended, setEnded] = useState<"session" | "account" | null>(null);
+  // The account this page opened with (from the first bootstrap): a status or bootstrap for another one is an account change.
+  const viewerRef = useRef<string | null>(null);
+  const endedRef = useRef(false);
+  const install = useCallback((next: Opened) => { if (!endedRef.current) { openedRef.current = next; setOpened(next); } }, []);
   const [store, setStore] = useState<UiStore>({});
   const latestStore = useRef(store);
   useLayoutEffect(() => { latestStore.current = store; }, [store]);
@@ -74,6 +78,14 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const [notice, setNotice] = useState({ text: "", error: false });
   const notify = useCallback((text: string, error = false) => setNotice({ text, error }), []);
 
+  useEffect(() => {
+    const end = (event: Event) => flushSync(() => {
+      endedRef.current = true; openedRef.current = null;
+      setEnded((event as CustomEvent<"session" | "account">).detail === "account" ? "account" : "session"); setStore({}); setOpened(null); setLists(null); setInvites(null); setDialog(null);
+    });
+    window.addEventListener(SESSION_ENDED, end);
+    return () => window.removeEventListener(SESSION_ENDED, end);
+  }, []);
   useEffect(() => {
     const element = shellRef.current;
     if (!element) return;
@@ -88,7 +100,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
 
   const loadLists = useCallback(async () => {
     const [projects, mine] = await Promise.all([apiRead<ProjectLists>("/api/projects"), apiRead<{ items: MyInvitation[]; truncated: boolean }>("/api/invitations")]);
-    if (sessionEnded(projects) || sessionEnded(mine)) return;
+    if (sessionEnded(projects) || sessionEnded(mine) || endedRef.current) return;
     if (!projects.ok || !mine.ok) { setListsState("error"); return; }
     const now = Date.now();
     setLists(projects.data);
@@ -96,24 +108,49 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     setListsState("ready");
   }, []);
 
-  const loadProject = useCallback(async (id: string, signal?: AbortSignal) => {
+  // `fence` (the sync controller) drops a response its generation has since replaced, and is the only caller allowed to
+  // install a different draft than the one shown: a replaced draft. Any other read of another draft is a stale one.
+  const loadProject = useCallback(async (id: string, signal?: AbortSignal, fence?: () => boolean) => {
     const result = await apiRead<ProjectBootstrap>(`/api/projects/${id}/bootstrap`, signal);
-    if (signal?.aborted || sessionEnded(result)) return;
+    if (signal?.aborted || sessionEnded(result) || endedRef.current || (fence && !fence())) return;
     // An unsignaled caller (Retry, projectChanged) can resolve after the user opened a different project.
     if (id !== projectIdRef.current) return;
+    if (result.ok && viewerRef.current && result.data.status.viewerId !== viewerRef.current) { accountChanged(); return; }
     if (result.ok) {
-      setOpened((previous) => ({ projectId: id, bootstrap: keepNewerDraft(result.data, previous) }));
-      setStore((previous) => updateUi(previous, id, (current) => afterDraftRead(current, result.data.draft)));
+      viewerRef.current = result.data.status.viewerId;
+      // A re-read that raced a save or another read must not roll the draft back or below a receipt floor: the shown
+      // draft stays and the floor is left alone. With no draft shown yet the read is installed and the floor stays
+      // unless it covers it.
+      const previous = openedRef.current;
+      const shown = previous?.projectId === id ? previous.bootstrap?.draft : undefined;
+      const admitted = !shown || (fence && shown.id !== result.data.draft.id) || admits(uiFor(latestStore.current, id), shown, result.data.draft);
+      install({ projectId: id, bootstrap: admitted ? result.data : { ...result.data, draft: shown } });
+      if (admitted) setStore((current) => updateUi(current, id, (ui) => afterDraftRead(ui, result.data.draft)));
     }
-    else if (result.status === 404) { setOpened({ projectId: id, missing: true }); setStore((previous) => dropProject(previous, id)); }
-    else setOpened({ projectId: id, error: result.message });
-  }, []);
+    else if (result.status === 404) { install({ projectId: id, missing: true }); setStore((previous) => dropProject(previous, id)); }
+    // A background read (polling, Details) that fails transiently keeps what is shown: unmounting would stop the polling
+    // that retries it. The unavailable view's own Retry has nothing shown, and 403 or 404 always show their recovery.
+    else if (result.uncertain && openedRef.current?.projectId === id && openedRef.current.bootstrap) return;
+    else install({ projectId: id, error: result.message });
+  }, [install]);
 
-  // The Studio's saved draft lives with the bootstrap; a read replaces it only when neither revision goes backwards.
+  // The Studio's saved draft lives with the bootstrap; a read replaces it only through the admission gate. True when installed.
   const adoptDraft = useCallback((view: DraftView) => {
-    setOpened((previous) => previous?.bootstrap && isNewer(view, previous.bootstrap.draft) ? { ...previous, bootstrap: { ...previous.bootstrap, draft: view } } : previous);
+    const previous = openedRef.current;
+    if (!previous?.bootstrap || !admits(uiFor(latestStore.current, previous.projectId), previous.bootstrap.draft, view)) return false;
+    install({ ...previous, bootstrap: { ...previous.bootstrap, draft: view } });
+    return true;
+  }, [install]);
+  // What the sync controller compares each status with: the role, lifecycle and draft adopted right now.
+  const liveOf = useCallback((id: string): Live | null => {
+    const shown = openedRef.current;
+    const adopted = shown?.projectId === id ? shown.bootstrap : undefined;
+    return adopted ? { role: adopted.project.role, status: adopted.project.status, draftId: adopted.draft.id, documentRevision: adopted.draft.documentRevision, layoutRevision: adopted.draft.layoutRevision } : null;
   }, []);
   const updateStudio = useCallback((change: (ui: StudioUi) => Partial<StudioUi>) => {
+    // A late response for a project that was dropped or whose session ended must not bring its state back.
+    const shown = openedRef.current;
+    if (endedRef.current || (shown?.projectId === projectId && shown?.missing)) return;
     if (projectId) setStore((previous) => updateUi(previous, projectId, change));
   }, [projectId]);
 
@@ -234,6 +271,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     void loadLists();
   }
 
+  if (ended) return <div className="app-shell"><main id="editor-main" className="editor-slot"><div className="empty-state" role="alert"><p>{ended === "account" ? "Your account changed. Reloading…" : "Your session ended. Taking you to sign in…"}</p></div></main></div>;
+
   const restoreNote = capacity && !capacity.canCreate ? (capacity.entitled ? `${capacity.activeOwned}/${capacity.maxOwned} active` : "Restoring isn’t enabled for this account") : undefined;
   const lifecycleDialog = dialog && dialog.kind !== "create" && dialog.kind !== "switch" ? dialog : null;
   const switchTarget = dialog?.kind === "switch" ? dialog.target : null;
@@ -272,10 +311,12 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
             onInviteSettled={(text, error) => { notify(text, error); void loadLists(); }} />
         </div>
         {projectId && bootstrap
-          ? <StudioProvider key={projectId} projectId={projectId} draft={bootstrap.draft} role={bootstrap.project.role} archived={bootstrap.project.status === "ARCHIVED"}
+          ? <SyncProvider key={projectId} projectId={projectId} initial={bootstrap.status} live={() => liveOf(projectId)} bootstrap={(fence) => loadProject(projectId, undefined, fence)}>
+            <StudioProvider key={projectId} projectId={projectId} draft={bootstrap.draft} role={bootstrap.project.role} archived={bootstrap.project.status === "ARCHIVED"}
               narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={projectChanged} onInspect={() => setPanel(true)} saveRef={saveChangesRef}>
               {main}{panel}
             </StudioProvider>
+          </SyncProvider>
           : <>{main}{panel}</>}
       </>}
     </div>
@@ -289,7 +330,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
       <CancelFocus label="Stay" onClick={() => setDialog(null)} />
       <button type="button" className="button danger" disabled={Boolean(ui.request)} onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
     </>}><p>{dirtyCount(store, projectId)} {ui.outbox.sending?.state === "uncertain" ? "unsaved edit(s) or unconfirmed change(s)." : pendingCount(ui.outbox) ? "unsaved change(s)." : "unsaved field(s)."}</p>{ui.outbox.sending?.state === "uncertain" && <p>The unconfirmed save will still be available to retry when you return. Discard only removes local edits; it cannot cancel a change already sent.</p>}</Dialog>}
-    {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project}
+    {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project} viewer={() => viewerRef.current}
       onClose={() => closeDialog(lifecycleDialog.project.id)} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}
   </div>;
 }

@@ -32,6 +32,16 @@ export function changes(buffer: EntityBuffer): Fields {
 /** Counted by the unsaved-changes guard: typed text or an unresolved conflict. */
 export const isDirty = (buffer: EntityBuffer) => buffer.conflict || dirtyFields(buffer).length > 0;
 
+/**
+ * "Changed by someone else": typed text whose record moved on. Shown version differs from the one typed against (a read
+ * moved the displayed record), or, while the view is frozen, the adopted record's version left the frozen base's. A refused
+ * save's `conflict` has its own note.
+ */
+export function changedElsewhere(buffer: EntityBuffer, shown: number, adopted?: number, frozenBase?: number): boolean {
+  return !buffer.conflict && dirtyFields(buffer).length > 0
+    && (buffer.baseVersion !== shown || (adopted !== undefined && frozenBase !== undefined && adopted !== frozenBase));
+}
+
 function put(buffers: Buffers, buffer: EntityBuffer): Buffers {
   const key = bufferKey(buffer.kind, buffer.id);
   const rest = { ...buffers };

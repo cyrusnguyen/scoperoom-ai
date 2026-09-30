@@ -25,7 +25,13 @@ Unavailable future actions are hidden; simulated screens never claim real saved,
 - **Save qualification:** the header and autosave send completed edits in the outbox. Unsubmitted inspector text and endpoint choices stay in separate buffers until their form action; they still count for the leave guard. Autosave currently ends undo history along with manual Save. These are recorded product limitations; the recommendation is to keep autosave.
 - **Refused save:** the unsaved changes stay on screen. Each item someone else changed underneath is listed with Saved value / Your edit / Before your edit and a Keep theirs choice; then Apply my changes again (fresh guards, anything that no longer applies is listed) or Discard my changes. An unconfirmed save shows Retry, which resends the same request.
 - **Arrange** (header button): a dialog picks Top to bottom or Left to right and previews the server layout read-only; Apply saves it only if the flow is unchanged, Cancel leaves everything as it was.
-- Reader and archived views keep pan and zoom only. Other people's changes appear after this person's next save, refusal or reload until Stage 04.
+- Reader and archived views keep pan and zoom only.
+- **Other people's saved changes** arrive by status polling (about every 10 s, no Realtime yet) and are shown without a reload:
+  - *Unrelated to my unsaved edits:* shown at once, no notice.
+  - *Same record as an unsaved edit (frozen):* one `role=status` notice, "Newer saved changes are available. Your changes stay shown until they are saved.", with the Saved value / Your edit / Before your edit comparison, Keep theirs and Save. A deleted target or an uncomparable revision gets the same headline without rows. Save meets the refused-save review under the same headline. Undoing everything shows the newer draft and says "Saved updates loaded. Redo history was cleared." once (Dismiss).
+  - *Read not landing after my save:* "Changes saved. Refreshing saved changes…"; once the poll's read also fails, "Changes saved. Couldn't refresh saved changes" with Retry. My acknowledged edit stays shown and "All changes saved" waits for a covering read. Below the floor no comparison or Keep theirs is offered.
+  - *Inspector text typed against a newer record:* the typed text stays, "Changed by someone else" shows their saved value, with Save my edit and Keep saved value.
+  - *No authority:* "Not saved" (status unavailable; the edit is kept and a later Save works); "Your account changed. Reloading…" and a return to /app when another account signed in; "Project unavailable" after removal; "This draft is read-only now, so your unsaved changes can’t be saved" with the edits listed for copying and Discard my changes after a downgrade.
 
 ## User-visible truth
 

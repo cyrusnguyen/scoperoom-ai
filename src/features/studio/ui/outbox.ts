@@ -38,15 +38,24 @@ export function isNewer(candidate: DraftView, current: DraftView): boolean {
   return candidate.id === current.id && candidate.documentRevision >= current.documentRevision && candidate.layoutRevision >= current.layoutRevision;
 }
 
+/** The saved revisions a receipt proved (`StudioUi.acknowledgedRevisions`): a read below either has not seen that save. */
+export type RevisionFloor = Pick<DraftView, "documentRevision" | "layoutRevision">;
+/** A read at or above both floor revisions (no floor: every read). */
+export function covers(view: RevisionFloor, floor: RevisionFloor | undefined): boolean {
+  return !floor || (view.documentRevision >= floor.documentRevision && view.layoutRevision >= floor.layoutRevision);
+}
+
 /**
  * What unsaved changes build on. With nothing unsaved it is the saved draft, except just after a save whose re-read
- * has not landed (or failed): the locally replayed result of that save stays shown until a read catches up.
+ * has not landed (or failed): the locally replayed result of that save stays shown until a read that is newer and
+ * covers the acknowledged `floor` catches up (the replay's own revisions can lag the receipt's, so a newer-looking read
+ * may still lack the save).
  */
-export function baseOf(outbox: Outbox, saved: DraftView): DraftView {
+export function baseOf(outbox: Outbox, saved: DraftView, floor?: RevisionFloor): DraftView {
   const { base } = outbox;
   if (!base) return saved;
   if (outbox.sending || outbox.entries.length) return base;
-  return base.id === saved.id && !isNewer(saved, base) ? base : saved;
+  return base.id === saved.id && (!isNewer(saved, base) || !covers(saved, floor)) ? base : saved;
 }
 
 /** One batch exactly as the server applies it: documentRevision per effective command, layoutRevision once. */
@@ -121,8 +130,8 @@ export type Replayed = { draft: DraftView; skipped: string[]; overLimit: boolean
  * What every view shows: the saved draft with the segment being saved and the unsent changes replayed on it, plus a
  * description of anything that no longer applies (so it is listed, not silently missing) and the final size check.
  */
-export function replay(outbox: Outbox, saved: DraftView): Replayed {
-  let view = baseOf(outbox, saved);
+export function replay(outbox: Outbox, saved: DraftView, floor?: RevisionFloor): Replayed {
+  let view = baseOf(outbox, saved, floor);
   const names = view.document;
   const skipped: string[] = [];
   for (const batch of outbox.sending?.batches ?? []) {
@@ -136,8 +145,8 @@ export function replay(outbox: Outbox, saved: DraftView): Replayed {
   return { draft: built.draft, skipped: [...skipped, ...built.skipped.map(({ command }) => describe(command, names))], overLimit: built.overLimit };
 }
 
-export function optimistic(outbox: Outbox, saved: DraftView): DraftView {
-  return replay(outbox, saved).draft;
+export function optimistic(outbox: Outbox, saved: DraftView, floor?: RevisionFloor): DraftView {
+  return replay(outbox, saved, floor).draft;
 }
 
 export type Enqueued = { entries: Entry[]; createdIds: string[]; versions: Record<string, number>; retiredIds: string[]; documentRevision: number };
@@ -156,8 +165,8 @@ function coalesces(last: Entry | undefined, command: GraphCommand): last is Extr
  * Checks a command against the shown (optimistic) draft and returns the new unsent chain. A refusal throws the same
  * GraphError the server would send. Created ids are generated here and are final: the save proposes them.
  */
-export function enqueue(outbox: Outbox, saved: DraftView, command: GraphCommand, newId: () => string = () => crypto.randomUUID()): Enqueued {
-  const current = optimistic(outbox, saved);
+export function enqueue(outbox: Outbox, saved: DraftView, command: GraphCommand, newId: () => string = () => crypto.randomUUID(), floor?: RevisionFloor): Enqueued {
+  const current = optimistic(outbox, saved, floor);
   if (command.command === "RECONNECT_EDGE") command = {
     ...command, payload: { ...command.payload, expectedSides: current.layout.edgeSides[command.payload.edgeId] ?? null },
   };
@@ -168,7 +177,7 @@ export function enqueue(outbox: Outbox, saved: DraftView, command: GraphCommand,
   if (coalesces(last, command)) {
     const earlier = outbox.entries.slice(0, -1);
     const merged = { ...last.command, payload: { ...last.command.payload, ...command.payload } } as GraphCommand;
-    const before = optimistic({ ...outbox, entries: earlier }, saved);
+    const before = optimistic({ ...outbox, entries: earlier }, saved, floor);
     const again = applyGraphCommand(before, before.documentRevision, merged, () => { throw new Error("NO_IDS"); });
     if (!again.documentChanged && !again.layoutChanged) return { entries: earlier, createdIds: [], versions: {}, retiredIds: [], documentRevision: before.documentRevision };
     return { entries: [...earlier, { kind: "command", command: merged, proposedIds: [] }], createdIds: [], versions: again.versions, retiredIds: [], documentRevision: before.documentRevision + (again.documentChanged ? 1 : 0) };
@@ -180,13 +189,13 @@ export function enqueue(outbox: Outbox, saved: DraftView, command: GraphCommand,
 }
 
 /** Stores a new unsent chain. Any new change ends what could be redone. */
-export function withEntries(outbox: Outbox, saved: DraftView, entries: Entry[]): Outbox {
-  return { ...outbox, base: baseOf(outbox, saved), entries, redo: [] };
+export function withEntries(outbox: Outbox, saved: DraftView, entries: Entry[], floor?: RevisionFloor): Outbox {
+  return { ...outbox, base: baseOf(outbox, saved, floor), entries, redo: [] };
 }
 
 /** One drop of steps (a drag, the position form, or a new shape's drop point when `joined`). */
-export function addDrop(outbox: Outbox, saved: DraftView, flowId: string, items: Placement[], joined = false): Outbox {
-  return withEntries(outbox, saved, [...outbox.entries, { kind: "drop", flowId, items, ...(joined ? { joined: true as const } : {}) }]);
+export function addDrop(outbox: Outbox, saved: DraftView, flowId: string, items: Placement[], joined = false, floor?: RevisionFloor): Outbox {
+  return withEntries(outbox, saved, [...outbox.entries, { kind: "drop", flowId, items, ...(joined ? { joined: true as const } : {}) }], floor);
 }
 
 /** Removes the last unsent change (with anything joined to it). Nothing that is being or was saved can be undone. */
@@ -254,9 +263,9 @@ export function split({ commands, moves }: Changes): Changes[] {
  * Commands that no longer apply are left out and listed in `dropped`. A chain whose result would go over the draft's
  * size limit is not started at all (the outbox is returned unchanged; `overLimit` tells the caller).
  */
-export function startSave(outbox: Outbox, saved: DraftView, key: string): Outbox {
+export function startSave(outbox: Outbox, saved: DraftView, key: string, floor?: RevisionFloor): Outbox {
   if (outbox.sending || !outbox.entries.length) return outbox;
-  const base = baseOf(outbox, saved);
+  const base = baseOf(outbox, saved, floor);
   const built = build(base, outbox.entries);
   if (built.overLimit) return outbox;
   const batches = split(built.changes);
@@ -274,8 +283,61 @@ export function acknowledged(outbox: Outbox, nextKey: string): Outbox {
   return { ...outbox, base: next, sending: rest.length ? { draftId: sending.draftId, key: nextKey, batches: rest, state: "waiting" } : null };
 }
 
+const ADVANCE_MAX_PREFIXES = 16;
+const ADVANCE_WORK_BUDGET_BYTES = 8 * 1024 * 1024;
+const advanceEncoder = new TextEncoder();
+
+// Undo/redo traverses one ordered chain. Joined entries form one undo unit, so only its end is reachable.
+function reachableEnds(entries: Entry[]): number[] {
+  const ends = [0];
+  for (let end = 1; end <= entries.length; end++) {
+    if (end === entries.length || !entries[end]!.joined) ends.push(end);
+  }
+  return ends;
+}
+
 /**
- * "Discard my changes": local changes go. A save in flight or unconfirmed may already have committed, so it stays with
+ * Moves the frozen base to an adopted saved read (`fresh`) only when no request the outbox could still send would
+ * change: every undo/redo-reachable prefix of the chain must build the same request body and the same size verdict on
+ * both. Returns the same object when it declines (or `sending` is pending). A redo path that cannot be proved is
+ * cleared, so a later redo cannot restore an obsolete base. Bounded work: at most ADVANCE_MAX_PREFIXES prefix pairs and
+ * ADVANCE_WORK_BUDGET_BYTES of serialized input; an unproved active prefix freezes the base.
+ */
+export function advance(outbox: Outbox, fresh: DraftView): Outbox {
+  const { base } = outbox;
+  if (outbox.sending || !base || fresh === base || !isNewer(fresh, base)) return outbox; // the same object: nothing to prove
+  // A read whose revisions equal the base's has nothing newer to adopt: it may replace the base when provable, but an
+  // unproved (or capped) prefix only declines, and never clears redo. Only a read that moved may obsolete a redo path.
+  const moved = fresh.documentRevision !== base.documentRevision || fresh.layoutRevision !== base.layoutRevision;
+  const activeEnd = outbox.entries.length;
+  const chain = [...outbox.entries, ...[...outbox.redo].reverse().flat()];
+  const pairBytes = advanceEncoder.encode(JSON.stringify(base)).byteLength
+    + advanceEncoder.encode(JSON.stringify(fresh)).byteLength;
+  let compared = 0;
+  let keepRedo = true;
+  for (const end of reachableEnds(chain)) {
+    if (end === 0) continue; // The empty request is identical and build(empty).overLimit is false.
+    let same = false;
+    if (compared < ADVANCE_MAX_PREFIXES && (compared + 1) * pairBytes <= ADVANCE_WORK_BUDGET_BYTES) {
+      const prefix = chain.slice(0, end);
+      // Each (base, prefix) is built once; do not rebuild these results for the full-chain check.
+      const before = build(base, prefix), after = build(fresh, prefix);
+      compared++;
+      same = before.overLimit === after.overLimit
+        && (end !== activeEnd || !after.overLimit)
+        && JSON.stringify(wireBody(before.changes)) === JSON.stringify(wireBody(after.changes));
+    }
+    if (!same) {
+      if (end <= activeEnd || !moved) return outbox; // Mismatch or exhausted budget: keep every active attempt frozen.
+      keepRedo = false; // Active prefixes were proved; discard unproved redo before moving their base.
+      break;
+    }
+  }
+  return { ...outbox, base: fresh, redo: keepRedo ? outbox.redo : [] };
+}
+
+/**
+ * “Discard my changes”: local changes go. A save in flight or unconfirmed may already have committed, so it stays with
  * its key for an exact retry. The base stays too: after an acknowledged save whose re-read failed it is what was saved.
  */
 export function discardOutbox(outbox: Outbox): Outbox {

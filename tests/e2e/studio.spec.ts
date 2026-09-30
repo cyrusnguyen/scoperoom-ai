@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
-import { appUrl, createProjectViaApi, e2eReady, emptyDraftView, headerSave, saveStudio } from "./support";
+import { appUrl, createProjectViaApi, e2eReady, emptyDraftView, headerSave, saveStudio, withStatus } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -877,13 +877,13 @@ test.describe("Studio on a real draft", () => {
         await note(page).getByRole("button", { name: "Retry" }).click();
       }
       if (failedRead) {
-        await expect(page.locator(".studio-status")).toContainText("Changes saved. The latest draft could not load.");
+        await expect(page.locator(".studio-status")).toContainText("Changes saved. Refreshing saved changes…");
         await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
         await page.goBack();
         await expect(page.getByRole("heading", { level: 1, name: "History project" })).toBeVisible();
         await page.goForward();
         await expect(page.getByRole("heading", { level: 1, name: "Studio project" })).toBeVisible();
-        await expect(page.getByRole("button", { name: "Retry read", exact: true })).toHaveCount(0);
+        await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
       }
       await expect(page.locator(".studio-status")).toContainText("0 connections");
       await expect(page.locator(".studio-status")).toContainText("All changes saved");
@@ -930,21 +930,23 @@ test.describe("Studio on a real draft", () => {
       await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Before/ }).click();
       await panel(page).getByLabel("Name", { exact: true }).fill("After");
       await saveButton(page).click();
-      await expect(page.locator(".studio-status")).toContainText("Changes saved. The latest draft could not load.");
+      await expect(page.locator(".studio-status")).toContainText("Changes saved. Refreshing saved changes…");
       release();
       await expect(page.getByRole("heading", { level: 1, name: "Metadata reread" })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Retry read", exact: true })).toBeVisible();
+      // The first failure says "Refreshing saved changes…"; the poll's next failed read turns it into the recovery line.
+      await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible({ timeout: 25_000 });
+      await expect(page.locator(".studio-status")).toContainText("Couldn't refresh saved changes");
       await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
       mode = "stale";
       const staleRead = page.waitForResponse((response) => response.url().endsWith(`/drafts/${staleDraft.id}`));
-      await page.getByRole("button", { name: "Retry read", exact: true }).click();
+      await page.getByRole("button", { name: "Retry", exact: true }).click();
       await staleRead;
-      await expect(page.getByRole("button", { name: "Retry read", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
       await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
       mode = "fresh";
-      await page.getByRole("button", { name: "Retry read", exact: true }).click();
+      await page.getByRole("button", { name: "Retry", exact: true }).click();
       await expect(page.getByRole("list", { name: "Steps" })).toContainText("After");
-      await expect(page.getByRole("button", { name: "Retry read", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
       await expect(page.locator(".studio-status")).toContainText("All changes saved");
       expect(writes).toBe(1);
     } finally { release(); }
@@ -1116,7 +1118,10 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await page.unrouteAll({ behavior: "ignoreErrors" });
     await page.route("**/api/projects", (route) => route.fulfill({ json: lists(role, status) }));
     await page.route("**/api/invitations", (route) => route.fulfill({ json: { items: [], truncated: false } }));
-    await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: draft(extraFlows) } }));
+    const bootstrap = withStatus({ project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: draft(extraFlows) });
+    await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: bootstrap }));
+    // Saves revalidate against status first (Stage 04.2 Task 5): unmocked, the real API answers 404 for this made-up project.
+    await page.route(`**/api/projects/${projectId}/status`, (route) => route.fulfill({ json: bootstrap.status }));
   }
 
 
@@ -1322,14 +1327,24 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
       writes++;
       await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, replayed: false } });
     });
+    // The status poll fails too: two failed attempts (the poll's backoff at its cap) turn "Refreshing" into the recovery line.
+    await page.route(`**/api/projects/${projectId}/status`, (route) => route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Status unavailable" } } }));
+    await page.clock.install();
     await page.goto(`/app/projects/${projectId}`);
     await toolbar(page).getByRole("button", { name: "List", exact: true }).click();
     await page.getByRole("button", { name: /^Delete connection Receive form/ }).click();
     await headerSave(page).click();
-    await expect(page.locator(".studio-status")).toContainText("Changes saved. The latest draft could not load.");
+    await expect(page.locator(".studio-status")).toContainText("Changes saved. Refreshing saved changes…");
     await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
     await expect(page.locator(".studio-status")).toContainText("0 connections"); // what was saved stays shown
-    await page.getByRole("button", { name: "Retry read", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
+    for (const ms of [11_000, 23_000]) {
+      const answered = page.waitForResponse((response) => /\/status$/.test(new URL(response.url()).pathname));
+      await page.clock.runFor(ms);
+      await answered;
+    }
+    await expect(page.locator(".studio-status")).toContainText("Couldn't refresh saved changes");
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
     await expect(page.locator(".studio-status")).toContainText("0 connections");
     await expect(page.locator(".studio-status")).toContainText("All changes saved");
     expect(writes).toBe(1);
@@ -1343,8 +1358,8 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     const attempts: { key: string; body: string }[] = [];
     const committed = { ...initial, documentRevision: 2, document: { ...initial.document, nodes: { ...initial.document.nodes, [start]: { ...initial.document.nodes[start]!, label: "Saved before change", version: 2 } } } };
     const currentDraft = () => change === "empty" && status === "ARCHIVED" ? { ...emptyDraftView(initial.id), documentRevision: 3 } : committed;
-    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: attempts.length ? currentDraft() : initial } }));
-    await page.route(`**/api/projects/${projectId}/status`, async (route) => route.fulfill({ json: { settingsVersion: 1, approvalPolicyVersion: 1, status } }));
+    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: attempts.length ? currentDraft() : initial }) }));
+    await page.route(`**/api/projects/${projectId}/status`, async (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: attempts.length ? currentDraft() : initial }).status }));
     await page.route(`**/api/projects/${projectId}/members`, async (route) => route.fulfill({ json: { members: [] } }));
     await page.route(`**/api/projects/${projectId}/settings`, async (route) => {
       if (change === "role") role = "VIEWER";
@@ -1387,7 +1402,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     let role = "OWNER";
     let status = "ACTIVE";
     let writes = 0;
-    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: draft() } }));
+    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: draft() }) }));
     await page.route("**/changes", async (route) => {
       writes++;
       if (change === "role") role = "VIEWER";
@@ -1417,7 +1432,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
   test("a role downgrade removes an already-open Add step form", async ({ page }) => {
     await mock(page, "OWNER");
     let role = "OWNER";
-    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status: "ACTIVE", role, ownerId: projectId }, draft: draft() } }));
+    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status: "ACTIVE", role, ownerId: projectId }, draft: draft() }) }));
     await page.route("**/changes", async (route) => {
       role = "VIEWER";
       await route.fulfill({ status: 403, json: { error: { code: "FORBIDDEN", message: "Access changed" } } });
@@ -1439,7 +1454,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
   test("a role downgrade removes an already-open flow creation form", async ({ page }) => {
     await mock(page, "OWNER");
     let role = "OWNER";
-    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status: "ACTIVE", role, ownerId: projectId }, draft: draft() } }));
+    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status: "ACTIVE", role, ownerId: projectId }, draft: draft() }) }));
     await page.route("**/changes", async (route) => {
       role = "VIEWER";
       await route.fulfill({ status: 403, json: { error: { code: "FORBIDDEN", message: "Access changed" } } });

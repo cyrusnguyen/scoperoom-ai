@@ -13,6 +13,21 @@ export function emptyDraftView(id = "55555555-5555-4555-8555-555555555555") {
   return { id, status: "EDITABLE" as const, documentRevision: 1, layoutRevision: 1, ...emptyDraft() };
 }
 
+/** The caller's profile id in mocked statuses and bootstraps: they must agree, or the page treats the account as changed. */
+export const MOCK_VIEWER_ID = "99999999-9999-4999-8999-999999999999";
+
+/** A bootstrap body as the API sends it: `status` (04.1) is what the project sync controller starts from. */
+export function withStatus<T extends { project: { status: string; role: string }; draft: { id: string; documentRevision: number; layoutRevision: number } }>(bootstrap: T) {
+  const { project, draft } = bootstrap;
+  return {
+    ...bootstrap,
+    status: {
+      viewerId: MOCK_VIEWER_ID, status: project.status, role: project.role, version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null,
+      currentDraftId: draft.id, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, realtimeEpoch: "77777777-7777-4777-8777-777777777777", eventSequence: 1,
+    },
+  };
+}
+
 export function adminClient() {
   return createClient(process.env.E2E_SUPABASE_URL!, process.env.E2E_SUPABASE_SECRET_KEY!, { auth: { autoRefreshToken: false, persistSession: false } });
 }

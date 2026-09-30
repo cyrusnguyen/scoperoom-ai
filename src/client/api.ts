@@ -5,6 +5,7 @@ export type ApiResult<T> =
   | { ok: true; data: T }
   | { ok: false; code: string; message: string; status: number; details?: ErrorDetails; uncertain: boolean };
 
+export const SESSION_ENDED = "scoperoom:session-ended";
 const unavailable = "ScopeRoom is unavailable right now. Try again.";
 
 async function settle<T>(request: () => Promise<Response>): Promise<ApiResult<T>> {
@@ -42,6 +43,17 @@ export function apiMutate<T>(url: string, key: string | null, body: Record<strin
  */
 export function sessionEnded(result: ApiResult<unknown>, to = "/login"): boolean {
   if (result.ok || result.status !== 401) return false;
+  // The shell listens, so it can stop polling and clear what it shows before the page is replaced.
+  window.dispatchEvent(new CustomEvent(SESSION_ENDED, { detail: "session" }));
   window.location.replace(to);
   return true;
+}
+
+/**
+ * A status or bootstrap for another account than the page opened with: same teardown as a 401, then a full load of the
+ * app so nothing private from the first account stays in memory.
+ */
+export function accountChanged(to = "/app"): void {
+  window.dispatchEvent(new CustomEvent(SESSION_ENDED, { detail: "account" }));
+  window.location.replace(to);
 }
