@@ -45,27 +45,38 @@ function tenantApi() {
   const { docker, container } = inspectLocalContainer(projectId, dbPort, "realtime");
   const secret = container.Config?.Env?.find((entry) => entry.startsWith("API_JWT_SECRET="))?.slice("API_JWT_SECRET=".length);
   if (!secret) throw new Error("Realtime setup could not read the local management credential.");
-  return (method, body) => {
-    const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
-    const unsigned = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ role: "service_role", exp: Math.floor(Date.now() / 1000) + 60 })}`;
+  return (method, body) => requestLocalTenant({ docker, projectId, secret, method, body });
+}
+
+/**
+ * Bounded local adapter. Injected process/time calls exercise slow startup without changing provider state.
+ * @param {{ docker: string, projectId: string, secret: string, method: string, body?: unknown }} target
+ * @param {{ run?: (binary: string, args: string[], options: { encoding: "utf8", input: string, stdio: ["pipe", "pipe", "ignore"] }) => string, now?: () => number, wait?: (ms: number) => void }} dependencies
+ */
+export function requestLocalTenant({ docker, projectId, secret, method, body = undefined }, {
+  run = execFileSync, now = Date.now,
+  wait = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
+} = {}) {
+  const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const args = ["exec", "-i", `supabase_realtime_${projectId}`, "curl", "-sS", "--max-time", "15", "-K", "-", "-w", "\n%{http_code}", "-H", "content-type: application/json"];
+  if (method === "PUT") args.push("-X", "PUT", "-d", JSON.stringify(body));
+  // A freshly started Realtime container may not accept connections yet (CI): retry until the deadline, then fail closed.
+  for (const deadline = now() + TENANT_WAIT_MS; ; ) {
+    // A slow container may become reachable only after the first credential expires.
+    const unsigned = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ role: "service_role", exp: Math.floor(now() / 1000) + 60 })}`;
     const token = `${unsigned}.${createHmac("sha256", secret).update(unsigned).digest("base64url")}`;
-    const args = ["exec", "-i", `supabase_realtime_${projectId}`, "curl", "-sS", "--max-time", "15", "-K", "-", "-w", "\n%{http_code}", "-H", "content-type: application/json"];
-    if (method === "PUT") args.push("-X", "PUT", "-d", JSON.stringify(body));
-    // A freshly started Realtime container may not accept connections yet (CI): retry until the deadline, then fail closed.
-    for (const deadline = Date.now() + TENANT_WAIT_MS; ; ) {
-      let output;
-      try {
-        output = execFileSync(docker, [...args, `http://127.0.0.1:4000/api/tenants/${TENANT}`], { encoding: "utf8", input: `header = "Authorization: Bearer ${token}"\n`, stdio: ["pipe", "pipe", "ignore"] });
-      } catch {
-        if (Date.now() >= deadline) throw new Error(`Realtime setup could not reach the local tenant API within ${TENANT_WAIT_MS / 1000}s.`);
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
-        continue;
-      }
-      const split = output.lastIndexOf("\n");
-      // Bodies hold encrypted provider settings, so they are parsed here and never printed.
-      return { status: Number(output.slice(split + 1)), data: (() => { try { return JSON.parse(output.slice(0, split)).data; } catch { return undefined; } })() };
+    let output;
+    try {
+      output = run(docker, [...args, `http://127.0.0.1:4000/api/tenants/${TENANT}`], { encoding: "utf8", input: `header = "Authorization: Bearer ${token}"\n`, stdio: ["pipe", "pipe", "ignore"] });
+    } catch {
+      if (now() >= deadline) throw new Error(`Realtime setup could not reach the local tenant API within ${TENANT_WAIT_MS / 1000}s.`);
+      wait(2000);
+      continue;
     }
-  };
+    const split = output.lastIndexOf("\n");
+    // Bodies hold encrypted provider settings, so they are parsed here and never printed.
+    return { status: Number(output.slice(split + 1)), data: (() => { try { return JSON.parse(output.slice(0, split)).data; } catch { return undefined; } })() };
+  }
 }
 
 async function requirePrivateOnly(configure) {
