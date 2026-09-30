@@ -112,7 +112,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   // install a different draft than the one shown: a replaced draft. Any other read of another draft is a stale one.
   const loadProject = useCallback(async (id: string, signal?: AbortSignal, fence?: () => boolean) => {
     const result = await apiRead<ProjectBootstrap>(`/api/projects/${id}/bootstrap`, signal);
-    if (signal?.aborted || sessionEnded(result) || (fence && !fence())) return;
+    if (signal?.aborted || sessionEnded(result) || endedRef.current || (fence && !fence())) return;
     // An unsignaled caller (Retry, projectChanged) can resolve after the user opened a different project.
     if (id !== projectIdRef.current) return;
     if (result.ok && viewerRef.current && result.data.status.viewerId !== viewerRef.current) { accountChanged(); return; }
@@ -128,6 +128,9 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
       if (admitted) setStore((current) => updateUi(current, id, (ui) => afterDraftRead(ui, result.data.draft)));
     }
     else if (result.status === 404) { install({ projectId: id, missing: true }); setStore((previous) => dropProject(previous, id)); }
+    // A background read (polling, Details) that fails transiently keeps what is shown: unmounting would stop the polling
+    // that retries it. The unavailable view's own Retry has nothing shown, and 403 or 404 always show their recovery.
+    else if (result.uncertain && openedRef.current?.projectId === id && openedRef.current.bootstrap) return;
     else install({ projectId: id, error: result.message });
   }, [install]);
 
