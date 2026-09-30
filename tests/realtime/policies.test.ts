@@ -6,6 +6,7 @@ import { parseTopic } from "../../src/features/collaboration/contracts/topics.ts
 import { archiveProject, removeProjectMember } from "../../src/features/projects/server/management.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import type { Identity } from "../integration/support/fixture.ts";
+import { saveFlow } from "../integration/support/hints.ts";
 import { controlSend, policyAllows, RECEIVE_TIMEOUT_MS, SILENCE_MS, withRealtimeFixture, type Realtime } from "./support.ts";
 
 // Real Auth sessions over real sockets against the installed provider policies. Every socket result is paired with the application's own
@@ -76,10 +77,9 @@ test("both topics enforce exact role capabilities over real sockets", async () =
       else assert.deepEqual([result.status === "ok", ...result.delivered], [false, false, false, false], `${role} collab send`);
     }));
 
-    // Events: no browser may send, but members do receive database-originated hints (positive control for the silence below).
-    const event = `control-${randomUUID()}`;
-    const controls = ROLES.map((role) => rt.receive(sockets[role].events, event));
-    await controlSend(fixture.database, topics.events, event);
+    // Events: no browser may send, but members do receive the hint a real save commits (positive control for the silence below).
+    const controls = ROLES.map((role) => rt.receive(sockets[role].events, "PROJECT_CHANGED"));
+    await saveFlow(owner!, projectId);
     await Promise.all(controls);
     await Promise.all(ROLES.map(async (role) => {
       assert.equal(await policyAllows(fixture.database, members[role].authUserId, topics.events, "send_broadcast"), false, `${role} events policy`);

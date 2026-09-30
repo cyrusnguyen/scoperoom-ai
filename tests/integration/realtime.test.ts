@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
-import type { Client } from "pg";
+import { Client } from "pg";
+import { saveChanges } from "../../src/features/drafts/server/changes.ts";
+import { ProjectError } from "../../src/features/projects/server/errors.ts";
+import { archiveProject } from "../../src/features/projects/server/management.ts";
+import { getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { canRun, withFixture, type Identity } from "./support/fixture.ts";
+import { draftOf, flowBatch, hintsFor, saveFlow } from "./support/hints.ts";
 
 // SQL-level matrix for the private Realtime policies. Real-JWT socket checks live in the browser/socket suite.
 const denied = (error: unknown) => (error as { code?: string }).code === "42501";
@@ -192,7 +198,7 @@ test("helper ownership, search path and role privileges are minimal", { skip: !c
              has_schema_privilege('app_realtime_notifier', 'app', 'USAGE') as app_usage,
              has_schema_privilege('app_realtime_notifier', 'app_private', 'USAGE') as private_usage,
              has_function_privilege('app_realtime_notifier', 'app_private.can_realtime(text,text)', 'EXECUTE') as can_realtime`);
-    assert.deepEqual(notifier, { realtime_usage: true, send: true, app_usage: false, private_usage: false, can_realtime: false });
+    assert.deepEqual(notifier, { realtime_usage: true, send: true, app_usage: false, private_usage: true, can_realtime: false });
 
     // Browsers: helper schema and function only; no application schema access and no other provider policies.
     const { rows: [browser] } = await database.query<{ private_usage: boolean; app_usage: boolean; anon_private: boolean; web_private: boolean }>(`
@@ -204,9 +210,112 @@ test("helper ownership, search path and role privileges are minimal", { skip: !c
     assert.deepEqual(rls, { enabled: true, owner: "supabase_realtime_admin" });
     const { rows: policies } = await database.query<{ policyname: string; cmd: string; roles: string[] }>("select policyname::text, cmd::text, roles::text[] from pg_policies where schemaname = 'realtime' and tablename = 'messages' order by policyname");
     assert.deepEqual(policies, [
+      { policyname: "scoperoom_rt_hint", cmd: "INSERT", roles: ["app_realtime_notifier"] },
       { policyname: "scoperoom_rt_insert", cmd: "INSERT", roles: ["authenticated"] },
       { policyname: "scoperoom_rt_select", cmd: "SELECT", roles: ["authenticated"] },
     ]);
   });
 });
 
+
+const HINT_KEYS = ["epoch", "eventSequence", "projectId", "type"];
+/** The provider adds its own message id to a stored payload; everything else must be the four-field contract. */
+const contract = (payload: Record<string, unknown>) => Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "id"));
+
+test("a changed save commits exactly one four-field hint on the epoch topic of that update", { skip: !canRun }, async () => {
+  const runtime = new Client({ connectionString: process.env.DATABASE_URL });
+  await runtime.connect();
+  try {
+    assert.equal((await runtime.query<{ role: string }>("select current_user as role")).rows[0]!.role, "app_web", "the services run as the web runtime role, not a privileged one");
+  } finally { await runtime.end(); }
+  await withFixture(async ({ database, user, project }) => {
+    const owner = await user();
+    const projectId = await project(owner);
+    assert.deepEqual(await hintsFor(database, projectId), [], "project creation needs no hint");
+    const { rows: [before] } = await database.query<{ epoch: string; sequence: number }>("select realtime_epoch::text as epoch, event_sequence::int as sequence from app.project where id = $1", [projectId]);
+    const saved = await saveFlow(owner, projectId);
+    const [hint, ...rest] = await hintsFor(database, projectId);
+    assert.equal(rest.length, 0, "one project UPDATE per save, two audit entries, one hint");
+    assert.deepEqual(Object.keys(contract(hint!.payload)).sort(), HINT_KEYS);
+    assert.deepEqual(contract(hint!.payload), { type: "PROJECT_CHANGED", projectId, epoch: before!.epoch, eventSequence: saved.eventSequence });
+    assert.equal(saved.eventSequence, before!.sequence + 2);
+    assert.equal(hint!.topic, `project:${projectId}:${before!.epoch}:events`);
+  });
+});
+
+test("no-op saves, receipt replays and refused saves add no audit and no hint", { skip: !canRun }, async () => {
+  await withFixture(async ({ database, user, project }) => {
+    const owner = await user();
+    const projectId = await project(owner);
+    const { draftId, base } = await draftOf(owner, projectId);
+    const { start, body } = flowBatch(base.documentRevision);
+    const key = randomUUID();
+    const saved = await saveChanges(owner, projectId, draftId, { ...body, key });
+    const state = async () => ({
+      hints: (await hintsFor(database, projectId)).length,
+      audit: Number((await database.query("select count(*) from app.audit_event where project_id = $1", [projectId])).rows[0].count),
+      sequence: (await getProjectStatus(owner, projectId)).eventSequence,
+    });
+    const settled = await state();
+    assert.deepEqual(settled, { hints: 1, audit: 3, sequence: 3 }); // creation audits sequence 1 without a hint
+
+    const noOp = await saveChanges(owner, projectId, draftId, { commands: [{ commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId: start, label: "Step" } }], moves: [], key: randomUUID() });
+    assert.equal(noOp.eventSequence, saved.eventSequence);
+    assert.deepEqual(await state(), settled, "an effective no-op keeps every counter");
+
+    assert.deepEqual(await saveChanges(owner, projectId, draftId, { ...body, key }), { ...saved, replayed: true });
+    assert.deepEqual(await state(), settled, "a receipt replay writes nothing");
+
+    await assert.rejects(saveChanges(owner, projectId, draftId, { ...flowBatch(base.documentRevision).body, key: randomUUID() }), (error: unknown) => error instanceof ProjectError && error.code === "STALE_DOCUMENT_REVISION");
+    assert.deepEqual(await state(), settled, "a refused save writes nothing");
+  });
+});
+
+test("a management rotation hint names the epoch of the row it was fired for", { skip: !canRun }, async () => {
+  await withFixture(async ({ database, user, project }) => {
+    const owner = await user();
+    const projectId = await project(owner);
+    await archiveProject(owner, projectId, { expectedProjectVersion: (await getProjectStatus(owner, projectId)).version, reason: "Wrapped up", key: randomUUID() });
+    const hints = await hintsFor(database, projectId);
+    assert.ok(hints.length >= 1);
+    for (const hint of hints) {
+      const payload = contract(hint.payload);
+      assert.deepEqual(Object.keys(payload).sort(), HINT_KEYS);
+      assert.equal(hint.topic, `project:${payload.projectId}:${payload.epoch}:events`, "topic and payload come from the same NEW row");
+    }
+  });
+});
+
+test("only the notifier owns the hint functions and no application or browser role can execute them", { skip: !canRun }, async () => {
+  await withFixture(async ({ database }) => {
+    const functions = ["app_private.enqueue_project_hint(jsonb,text)", "app_private.notify_project_changed()"];
+    for (const signature of functions) {
+      const { rows: [row] } = await database.query<{ owner: string; secdef: boolean; config: string[]; shared: boolean }>(
+        `select pg_get_userbyid(proowner) as owner, prosecdef as secdef, proconfig as config,
+           exists (select 1 from aclexplode(coalesce(proacl, acldefault('f', proowner))) a where a.grantee <> proowner) as shared
+         from pg_proc where oid = $1::regprocedure`, [signature]);
+      assert.deepEqual(row, { owner: "app_realtime_notifier", secdef: true, config: ["search_path=\"\""], shared: false }, signature);
+      for (const role of ["anon", "authenticated", "app_web", "app_worker", "app_web_runtime", "app_worker_runtime", "app_migrator_runtime", "app_realtime_reader"]) {
+        const { rows: [access] } = await database.query<{ ok: boolean }>("select has_function_privilege($1, $2::regprocedure, 'EXECUTE') as ok", [role, signature]);
+        assert.equal(access!.ok, false, `${role} ${signature}`);
+      }
+    }
+    const topic = `project:${randomUUID()}:${randomEpoch}:events`;
+    const payload = JSON.stringify({ type: "PROJECT_CHANGED", projectId: randomUUID(), epoch: randomEpoch, eventSequence: 1 });
+    const runtime = new Client({ connectionString: process.env.DATABASE_URL });
+    await runtime.connect();
+    try { await assert.rejects(runtime.query("select app_private.enqueue_project_hint($1::jsonb, $2)", [payload, topic]), denied, "runtime login"); } finally { await runtime.end(); }
+    for (const role of ["anon", "authenticated"]) {
+      await database.query("begin");
+      try {
+        await database.query(`set local role ${role}`);
+        await assert.rejects(database.query("select app_private.enqueue_project_hint($1::jsonb, $2)", [payload, topic]), denied, role);
+      } finally { await database.query("rollback"); }
+    }
+    assert.deepEqual((await database.query("select 1 from realtime.messages where topic = $1", [topic])).rows, [], "no fabricated hint");
+    const { rows: [trigger] } = await database.query<{ enabled: string; definition: string }>(
+      "select tgenabled as enabled, pg_get_triggerdef(oid) as definition from pg_trigger where tgrelid = 'app.project'::regclass and tgname = 'project_changed_hint'");
+    assert.equal(trigger!.enabled, "O");
+    assert.equal(trigger!.definition, "CREATE TRIGGER project_changed_hint AFTER UPDATE OF event_sequence ON app.project FOR EACH ROW WHEN ((new.event_sequence > old.event_sequence)) EXECUTE FUNCTION app_private.notify_project_changed()");
+  });
+});
