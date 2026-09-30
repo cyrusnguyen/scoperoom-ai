@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect } from "@playwright/test";
+import { expect, type Route } from "@playwright/test";
 import { test } from "./studio-fixtures";
 import { appUrl, createProjectViaApi, e2eReady, headerSave, seedStudioChanges } from "./support";
 
@@ -60,20 +60,23 @@ test("a transient bootstrap failure in the background keeps the Studio mounted a
   const toolbar = page.locator(".studio-toolbar");
   await expect(toolbar).toBeVisible();
   await expect(page.locator("#studio-flow-title")).toHaveText("Transient");
-  // Another window archives the project: the next status differs in lifecycle, so the controller asks for a bootstrap.
+  // Another window archives the project: the next status differs in lifecycle, so the controller asks for a bootstrap. With Realtime live that read may
+  // come from the archive's committed hint or the join read before any poll, so the bootstrap fails for as long as the route is held, whichever read asks.
   const status = await (await page.request.get(`/api/projects/${projectId}/status`)).json() as { version: number };
+  const unavailable = (route: Route) => route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "No.", requestId: "00000000-0000-4000-8000-000000000000", retryable: true } } });
+  await page.route(`**/api/projects/${projectId}/bootstrap`, unavailable);
+  const failed = page.waitForResponse((response) => /\/bootstrap$/.test(new URL(response.url()).pathname) && response.status() === 503);
   const archived = await page.request.post(`/api/projects/${projectId}/archive`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedProjectVersion: status.version, reason: "Finished" } });
   expect(archived.status()).toBe(200);
-  await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "No.", requestId: "00000000-0000-4000-8000-000000000000", retryable: true } } }), { times: 1 });
-  const failed = page.waitForResponse((response) => /\/bootstrap$/.test(new URL(response.url()).pathname) && response.status() === 503);
-  await page.clock.runFor(11_000);
   await failed;
+  await page.clock.runFor(11_000); // and the poll's own bootstrap attempt fails the same way
   await page.waitForTimeout(300);
   await expect(toolbar).toBeVisible();
   await expect(page.locator("#studio-flow-title")).toHaveText("Transient");
   await expect(page.getByRole("heading", { level: 1, name: "Project unavailable" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Restore…" })).toHaveCount(0); // still the active view
   const recovered = page.waitForResponse((response) => /\/bootstrap$/.test(new URL(response.url()).pathname) && response.status() === 200);
+  await page.unroute(`**/api/projects/${projectId}/bootstrap`, unavailable);
   await page.clock.runFor(11_000);
   await recovered;
   await expect(page.getByRole("button", { name: "Restore…" })).toBeVisible();
