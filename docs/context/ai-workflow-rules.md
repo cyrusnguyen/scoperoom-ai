@@ -8,7 +8,7 @@ Read root instructions, tracker and relevant context/stage/contracts. Inspect ac
 
 Complete one reviewable checkpoint with its UI, data path and relevant failure tests. Keep related work together across layers. Independent agents may own bounded files/tasks when the session supports delegation; reconcile shared contracts before claiming completion.
 
-The primary session remains the lead/integrator. Use the project-scoped roles selectively rather than launching a permanent team. Keep one active writer per path or working tree, provide explicit ownership and acceptance criteria, and give reviewers/verifiers a stable change to inspect. Project agents take their model from the `.claude/agents` frontmatter; do not pass a model override when delegating.
+The primary session remains the lead/integrator. Use the project-scoped roles selectively rather than launching a permanent team. Keep one active writer per path or working tree, provide explicit ownership and acceptance criteria, and give reviewers/verifiers a stable change to inspect. Codex project agents take their model from `.codex/agents/*.toml`; `docs_drafter` uses Luna for bounded documentation and plan drafts. The lead retains scope and final plan decisions. Claude project agents take their model from `.claude/agents` frontmatter; do not pass a model override when delegating.
 
 ## Decisions and boundaries
 
