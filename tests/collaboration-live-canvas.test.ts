@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { PresenceState } from "../src/features/collaboration/contracts/messages.ts";
 import type { SavedView } from "../src/features/collaboration/ui/preview-store.ts";
-import { PREVIEW_TTL_MS } from "../src/features/collaboration/ui/preview-store.ts";
 import type { Person } from "../src/features/collaboration/ui/participants.ts";
 import { expiryDelay, gestureBases, gestureItems, sessionLabels, visibleDrags } from "../src/features/collaboration/ui/live-canvas.ts";
 
@@ -41,13 +40,12 @@ test("a remote ghost for a node the local user is dragging is suppressed; other 
   assert.equal(visibleDrags(shot, new Set()).length, 2);
 });
 
-test("the expiry timer is due just after the last notification's TTL, never earlier than 50 ms, and absent when nothing is shown", () => {
-  const empty = { cursors: [], drags: [] };
-  const cursor = { cursors: [{ sessionId: "s", x: 0, y: 0 }], drags: [] };
-  assert.equal(expiryDelay(empty, 1000, 1000), null);
-  assert.equal(expiryDelay(cursor, 1000, 1000), PREVIEW_TTL_MS + 1);
-  assert.equal(expiryDelay(cursor, 1000, 1000 + 1500), 501);
-  assert.equal(expiryDelay(cursor, 1000, 1000 + 5000), 50);
+test("the expiry timer waits until the earliest shown entry has expired (one ms past it) and is absent when nothing is shown", () => {
+  assert.equal(expiryDelay(null, 1000), null);
+  assert.equal(expiryDelay(3000, 1000), 2001);
+  assert.equal(expiryDelay(3000, 2999), 2);
+  assert.equal(expiryDelay(3000, 3000), 1, "due now");
+  assert.equal(expiryDelay(3000, 9000), 1, "already past: read at once");
 });
 
 test("labels come from the directory-resolved people by session; the viewer's other tab and an unlisted session are named neutrally", () => {

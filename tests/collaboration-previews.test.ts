@@ -105,6 +105,19 @@ test("DRAG_END only clears the gesture it names; one drag and one cursor per ses
   assert.deepEqual(store.snapshot(0).cursors, [{ sessionId: alice, x: 2, y: 2 }]);
 });
 
+test("nextExpiry is the earliest last-update plus the TTL of what is shown, and null when nothing is", () => {
+  const store = ready();
+  assert.equal(store.nextExpiry(0), null);
+  store.receive(cursor(alice, 1), saved(), 1000);
+  store.receive(drag(bob, 1), saved(), 1500);
+  assert.equal(store.nextExpiry(1600), 1000 + PREVIEW_TTL_MS, "the cursor goes first");
+  store.receive(cursor(alice, 2), saved(), 1800);
+  assert.equal(store.nextExpiry(1900), 1500 + PREVIEW_TTL_MS, "a refresh moves that entry's expiry");
+  assert.equal(store.snapshot(1500 + PREVIEW_TTL_MS).drags.length, 0, "and the snapshot agrees at exactly that time");
+  assert.equal(store.nextExpiry(1500 + PREVIEW_TTL_MS), 1800 + PREVIEW_TTL_MS, "an already expired entry is not the next expiry");
+  assert.equal(store.nextExpiry(1800 + PREVIEW_TTL_MS), null);
+});
+
 test("visuals expire about two seconds after their last update, but the watermark stays", () => {
   const store = ready();
   store.receive(cursor(alice, 7), saved(), 1000);

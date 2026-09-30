@@ -421,7 +421,7 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
       fitView fitViewOptions={{ padding: 0.2, maxZoom: 1 }} minZoom={0.1} maxZoom={4}
       aria-label={preview ? "Arrangement preview" : `${editable ? "Editable" : "Read-only"} flow canvas: ${document.flows[flowId]?.title ?? ""}`}>
       <Background gap={24} size={1} />
-      {interactive && <LiveOverlay flowId={flowId} localDragging={localDragging} sizeOf={sizeOf} />}
+      {interactive && <LiveOverlay localDragging={localDragging} sizeOf={sizeOf} />}
     </ReactFlow>
     {interactive && <CanvasControls />}
     {canEdit && <ShapePanel onActivate={activateShape} />}

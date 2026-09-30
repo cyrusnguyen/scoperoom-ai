@@ -22,6 +22,8 @@ export type PreviewStore = {
   receive: (message: PeerMessage, saved: SavedView, now: number) => boolean;
   /** Render-ready, excluding entries older than PREVIEW_TTL_MS; expiry drops visuals only, never watermarks. */
   snapshot: (now: number) => PreviewSnapshot;
+  /** The earliest moment a currently shown entry expires (its last update plus PREVIEW_TTL_MS); null when nothing is shown. */
+  nextExpiry: (now: number) => number | null;
   /** After every adoption of saved data: drops drags whose targets vanished, left the flow or changed saved position version. */
   reconcile: (saved: SavedView) => void;
   /** Disconnect: drops every visual; keeps the roster and watermarks so pre-disconnect packets cannot return. */
@@ -66,6 +68,13 @@ export function createPreviewStore(): PreviewStore {
         if (drag && live(drag.at)) result.drags.push({ sessionId, gestureId: drag.gestureId, items: drag.items.map(({ nodeId, x, y }) => ({ nodeId, x, y })) });
       }
       return result;
+    },
+    nextExpiry(now) {
+      let earliest: number | null = null;
+      for (const { cursor, drag } of sessions.values()) {
+        for (const entry of [cursor, drag]) if (entry && entry.at + PREVIEW_TTL_MS > now && (earliest === null || entry.at + PREVIEW_TTL_MS < earliest)) earliest = entry.at + PREVIEW_TTL_MS;
+      }
+      return earliest;
     },
     reconcile(saved) {
       if (!context) return;

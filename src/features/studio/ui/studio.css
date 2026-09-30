@@ -140,12 +140,12 @@ button.item-row { width: 100%; border: 0; border-bottom: var(--panel-border); ba
 .live-overlay [data-presence="5"] { color: var(--presence-5); }
 .live-overlay [data-presence="6"] { color: var(--presence-6); }
 .live-overlay > * { color: var(--foreground-subtle); }
-.live-ghost, .live-cursor { position: absolute; top: 0; left: 0; pointer-events: none; transition: transform var(--duration) linear; }
+.live-ghost, .live-cursor { position: absolute; top: 0; left: 0; transform-origin: 0 0; pointer-events: none; transition: transform var(--duration) linear; }
 .live-ghost { border: 2px dashed currentColor; border-radius: var(--radius-card); }
-.live-label { position: absolute; top: 0; left: 0; padding: 0 var(--space-2); border-radius: var(--radius-control); background: currentColor; font-size: 12px; line-height: 18px; white-space: nowrap; transform: translateY(-100%); }
+.live-label { position: absolute; top: 0; left: 0; padding: 0 var(--space-2); border-radius: var(--radius-control); background: currentColor; font-size: 12px; line-height: 18px; white-space: nowrap; transform-origin: 0 0; }
 .live-cursor-mark { display: block; width: 10px; height: 10px; border: 2px solid currentColor; border-radius: 50%; background: var(--background); }
 .live-label > span { color: var(--background); }
-.live-cursor .live-label { top: 12px; left: 12px; transform: none; }
+.live-cursor .live-label { top: 12px; left: 12px; }
 @media (prefers-reduced-motion: reduce) {
   .live-ghost, .live-cursor { transition: none; }
 }

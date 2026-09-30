@@ -1,6 +1,6 @@
 import { MAX_DRAG_ITEMS, type DragItem, type PresenceState } from "../contracts/messages.ts";
 import { paletteIndex, UNKNOWN_PARTICIPANT, type Person } from "./participants.ts";
-import { PREVIEW_TTL_MS, type PreviewSnapshot, type SavedView } from "./preview-store.ts";
+import type { PreviewSnapshot, SavedView } from "./preview-store.ts";
 
 // Pure helpers for the live canvas overlay (Stage 04.3 Task 5): what a local drag may preview, and what remote previews show.
 
@@ -32,13 +32,9 @@ export function visibleDrags(snapshot: PreviewSnapshot, localDragging: ReadonlyS
   });
 }
 
-/**
- * When the one expiry timer should next re-read the snapshot (null: nothing is shown, no timer). The store only notifies on
- * accepted messages, so expiry shows on a read: due just after the last notification's TTL, and never busy-looping.
- */
-export function expiryDelay(snapshot: PreviewSnapshot, notifiedAt: number, now: number): number | null {
-  if (!snapshot.cursors.length && !snapshot.drags.length) return null;
-  return Math.max(50, notifiedAt + PREVIEW_TTL_MS + 1 - now);
+/** How long the one expiry timer waits: until the earliest shown entry has expired (one ms past it, since the store treats the TTL edge as expired). Null: nothing is shown. */
+export function expiryDelay(expiresAt: number | null, now: number): number | null {
+  return expiresAt === null ? null : Math.max(0, expiresAt - now) + 1;
 }
 
 /** A name and palette slot per peer session: the directory-resolved person, never a claim; the viewer's other tabs are theirs. */

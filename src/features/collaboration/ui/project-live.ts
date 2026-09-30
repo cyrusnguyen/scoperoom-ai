@@ -46,6 +46,8 @@ export type ProjectLive = {
   roster: () => PresenceState[];
   /** The same object while its contents are unchanged (safe for useSyncExternalStore). Expiry shows on the next read: the consumer's one scheduler re-reads before PREVIEW_TTL_MS. */
   snapshot: () => PreviewSnapshot;
+  /** When the earliest shown preview expires (epoch ms), or null: the consumer's one scheduler re-reads `snapshot` then. */
+  nextExpiry: () => number | null;
   /** Any change of state, roster or previews. */
   subscribe: (listener: () => void) => () => void;
 };
@@ -209,6 +211,7 @@ export function createProjectLive(o: LiveOptions): ProjectLive {
       if (key !== shotKey) { shot = next; shotKey = key; }
       return shot;
     },
+    nextExpiry: () => store.nextExpiry(o.now()),
     subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };
 }

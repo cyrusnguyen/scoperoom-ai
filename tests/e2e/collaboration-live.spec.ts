@@ -44,9 +44,15 @@ test("a peer's drag shows as a labelled ghost at any pan and zoom, the canonical
   expect(await transformOf(ownerPage, startId)).toBe(savedTransform);
   const [ghostBox, nodeBox] = [(await ghost.boundingBox())!, (await nodeAt(ownerPage, startId).boundingBox())!];
   expect(Math.abs(ghostBox.x - nodeBox.x) + Math.abs(ghostBox.y - nodeBox.y)).toBeGreaterThan(10);
+  // The ghost is drawn in flow space under the owner's zoom: it is as wide as the owner's own (zoomed-out) copy of the step.
+  expect(Math.abs(ghostBox.width - nodeBox.width)).toBeLessThan(4);
+  expect(nodeBox.width).toBeLessThan(box.width); // the owner really is zoomed out relative to the editor
 
+  // A fresh update right before the drop, so only DRAG_END (not the 2 s expiry) can remove the ghost within the next second.
+  await editorPage.mouse.move(x + 162, y + 81);
+  await expect(ghost).toBeVisible();
   await editorPage.mouse.up();
-  await expect(ghost).toHaveCount(0, { timeout: 10_000 }); // DRAG_END, or expiry within about 2 s
+  await expect(ghost).toHaveCount(0, { timeout: 1_000 });
   expect(await transformOf(ownerPage, startId)).toBe(savedTransform); // unsaved: nothing changed for the owner
 
   await saveStudio(editorPage);
@@ -75,8 +81,11 @@ test("a peer's cursor over the canvas is labelled; over a panel it is not publis
   await expect(cursor).toBeVisible({ timeout: 10_000 });
   await expect(cursor).toContainText("Collab editor");
   await expect(cursor).toHaveCSS("pointer-events", "none");
-  // Nothing more is published from the controls, so the cursor expires (about 2 s) rather than following the pointer there.
+  // Nothing is published from the controls: keep moving over them longer than the 2 s preview TTL. A published position would
+  // keep the cursor alive there; instead the last one from the canvas expires.
   const controls = (await editorPage.locator(".canvas-controls").boundingBox())!;
-  await editorPage.mouse.move(controls.x + controls.width / 2, controls.y + controls.height / 2, { steps: 6 });
-  await expect(cursor).toHaveCount(0, { timeout: 10_000 });
+  const [cx, cy] = [controls.x + controls.width / 2, controls.y + controls.height / 2];
+  await editorPage.mouse.move(cx, cy, { steps: 6 });
+  for (let step = 0; step < 14; step++) { await editorPage.mouse.move(cx + (step % 2 ? 4 : -4), cy); await editorPage.waitForTimeout(200); }
+  await expect(cursor).toHaveCount(0, { timeout: 500 });
 });

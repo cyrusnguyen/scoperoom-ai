@@ -51,8 +51,8 @@ type Sync = {
   roster: PresenceState[];
   /** The authorized members list (names and roles for the roster); null until first read. Peers' own claims never supply a name. */
   directory: DirectoryMember[] | null;
-  /** Remote cursors and drag ghosts: `snapshot()` is referentially stable while unchanged; read it when notified and again before `PREVIEW_TTL_MS` passes (expiry only shows on a read). */
-  previews: Pick<ProjectLive, "snapshot" | "subscribe">;
+  /** Remote cursors and drag ghosts: `snapshot()` is referentially stable while unchanged; read it when notified and again at `nextExpiry()` (expiry only shows on a read). */
+  previews: Pick<ProjectLive, "snapshot" | "subscribe" | "nextExpiry">;
   sendCursor: ProjectLive["sendCursor"];
   sendDrag: ProjectLive["sendDrag"];
   endDrag: ProjectLive["endDrag"];
@@ -138,7 +138,7 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
   const installed = useRef(initial);
   useEffect(() => { if (installed.current !== initial) { installed.current = initial; sync.invalidate(); } }, [initial, sync]);
   const setReader = useMemo(() => (read: Reader) => { Object.assign(bridge, { reader: read }); return () => { if (bridge.reader === read) Object.assign(bridge, { reader: null }); }; }, [bridge]);
-  const previews = useMemo(() => ({ snapshot: realtime.snapshot, subscribe: realtime.subscribe }), [realtime]);
+  const previews = useMemo(() => ({ snapshot: realtime.snapshot, subscribe: realtime.subscribe, nextExpiry: realtime.nextExpiry }), [realtime]);
   const value = useMemo<Sync>(() => ({
     ...state, revalidate: sync.revalidate, beforeWrite: sync.beforeWrite, invalidate: sync.invalidate, fence: sync.fence, setReader, setSavedDraft,
     liveState, roster, directory, previews, sendCursor: realtime.sendCursor, sendDrag: realtime.sendDrag, endDrag: realtime.endDrag, setPresence: realtime.setPresence,
