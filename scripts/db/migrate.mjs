@@ -37,6 +37,6 @@ process.env.MIGRATION_DATABASE_URL = migrationUrl.toString();
 run(process.execPath, ["scripts/db/realtime.mjs", "prepare"]);
 // A failed deploy must not leave the reader lent to app_migrator (prepare lends it so a migration can replace the helper).
 run(process.platform === "win32" ? "corepack.cmd" : "corepack", ["pnpm", "exec", "prisma", "migrate", "deploy"], { cleanup: ["scripts/db/realtime.mjs", "release"] });
-run(process.execPath, ["scripts/db/guard.mjs"]);
+run(process.execPath, ["scripts/db/guard.mjs"], { cleanup: ["scripts/db/realtime.mjs", "release"] }); // a failed post-deploy guard must not leave the lent reader either
 run(process.execPath, ["scripts/db/realtime.mjs", "apply"]);
 run(process.execPath, ["scripts/db/realtime.mjs", "verify"]);
