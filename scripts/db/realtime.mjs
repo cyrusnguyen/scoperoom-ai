@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { resolve } from "node:path";
 import { Client } from "pg";
 import { inspectLocalContainer, localConfig, targetInput, verifyTarget } from "./guard.mjs";
 
@@ -197,7 +196,7 @@ async function verify(client) {
   await requirePrivateOnly(false);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
+if (import.meta.main) {
   const command = process.argv[2];
   const steps = { prepare, apply, verify };
   if (!steps[command]) throw new Error("Usage: realtime.mjs prepare [--initial] | apply | verify");

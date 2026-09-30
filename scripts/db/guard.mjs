@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { Client } from "pg";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -146,7 +145,7 @@ async function provisionMigrationAuthReference() {
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
+if (import.meta.main) {
 const mode = process.argv.includes("--initial") ? "initial" : process.argv.includes("--bind") ? "bind" : "bound";
 if (process.argv.includes("--provision-runtime")) await provisionRuntimeRoles();
 else if (process.argv.includes("--provision-migration-auth-reference")) await provisionMigrationAuthReference();
