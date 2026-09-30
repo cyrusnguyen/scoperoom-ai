@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, type APIResponse, type Page, type Route } from "@playwright/test";
-import { test } from "./collaboration-fixtures";
-import { statusDelay } from "../../src/features/collaboration/ui/project-sync.ts";
+import { POLL_DEADLINE, poll, test } from "./collaboration-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { appUrl, createProjectViaApi, e2eReady, headerSave, seedStudioChanges } from "./support";
 
@@ -10,7 +9,6 @@ test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 // Stage 04.2 Task 6: two real users, no Realtime and no mocked collaborator. The owner acts through their own browser (or the
 // real API as that account); the editor's page has a fake clock, so one `runFor` of the longest healthy poll delay is a
 // deterministic deadline: statusDelay's maximum (10 s +10%), never a bare sleep. Route interception only orders responses.
-const POLL_DEADLINE = statusDelay(0, 1);
 const status = (page: Page) => page.locator(".studio-status");
 const notice = (page: Page) => page.locator(".save-note");
 const nodeAt = (page: Page, nodeId: string) => page.locator(`.react-flow__node[data-id="${nodeId}"]`);
@@ -54,25 +52,6 @@ async function moveTo(page: Page, projectId: string, ids: Ids, nodeId: string, x
   expect(response.status()).toBe(200);
 }
 
-/**
- * Runs the editor's frozen clock in short slices until its next status read starts, at most the longest healthy poll delay.
- * Slicing stops the clock right there: a dirty edit's 10 s autosave (a timer on the same clock) never gets to send before
- * the poll it is meant to meet. The editor page pins its jitter to the minimum (see openBoth), so the poll is due after 9 s.
- */
-async function poll(page: Page) {
-  let started = 0;
-  const count = (request: { url(): string }) => { if (/\/status$/.test(new URL(request.url()).pathname)) started++; };
-  const answered = page.waitForResponse((response) => /\/status$/.test(new URL(response.url()).pathname));
-  page.on("request", count);
-  try {
-    for (let waited = 0; !started && waited < POLL_DEADLINE; waited += 250) {
-      await page.clock.runFor(250);
-      await new Promise((resolve) => setTimeout(resolve, 25)); // let the page's request event reach this process
-    }
-  } finally { page.off("request", count); }
-  expect(started, "a status read within the longest poll delay").toBeGreaterThan(0);
-  await answered;
-}
 async function renameLocally(page: Page, nodeId: string, label: string) {
   await nodeAt(page, nodeId).locator(".step-label").dblclick();
   await nodeAt(page, nodeId).getByRole("textbox", { name: "Step name" }).fill(label);

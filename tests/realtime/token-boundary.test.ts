@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import type { Client } from "pg";
-import { signRealtimeToken, type RealtimeScope } from "../../src/features/collaboration/server/sign-token.ts";
+import type { RealtimeScope } from "../../src/features/collaboration/server/sign-token.ts";
 import { removeProjectMember } from "../../src/features/projects/server/management.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { saveFlow } from "../integration/support/hints.ts";
-import { RECEIVE_TIMEOUT_MS, SILENCE_MS, withRealtimeFixture, type Realtime } from "./support.ts";
+import { clientWithToken, mintScoped, RECEIVE_TIMEOUT_MS, SILENCE_MS, withRealtimeFixture, type Realtime } from "./support.ts";
 
 // Scoped Realtime credential boundary (E36) against the real local stack: tokens are minted by the production signer from the environment
 // configuration, joined over real sockets and thrown at the Auth, Data API and Storage surfaces. Every denial is paired with a positive
@@ -17,18 +17,8 @@ const DENIED = /Unauthorized|permissions/i;
 const BAD_CREDENTIAL = (error: unknown) => { const message = String((error as Error)?.message); return /jwt|token|signature|expired/i.test(message) && !DENIED.test(message); };
 const CLIENT = "app_realtime_client";
 
-function mint(scope: RealtimeScope, now?: number) {
-  const signed = signRealtimeToken(scope, { now });
-  assert.ok(signed.ok, "set SCOPEROOM_REALTIME_SIGNING_ALG/KEY (and KID for ES256) for this suite; see docs/realtime-setup.md");
-  return signed.token;
-}
-
-/** An anonymous SDK client whose Realtime socket presents `token`. setAuth is awaited before any channel exists (the SDK's initial token fetch races otherwise). */
-async function withToken(rt: Realtime, token: string) {
-  const client = await rt.client();
-  await client.realtime.setAuth(token);
-  return client;
-}
+const mint = (scope: RealtimeScope, now?: number) => mintScoped(scope, now).token;
+const withToken = clientWithToken;
 
 /** Evaluates the installed helper as Realtime does for the client role: raw claims text, topic, and the database role Realtime switched to. */
 async function clientAllows(database: Client, claims: string, topic: string, capability: string, role = CLIENT) {

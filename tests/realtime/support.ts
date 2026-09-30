@@ -1,9 +1,11 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
 import type { Client } from "pg";
+import { signRealtimeToken, type RealtimeScope } from "../../src/features/collaboration/server/sign-token.ts";
 import { canRun, withFixture, type Fixture, type Identity } from "../integration/support/fixture.ts";
 
-// Socket verification helpers. Every socket uses a real Auth session: no forged JWTs and never the service secret.
+// Socket verification helpers. Sockets use a real Auth session or a scoped Realtime credential minted by the production signer; never the service secret.
 const REQUIRED = ["E2E_SUPABASE_URL", "E2E_SUPABASE_SECRET_KEY", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SCOPEROOM_BOOTSTRAP_DATABASE_URL", "DATABASE_URL", "SCOPEROOM_ENVIRONMENT_ID", "NEXT_PUBLIC_APP_URL"];
 export const JOIN_TIMEOUT_MS = 10_000;
 export const RECEIVE_TIMEOUT_MS = 5_000;
@@ -145,4 +147,26 @@ export function policyAllows(database: Client, sub: string | null, topic: string
 /** Server-side positive control: a database-originated private Broadcast, which is how PROJECT_CHANGED hints travel. */
 export async function controlSend(database: Client, topic: string, event: string, payload: Record<string, unknown> = { control: true }) {
   await database.query("select realtime.send($1::jsonb, $2, $3, true)", [JSON.stringify(payload), event, topic]);
+}
+
+/** A scoped Realtime credential from the production signer (the stack's JWT secret). A back-dated `now` (Date.now() - 300_000 + N * 1000) yields a credential with N s left. */
+export function mintScoped(scope: RealtimeScope, now?: number) {
+  const signed = signRealtimeToken(scope, { now });
+  assert.ok(signed.ok, "set SCOPEROOM_REALTIME_SIGNING_ALG/KEY (and KID for ES256) for this suite; see docs/realtime-setup.md");
+  return { token: signed.token, expiresAt: signed.expiresAt };
+}
+
+/** An anonymous SDK client whose Realtime socket presents `token`. setAuth is awaited before any channel exists (the SDK's initial token fetch races otherwise). */
+export async function clientWithToken(realtime: Realtime, token: string) {
+  const client = await realtime.client();
+  await client.realtime.setAuth(token);
+  return client;
+}
+
+/** Sends from `sender` and reports the ack plus which of `listeners` received it inside the bounded window (observers exist before the send). */
+export async function broadcast(realtime: Realtime, sender: RealtimeChannel, listeners: RealtimeChannel[], expectDelivery: boolean) {
+  const event = `m-${crypto.randomUUID()}`;
+  const seen = listeners.map((channel) => realtime.receive(channel, event, expectDelivery ? RECEIVE_TIMEOUT_MS : SILENCE_MS).then(() => true, () => false));
+  const status = await realtime.send(sender, event, { n: 1 });
+  return { status, delivered: await Promise.all(seen) };
 }
