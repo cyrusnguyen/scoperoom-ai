@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, type Locator, type Page } from "@playwright/test";
+import { interceptRealtime } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { appUrl, createProjectViaApi, e2eReady, emptyDraftView, headerSave, saveStudio, withStatus } from "./support";
@@ -482,6 +483,10 @@ test.describe("Studio on a real draft", () => {
   });
 
   test("typed text survives someone else's change; the person applies their changes again", async ({ page }) => {
+    // This test is about the save meeting the other tab's change. With Realtime live the change's committed hint would make the page read it first (a legitimate
+    // other path, covered by the collaboration specs), so the hints are withheld and the socket reopened by a reload: only the save can find out.
+    (await interceptRealtime(page)).dropEvents = true;
+    await page.reload();
     await createFlowInUi(page, "Billing");
     await addStepInUi(page, "Invoice", "Start");
     await saveStudio(page);
