@@ -128,10 +128,12 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
 
   // Every adopted saved read (shell bootstrap or adoption, and `reload`) lands here as a new `savedDraft`. The frozen base
   // follows it through `advanceOnRead` (never while a save is pending; only once the read covers the acknowledged floor).
-  // It runs again when a save resolves (`pending`) and when the active entries become empty (`idle`, after an undo): a
-  // redo must not switch back to an old base. The store's updater advances the store's own current outbox, because the
+  // It runs again when a save resolves (`pending`) and whenever the active entries change (an undo to empty must not let a
+  // redo switch back to an old base; Keep theirs may remove the only conflicting entry). The store's updater advances the store's own current outbox, because the
   // shell also writes it outside `change` (Discard) between this render and the effect.
-  const pending = Boolean(outbox.sending), idle = outbox.entries.length === 0;
+  // It also runs when the active entries change (Keep theirs, undo, redo, a new edit): the base must follow the adopted read as
+  // soon as no request would change, or the shown draft and the frozen notice (derived from the same test) disagree.
+  const pending = Boolean(outbox.sending), { entries } = outbox;
   useEffect(() => {
     const before = latest.current, next = advanceOnRead(before, savedDraft, floor);
     if (next === before) return;
@@ -139,7 +141,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     // unchanged re-read leaves an already-empty redo alone: one message per clearing.
     if (clearedRedo(before, next)) setRedoCleared(true);
     change((current) => (current === before ? next : advanceOnRead(current, savedDraft, floor)));
-  }, [savedDraft, floor, pending, idle, change]);
+  }, [savedDraft, floor, pending, entries, change]);
   const frozen = useMemo(() => frozenBehind(outbox, savedDraft, floor), [outbox, savedDraft, floor]);
 
   // `fence` (polling only) drops a response the sync controller has since replaced, right before anything is adopted.

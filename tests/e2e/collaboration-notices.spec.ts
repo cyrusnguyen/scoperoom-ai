@@ -119,6 +119,65 @@ test.describe("Frozen view, redo history, typed text and refreshing", () => {
     expect((await draftOf(page, projectId)).document.nodes[ids.startId]!.label).toBe("Mine");
   });
 
+  /** Two local renames (Ship, then Start) and two remote ones (Start, Pay) in one adopted read: only Start conflicts. */
+  async function freezeOnStart(page: Page) {
+    await open(page);
+    await renameLocally(page, ids.shipId, "Ship mine");
+    await renameLocally(page, ids.startId, "Mine");
+    await renameElsewhere(page, projectId, ids.startId, "Theirs");
+    await renameElsewhere(page, projectId, ids.payId, "Pay (theirs)");
+    await revalidate(page);
+    await expect(notice(page)).toContainText(FROZEN);
+    await expect(nodeAt(page, ids.startId)).toContainText("Mine");
+    await expect(nodeAt(page, ids.payId)).not.toContainText("Pay (theirs)"); // hidden behind the frozen view
+  }
+
+  test("Keep theirs on the only conflicting change of several moves the view to the newer draft and clears the notice with it", async ({ page }) => {
+    await freezeOnStart(page);
+    await notice(page).getByRole("button", { name: "Keep theirs" }).click();
+    await expect(notice(page)).toHaveCount(0);
+    await expect(nodeAt(page, ids.startId)).toContainText("Theirs");
+    await expect(nodeAt(page, ids.payId)).toContainText("Pay (theirs)");
+    await expect(nodeAt(page, ids.shipId)).toContainText("Ship mine");
+    await expect(status(page)).toContainText("Unsaved changes");
+  });
+
+  test("undoing the only conflicting change of several moves the view to the newer draft and clears the notice with it", async ({ page }) => {
+    await freezeOnStart(page);
+    await status(page).getByRole("button", { name: "Undo" }).click();
+    await expect(notice(page)).toHaveCount(0);
+    await expect(nodeAt(page, ids.startId)).toContainText("Theirs");
+    await expect(nodeAt(page, ids.payId)).toContainText("Pay (theirs)");
+    await expect(nodeAt(page, ids.shipId)).toContainText("Ship mine");
+    await expect(status(page)).toContainText("Unsaved changes");
+  });
+
+  test("below the acknowledged floor no comparison is shown: a refused save after a failed re-read lists no Saved value", async ({ page }) => {
+    await open(page);
+    let failing = true;
+    await page.route(`**/api/projects/${projectId}/drafts/*`, (route) => (failing && route.request().method() === "GET"
+      ? route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Read unavailable" } } }) : route.continue()));
+    await renameLocally(page, ids.startId, "Acknowledged");
+    await headerSave(page).click();
+    await expect(status(page)).toContainText("Refreshing saved changes");
+    await renameElsewhere(page, projectId, ids.startId, "Theirs");
+    await renameLocally(page, ids.startId, "Mine again");
+    await headerSave(page).click();
+
+    await expect(notice(page)).toContainText("Someone else changed this draft first");
+    // The saved draft shown is older than my own acknowledged save, so its "Saved value" would be my own earlier text.
+    await expect(notice(page)).not.toContainText("Saved value");
+    await expect(notice(page).getByRole("button", { name: "Keep theirs" })).toHaveCount(0);
+    await expect(notice(page).getByRole("button", { name: "Apply my changes again" })).toBeDisabled();
+
+    failing = false;
+    await status(page).getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(notice(page)).toContainText("Saved value");
+    await expect(notice(page)).toContainText("Theirs");
+    await expect(notice(page).getByRole("button", { name: "Keep theirs" })).toBeEnabled();
+    await expect(notice(page).getByRole("button", { name: "Apply my changes again" })).toBeEnabled();
+  });
+
   test("a remote change to another record is shown at once, with no notice", async ({ page }) => {
     await open(page);
     await renameLocally(page, ids.startId, "Mine");

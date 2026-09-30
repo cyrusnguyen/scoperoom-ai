@@ -116,7 +116,7 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
     <h3 id="inspector-heading">{heading}</h3>
     {buffer && (buffer.conflict || elsewhere) && <div className="inline-note" role={elsewhere ? "status" : "alert"}>
       <p>{elsewhere ? <><strong>Changed by someone else.</strong> Your text is kept; nothing was overwritten.</> : `Someone else saved this ${NOUNS[kind]} first. Your text is kept; nothing was overwritten.`}</p>
-      <dl className="conflict-list">{dirty.map((field) => {
+      {!refreshFailed && <dl className="conflict-list">{dirty.map((field) => {
         const label = FIELDS[kind].find((spec) => spec.name === field)?.label ?? field;
         return <div key={field}>
           <dt>{label}</dt>
@@ -124,7 +124,7 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
           <dd><span className="muted">Your edit</span>{buffer.values[field] || "(empty)"}</dd>
           <dd><span className="muted">Before your edit</span>{buffer.original[field] || "(empty)"}</dd>
         </div>;
-      })}</dl>
+      })}</dl>}
       <div className="view-actions">
         <button type="button" className="button primary small" onClick={saveMine} disabled={refreshFailed}>Save my edit</button>
         <button type="button" className="button small" onClick={keepSaved} disabled={refreshFailed}>Keep saved value</button>

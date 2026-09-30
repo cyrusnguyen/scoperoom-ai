@@ -138,7 +138,8 @@ function SaveNote() {
   const resolvable = canApplyAgain(ui, savedDraft);
   const newer = frozen && <strong>Newer saved changes are available.</strong>;
   // Never resubmit over someone else's newer value unseen (UI02): each overlap is compared first, 03.2-style.
-  const conflictList = (conflicts: Conflict[]) => conflicts.length > 0 && <>
+  // Below the floor or while a read has failed, the saved draft can be the person's own older text: no comparison is shown.
+  const conflictList = (conflicts: Conflict[]) => resolvable && conflicts.length > 0 && <>
     <span>They also changed what you edited. Compare, then keep theirs or apply yours:</span>
     <dl className="conflict-list save-note-list">{conflicts.map((conflict, index) => <div key={index}>
       <dt>{conflict.label}</dt>
@@ -147,7 +148,7 @@ function SaveNote() {
         <dd><span className="muted">Your edit</span>{row.mine}</dd>
         <dd><span className="muted">Before your edit</span>{row.before}</dd>
       </Fragment>)}
-      <dd><button type="button" className="button quiet small" onClick={() => keepTheirs(conflict.target)} disabled={busy || !resolvable}>Keep theirs</button></dd>
+      <dd><button type="button" className="button quiet small" onClick={() => keepTheirs(conflict.target)} disabled={busy}>Keep theirs</button></dd>
     </div>)}</dl>
   </>;
   const dropped = [...ui.outbox.dropped, ...skipped];

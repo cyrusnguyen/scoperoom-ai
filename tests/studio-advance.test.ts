@@ -9,7 +9,7 @@ import { discardDrafts, uiFor, updateUi } from "../src/features/shell/ui/project
 import { changedElsewhere, type EntityBuffer } from "../src/features/studio/ui/buffers.ts";
 import { advanceOnRead, clearedRedo, frozenBehind } from "../src/features/studio/ui/studio-ui.ts";
 import {
-  advance, applyBatch, discardOutbox, redo, pendingCount, build, emptyOutbox, enqueue, undo, wireBody, withEntries, addDrop, optimistic, type Outbox,
+  advance, applyBatch, discardOutbox, keepTheirs, redo, pendingCount, build, emptyOutbox, enqueue, undo, wireBody, withEntries, addDrop, optimistic, type Outbox,
 } from "../src/features/studio/ui/outbox.ts";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -643,4 +643,21 @@ test("changedElsewhere: a dirty buffer typed against another version, or against
   assert.equal(changedElsewhere(buffer, 3, 3, 3), false);
   assert.equal(changedElsewhere({ ...buffer, values: { label: "Start" } }, 4), false, "a clean buffer has nothing to protect");
   assert.equal(changedElsewhere({ ...buffer, conflict: true }, 4), false, "the refused-save conflict has its own note");
+});
+
+test("Keep theirs on the only conflicting entry lets the base advance; the notice test flips only with it", () => {
+  const base = saved();
+  const both = queue(queue(emptyOutbox, base, rename(1, mid, "Mine mid")).outbox, base, rename(1, start, "Mine")).outbox;
+  const fresh = remote(remote(base, [rename(1, start, "Theirs")]), [rename(1, end, "Theirs end")]);
+  assert.equal(advanceOnRead(both, fresh, undefined), both, "frozen by the conflicting entry");
+  assert.equal(frozenBehind(both, fresh, undefined), true);
+  const kept = keepTheirs(both, { kind: "command", command: rename(1, start, "Mine") });
+  assert.equal(kept.entries.length, 1);
+  assert.equal(kept.base, base, "removing the entry alone does not move the base: the provider must re-run advance");
+  const next = advanceOnRead(kept, fresh, undefined);
+  assert.equal(next.base, fresh);
+  assert.equal(frozenBehind(next, fresh, undefined), false, "advanced: nothing is frozen");
+  assert.equal(optimistic(next, fresh).document.nodes[end]!.label, "Theirs end");
+  assert.equal(optimistic(next, fresh).document.nodes[start]!.label, "Theirs");
+  assert.equal(optimistic(next, fresh).document.nodes[mid]!.label, "Mine mid");
 });
