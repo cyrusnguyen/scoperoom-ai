@@ -877,13 +877,13 @@ test.describe("Studio on a real draft", () => {
         await note(page).getByRole("button", { name: "Retry" }).click();
       }
       if (failedRead) {
-        await expect(page.locator(".studio-status")).toContainText("Changes saved. The latest draft could not load.");
+        await expect(page.locator(".studio-status")).toContainText("Changes saved. Refreshing saved changes…");
         await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
         await page.goBack();
         await expect(page.getByRole("heading", { level: 1, name: "History project" })).toBeVisible();
         await page.goForward();
         await expect(page.getByRole("heading", { level: 1, name: "Studio project" })).toBeVisible();
-        await expect(page.getByRole("button", { name: "Retry read", exact: true })).toHaveCount(0);
+        await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
       }
       await expect(page.locator(".studio-status")).toContainText("0 connections");
       await expect(page.locator(".studio-status")).toContainText("All changes saved");
@@ -930,21 +930,23 @@ test.describe("Studio on a real draft", () => {
       await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Before/ }).click();
       await panel(page).getByLabel("Name", { exact: true }).fill("After");
       await saveButton(page).click();
-      await expect(page.locator(".studio-status")).toContainText("Changes saved. The latest draft could not load.");
+      await expect(page.locator(".studio-status")).toContainText("Changes saved. Refreshing saved changes…");
       release();
       await expect(page.getByRole("heading", { level: 1, name: "Metadata reread" })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Retry read", exact: true })).toBeVisible();
+      // The first failure says "Refreshing saved changes…"; the poll's next failed read turns it into the recovery line.
+      await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible({ timeout: 25_000 });
+      await expect(page.locator(".studio-status")).toContainText("Couldn't refresh saved changes");
       await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
       mode = "stale";
       const staleRead = page.waitForResponse((response) => response.url().endsWith(`/drafts/${staleDraft.id}`));
-      await page.getByRole("button", { name: "Retry read", exact: true }).click();
+      await page.getByRole("button", { name: "Retry", exact: true }).click();
       await staleRead;
-      await expect(page.getByRole("button", { name: "Retry read", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
       await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
       mode = "fresh";
-      await page.getByRole("button", { name: "Retry read", exact: true }).click();
+      await page.getByRole("button", { name: "Retry", exact: true }).click();
       await expect(page.getByRole("list", { name: "Steps" })).toContainText("After");
-      await expect(page.getByRole("button", { name: "Retry read", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
       await expect(page.locator(".studio-status")).toContainText("All changes saved");
       expect(writes).toBe(1);
     } finally { release(); }
@@ -1322,14 +1324,24 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
       writes++;
       await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, replayed: false } });
     });
+    // The status poll fails too: two failed attempts (the poll's backoff at its cap) turn "Refreshing" into the recovery line.
+    await page.route(`**/api/projects/${projectId}/status`, (route) => route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Status unavailable" } } }));
+    await page.clock.install();
     await page.goto(`/app/projects/${projectId}`);
     await toolbar(page).getByRole("button", { name: "List", exact: true }).click();
     await page.getByRole("button", { name: /^Delete connection Receive form/ }).click();
     await headerSave(page).click();
-    await expect(page.locator(".studio-status")).toContainText("Changes saved. The latest draft could not load.");
+    await expect(page.locator(".studio-status")).toContainText("Changes saved. Refreshing saved changes…");
     await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
     await expect(page.locator(".studio-status")).toContainText("0 connections"); // what was saved stays shown
-    await page.getByRole("button", { name: "Retry read", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
+    for (const ms of [11_000, 23_000]) {
+      const answered = page.waitForResponse((response) => /\/status$/.test(new URL(response.url()).pathname));
+      await page.clock.runFor(ms);
+      await answered;
+    }
+    await expect(page.locator(".studio-status")).toContainText("Couldn't refresh saved changes");
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
     await expect(page.locator(".studio-status")).toContainText("0 connections");
     await expect(page.locator(".studio-status")).toContainText("All changes saved");
     expect(writes).toBe(1);

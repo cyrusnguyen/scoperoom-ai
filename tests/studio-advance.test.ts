@@ -6,7 +6,8 @@ import { emptyDraft, LIMITS, type DraftView } from "../src/features/drafts/contr
 import { applyGraphCommand, dependencyPlan, GraphError } from "../src/features/drafts/domain/graph.ts";
 import { utf8Bytes } from "../src/features/drafts/contracts/strict.ts";
 import { discardDrafts, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
-import { advanceOnRead } from "../src/features/studio/ui/studio-ui.ts";
+import { changedElsewhere, type EntityBuffer } from "../src/features/studio/ui/buffers.ts";
+import { advanceOnRead, clearedRedo, frozenBehind } from "../src/features/studio/ui/studio-ui.ts";
 import {
   advance, applyBatch, discardOutbox, redo, pendingCount, build, emptyOutbox, enqueue, undo, wireBody, withEntries, addDrop, optimistic, type Outbox,
 } from "../src/features/studio/ui/outbox.ts";
@@ -606,4 +607,40 @@ test("cost is bounded: each prefix pair is built once, within 16 pairs and 8 MiB
   assert.equal(m.result.base?.documentRevision, midNext.documentRevision);
 
   console.log(`advance cost, worst of 3 runs each:\n  ${measured.join("\n  ")}`);
+});
+
+test("frozen: an adopted read that is newer than the shown base while pending work waits, never for an advance that succeeded", () => {
+  const base = saved();
+  const mine = queue(emptyOutbox, base, rename(1, start, "Mine")).outbox;
+  const conflicting = remote(base, [rename(1, start, "Theirs")]);
+  assert.equal(frozenBehind(mine, conflicting, undefined), true, "advance declined a remote edit of the same record");
+  assert.equal(frozenBehind(mine, remote(base, [rename(1, end, "Theirs")]), undefined), false, "an unrelated read advances: nothing is frozen");
+  assert.equal(frozenBehind(mine, base, undefined), false, "a read equal to the shown base is not newer");
+  assert.equal(frozenBehind(emptyOutbox, conflicting, undefined), false, "no base");
+  assert.equal(frozenBehind({ ...mine, entries: [] }, conflicting, undefined), false, "no pending work");
+  const floor = { documentRevision: conflicting.documentRevision + 1, layoutRevision: conflicting.layoutRevision };
+  assert.equal(frozenBehind(mine, conflicting, floor), false, "a read below the acknowledged floor is not adopted, so nothing waits behind it");
+  const sending: Outbox = { ...mine, entries: [], sending: { draftId: base.id, key: "k", batches: [build(base, mine.entries).changes], state: "refused" } };
+  assert.equal(frozenBehind(sending, remote(base, [rename(1, end, "Theirs")]), undefined), true, "a pending save always freezes the base");
+});
+
+test("clearedRedo is true only when advanceOnRead shortened the redo, so an unchanged re-read announces nothing", () => {
+  const base = saved();
+  const emptied = undo(queue(emptyOutbox, base, rename(1, start, "Mine")).outbox);
+  const conflicting = remote(base, [rename(1, start, "Theirs")]);
+  const cleared = advanceOnRead(emptied, conflicting, undefined);
+  assert.equal(clearedRedo(emptied, cleared), true);
+  assert.equal(clearedRedo(cleared, advanceOnRead(cleared, conflicting, undefined)), false, "the same read again: nothing more to clear");
+  const unrelated = advanceOnRead(emptied, remote(base, [rename(1, end, "Theirs")]), undefined);
+  assert.equal(clearedRedo(emptied, unrelated), false, "a compatible redo survives");
+});
+
+test("changedElsewhere: a dirty buffer typed against another version, or against a record the adopted read moved while frozen", () => {
+  const buffer: EntityBuffer = { kind: "NODE", id: start, baseVersion: 3, original: { label: "Start" }, values: { label: "Mine" }, conflict: false };
+  assert.equal(changedElsewhere(buffer, 3), false, "same version");
+  assert.equal(changedElsewhere(buffer, 4), true, "the shown record moved on");
+  assert.equal(changedElsewhere(buffer, 3, 4, 3), true, "frozen: the adopted record left the frozen base's version");
+  assert.equal(changedElsewhere(buffer, 3, 3, 3), false);
+  assert.equal(changedElsewhere({ ...buffer, values: { label: "Start" } }, 4), false, "a clean buffer has nothing to protect");
+  assert.equal(changedElsewhere({ ...buffer, conflict: true }, 4), false, "the refused-save conflict has its own note");
 });

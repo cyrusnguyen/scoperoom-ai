@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import type { ErrorDetails } from "@/contracts/http";
 import type { ChangesResult } from "@/features/drafts/contracts/changes";
@@ -10,13 +10,13 @@ import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import { GraphError } from "@/features/drafts/domain/graph";
 import { projectErrors } from "@/features/projects/contracts/errors";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
-import { useSyncReader } from "@/features/collaboration/ui/sync-context";
+import { useSync, useSyncReader } from "@/features/collaboration/ui/sync-context";
 import { follow } from "./buffers";
 import {
   acknowledged, addDrop, discardOutbox, enqueue, keepTheirs as keepTheirsChange, optimistic, pendingCount, rebase, redo as redoChange, replay, startSave, undo as undoChange,
   wireBody, withEntries, type ConflictTarget, type Outbox, type Placement, type Sending,
 } from "./outbox";
-import { advanceOnRead, afterDraftRead, AUTOSAVE_MS, covers, requireDraftRevision, stranded, type SaveState, type StudioUi } from "./studio-ui";
+import { advanceOnRead, afterDraftRead, AUTOSAVE_MS, clearedRedo, covers, frozenBehind, requireDraftRevision, stranded, type SaveState, type StudioUi } from "./studio-ui";
 
 export type Outcome<T> =
   | { ok: true; result: T }
@@ -36,6 +36,12 @@ type Studio = {
   /** True while a save or arrangement request is in flight (one request at a time per tab). Editing continues. */
   busy: boolean;
   save: SaveState; refreshFailed: boolean;
+  /** Consecutive saved reads that failed or fell below the acknowledged floor (reset by a covering read). */
+  readFailures: number;
+  /** An adopted saved read waits behind the shown (frozen) draft because unsaved or unconfirmed changes would change. */
+  frozen: boolean;
+  /** A saved read was adopted and cleared a nonempty redo history; one message until dismissed. */
+  redoCleared: boolean; dismissRedoCleared: () => void;
   /** Applies a command to the shown draft and queues it for the next save; a refusal is the server's own. */
   run: (command: GraphCommand) => Promise<RunOutcome>;
   /** Queues dropped steps. `save` saves every unsaved change at once (the position form's Move); `joined` makes the
@@ -110,6 +116,9 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   useLayoutEffect(() => { inFlight.current = request; }, [request]);
   useLayoutEffect(() => { floorRef.current = floor; }, [floor]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const [readFailures, setReadFailures] = useState(0);
+  const [redoCleared, setRedoCleared] = useState(false);
+  if (!refreshFailed && readFailures) setReadFailures(0); // any covering read, from any path, starts the count over
 
   /** One pure outbox change, applied to the synchronous copy now and to the store in order. */
   const change = useCallback((next: (current: Outbox) => Outbox, also?: (current: StudioUi) => Partial<StudioUi>) => {
@@ -125,8 +134,13 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   const pending = Boolean(outbox.sending), idle = outbox.entries.length === 0;
   useEffect(() => {
     const before = latest.current, next = advanceOnRead(before, savedDraft, floor);
-    if (next !== before) change((current) => (current === before ? next : advanceOnRead(current, savedDraft, floor)));
+    if (next === before) return;
+    // Only this call clears redo on a read (the person's own undo, redo and edits do not go through here), and an
+    // unchanged re-read leaves an already-empty redo alone: one message per clearing.
+    if (clearedRedo(before, next)) setRedoCleared(true);
+    change((current) => (current === before ? next : advanceOnRead(current, savedDraft, floor)));
   }, [savedDraft, floor, pending, idle, change]);
+  const frozen = useMemo(() => frozenBehind(outbox, savedDraft, floor), [outbox, savedDraft, floor]);
 
   // `fence` (polling only) drops a response the sync controller has since replaced, right before anything is adopted.
   const reload = useCallback(async (fence?: () => boolean): Promise<DraftView | null> => {
@@ -134,13 +148,14 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     if (sessionEnded(result) || (fence && !fence())) return null;
     if (!result.ok) {
       update(() => ({ refreshFailed: true }));
+      setReadFailures((count) => count + 1);
       if (result.status === 404) onAccessChanged();
       return null;
     }
     // One gate (the shell's adopt): a rejected read changes nothing and leaves the floor. Only a read installed there
     // may clear it. A read below the floor keeps conflict actions disabled until one covers it.
     if (adopt(result.data)) { update((current) => afterDraftRead(current, result.data)); return result.data; }
-    if (!covers(result.data, floorRef.current)) update(() => ({ refreshFailed: true }));
+    if (!covers(result.data, floorRef.current)) { update(() => ({ refreshFailed: true })); setReadFailures((count) => count + 1); }
     return null;
   }, [projectId, draftId, adopt, onAccessChanged, update]);
 
@@ -258,7 +273,8 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   // Keeping theirs for the last conflicting change leaves nothing refused: the failure status goes with it.
   const keepTheirs = useCallback((target: ConflictTarget) => change((current) => keepTheirsChange(current, target),
     (current) => (keepTheirsChange(current.outbox, target).sending ? {} : { save: { state: "idle", message: "" } })), [change]);
-  const undo = useCallback(() => change(undoChange), [change]);
+  const undo = useCallback(() => { setRedoCleared(false); change(undoChange); }, [change]);
+  const dismissRedoCleared = useCallback(() => setRedoCleared(false), []);
   const redo = useCallback(() => change(redoChange), [change]);
 
   /** An arrangement save (Arrange's Apply), on the same one-request-at-a-time lock as the batch save. */
@@ -320,9 +336,9 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   const unsaved = pendingCount(outbox) > 0;
   const canUndo = editable && outbox.entries.length > 0, canRedo = editable && outbox.redo.length > 0;
   const value = useMemo<Studio>(() => ({
-    projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, moveSteps, saveChanges, unsaved,
+    projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, readFailures, frozen, redoCleared, dismissRedoCleared, run, moveSteps, saveChanges, unsaved,
     applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, reload, dragActive, inspect: onInspect,
-  }), [projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, run, moveSteps, saveChanges, unsaved,
+  }), [projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, readFailures, frozen, redoCleared, dismissRedoCleared, run, moveSteps, saveChanges, unsaved,
     applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, reload, dragActive, onInspect]);
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }
@@ -345,12 +361,19 @@ export function formKeys(event: KeyboardEvent<HTMLFormElement>) {
   if ((event.ctrlKey || event.metaKey) && event.target instanceof HTMLTextAreaElement) { event.preventDefault(); event.currentTarget.requestSubmit(); }
 }
 
-/** A save whose follow-up read failed: say so, and offer the read again. */
+/**
+ * A read that has not landed: a failed or below-the-floor saved read (or a failing status poll). Polling keeps trying, so
+ * the first line just says so; a screen reader hears it once, not per poll. After two consecutive failures (the poll's
+ * backoff at its 30 s cap) it becomes the recovery line with Retry.
+ */
 export function ReadRecovery() {
-  const { reload, save, refreshFailed } = useStudio();
+  const { reload, save, refreshFailed, readFailures } = useStudio();
+  const { failures, revalidate } = useSync();
   if (!refreshFailed) return null;
+  const gaveUp = readFailures >= 2 || failures >= 2;
+  const retry = () => { void reload(); if (failures) void revalidate("manual"); };
   return <>
-    <span className="status-error" role="alert">{save.state === "saved" ? "Changes saved. " : ""}The latest draft could not load.</span>
-    <button type="button" className="button small" onClick={() => void reload()}>Retry read</button>
+    <span className={gaveUp ? "status-error" : "muted"} role="status">{save.state === "saved" ? "Changes saved. " : ""}{gaveUp ? "Couldn't refresh saved changes" : "Refreshing saved changes…"}</span>
+    {gaveUp && <button type="button" className="button small" onClick={retry}>Retry</button>}
   </>;
 }

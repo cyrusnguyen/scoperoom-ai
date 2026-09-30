@@ -5,13 +5,13 @@ import { COORDINATE_LIMIT } from "@/features/drafts/contracts/draft-layout";
 import type { EdgeRecord, NodeRecord } from "@/features/drafts/contracts/scope-document";
 import { graphWarnings, type GraphWarning } from "@/features/drafts/domain/warnings";
 import {
-  bufferKey, changes, dirtyFields, discard, edit, rebase, refuse, type EntityBuffer, type EntityKind, type Fields, type Saved,
+  bufferKey, changedElsewhere, changes, dirtyFields, discard, edit, rebase, refuse, type EntityBuffer, type EntityKind, type Fields, type Saved,
 } from "./buffers";
 import { endpointGuard, FIELDS, fieldErrors, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
 import { neighbours, recordOf, stepName } from "./graph-view";
 import { DeleteStepsDialog } from "./step-dialogs";
 import { explain, formKeys, useCommandSubmit, useStudio } from "./studio-context";
-import { studioDirtyCount } from "./studio-ui";
+import { canApplyAgain, studioDirtyCount } from "./studio-ui";
 
 const NOUNS: Record<EntityKind, string> = { FLOW: "flow", NODE: "step", EDGE: "connection" };
 
@@ -50,9 +50,16 @@ export default function Inspector({ onBack }: { onBack: () => void }) {
 }
 
 function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
-  const { editable, ui, update, run, refreshFailed, saveChanges } = useStudio();
+  const { editable, ui, update, run, savedDraft, frozen, saveChanges } = useStudio();
+  // Conflict actions wait for a readable saved draft that covers the acknowledged floor.
+  const refreshFailed = !canApplyAgain(ui, savedDraft);
   const key = bufferKey(kind, saved.id);
   const buffer = ui.buffers[key];
+  // "Changed by someone else": the adopted saved record moved on from what this text was typed against. The text is untouched.
+  const adopted = recordOf(savedDraft.document, kind, saved.id);
+  const frozenBase = frozen && ui.outbox.base ? recordOf(ui.outbox.base.document, kind, saved.id) : undefined;
+  const elsewhere = Boolean(buffer && changedElsewhere(buffer, saved.version, frozen ? adopted?.version : undefined, frozenBase?.version));
+  const theirs = adopted ? savedOf(kind, adopted).fields : saved.fields;
   const values = buffer ? { ...saved.fields, ...changes(buffer) } : saved.fields;
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
@@ -71,8 +78,8 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
   }
 
   // Save applies this record's edits (queued with the rest of the unsaved changes) and then saves them all at once.
-  const submit = async (target: EntityBuffer) => {
-    if (!editable || target.conflict) return;
+  const submit = async (target: EntityBuffer, chosen = false) => {
+    if (!editable || target.conflict || (elsewhere && !chosen)) return;
     const fields = changes(target);
     const found = fieldErrors(kind, fields);
     setErrors(found);
@@ -96,7 +103,7 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
     if (!editable || refreshFailed) return;
     const rebased = rebase(ui.buffers, saved)[key];
     update((current) => ({ buffers: rebase(current.buffers, saved) }));
-    if (rebased) void submit(rebased);
+    if (rebased) void submit(rebased, true);
     else setMessage("Your text already matches the saved value.");
   };
   const copyMine = async () => {
@@ -107,13 +114,13 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
   const dirty = buffer ? dirtyFields(buffer) : [];
   return <section className="detail-section" aria-labelledby="inspector-heading">
     <h3 id="inspector-heading">{heading}</h3>
-    {buffer?.conflict && <div className="inline-note" role="alert">
-      <p>Someone else saved this {NOUNS[kind]} first. Your text is kept; nothing was overwritten.</p>
+    {buffer && (buffer.conflict || elsewhere) && <div className="inline-note" role={elsewhere ? "status" : "alert"}>
+      <p>{elsewhere ? <><strong>Changed by someone else.</strong> Your text is kept; nothing was overwritten.</> : `Someone else saved this ${NOUNS[kind]} first. Your text is kept; nothing was overwritten.`}</p>
       <dl className="conflict-list">{dirty.map((field) => {
         const label = FIELDS[kind].find((spec) => spec.name === field)?.label ?? field;
         return <div key={field}>
           <dt>{label}</dt>
-          <dd><span className="muted">Saved value</span>{saved.fields[field] || "(empty)"}</dd>
+          <dd><span className="muted">Saved value</span>{(elsewhere ? theirs : saved.fields)[field] || "(empty)"}</dd>
           <dd><span className="muted">Your edit</span>{buffer.values[field] || "(empty)"}</dd>
           <dd><span className="muted">Before your edit</span>{buffer.original[field] || "(empty)"}</dd>
         </div>;
@@ -142,8 +149,8 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
         </div>;
       })}
       <div className="view-actions">
-        <button type="submit" className="button primary small" disabled={!buffer || buffer.conflict}>Save</button>
-        {buffer && !buffer.conflict && <button type="button" className="button quiet small" onClick={keepSaved}>Discard local changes</button>}
+        <button type="submit" className="button primary small" disabled={!buffer || buffer.conflict || elsewhere}>Save</button>
+        {buffer && !buffer.conflict && !elsewhere && <button type="button" className="button quiet small" onClick={keepSaved}>Discard local changes</button>}
       </div>
       <p className="muted" role="status" aria-live="polite">{message === "Saved." && studioDirtyCount(ui) ? "Unsaved changes" : message}</p>
     </form>

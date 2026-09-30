@@ -97,6 +97,20 @@ export function advanceOnRead(outbox: Outbox, saved: DraftView, floor: RevisionF
   return outbox.sending || !covers(saved, floor) ? outbox : advance(outbox, saved);
 }
 
+/**
+ * The frozen view: an adopted read that covers the floor and is strictly newer than the shown base while there is pending
+ * work, and `advanceOnRead` declined it. (Derived, never stored: no separate flag can outlive the state it describes.)
+ */
+export function frozenBehind(outbox: Outbox, saved: DraftView, floor: RevisionFloor | undefined): boolean {
+  const { base } = outbox;
+  if (!base || !(outbox.sending || outbox.entries.length) || !covers(saved, floor) || !isNewer(saved, base)) return false;
+  if (saved.documentRevision === base.documentRevision && saved.layoutRevision === base.layoutRevision) return false;
+  return advanceOnRead(outbox, saved, floor) === outbox;
+}
+
+/** `advanceOnRead` only ever shortens `redo` by clearing it: the caller announces that once, at its own call site. */
+export const clearedRedo = (before: Outbox, after: Outbox) => after.redo.length < before.redo.length;
+
 /** Only a read covering every acknowledged revision can clear this draft's outstanding read failure/floor. */
 export function afterDraftRead(ui: StudioUi, view: Pick<DraftView, "id" | "documentRevision" | "layoutRevision">): Pick<StudioUi, "acknowledgedRevisions" | "refreshFailed"> {
   if (!covers(view, ui.acknowledgedRevisions[view.id])) {
