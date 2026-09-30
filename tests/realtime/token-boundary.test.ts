@@ -12,7 +12,9 @@ import { RECEIVE_TIMEOUT_MS, SILENCE_MS, withRealtimeFixture, type Realtime } fr
 // configuration, joined over real sockets and thrown at the Auth, Data API and Storage surfaces. Every denial is paired with a positive
 // control on the same channel or endpoint, so an outage cannot masquerade as a boundary.
 const DENIED = /Unauthorized|permissions/i;
-const REJECTED = /invalid|jwt|unauthori[sz]ed|expired|permissions/i; // the server's refusal of a bad credential; a bare timeout must not pass
+// A credential refused as a credential: JWT/signature/expiry wording, and never the RLS wording (DENIED), a timeout or a bare channel error.
+// realtime-js does no client-side expiry check (setAuth only stores the token), so the provider's own message is the evidence.
+const BAD_CREDENTIAL = (error: unknown) => { const message = String((error as Error)?.message); return /jwt|token|signature|expired/i.test(message) && !DENIED.test(message); };
 const CLIENT = "app_realtime_client";
 
 function mint(scope: RealtimeScope, now?: number) {
@@ -108,12 +110,12 @@ test("the scoped credential joins, sends and receives exactly what its member sc
       await assert.rejects(rt.join(await withToken(rt, mint(scope)), topic), DENIED, label);
     }
 
-    // Expired and tampered credentials are refused although a fresh one for the same scope just joined this channel.
-    await assert.rejects(rt.join(await withToken(rt, mint(ownerScope!, Date.now() - 400_000)), topics.collab), REJECTED, "expired");
-    const [header, payload, signature] = mint(strangerScope!).split(".") as [string, string, string];
-    const forged = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(payload, "base64url").toString()), profile_id: ownerScope!.profileId })).toString("base64url");
-    await assert.rejects(rt.join(await withToken(rt, `${header}.${forged}.${signature}`), topics.collab), REJECTED, "tampered claims");
-    await assert.rejects(rt.join(await withToken(rt, `${header}.${payload}.${signature.slice(0, -2)}AA`), topics.collab), REJECTED, "tampered signature");
+    // Expired and tampered credentials are refused as credentials. Each starts from a scope that JOINS above, so only the signature or expiry can explain the refusal.
+    await assert.rejects(rt.join(await withToken(rt, mint(ownerScope!, Date.now() - 400_000)), topics.collab), BAD_CREDENTIAL, "expired");
+    const [header, payload, signature] = mint(ownerScope!).split(".") as [string, string, string];
+    const forged = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(payload, "base64url").toString()), profile_id: viewerScope!.profileId })).toString("base64url"); // another joinable member
+    await assert.rejects(rt.join(await withToken(rt, `${header}.${forged}.${signature}`), topics.collab), BAD_CREDENTIAL, "tampered claims");
+    await assert.rejects(rt.join(await withToken(rt, `${header}.${payload}.${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`), topics.collab), BAD_CREDENTIAL, "tampered signature");
     assert.deepEqual((await broadcast(rt, ownerCollab, [editorCollab], true)).delivered, [true], "the channel still works for the valid scope");
   });
 });
