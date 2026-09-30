@@ -59,6 +59,16 @@ test("a project is created once, owned by its creator and private to others", as
     expect(lists.owned.items).toEqual([expect.objectContaining({ id: project.id, role: "OWNER" })]);
     const otherPage = await other.newPage();
     await signIn(otherPage, admin, users, "API Outsider");
-    expect((await otherPage.request.get(`/api/projects/${project.id}/bootstrap`)).status()).toBe(404);
+    const boot = await page.request.get(`/api/projects/${project.id}/bootstrap`);
+    expect(boot.headers()["cache-control"]).toContain("no-store");
+    const { status: bootStatus, realtime } = await boot.json() as { status: { role: string; realtimeEpoch: string }; realtime: { events: string; collab: string } };
+    expect(bootStatus.role).toBe("OWNER");
+    expect(realtime).toEqual({ events: `project:${project.id}:${bootStatus.realtimeEpoch}:events`, collab: `project:${project.id}:${bootStatus.realtimeEpoch}:collab` });
+    const hidden = await otherPage.request.get(`/api/projects/${project.id}/bootstrap`);
+    expect(hidden.status()).toBe(404);
+    expect(hidden.headers()["cache-control"]).toContain("no-store");
+    const hiddenText = await hidden.text();
+    expect(hiddenText).not.toContain(bootStatus.realtimeEpoch);
+    expect(hiddenText).not.toContain("project:");
   } finally { await other.close(); await cleanupUsers(database, admin, users, page); await database.end(); }
 });

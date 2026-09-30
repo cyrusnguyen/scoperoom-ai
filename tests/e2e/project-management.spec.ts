@@ -26,7 +26,7 @@ const empty = { items: [], truncated: false };
 const owner = { profileId: project.ownerId, displayName: "Management Owner", role: "OWNER", version: 1, designatedApprover: false };
 const listItem = (id: string, name: string, role: string) => ({ id, name, status: "ACTIVE", role, ownerName: "Management Owner", updatedAt: "2026-09-26T00:00:00.000Z" });
 const baseStatus = {
-  status: "ACTIVE", version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null as string | null,
+  status: "ACTIVE", role: "OWNER", version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null as string | null,
   currentDraftId: draft.id, documentRevision: 1, layoutRevision: 1, realtimeEpoch: "77777777-7777-4777-8777-777777777777", eventSequence: 1,
 };
 
