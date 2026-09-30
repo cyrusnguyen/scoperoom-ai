@@ -11,6 +11,12 @@ Use the pinned Node and pnpm versions in package.json. Install with `corepack pn
 
 Keep fast unit tests for edge-case combinations, database integration tests for authority/atomicity/retry guarantees, and browser tests for workflows and actual interaction. A real pointer regression is necessary for clipped connection handles; a pure direction calculation cannot replace it. Preserve dedicated authentication/session/membership coverage.
 
+## Private Realtime socket suite
+
+`corepack pnpm test:realtime` runs `tests/realtime/*.test.ts` serially against a guarded local Supabase stack. It signs fixture-created verified Auth users in with the publishable key and opens actual Realtime sockets; it never forges a JWT or uses the service secret as a socket credential. Prerequisites: the running stack, `db:bootstrap` or `db:migrate` (which installs the policies and the private-only tenant), and `.env.local` or CI variables for `E2E_SUPABASE_URL`, `E2E_SUPABASE_SECRET_KEY` (fixture accounts only), `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` and the database/identity settings used by integration tests. Missing settings and an unverified tenant fail the run; nothing skips.
+
+Before any socket opens, the suite runs `scripts/db/realtime.mjs verify`. The local Realtime container re-seeds its tenant as public on every container start, so after a restart run `corepack pnpm db:migrate` again. Negative delivery checks use a bounded observation window, are paired with the application's `getProjectStatus` result and the `app_private.can_realtime` decision, and always run beside a positive delivery on the same channel so an outage cannot pass as denial. Run this suite alone on its stack (CI runs it after `test:integration`, never in parallel with other users of that database).
+
 ## Browser fixture ownership
 
 The ten Studio specs import their test fixture from `tests/e2e/studio-fixtures.ts`. Each worker owns a unique entitled test account and keeps its authentication state in memory. Playwright supplies a fresh browser context for each test. The fixture closes the context and allows outstanding requests to settle before deleting every project owned by that account and its mutation receipts. Worker teardown deletes the account. The normal ten-project allowance is retained.

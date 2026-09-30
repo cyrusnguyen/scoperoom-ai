@@ -39,6 +39,7 @@ jobs:
       - run: bash scripts/ci/export-local-auth-env.sh
       - run: corepack pnpm db:bootstrap
       - run: corepack pnpm test:integration
+      - run: corepack pnpm test:realtime
       - name: Supabase diagnostics
         if: failure()
         run: bash scripts/ci/print-local-supabase-logs.sh

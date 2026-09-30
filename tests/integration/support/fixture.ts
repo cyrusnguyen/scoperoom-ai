@@ -16,12 +16,15 @@ export type Fixture = {
   project: (owner: Identity, name?: string) => Promise<string>;
   /** Invites `member` with `role` and accepts through the real services. */
   join: (owner: Identity, projectId: string, member: Identity, role?: "EDITOR" | "REVIEWER" | "VIEWER") => Promise<void>;
+  /** Signs the verified Auth user in with a publishable-key client. The password never leaves this fixture. */
+  session: (identity: Identity) => Promise<{ accessToken: string; refreshToken: string }>;
 };
 
 export async function withFixture(run: (fixture: Fixture) => Promise<void>) {
   const admin = createClient(process.env.E2E_SUPABASE_URL!, process.env.E2E_SUPABASE_SECRET_KEY!, { auth: { autoRefreshToken: false, persistSession: false } });
   const database = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
   const authIds: string[] = [];
+  const passwords = new Map<string, string>();
   await database.connect();
   const profileId = async (identity: Identity) => {
     const { rows: [row] } = await database.query<{ id: string }>("select id from app.user_profile where auth_user_id = $1", [identity.authUserId]);
@@ -40,12 +43,22 @@ export async function withFixture(run: (fixture: Fixture) => Promise<void>) {
       database, profileId, entitle,
       user: async (label = "Integration Test") => {
         const verifiedEmail = `it-${randomUUID()}@example.test`;
-        const { data, error } = await admin.auth.admin.createUser({ email: verifiedEmail, password: `It-${randomUUID()}-Pass!`, email_confirm: true, user_metadata: { full_name: label } });
+        const password = `It-${randomUUID()}-Pass!`;
+        const { data, error } = await admin.auth.admin.createUser({ email: verifiedEmail, password, email_confirm: true, user_metadata: { full_name: label } });
         if (error || !data.user) throw error ?? new Error("Could not create test user.");
         authIds.push(data.user.id);
+        passwords.set(data.user.id, password);
         const identity = { authUserId: data.user.id, displayName: label, verifiedEmail };
         await listProjects(identity);
         return identity;
+      },
+      session: async (identity) => {
+        const password = passwords.get(identity.authUserId);
+        const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+        if (!password || !key) throw new Error("A publishable key and a fixture-created user are required for a real session.");
+        const { data, error } = await createClient(process.env.E2E_SUPABASE_URL!, key, { auth: { autoRefreshToken: false, persistSession: false } }).auth.signInWithPassword({ email: identity.verifiedEmail, password });
+        if (error || !data.session) throw new Error("Could not sign in the test user.");
+        return { accessToken: data.session.access_token, refreshToken: data.session.refresh_token };
       },
       project: async (owner, name = "Shared project") => {
         const { rows: [entitled] } = await database.query<{ count: number }>("select count(*)::int as count from app.pilot_entitlement where profile_id = $1", [await profileId(owner)]);
