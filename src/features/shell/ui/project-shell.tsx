@@ -330,7 +330,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
       <CancelFocus label="Stay" onClick={() => setDialog(null)} />
       <button type="button" className="button danger" disabled={Boolean(ui.request)} onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
     </>}><p>{dirtyCount(store, projectId)} {ui.outbox.sending?.state === "uncertain" ? "unsaved edit(s) or unconfirmed change(s)." : pendingCount(ui.outbox) ? "unsaved change(s)." : "unsaved field(s)."}</p>{ui.outbox.sending?.state === "uncertain" && <p>The unconfirmed save will still be available to retry when you return. Discard only removes local edits; it cannot cancel a change already sent.</p>}</Dialog>}
-    {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project}
+    {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project} viewer={() => viewerRef.current}
       onClose={() => closeDialog(lifecycleDialog.project.id)} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}
   </div>;
 }

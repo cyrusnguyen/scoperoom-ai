@@ -160,6 +160,67 @@ test.describe("shell actions", () => {
     expect(sent).toEqual([1, 4]);
   });
 
+  // Another window signs in as someone else while a lifecycle dialog is open: the read right before sending sees it, and
+  // nothing is sent (the server would allow it: the other account may itself be a member).
+  const OTHER_VIEWER = "00000000-0000-4000-8000-000000000001";
+  async function watchTeardown(page: Page) {
+    const seen: string[] = [];
+    await page.exposeFunction("captureAtTeardown", (text: string) => { seen.push(text); });
+    await page.evaluate(() => {
+      window.addEventListener("scoperoom:session-ended", () => { void (window as unknown as { captureAtTeardown: (text: string) => Promise<void> }).captureAtTeardown(document.body.innerText); });
+    });
+    return seen;
+  }
+
+  test("Leave from the sidebar, with no project open, sends nothing when the account changed while the dialog was open", async ({ page }) => {
+    await signIn(page, admin, users, "Actions Test");
+    let switched = false;
+    const sent: string[] = [];
+    await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: group(), shared: group([{ ...item(ids.alpha, "Alpha plan"), role: "REVIEWER" }]), archived: group(), capacity: capacity(0, 10) } }));
+    await page.route("**/api/invitations", (route) => route.fulfill({ json: noInvites }));
+    await page.route(`**/api/projects/${ids.alpha}/status`, (route) => route.fulfill({ json: { ...status(1), role: "REVIEWER", ...(switched ? { viewerId: OTHER_VIEWER } : {}) } }));
+    await page.route(`**/api/projects/${ids.alpha}/leave`, (route) => { sent.push("leave"); return route.fulfill({ json: { ...status(1), replayed: false } }); });
+    await page.goto("/app");
+    await sidebar(page).getByRole("tab", { name: "Shared with me" }).click();
+    await sidebar(page).getByRole("button", { name: "Actions for Alpha plan" }).click();
+    await page.getByRole("menuitem", { name: "Leave…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Leave Alpha plan?" });
+    await expect(dialog.getByRole("button", { name: "Leave", exact: true })).toBeEnabled(); // the opening read has finished
+    const seen = await watchTeardown(page);
+    switched = true;
+    await dialog.getByRole("button", { name: "Leave", exact: true }).click();
+    await expect.poll(() => seen.length).toBe(1);
+    expect(seen[0]).toContain("Your account changed");
+    expect(seen[0]).not.toContain("Alpha plan");
+    await expect(page).toHaveURL(/\/app$/);
+    expect(sent).toEqual([]);
+  });
+
+  test("Archive from Details of the open project sends nothing when the account changed while the dialog was open", async ({ page }) => {
+    await signIn(page, admin, users, "Actions Test");
+    let switched = false;
+    const sent: string[] = [];
+    await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: group([item(ids.alpha, "Alpha plan")]), shared: group(), archived: group(), capacity: capacity(1, 10) } }));
+    await page.route("**/api/invitations", (route) => route.fulfill({ json: noInvites }));
+    await page.route(`**/api/projects/${ids.alpha}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { id: ids.alpha, name: "Alpha plan", status: "ACTIVE", role: "OWNER", ownerId: ids.alpha }, draft: emptyDraftView() }) }));
+    await page.route(`**/api/projects/${ids.alpha}/status`, (route) => route.fulfill({ json: { ...status(1), ...(switched ? { viewerId: OTHER_VIEWER } : {}) } }));
+    await page.route(`**/api/projects/${ids.alpha}/archive`, (route) => { sent.push("archive"); return route.fulfill({ json: { ...status(2, "ARCHIVED"), replayed: false } }); });
+    await page.goto(`/app/projects/${ids.alpha}`);
+    await expect(page.getByRole("heading", { level: 1, name: "Alpha plan" })).toBeVisible();
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    await page.locator("#right-panel").getByRole("button", { name: "Archive project…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Archive Alpha plan?" });
+    await dialog.getByLabel("Reason").fill("Pilot finished");
+    await expect(dialog.getByRole("button", { name: "Archive", exact: true })).toBeEnabled();
+    const seen = await watchTeardown(page);
+    switched = true;
+    await dialog.getByRole("button", { name: "Archive", exact: true }).click();
+    await expect.poll(() => seen.length).toBe(1);
+    expect(seen[0]).toContain("Your account changed");
+    await expect(page).toHaveURL(/\/app$/);
+    expect(sent).toEqual([]);
+  });
+
   test("an archive whose project already changed says so, sends nothing, and Cancel re-reads the lists and returns focus", async ({ page }) => {
     await signIn(page, admin, users, "Actions Test");
     let listReads = 0;

@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState, type SubmitEvent } from "react";
-import { apiMutate, apiRead, sessionEnded } from "@/client/api";
+import { useCallback, useEffect, useRef, useState, type SubmitEvent } from "react";
+import { accountChanged, apiMutate, apiRead, sessionEnded } from "@/client/api";
 import type { ProjectStatusView } from "@/features/projects/contracts/project";
 import Dialog, { CancelFocus } from "./dialog";
 
@@ -14,13 +14,16 @@ const copy: Record<LifecycleKind, { verb: string; body: string; tone: "danger" |
 };
 
 /**
- * Archive, restore or leave one project. Archive and restore first read the current project version (a fresh preview);
- * a CONFLICT keeps the dialog and reads it again before the user can confirm. A project whose status already changed
- * (archived or restored elsewhere) can't be confirmed at all. An uncertain result keeps the same key and input.
+ * Archive, restore or leave one project. Every kind first reads the project status (a fresh preview); a CONFLICT keeps
+ * the dialog and reads it again before the user can confirm. A project whose status already changed (archived or restored
+ * elsewhere) can't be confirmed at all. An uncertain result keeps the same key and input. This dialog renders outside the
+ * sync controller, so it checks the account itself: a status read right before sending must be for the account the page
+ * opened with (`viewer`), else the page tears down and nothing is sent. With no project open there is no such account; the
+ * one the dialog's own opening read saw stands in, and Confirm waits for that read.
  */
-export default function LifecycleDialog({ kind, project, onClose, onDone }: { kind: LifecycleKind; project: { id: string; name: string }; onClose: () => void; onDone: () => void }) {
+export default function LifecycleDialog({ kind, project, viewer, onClose, onDone }: { kind: LifecycleKind; project: { id: string; name: string }; viewer: () => string | null; onClose: () => void; onDone: () => void }) {
   const { verb, body, tone } = copy[kind];
-  const needsVersion = kind !== "leave";
+  const opened = useRef<string | null>(null);
   const [version, setVersion] = useState<number | null>(null);
   const [reason, setReason] = useState("");
   const [key, setKey] = useState(() => crypto.randomUUID());
@@ -33,8 +36,9 @@ export default function LifecycleDialog({ kind, project, onClose, onDone }: { ki
     const result = await apiRead<ProjectStatusView>(`/api/projects/${project.id}/status`, signal);
     if (signal?.aborted || sessionEnded(result)) return;
     if (!result.ok) { setReadFailed(true); setError(result.message); return; }
+    opened.current ??= result.data.viewerId;
     // The server refuses archive unless ACTIVE and restore unless ARCHIVED, whatever the version: confirming can't succeed.
-    if (result.data.status !== (kind === "archive" ? "ACTIVE" : "ARCHIVED")) { setError(result.data.status === "ARCHIVED" ? "This project is already archived." : "This project is already active."); return; }
+    if (kind !== "leave" && result.data.status !== (kind === "archive" ? "ACTIVE" : "ARCHIVED")) { setError(result.data.status === "ARCHIVED" ? "This project is already archived." : "This project is already active."); return; }
     setVersion(result.data.version);
   }, [project.id, kind]);
   const retryPreview = () => {
@@ -46,17 +50,21 @@ export default function LifecycleDialog({ kind, project, onClose, onDone }: { ki
   };
 
   useEffect(() => {
-    if (!needsVersion) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => { void preview(controller.signal); }, 0);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [needsVersion, preview]);
+  }, [preview]);
 
   const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (busy || (needsVersion && version === null)) return;
+    if (busy || version === null) return;
     setBusy(true);
     setError("");
+    // Read again now: the account can change while the dialog is open, which the opening read can't see.
+    const fresh = await apiRead<ProjectStatusView>(`/api/projects/${project.id}/status`);
+    if (sessionEnded(fresh)) return;
+    if (!fresh.ok) { setBusy(false); setError(fresh.message); return; }
+    if (fresh.data.viewerId !== (viewer() ?? opened.current)) { accountChanged(); return; }
     const input = kind === "archive" ? { expectedProjectVersion: version, reason } : kind === "restore" ? { expectedProjectVersion: version } : {};
     const result = await apiMutate(`/api/projects/${project.id}/${kind}`, key, input);
     setBusy(false);
@@ -69,7 +77,7 @@ export default function LifecycleDialog({ kind, project, onClose, onDone }: { ki
     if (result.code === "CONFLICT") { setVersion(null); void preview(); }
   };
 
-  const ready = !needsVersion || version !== null;
+  const ready = version !== null;
   // Closing while the request is in flight would drop its key, its uncertain result and the Retry path.
   const close = busy ? () => {} : onClose;
   return <Dialog title={`${verb} ${project.name}?`} onClose={close} footer={<>
