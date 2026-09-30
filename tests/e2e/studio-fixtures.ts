@@ -5,7 +5,7 @@ type WorkerAccount = { authUserId: string; storageState: Awaited<ReturnType<Brow
 type WorkerFixtures = { workerAccount: WorkerAccount };
 type TestFixtures = { cleanStudio: void };
 
-async function closeStudioContext(context: BrowserContext) {
+export async function closeStudioContext(context: BrowserContext) {
   const responses = (await Promise.all(context.pages().map((page) => page.requests())))
     .flatMap((requests) => requests.map((request) => request.response().catch(() => null)));
   await Promise.race([Promise.all(responses), new Promise((resolve) => setTimeout(resolve, 5_000))]);
