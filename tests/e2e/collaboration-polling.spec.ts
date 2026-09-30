@@ -14,9 +14,13 @@ test("panel, view and project switches keep one status poll per window", async (
   const polls: string[] = [];
   page.on("request", (request) => { const match = /\/api\/projects\/([^/]+)\/status$/.exec(new URL(request.url()).pathname); if (match) polls.push(match[1]!); });
   await page.clock.install();
+  // A Realtime join (Stage 04.3) reads status once, outside the timer: each project's is settled before its windows are counted.
+  const joinRead = (id: string) => page.waitForResponse((response) => new URL(response.url()).pathname === `/api/projects/${id}/status`);
+  const joined = joinRead(projectId);
   await page.goto(`/app/projects/${projectId}`);
   const toolbar = page.locator(".studio-toolbar");
   await expect(toolbar).toBeVisible();
+  await joined;
 
   const inspect = page.getByRole("button", { name: "Inspect", exact: true });
   for (let round = 0; round < 3; round++) {
@@ -39,8 +43,10 @@ test("panel, view and project switches keep one status poll per window", async (
   for (let round = 0; round < 3; round++) expect(await window()).toEqual([projectId]);
 
   // Switching projects disposes the old controller and starts one for the new project.
+  const joinedOther = joinRead(otherId);
   await page.locator("#projects-nav").getByRole("button", { name: "Second polling project", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Second polling project" })).toBeVisible();
+  await joinedOther;
   for (let round = 0; round < 2; round++) expect(await window()).toEqual([otherId]);
 });
 

@@ -83,9 +83,12 @@ test("a peer's cursor over the canvas is labelled; over a panel it is not publis
   await Promise.all([ownerPage, editorPage].map((page) => page.goto(`/app/projects/${projectId}`)));
   await expect(nodeAt(editorPage, startId)).toBeVisible({ timeout: 20_000 });
   await expect(ownerPage.getByRole("button", { name: /other person here/ })).toBeVisible({ timeout: 20_000 });
+  // A point on the flow view clear of the shape panel (bottom centre) and the controls: the precondition is asserted, so the wrong spot cannot pass as "not published".
   const pane = (await editorPage.locator(".react-flow__pane").boundingBox())!;
-  await editorPage.mouse.move(pane.x + pane.width / 2, pane.y + pane.height - 40);
-  await editorPage.mouse.move(pane.x + pane.width / 2 + 20, pane.y + pane.height - 30, { steps: 4 });
+  const [px, py] = [pane.x + pane.width * 0.75, pane.y + pane.height * 0.4];
+  expect(await editorPage.evaluate(([x, y]) => Boolean(document.elementFromPoint(x!, y!)?.closest(".react-flow")), [px, py])).toBe(true);
+  await editorPage.mouse.move(px, py);
+  await editorPage.mouse.move(px + 20, py + 10, { steps: 4 });
   const cursor = ownerPage.locator(".live-cursor");
   await expect(cursor).toBeVisible({ timeout: 10_000 });
   await expect(cursor).toContainText("Collab editor");
@@ -213,11 +216,10 @@ test("a Realtime outage never blocks saving: Save succeeds while Live updates de
   let dragging = true;
   const wiggle = (async () => { for (let step = 0; dragging; step++) { await ownerPage.mouse.move(x + 160 + (step % 2) * 4, y + 80); await ownerPage.waitForTimeout(140); } })();
 
-  const cutAt = Date.now();
   await wire.cut(); // the editor's sockets only; every HTTP request still works
-  await expect(delayed(editorPage)).toBeVisible({ timeout: 20_000 });
   // The overlay ends with the connection: packets were still arriving right up to the cut, so the 2 s expiry cannot explain a ghost gone within 1.5 s of it.
-  await expect(ghostAt(editorPage, ids.startId)).toHaveCount(0, { timeout: Math.max(100, 1_500 - (Date.now() - cutAt)) });
+  await expect(ghostAt(editorPage, ids.startId)).toHaveCount(0, { timeout: 1_500 });
+  await expect(delayed(editorPage)).toBeVisible({ timeout: 20_000 });
   dragging = false;
   await wiggle;
   await ownerPage.mouse.up();

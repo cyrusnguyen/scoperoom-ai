@@ -72,9 +72,12 @@ test.describe("Frozen view, redo history, typed text and refreshing", () => {
     await page.clock.install();
   });
   const open = async (page: Page, narrow = false) => {
+    // The Realtime join (Stage 04.3) reads status once: let it settle, so a later step counts only its own reads (two failed saved reads give up).
+    const joined = page.waitForResponse((response) => /\/status$/.test(new URL(response.url()).pathname));
     await page.goto(`/app/projects/${projectId}`);
     // At 390 px the Studio opens on the List; the canvas is not mounted.
     await expect(narrow ? page.locator(".studio-toolbar") : nodeAt(page, ids.payId)).toBeVisible();
+    await joined;
   };
 
   test("a remote edit of what I changed freezes the view with one notice; Keep theirs resolves it", async ({ page }) => {
