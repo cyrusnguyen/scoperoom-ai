@@ -5,6 +5,7 @@ export type ApiResult<T> =
   | { ok: true; data: T }
   | { ok: false; code: string; message: string; status: number; details?: ErrorDetails; uncertain: boolean };
 
+export const SESSION_ENDED = "scoperoom:session-ended";
 const unavailable = "ScopeRoom is unavailable right now. Try again.";
 
 async function settle<T>(request: () => Promise<Response>): Promise<ApiResult<T>> {
@@ -42,6 +43,8 @@ export function apiMutate<T>(url: string, key: string | null, body: Record<strin
  */
 export function sessionEnded(result: ApiResult<unknown>, to = "/login"): boolean {
   if (result.ok || result.status !== 401) return false;
+  // The shell listens, so it can stop polling and clear what it shows before the page is replaced.
+  window.dispatchEvent(new Event(SESSION_ENDED));
   window.location.replace(to);
   return true;
 }

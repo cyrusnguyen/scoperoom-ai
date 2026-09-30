@@ -96,6 +96,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   saveRef?: RefObject<(() => Promise<boolean>) | null>; children: ReactNode;
 }) {
   const { outbox, request, save, refreshFailed } = ui;
+  const { beforeWrite, fence, invalidate } = useSync();
   // Another instance may still own the request after browser history remounts this keyed provider.
   const busy = Boolean(request);
   const draftId = savedDraft.id;
@@ -116,6 +117,9 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   useLayoutEffect(() => { inFlight.current = request; }, [request]);
   useLayoutEffect(() => { floorRef.current = floor; }, [floor]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  // A different draft is another authority to establish before the next write.
+  const shownDraft = useRef(draftId);
+  useEffect(() => { if (shownDraft.current !== draftId) { shownDraft.current = draftId; invalidate(); } }, [draftId, invalidate]);
   const [readFailures, setReadFailures] = useState(0);
   const [redoCleared, setRedoCleared] = useState(false);
   if (!refreshFailed && readFailures) setReadFailures(0); // any covering read, from any path, starts the count over
@@ -145,10 +149,11 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   const frozen = useMemo(() => frozenBehind(outbox, savedDraft, floor), [outbox, savedDraft, floor]);
 
   // `fence` (polling only) drops a response the sync controller has since replaced, right before anything is adopted.
-  const reload = useCallback(async (fence?: () => boolean): Promise<DraftView | null> => {
+  const reload = useCallback(async (stillCurrent?: () => boolean): Promise<DraftView | null> => {
     const result = await apiRead<DraftView>(`/api/projects/${projectId}/drafts/${draftId}`);
-    if (sessionEnded(result) || (fence && !fence())) return null;
+    if (sessionEnded(result) || (stillCurrent && !stillCurrent())) return null;
     if (!result.ok) {
+      if (result.uncertain) invalidate();
       update(() => ({ refreshFailed: true }));
       setReadFailures((count) => count + 1);
       if (result.status === 404) onAccessChanged();
@@ -159,7 +164,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     if (adopt(result.data)) { update((current) => afterDraftRead(current, result.data)); return result.data; }
     if (!covers(result.data, floorRef.current)) { update(() => ({ refreshFailed: true })); setReadFailures((count) => count + 1); }
     return null;
-  }, [projectId, draftId, adopt, onAccessChanged, update]);
+  }, [projectId, draftId, adopt, onAccessChanged, update, invalidate]);
 
   useSyncReader(reload); // polling adopts through this same gated read
 
@@ -179,6 +184,24 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   }, [editable, change]);
 
   /**
+   * The write barrier. Authority comes from the status controller, never from an earlier answer: after focus, reconnect,
+   * a failed request or a draft change it waits for a fresh status read. A new batch needs an ACTIVE project, an owner or
+   * editor and the draft it was made on; an uncertain retry only needs the person to still be a member (server guards stay
+   * final). Null admits the write; otherwise the reason. DENIED means the shell is already dropping the project.
+   */
+  const admit = useCallback(async (write: boolean, target: string): Promise<{ code: string; message: string } | null> => {
+    const authority = await beforeWrite();
+    if (authority.kind === "unavailable") return { code: "UNAVAILABLE", message: "Not saved. We couldn’t reach ScopeRoom." };
+    if (authority.kind === "denied") return { code: "DENIED", message: "" };
+    if (!fence(authority.generation)()) return { code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message };
+    if (!write) return null;
+    const { role: current, status, currentDraftId } = authority.status;
+    if (currentDraftId !== target) return { code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message };
+    if (status !== "ACTIVE" || (current !== "OWNER" && current !== "EDITOR")) return { code: "FORBIDDEN", message: "Not saved. This project is read-only now." };
+    return null;
+  }, [beforeWrite, fence]);
+
+  /**
    * One flush: start a save of the queued changes if none is pending, then send its batches one after another, and
    * then anything queued meanwhile. Stops (false) at an unconfirmed or refused batch, or while another request is in flight.
    */
@@ -188,8 +211,19 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     const finish = async () => { await reload(); update(() => ({ save: { state: "saved", message: "" } })); };
     for (;;) {
       if (!mounted.current || inFlight.current) { if (sent) await finish(); return false; }
+      const waiting = latest.current.sending;
+      if (waiting?.state === "refused") return false;
+      if (!waiting && !latest.current.entries.length) break;
+      if (!editable && waiting?.state !== "uncertain") return false;
+      // Before every new batch and every retry of an unconfirmed one. Nothing between this check and the request awaits.
+      const blocked = await admit(waiting?.state !== "uncertain", waiting ? waiting.draftId : saved.current.id);
+      if (blocked) {
+        if (blocked.code !== "DENIED") update(() => ({ save: { state: "failed", message: blocked.message } }));
+        return false;
+      }
+      // The person may have discarded, undone or unmounted while the barrier waited: start over from the current state.
+      if (!mounted.current || inFlight.current || latest.current.sending?.key !== waiting?.key) continue;
       if (!latest.current.sending) {
-        if (!latest.current.entries.length) break;
         if (!editable) return false;
         const base = saved.current, key = crypto.randomUUID();
         change((current) => startSave(current, base, key, floorRef.current));
@@ -203,9 +237,6 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
         }
       }
       const sending: Sending = latest.current.sending!;
-      if (sending.state === "refused") return false;
-      // An admitted reader may still resolve an already-sent batch, but only with its exact key and body.
-      if (!editable && sending.state !== "uncertain") return false;
       const { key, draftId: target } = sending;
       const mark = (state: Sending["state"], extra: Partial<Sending> = {}) => (current: Outbox) =>
         current.sending?.key === key ? { ...current, sending: { ...current.sending, state, ...extra } } : current;
@@ -224,6 +255,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
         continue;
       }
       if (result.uncertain) {
+        invalidate(); // the API may be down: the retry waits for a status read
         change(mark("uncertain"), (current) => ({ ...release(current), save: { state: "failed", message: "We couldn’t confirm your changes." } }));
         return false;
       }
@@ -238,7 +270,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     if (sent) await finish();
     // Editing remains enabled during the final read; a switch must still guard anything queued in that window.
     return pendingCount(latest.current) === 0;
-  }, [editable, projectId, change, update, reload, onAccessChanged]);
+  }, [editable, projectId, change, update, reload, onAccessChanged, admit, invalidate]);
 
   // Saves run one after another: a Save pressed during another waits for it, then sends what is left.
   const chain = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -286,6 +318,8 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     inFlight.current = key;
     update(() => ({ request: key }));
     try {
+      const blocked = await admit(true, draftId);
+      if (blocked) return { ok: false, code: blocked.code === "DENIED" ? "FORBIDDEN" : blocked.code, message: blocked.message || readOnly.message, uncertain: false };
       const result = await apiMutate<PositionResult>(`/api/projects/${projectId}/drafts/${draftId}/positions`, key, command);
       if (sessionEnded(result)) return { ok: false, code: "UNAUTHENTICATED", message: "", uncertain: false };
       if (result.ok) {
@@ -294,6 +328,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
         await reload();
         return { ok: true, result: result.data };
       }
+      if (result.uncertain) invalidate();
       if (accessCodes.has(result.code)) onAccessChanged();
       else if (!result.uncertain) await reload();
       return { ok: false, code: result.code, message: result.message, uncertain: result.uncertain, ...(result.details ? { details: result.details } : {}) };
@@ -301,7 +336,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
       if (inFlight.current === key) inFlight.current = null;
       update((current) => (current.request === key ? { request: null } : {}));
     }
-  }, [editable, projectId, draftId, update, reload, onAccessChanged]);
+  }, [editable, projectId, draftId, update, reload, onAccessChanged, admit, invalidate]);
 
   /** A nonmutating arrangement preview: no key, no lock, and a certain refusal re-reads the draft it was stale against. */
   const preview = useCallback(async (request: ArrangementRequest): Promise<Outcome<ArrangementPreview>> => {

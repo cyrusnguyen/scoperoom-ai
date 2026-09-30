@@ -29,8 +29,10 @@ type Sync = {
   failures: number;
   revalidate: (reason: ReconcileReason) => Promise<AuthorityResult>;
   beforeWrite: () => Promise<AuthorityResult>;
+  /** Marks authority unproven (an API failure, a draft change): the next write waits for a fresh status read. */
+  invalidate: () => void;
   /** True while nothing has replaced this project or its draft: check right before adopting a late response. */
-  fence: () => () => boolean;
+  fence: (at?: number) => () => boolean;
   setReader: (read: Reader) => () => void;
 };
 const SyncContext = createContext<Sync | null>(null);
@@ -76,6 +78,6 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
   }));
   useEffect(() => { sync.start(); return () => sync.dispose(); }, [sync]);
   const setReader = useMemo(() => (read: Reader) => { Object.assign(bridge, { reader: read }); return () => { if (bridge.reader === read) Object.assign(bridge, { reader: null }); }; }, [bridge]);
-  const value = useMemo<Sync>(() => ({ ...state, revalidate: sync.revalidate, beforeWrite: sync.beforeWrite, fence: sync.fence, setReader }), [state, sync, setReader]);
+  const value = useMemo<Sync>(() => ({ ...state, revalidate: sync.revalidate, beforeWrite: sync.beforeWrite, invalidate: sync.invalidate, fence: sync.fence, setReader }), [state, sync, setReader]);
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;
 }

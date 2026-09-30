@@ -1118,7 +1118,10 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await page.unrouteAll({ behavior: "ignoreErrors" });
     await page.route("**/api/projects", (route) => route.fulfill({ json: lists(role, status) }));
     await page.route("**/api/invitations", (route) => route.fulfill({ json: { items: [], truncated: false } }));
-    await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: draft(extraFlows) }) }));
+    const bootstrap = withStatus({ project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: draft(extraFlows) });
+    await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: bootstrap }));
+    // Saves revalidate against status first (Stage 04.2 Task 5): unmocked, the real API answers 404 for this made-up project.
+    await page.route(`**/api/projects/${projectId}/status`, (route) => route.fulfill({ json: bootstrap.status }));
   }
 
 

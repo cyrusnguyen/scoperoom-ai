@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
-import { apiRead, sessionEnded } from "@/client/api";
+import { apiRead, SESSION_ENDED, sessionEnded } from "@/client/api";
 import type { Live } from "@/features/collaboration/ui/project-sync";
 import { SyncProvider } from "@/features/collaboration/ui/sync-context";
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
@@ -62,7 +62,10 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const [opened, setOpened] = useState<Opened | null>(null);
   // Synchronous copy of `opened`: the admission gate must see a draft adopted in the same event.
   const openedRef = useRef<Opened | null>(null);
-  const install = useCallback((next: Opened) => { openedRef.current = next; setOpened(next); }, []);
+  // A 401 anywhere ends the session: what the shell holds is cleared before the page is replaced, and late responses install nothing.
+  const [ended, setEnded] = useState(false);
+  const endedRef = useRef(false);
+  const install = useCallback((next: Opened) => { if (!endedRef.current) { openedRef.current = next; setOpened(next); } }, []);
   const [store, setStore] = useState<UiStore>({});
   const latestStore = useRef(store);
   useLayoutEffect(() => { latestStore.current = store; }, [store]);
@@ -73,6 +76,14 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const [notice, setNotice] = useState({ text: "", error: false });
   const notify = useCallback((text: string, error = false) => setNotice({ text, error }), []);
 
+  useEffect(() => {
+    const end = () => flushSync(() => {
+      endedRef.current = true; openedRef.current = null;
+      setEnded(true); setStore({}); setOpened(null); setLists(null); setInvites(null); setDialog(null);
+    });
+    window.addEventListener(SESSION_ENDED, end);
+    return () => window.removeEventListener(SESSION_ENDED, end);
+  }, []);
   useEffect(() => {
     const element = shellRef.current;
     if (!element) return;
@@ -87,7 +98,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
 
   const loadLists = useCallback(async () => {
     const [projects, mine] = await Promise.all([apiRead<ProjectLists>("/api/projects"), apiRead<{ items: MyInvitation[]; truncated: boolean }>("/api/invitations")]);
-    if (sessionEnded(projects) || sessionEnded(mine)) return;
+    if (sessionEnded(projects) || sessionEnded(mine) || endedRef.current) return;
     if (!projects.ok || !mine.ok) { setListsState("error"); return; }
     const now = Date.now();
     setLists(projects.data);
@@ -130,6 +141,9 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     return adopted ? { role: adopted.project.role, status: adopted.project.status, draftId: adopted.draft.id, documentRevision: adopted.draft.documentRevision, layoutRevision: adopted.draft.layoutRevision } : null;
   }, []);
   const updateStudio = useCallback((change: (ui: StudioUi) => Partial<StudioUi>) => {
+    // A late response for a project that was dropped or whose session ended must not bring its state back.
+    const shown = openedRef.current;
+    if (endedRef.current || (shown?.projectId === projectId && shown?.missing)) return;
     if (projectId) setStore((previous) => updateUi(previous, projectId, change));
   }, [projectId]);
 
@@ -249,6 +263,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (projectId) void loadProject(projectId);
     void loadLists();
   }
+
+  if (ended) return <div className="app-shell"><main id="editor-main" className="editor-slot"><div className="empty-state" role="alert"><p>Your session ended. Taking you to sign in…</p></div></main></div>;
 
   const restoreNote = capacity && !capacity.canCreate ? (capacity.entitled ? `${capacity.activeOwned}/${capacity.maxOwned} active` : "Restoring isn’t enabled for this account") : undefined;
   const lifecycleDialog = dialog && dialog.kind !== "create" && dialog.kind !== "switch" ? dialog : null;

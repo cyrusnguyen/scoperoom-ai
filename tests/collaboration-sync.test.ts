@@ -335,3 +335,61 @@ test("pending work on a replaced draft is stranded (read-only recovery); the cur
   assert.equal(stranded({ ...emptyOutbox, base: old }, "d2"), false);
   assert.equal(stranded(emptyOutbox, "d2"), false);
 });
+
+const fire = (t: ReturnType<typeof rig>, reason: ReconcileReason) => { for (const on of [...t.listeners]) on(reason); };
+
+test("focus, online and visibility return invalidate authority: a write waits for the request they start", async () => {
+  for (const reason of ["focus", "reconnect"] as const) {
+    const t = rig();
+    t.sync.start();
+    fire(t, reason);
+    await settle();
+    assert.equal(t.pending.length, 1);
+    let admitted = false;
+    const write = t.sync.beforeWrite().then((result) => { admitted = true; return result; });
+    await settle();
+    assert.equal(admitted, false, "no write while the status request is unanswered");
+    assert.equal(t.pending.length, 1, "the write shares the event's request instead of starting another");
+    await t.answer(ok(status({ role: "VIEWER" })));
+    const result = await write;
+    assert.ok(result.kind === "current" && result.status.role === "VIEWER");
+    assert.equal(t.pending.length, 0);
+    t.sync.dispose();
+  }
+});
+
+test("focus and visibilitychange together cost one status request; an event during a poll still gets its own", async () => {
+  const t = rig();
+  t.sync.start();
+  fire(t, "focus"); fire(t, "focus");
+  await settle();
+  assert.equal(t.pending.length, 1);
+  await t.answer(ok(status()));
+  assert.equal(t.pending.length, 0);
+  await t.advance(10_000);
+  assert.equal(t.pending.length, 1, "a poll is in flight");
+  fire(t, "focus");
+  const write = t.sync.beforeWrite();
+  await t.answer(ok(status()));
+  assert.equal(t.pending.length, 1, "the poll predates the event, so one follow-up is required");
+  await t.answer(ok(status()));
+  assert.equal((await write).kind, "current");
+  t.sync.dispose();
+});
+
+test("a failed status read after an event keeps writes blocked until a later read succeeds", async () => {
+  const t = rig();
+  t.sync.start();
+  fire(t, "reconnect");
+  await settle();
+  await t.answer(fail(503));
+  const blocked = t.sync.beforeWrite();
+  await settle();
+  await t.answer(fail(503));
+  assert.equal((await blocked).kind, "unavailable");
+  const back = t.sync.beforeWrite();
+  await settle();
+  await t.answer(ok(status()));
+  assert.equal((await back).kind, "current");
+  t.sync.dispose();
+});

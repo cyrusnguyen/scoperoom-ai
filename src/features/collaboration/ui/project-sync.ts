@@ -38,7 +38,8 @@ export type ProjectSync = {
   beforeWrite: () => Promise<AuthorityResult>;
   invalidate: () => void;
   /** True while this generation is still the current one: check right before adopting anything. */
-  fence: () => () => boolean;
+  /** The current generation, or an earlier one whose result is being checked (an authority result carries its own). */
+  fence: (at?: number) => () => boolean;
 };
 
 export function statusDelay(failures: number, random: number): number {
@@ -57,6 +58,8 @@ const unavailable: AuthorityResult = { kind: "unavailable" };
 
 export function createProjectSync(o: SyncOptions): ProjectSync {
   let generation = 0, session = 0, started = false, stopped = false, failures = 0, invalid = false, invalidations = 0;
+  // What the request in flight started with: an event-driven one that saw every invalidation covers a later beforeWrite or event.
+  let runSeen = -1, runReason: ReconcileReason = "poll";
   let last = o.initial, shown = "";
   let cancelTimer: (() => void) | null = null, unlisten: (() => void) | null = null;
   let running: Promise<AuthorityResult> | null = null, queued: Promise<AuthorityResult> | null = null;
@@ -99,25 +102,33 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
     return { kind: "current", generation: at, status: last };
   }
 
-  function begin(): Promise<AuthorityResult> {
+  function begin(reason: ReconcileReason): Promise<AuthorityResult> {
     cancelTimer?.(); cancelTimer = null;
+    runSeen = invalidations; runReason = reason;
     const flight: Promise<AuthorityResult> = run().finally(() => { if (running === flight) running = null; });
     return running = flight;
   }
   function revalidate(reason: ReconcileReason): Promise<AuthorityResult> {
     if (!started || stopped || (reason === "poll" && o.visibility.hidden())) return Promise.resolve(unavailable); // hidden: paused until a return event
-    if (!running) return begin();
+    if (!running) return begin(reason);
     if (queued) return queued;
     const at = session;
-    const next: Promise<AuthorityResult> = running.then(() => { if (queued === next) queued = null; return at === session && started ? begin() : unavailable; });
+    const next: Promise<AuthorityResult> = running.then(() => { if (queued === next) queued = null; return at === session && started ? begin(reason) : unavailable; });
     return queued = next;
   }
+
+  function invalidate() { invalid = true; invalidations++; }
 
   return {
     start() {
       if (started) return;
       started = true; stopped = false; generation++;
-      unlisten = o.visibility.listen((reason) => { void revalidate(reason); });
+      // Leaving and returning may have changed access: writes wait for a request that starts after the event. Focus and
+      // visibilitychange fire together, so an event-started request that has seen every invalidation covers this one too.
+      unlisten = o.visibility.listen((reason) => {
+        if (running && runSeen === invalidations && runReason !== "poll") return;
+        invalidate(); void revalidate(reason);
+      });
       schedule();
     },
     dispose() {
@@ -126,8 +137,10 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
       unlisten?.(); unlisten = null;
     },
     revalidate,
-    beforeWrite: () => (!started || stopped ? Promise.resolve(unavailable) : invalid ? revalidate("before-save") : Promise.resolve<AuthorityResult>({ kind: "current", generation, status: last })),
-    invalidate() { invalid = true; invalidations++; },
-    fence: () => fenceFor(generation),
+    beforeWrite: () => (!started || stopped ? Promise.resolve(unavailable)
+      : !invalid ? Promise.resolve<AuthorityResult>({ kind: "current", generation, status: last })
+      : running && runSeen === invalidations ? running : revalidate("before-save")),
+    invalidate,
+    fence: (at = generation) => fenceFor(at),
   };
 }
