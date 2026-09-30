@@ -11,7 +11,7 @@ import GraphList from "./graph-list";
 import { currentFlow, recordOf } from "./graph-view";
 import { AddStepDialog, ConnectDialog, DeleteStepsDialog } from "./step-dialogs";
 import { compareOutbox, describeAll, optimistic, type Conflict } from "./outbox";
-import { ReadRecovery, staleCodes, useStudio } from "./studio-context";
+import { LiveStatus, ReadRecovery, staleCodes, useStudio } from "./studio-context";
 import { canApplyAgain, stranded, studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
 
 type StudioDialog = "add" | "connect" | "delete" | "arrange" | null;
@@ -206,6 +206,7 @@ function StudioStatus({ flowId }: { flowId: string }) {
     <span className={redoCleared ? "muted" : "sr-only"} role="status">{redoCleared ? "Saved updates loaded. Redo history was cleared." : ""}</span>
     {redoCleared && <button type="button" className="button quiet small" onClick={dismissRedoCleared}>Dismiss</button>}
     <span className="editor-spacer" />
+    <LiveStatus />
     <ReadRecovery />
     <SaveStatus ui={ui} save={save} refreshFailed={refreshFailed} />
   </div>;

@@ -1,6 +1,8 @@
 // Browser side of the scoped Realtime credential (decision E36). One token source per open project and epoch: it is disposed when either
-// changes, so a late response can never reach the next source. Channels and presence are the transport's job, not this file's.
+// changes, so a late response can never reach the next source. The SDK transport at the end of this file is the only place a client or channel exists.
 import { createClient } from "@supabase/supabase-js";
+import type { PeerMessage, PresenceState } from "../features/collaboration/contracts/messages.ts";
+import type { LiveConnection, LiveState, RealtimeTransport } from "../features/collaboration/ui/realtime-transport.ts";
 import { apiPostEmpty, sessionEnded as endSession, type ApiResult } from "./api.ts";
 
 const RENEW_EARLY_MS = 60_000;
@@ -106,4 +108,97 @@ export async function authenticateRealtime(client: { realtime: { setAuth: (token
   if (!token) return false;
   await client.realtime.setAuth(token);
   return source.live(); // disposed while setAuth was pending: the caller must not subscribe
+}
+
+/** The slice of the SDK the transport uses: tests fake it without a network. */
+export type SdkChannel = {
+  on(type: "broadcast" | "presence", filter: { event: string }, callback: (payload: { payload?: unknown }) => void): SdkChannel;
+  subscribe(callback: (status: string) => void): unknown;
+  send(message: { type: "broadcast"; event: string; payload: unknown }): Promise<unknown>;
+  track(payload: object): Promise<unknown>;
+  presenceState(): Record<string, unknown[]>;
+};
+export type SdkClient = {
+  channel(topic: string, options: { config: Record<string, unknown> }): SdkChannel;
+  removeAllChannels(): Promise<unknown>;
+  realtime: { setAuth: (token?: string | null) => Promise<void>; disconnect: () => Promise<unknown> };
+};
+export type TransportOptions = {
+  makeClient?: (source: TokenSource) => SdkClient;
+  token?: Pick<TokenSourceOptions, "read" | "now" | "setTimer" | "sessionEnded">;
+  /** Wait before asking for a credential again after an outage. */
+  retryMs?: number;
+};
+
+const COLLAB_EVENT = "peer";
+const HINT_EVENT = "PROJECT_CHANGED";
+const FAILED = new Set(["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"]);
+
+/**
+ * One SDK client and exactly two private channels per connection. Listeners are registered before `subscribe()`; `subscribed` needs
+ * both SUBSCRIBED. A terminal credential end (denial or expiry) removes the channels and reports `degraded`: the status poll then
+ * carries on alone until the project or epoch changes. Disposal removes channels, disconnects and disposes the token source.
+ */
+export function createSupabaseTransport(options: TransportOptions = {}): RealtimeTransport {
+  const makeClient = options.makeClient ?? ((source) => createRealtimeClient(source) as unknown as SdkClient);
+  return {
+    connect(scope, handlers): LiveConnection {
+      let closed = false, dead = false, tokenDegraded = false, reported: LiveState = "connecting";
+      const status = { events: "", collab: "" };
+      let collab: SdkChannel | null = null, cancelRetry: (() => void) | null = null, released: Promise<void> | null = null;
+
+      const derive = (): LiveState => (dead || tokenDegraded || FAILED.has(status.events) || FAILED.has(status.collab) ? "degraded"
+        : status.events === "SUBSCRIBED" && status.collab === "SUBSCRIBED" ? "subscribed" : "connecting");
+      const report = () => { const next = derive(); if (!closed && next !== reported) { reported = next; handlers.state(next); } };
+      const release = () => released ??= (async () => {
+        cancelRetry?.(); cancelRetry = null;
+        source.dispose();
+        await client.removeAllChannels().catch(() => undefined);
+        await client.realtime.disconnect().catch(() => undefined);
+      })();
+
+      const source = createRealtimeTokenSource({
+        projectId: scope.projectId,
+        ...options.token,
+        onTeardown: () => { dead = true; report(); void release(); },
+        onDegraded: (on) => { tokenDegraded = on; report(); },
+      });
+      const client = makeClient(source);
+      // Only while both channels are joined: realtime-js would otherwise fall back to its REST broadcast endpoint.
+      const whenLive = (run: () => void) => {
+        if (closed || dead || derive() !== "subscribed") return;
+        // Awaiting the token first means a tab that just resumed renews (or tears down) before anything is sent.
+        void source.get().then((token) => { if (token && !closed && !dead && derive() === "subscribed") run(); }).catch(() => undefined);
+      };
+
+      const join = (purpose: "events" | "collab", wire: (channel: SdkChannel) => void) => {
+        const channel = client.channel(scope.topics[purpose], { config: { private: true, broadcast: { self: false, ack: false }, presence: { key: crypto.randomUUID(), enabled: purpose === "collab" } } });
+        wire(channel);
+        channel.subscribe((value) => { if (closed || dead) return; status[purpose] = value; report(); });
+        return channel;
+      };
+
+      void (async () => {
+        let ready = false;
+        for (;;) {
+          ready = await authenticateRealtime(client, source).catch(() => false);
+          if (closed || dead) return; // disposed or ended while the credential was pending: subscribe nothing
+          if (ready) break;
+          await new Promise<void>((resolve) => { const timer = setTimeout(() => { cancelRetry = null; resolve(); }, options.retryMs ?? 5_000); cancelRetry = () => { clearTimeout(timer); resolve(); }; });
+          if (closed || dead) return;
+        }
+        join("events", (channel) => { channel.on("broadcast", { event: HINT_EVENT }, (message) => { if (!closed && !dead) handlers.hint(message.payload); }); });
+        collab = join("collab", (channel) => {
+          channel.on("broadcast", { event: COLLAB_EVENT }, (message) => { if (!closed && !dead) handlers.peer(message.payload); });
+          channel.on("presence", { event: "sync" }, () => { if (!closed && !dead) handlers.presence(Object.values(channel.presenceState()).flat()); });
+        });
+      })();
+
+      return {
+        sendPeer: (message: PeerMessage) => whenLive(() => { void collab?.send({ type: "broadcast", event: COLLAB_EVENT, payload: message }).catch(() => undefined); }),
+        trackPresence: (state: PresenceState) => whenLive(() => { void collab?.track(state).catch(() => undefined); }),
+        dispose: () => { closed = true; return release(); },
+      };
+    },
+  };
 }

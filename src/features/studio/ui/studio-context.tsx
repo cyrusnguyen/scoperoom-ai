@@ -10,7 +10,7 @@ import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import { GraphError } from "@/features/drafts/domain/graph";
 import { projectErrors } from "@/features/projects/contracts/errors";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
-import { useSync, useSyncReader } from "@/features/collaboration/ui/sync-context";
+import { useSync, useSyncReader, useSyncSavedDraft } from "@/features/collaboration/ui/sync-context";
 import { follow } from "./buffers";
 import {
   acknowledged, addDrop, discardOutbox, enqueue, keepTheirs as keepTheirsChange, optimistic, pendingCount, rebase, redo as redoChange, replay, startSave, undo as undoChange,
@@ -168,6 +168,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   }, [projectId, draftId, adopt, onAccessChanged, update, invalidate]);
 
   useSyncReader(reload); // polling adopts through this same gated read
+  useSyncSavedDraft(savedDraft); // remote previews are validated against what was adopted
 
   const run = useCallback(async (command: GraphCommand): Promise<RunOutcome> => {
     if (!editable) return readOnly;
@@ -401,6 +402,12 @@ export function formKeys(event: KeyboardEvent<HTMLFormElement>) {
   if (event.key !== "Enter") return;
   if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) { event.preventDefault(); return; } // 229: WebKit's IME-confirming Enter
   if ((event.ctrlKey || event.metaKey) && event.target instanceof HTMLTextAreaElement) { event.preventDefault(); event.currentTarget.requestSubmit(); }
+}
+
+/** Always mounted, so the one message is announced when it appears; saving is never blocked by it. */
+export function LiveStatus() {
+  const delayed = useSync().liveState === "degraded";
+  return <span className={delayed ? "muted" : "sr-only"} role="status">{delayed ? "Live updates delayed" : ""}</span>;
 }
 
 /**
