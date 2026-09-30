@@ -155,6 +155,28 @@ test("advance declines with no base, while a save is pending, or for a read that
   assert.equal(advance(queued, { ...fresh, id: id(98) }), queued, "another draft is never adopted");
 });
 
+test("a local undo re-runs the effect on an unchanged saved draft: it never clears redo (past 16 prefixes too)", () => {
+  const base = saved();
+  let outbox: Outbox = emptyOutbox;
+  for (let n = 0; n < 20; n++) outbox = addDrop(outbox, base, flowId, [{ nodeId: mid, x: 100 + n, y: 100 }]);
+  assert.equal(outbox.base, base);
+  for (let n = 1; n <= 6; n++) {
+    const undone = undo(outbox);
+    const next = advanceOnRead(undone, base, undefined);
+    assert.equal(clearedRedo(undone, next), false, `undo #${n} must not announce a cleared redo`);
+    assert.equal(next.redo.length, n);
+    outbox = next;
+  }
+  // The same holds for a re-read of the same revisions (a copy): the base may be a replay, so only a moved read may clear redo.
+  const copy = { ...base };
+  const undone = undo(outbox);
+  assert.equal(clearedRedo(undone, advanceOnRead(undone, copy, undefined)), false);
+  assert.equal(advanceOnRead(undone, copy, undefined).redo.length, 7);
+  // A read that did move still clears the unprovable redo.
+  const moved = remote(base, [rename(1, end, "Theirs")]);
+  assert.equal(clearedRedo(undone, advanceOnRead(undone, moved, undefined)), true);
+});
+
 test("advanceOnRead declines below the acknowledged floor and while a save is pending, and advances once neither holds", () => {
   const base = saved();
   const outbox = queue(emptyOutbox, base, rename(1, start, "A")).outbox;
@@ -399,13 +421,14 @@ const growth = (command: GraphCommand) => {
 };
 /**
  * The same revisions with a document exactly `bytes` larger (or smaller, when negative). Real saves also move the
- * revision, which alone freezes a document-guarded create; holding it still isolates the size verdict, and the oracle
- * property is about what the pure function sends for the two drafts it is given.
+ * revision. The document revision alone would freeze a document-guarded create, so only the layout revision moves: that
+ * still isolates the size verdict (and is a read `advance` treats as newer), and the oracle property is about what the
+ * pure function sends for the two drafts it is given.
  */
 const resized = (view: DraftView, bytes: number): DraftView => {
   const node = view.document.nodes[nodeAt(500)]!;
   const description = bytes >= 0 ? node.description + "a".repeat(bytes) : node.description.slice(0, node.description.length + bytes / 3);
-  return { ...view, document: { ...view.document, nodes: { ...view.document.nodes, [node.id]: { ...node, description } } } };
+  return { ...view, layoutRevision: view.layoutRevision + 1, document: { ...view.document, nodes: { ...view.document.nodes, [node.id]: { ...node, description } } } };
 };
 const chainOf = (base: DraftView, first: GraphCommand, second: (created: string[], shown: DraftView) => GraphCommand) => {
   const created = command(emptyOutbox, base, () => first, ids(800))!;

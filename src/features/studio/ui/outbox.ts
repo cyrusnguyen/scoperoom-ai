@@ -305,7 +305,10 @@ function reachableEnds(entries: Entry[]): number[] {
  */
 export function advance(outbox: Outbox, fresh: DraftView): Outbox {
   const { base } = outbox;
-  if (outbox.sending || !base || !isNewer(fresh, base)) return outbox;
+  if (outbox.sending || !base || fresh === base || !isNewer(fresh, base)) return outbox; // the same object: nothing to prove
+  // A read whose revisions equal the base's has nothing newer to adopt: it may replace the base when provable, but an
+  // unproved (or capped) prefix only declines, and never clears redo. Only a read that moved may obsolete a redo path.
+  const moved = fresh.documentRevision !== base.documentRevision || fresh.layoutRevision !== base.layoutRevision;
   const activeEnd = outbox.entries.length;
   const chain = [...outbox.entries, ...[...outbox.redo].reverse().flat()];
   const pairBytes = advanceEncoder.encode(JSON.stringify(base)).byteLength
@@ -325,7 +328,7 @@ export function advance(outbox: Outbox, fresh: DraftView): Outbox {
         && JSON.stringify(wireBody(before.changes)) === JSON.stringify(wireBody(after.changes));
     }
     if (!same) {
-      if (end <= activeEnd) return outbox; // Mismatch or exhausted budget: keep every active attempt frozen.
+      if (end <= activeEnd || !moved) return outbox; // Mismatch or exhausted budget: keep every active attempt frozen.
       keepRedo = false; // Active prefixes were proved; discard unproved redo before moving their base.
       break;
     }
