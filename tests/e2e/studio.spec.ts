@@ -1359,7 +1359,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     const committed = { ...initial, documentRevision: 2, document: { ...initial.document, nodes: { ...initial.document.nodes, [start]: { ...initial.document.nodes[start]!, label: "Saved before change", version: 2 } } } };
     const currentDraft = () => change === "empty" && status === "ARCHIVED" ? { ...emptyDraftView(initial.id), documentRevision: 3 } : committed;
     await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: attempts.length ? currentDraft() : initial }) }));
-    await page.route(`**/api/projects/${projectId}/status`, async (route) => route.fulfill({ json: { settingsVersion: 1, approvalPolicyVersion: 1, status } }));
+    await page.route(`**/api/projects/${projectId}/status`, async (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: attempts.length ? currentDraft() : initial }).status }));
     await page.route(`**/api/projects/${projectId}/members`, async (route) => route.fulfill({ json: { members: [] } }));
     await page.route(`**/api/projects/${projectId}/settings`, async (route) => {
       if (change === "role") role = "VIEWER";

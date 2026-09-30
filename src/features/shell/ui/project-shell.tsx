@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
-import { apiRead, SESSION_ENDED, sessionEnded } from "@/client/api";
+import { accountChanged, apiRead, SESSION_ENDED, sessionEnded } from "@/client/api";
 import type { Live } from "@/features/collaboration/ui/project-sync";
 import { SyncProvider } from "@/features/collaboration/ui/sync-context";
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
@@ -63,7 +63,9 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   // Synchronous copy of `opened`: the admission gate must see a draft adopted in the same event.
   const openedRef = useRef<Opened | null>(null);
   // A 401 anywhere ends the session: what the shell holds is cleared before the page is replaced, and late responses install nothing.
-  const [ended, setEnded] = useState(false);
+  const [ended, setEnded] = useState<"session" | "account" | null>(null);
+  // The account this page opened with (from the first bootstrap): a status or bootstrap for another one is an account change.
+  const viewerRef = useRef<string | null>(null);
   const endedRef = useRef(false);
   const install = useCallback((next: Opened) => { if (!endedRef.current) { openedRef.current = next; setOpened(next); } }, []);
   const [store, setStore] = useState<UiStore>({});
@@ -77,9 +79,9 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const notify = useCallback((text: string, error = false) => setNotice({ text, error }), []);
 
   useEffect(() => {
-    const end = () => flushSync(() => {
+    const end = (event: Event) => flushSync(() => {
       endedRef.current = true; openedRef.current = null;
-      setEnded(true); setStore({}); setOpened(null); setLists(null); setInvites(null); setDialog(null);
+      setEnded((event as CustomEvent<"session" | "account">).detail === "account" ? "account" : "session"); setStore({}); setOpened(null); setLists(null); setInvites(null); setDialog(null);
     });
     window.addEventListener(SESSION_ENDED, end);
     return () => window.removeEventListener(SESSION_ENDED, end);
@@ -113,7 +115,9 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (signal?.aborted || sessionEnded(result) || (fence && !fence())) return;
     // An unsignaled caller (Retry, projectChanged) can resolve after the user opened a different project.
     if (id !== projectIdRef.current) return;
+    if (result.ok && viewerRef.current && result.data.status.viewerId !== viewerRef.current) { accountChanged(); return; }
     if (result.ok) {
+      viewerRef.current = result.data.status.viewerId;
       // A re-read that raced a save or another read must not roll the draft back or below a receipt floor: the shown
       // draft stays and the floor is left alone. With no draft shown yet the read is installed and the floor stays
       // unless it covers it.
@@ -264,7 +268,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     void loadLists();
   }
 
-  if (ended) return <div className="app-shell"><main id="editor-main" className="editor-slot"><div className="empty-state" role="alert"><p>Your session ended. Taking you to sign in…</p></div></main></div>;
+  if (ended) return <div className="app-shell"><main id="editor-main" className="editor-slot"><div className="empty-state" role="alert"><p>{ended === "account" ? "Your account changed. Reloading…" : "Your session ended. Taking you to sign in…"}</p></div></main></div>;
 
   const restoreNote = capacity && !capacity.canCreate ? (capacity.entitled ? `${capacity.activeOwned}/${capacity.maxOwned} active` : "Restoring isn’t enabled for this account") : undefined;
   const lifecycleDialog = dialog && dialog.kind !== "create" && dialog.kind !== "switch" ? dialog : null;

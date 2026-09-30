@@ -81,9 +81,9 @@ export async function listProjects(identity: ProjectIdentity): Promise<ProjectLi
 type DraftCounters = { documentRevision: number; layoutRevision: number };
 
 // One mapping for both reads, so bootstrap's status and topics come from the same snapshot as its draft.
-function statusOf(project: ProjectRow, draft: DraftCounters & { id: string }, role: ProjectAccessRole): ProjectStatusView {
+function statusOf(project: ProjectRow, draft: DraftCounters & { id: string }, role: ProjectAccessRole, viewerId: string): ProjectStatusView {
   return {
-    status: project.status, role, version: project.version, settingsVersion: project.settingsVersion, approvalPolicyVersion: project.approvalPolicyVersion,
+    viewerId, status: project.status, role, version: project.version, settingsVersion: project.settingsVersion, approvalPolicyVersion: project.approvalPolicyVersion,
     membershipVersion: project.membershipVersion, designatedApproverId: project.designatedApproverId, currentDraftId: draft.id,
     documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, realtimeEpoch: project.realtimeEpoch, eventSequence: Number(project.eventSequence),
   };
@@ -104,7 +104,7 @@ export async function getProjectBootstrap(identity: ProjectIdentity, projectId: 
       } catch {
         throw new ProjectError("UNAVAILABLE");
       }
-      const status = statusOf(project, draft, role);
+      const status = statusOf(project, draft, role, profile.id);
       return {
         project: { id: project.id, name: project.name, status: project.status, role, ownerId: project.ownerId },
         draft: { id: draft.id, status: draft.status, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, ...saved },
@@ -124,7 +124,7 @@ export async function getProjectStatus(identity: ProjectIdentity, projectId: str
       const role = requireMember(project);
       const draft = project.currentDraftId ? await tx.scopeDraft.findFirst({ where: { id: project.currentDraftId, projectId: project.id }, select: { id: true, documentRevision: true, layoutRevision: true } }) : null;
       if (!draft) throw new ProjectError("NOT_FOUND");
-      return statusOf(project, draft, role);
+      return statusOf(project, draft, role, profile.id);
     });
   });
 }

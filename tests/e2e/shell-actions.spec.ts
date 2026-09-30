@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
-import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, openDatabase, signIn, withStatus } from "./support";
+import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, emptyDraftView, entitle, MOCK_VIEWER_ID, openDatabase, signIn, withStatus } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -13,7 +13,7 @@ const capacity = (activeOwned: number, maxOwned: number) => ({ entitled: true, a
 const noInvites = { items: [], truncated: false };
 const envelope = (code: string, message: string) => ({ error: { code, message, requestId: "00000000-0000-4000-8000-000000000000", retryable: false } });
 const status = (version: number, state = "ACTIVE") => ({
-  status: state, role: "OWNER", version, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null,
+  viewerId: MOCK_VIEWER_ID, status: state, role: "OWNER", version, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null,
   currentDraftId: "55555555-5555-4555-8555-555555555555", documentRevision: 1, layoutRevision: 1, realtimeEpoch: "88888888-8888-4888-8888-888888888888", eventSequence: 1,
 });
 const sidebar = (page: Page) => page.locator("#projects-nav");

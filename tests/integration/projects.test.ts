@@ -156,6 +156,8 @@ test("status carries the draft, revision, epoch and sequence fields; outsiders g
     const projectId = await project(owner);
     const status = await getProjectStatus(owner, projectId);
     assert.equal(status.status, "ACTIVE");
+    assert.match(status.viewerId, /^[0-9a-f-]{36}$/);
+    assert.equal((await getProjectBootstrap(owner, projectId)).status.viewerId, status.viewerId, "bootstrap and status name the same caller");
     assert.match(status.currentDraftId, /^[0-9a-f-]{36}$/);
     assert.equal(status.documentRevision, 1);
     assert.equal(status.layoutRevision, 1);

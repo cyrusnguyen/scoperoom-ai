@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
-import { apiRead, sessionEnded } from "@/client/api";
+import { accountChanged, apiRead, sessionEnded } from "@/client/api";
 import type { ProjectStatusView } from "@/features/projects/contracts/project";
 import { createProjectSync, type AuthorityResult, type Live, type ReconcileReason, type SyncOptions, type SyncState } from "./project-sync";
 
@@ -9,7 +9,7 @@ import { createProjectSync, type AuthorityResult, type Live, type ReconcileReaso
 const visibility: SyncOptions["visibility"] = {
   hidden: () => document.visibilityState === "hidden",
   listen: (on) => {
-    const focus = () => on("focus"), online = () => on("reconnect"), shown = () => { if (document.visibilityState === "visible") on("focus"); };
+    const focus = () => on("focus"), online = () => on("reconnect"), shown = () => on(document.visibilityState === "visible" ? "focus" : "hidden");
     window.addEventListener("focus", focus);
     window.addEventListener("online", online);
     document.addEventListener("visibilitychange", shown);
@@ -66,6 +66,7 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
     random: Math.random,
     setTimer: (run, ms) => { const timer = window.setTimeout(run, ms); return () => window.clearTimeout(timer); },
     visibility,
+    accountChanged,
     fetchStatus: async () => {
       const result = await apiRead<ProjectStatusView>(`/api/projects/${projectId}/status`);
       sessionEnded(result); // a 401 navigates to sign-in; the controller stops on it

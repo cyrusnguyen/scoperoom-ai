@@ -78,6 +78,7 @@ export function useStudio(): Studio {
 const accessCodes = new Set(["FORBIDDEN", "CONFLICT", "NOT_FOUND", "DRAFT_REPLACED"]);
 /** A save refused because someone else saved first: the person reviews and applies their changes again. */
 export const staleCodes = new Set(["STALE_DOCUMENT_REVISION", "STALE_ENTITY_VERSION", "STALE_LAYOUT_REVISION", "POSITION_CONFLICT", "DEPENDENCY_CONFLICT"]);
+type Admission = { blocked: { code: string; message: string }; stillCurrent?: undefined } | { blocked: null; stillCurrent: () => boolean };
 const busyOutcome = { ok: false as const, code: "BUSY", message: "Another change is still saving.", uncertain: false };
 const readOnly = { ok: false as const, code: "FORBIDDEN", message: "This draft is read-only.", uncertain: false };
 
@@ -189,16 +190,18 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
    * editor and the draft it was made on; an uncertain retry only needs the person to still be a member (server guards stay
    * final). Null admits the write; otherwise the reason. DENIED means the shell is already dropping the project.
    */
-  const admit = useCallback(async (write: boolean, target: string): Promise<{ code: string; message: string } | null> => {
+  const admit = useCallback(async (write: boolean, target: string): Promise<Admission> => {
     const authority = await beforeWrite();
-    if (authority.kind === "unavailable") return { code: "UNAVAILABLE", message: "Not saved. We couldn’t reach ScopeRoom." };
-    if (authority.kind === "denied") return { code: "DENIED", message: "" };
-    if (!fence(authority.generation)()) return { code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message };
-    if (!write) return null;
-    const { role: current, status, currentDraftId } = authority.status;
-    if (currentDraftId !== target) return { code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message };
-    if (status !== "ACTIVE" || (current !== "OWNER" && current !== "EDITOR")) return { code: "FORBIDDEN", message: "Not saved. This project is read-only now." };
-    return null;
+    if (authority.kind === "unavailable") return { blocked: { code: "UNAVAILABLE", message: "Not saved. We couldn’t reach ScopeRoom." } };
+    if (authority.kind === "denied") return { blocked: { code: "DENIED", message: "" } };
+    const stillCurrent = fence(authority.generation);
+    if (!stillCurrent()) return { blocked: { code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message } };
+    if (write) {
+      const { role: current, status, currentDraftId } = authority.status;
+      if (currentDraftId !== target) return { blocked: { code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message } };
+      if (status !== "ACTIVE" || (current !== "OWNER" && current !== "EDITOR")) return { blocked: { code: "FORBIDDEN", message: "Not saved. This project is read-only now." } };
+    }
+    return { blocked: null, stillCurrent };
   }, [beforeWrite, fence]);
 
   /**
@@ -216,13 +219,14 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
       if (!waiting && !latest.current.entries.length) break;
       if (!editable && waiting?.state !== "uncertain") return false;
       // Before every new batch and every retry of an unconfirmed one. Nothing between this check and the request awaits.
-      const blocked = await admit(waiting?.state !== "uncertain", waiting ? waiting.draftId : saved.current.id);
+      const { blocked, stillCurrent } = await admit(waiting?.state !== "uncertain", waiting ? waiting.draftId : saved.current.id);
       if (blocked) {
         if (blocked.code !== "DENIED") update(() => ({ save: { state: "failed", message: blocked.message } }));
         return false;
       }
-      // The person may have discarded, undone or unmounted while the barrier waited: start over from the current state.
-      if (!mounted.current || inFlight.current || latest.current.sending?.key !== waiting?.key) continue;
+      // Recheck right before the request: the person may have discarded, undone or unmounted, or the generation may have been
+      // replaced, while the barrier waited. Start over from the current state (and a fresh barrier).
+      if (!mounted.current || inFlight.current || latest.current.sending?.key !== waiting?.key || !stillCurrent()) continue;
       if (!latest.current.sending) {
         if (!editable) return false;
         const base = saved.current, key = crypto.randomUUID();
@@ -318,8 +322,9 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     inFlight.current = key;
     update(() => ({ request: key }));
     try {
-      const blocked = await admit(true, draftId);
+      const { blocked, stillCurrent } = await admit(true, draftId);
       if (blocked) return { ok: false, code: blocked.code === "DENIED" ? "FORBIDDEN" : blocked.code, message: blocked.message || readOnly.message, uncertain: false };
+      if (!stillCurrent()) return { ok: false, code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message, uncertain: false };
       const result = await apiMutate<PositionResult>(`/api/projects/${projectId}/drafts/${draftId}/positions`, key, command);
       if (sessionEnded(result)) return { ok: false, code: "UNAUTHENTICATED", message: "", uncertain: false };
       if (result.ok) {

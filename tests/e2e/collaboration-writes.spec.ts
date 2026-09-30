@@ -253,6 +253,86 @@ test.describe("writes wait for the status controller (real draft)", () => {
     expect(page.url()).toContain(secondId);
   });
 
+  test("a status for another account tears the page down and navigates, with nothing sent", async ({ page }) => {
+    await open(page);
+    await connect(page, ids.payId, ids.shipId);
+    await expect(status(page)).toContainText("Unsaved changes");
+    const seen: string[] = [];
+    await page.exposeFunction("captureAtTeardown", (text: string) => { seen.push(text); });
+    await page.evaluate(() => {
+      window.addEventListener("scoperoom:session-ended", () => { void (window as unknown as { captureAtTeardown: (text: string) => Promise<void> }).captureAtTeardown(document.body.innerText); });
+    });
+    await page.route(`**/api/projects/${projectId}/status`, async (route) => {
+      const real = await route.fetch();
+      await route.fulfill({ response: real, json: { ...(await real.json() as object), viewerId: "00000000-0000-4000-8000-000000000001" } });
+    });
+    await focusWindow(page);
+    await expect(page).toHaveURL(/\/app$/);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("Your account changed");
+    for (const gone of ["Writes project", "Unsaved changes", "Start", "Pay"]) expect(seen[0], gone).not.toContain(gone);
+    expect(writes).toHaveLength(0);
+  });
+
+  /** 101 alternating renames of two steps: no coalescing, so the save is a real split (100 commands, then 1). */
+  async function splitEdits(page: Page) {
+    await open(page);
+    // Autosave (10 s) must not save part of the edits while the loop runs, which is slower under load: freeze timers.
+    await page.clock.install();
+    await page.clock.pauseAt(new Date(Date.now() + 5_000));
+    for (let index = 0; index < 101; index++) {
+      const id = index % 2 ? ids.shipId : ids.payId;
+      await nodeAt(page, id).locator(".step-label").dblclick();
+      await nodeAt(page, id).getByRole("textbox", { name: "Step name" }).fill(`Renamed ${index}`);
+      await page.keyboard.press("Enter");
+    }
+    await expect(status(page)).toContainText("Unsaved changes");
+  }
+  /** Sends batch 1, holds its response, lands focus with status paused, then lets the receipt through: batch 2 is next in line. */
+  async function pauseBetweenSplitBatches(page: Page, bodies: { commands: unknown[] }[]) {
+    let releaseFirst!: () => void;
+    const firstHeld = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    await page.route(/\/drafts\/[^/]+\/changes$/, async (route) => { const response = await route.fetch(); await firstHeld; await route.fulfill({ response }); }, { times: 1 });
+    page.on("request", (request) => { if (request.method() === "POST" && /\/changes$/.test(request.url())) bodies.push(request.postDataJSON() as { commands: unknown[] }); });
+    await headerSave(page).click();
+    await expect.poll(() => writes.length).toBe(1);
+    await pauseAfterFocus(page);
+    releaseFirst();
+    await quiet(page);
+    expect(writes).toHaveLength(1); // batch 2 (waiting state, its own key) waits for status
+    expect(bodies.map((body) => body.commands.length)).toEqual([100]);
+  }
+
+  test("a split save's second batch waits for status after the first batch's receipt", async ({ page }) => {
+    test.setTimeout(120_000);
+    const bodies: { commands: unknown[] }[] = [];
+    await splitEdits(page);
+    await pauseBetweenSplitBatches(page, bodies);
+    await gate.release();
+    await expect.poll(() => writes.length).toBe(2);
+    expect(bodies.map((body) => body.commands.length)).toEqual([100, 1]);
+    await expect(status(page)).toContainText("All changes saved");
+  });
+
+  test("a split save's second batch is never sent after a denied or unavailable status, and resumes once it is healthy", async ({ page }) => {
+    test.setTimeout(120_000);
+    const bodies: { commands: unknown[] }[] = [];
+    await splitEdits(page);
+    await pauseBetweenSplitBatches(page, bodies);
+    await gate.release(403);
+    await quiet(page);
+    expect(writes).toHaveLength(1);
+    gate.failWith(503);
+    await headerSave(page).click();
+    await expect(status(page)).toContainText("Not saved");
+    expect(writes).toHaveLength(1);
+    gate.pass();
+    await headerSave(page).click();
+    await expect.poll(() => writes.length).toBe(2);
+    expect(bodies.map((body) => body.commands.length)).toEqual([100, 1]);
+    await expect(status(page)).toContainText("All changes saved");
+  });
+
   test("a save queued behind a request waits for status again when focus arrives before it starts", async ({ page }) => {
     await open(page);
     await connect(page, ids.payId, ids.shipId);

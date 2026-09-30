@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProjectStatusView } from "../src/features/projects/contracts/project.ts";
 import {
-  createProjectSync, plan, statusDelay, type Live, type ReconcileReason, type StatusRead,
+  createProjectSync, plan, statusDelay, type Live, type StatusRead, type VisibilityEvent,
 } from "../src/features/collaboration/ui/project-sync.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import { stranded } from "../src/features/studio/ui/studio-ui.ts";
 
 const status = (over: Partial<ProjectStatusView> = {}): ProjectStatusView => ({
-  status: "ACTIVE", role: "OWNER", version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null,
+  viewerId: "v1", status: "ACTIVE", role: "OWNER", version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null,
   currentDraftId: "d1", documentRevision: 1, layoutRevision: 1, realtimeEpoch: "e1", eventSequence: 1, ...over,
 });
 const liveOf = (s: ProjectStatusView): Live => ({ role: s.role, status: s.status, draftId: s.currentDraftId, documentRevision: s.documentRevision, layoutRevision: s.layoutRevision });
@@ -21,7 +21,7 @@ const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 function rig(start = status()) {
   let clock = 0, ids = 0, hidden = false;
   const timers: { id: number; at: number; fn: () => void; ms: number }[] = [];
-  const listeners = new Set<(reason: ReconcileReason) => void>();
+  const listeners = new Set<(reason: VisibilityEvent) => void>();
   const pending: ((read: StatusRead) => void)[] = [];
   const log: string[] = [];
   const published: { status: ProjectStatusView; failures: number }[] = [];
@@ -36,6 +36,7 @@ function rig(start = status()) {
       return () => { const at = timers.indexOf(timer); if (at >= 0) timers.splice(at, 1); };
     },
     visibility: { hidden: () => hidden, listen: (on) => { listeners.add(on); return () => { listeners.delete(on); }; } },
+    accountChanged: () => { log.push("account"); },
     live: () => shell.live,
     readDraft: async (fence) => { log.push(`read:${fence()}`); },
     bootstrap: async (fence) => { log.push(`bootstrap:${fence()}`); },
@@ -336,7 +337,7 @@ test("pending work on a replaced draft is stranded (read-only recovery); the cur
   assert.equal(stranded(emptyOutbox, "d2"), false);
 });
 
-const fire = (t: ReturnType<typeof rig>, reason: ReconcileReason) => { for (const on of [...t.listeners]) on(reason); };
+const fire = (t: ReturnType<typeof rig>, reason: VisibilityEvent) => { for (const on of [...t.listeners]) on(reason); };
 
 test("focus, online and visibility return invalidate authority: a write waits for the request they start", async () => {
   for (const reason of ["focus", "reconnect"] as const) {
@@ -391,5 +392,48 @@ test("a failed status read after an event keeps writes blocked until a later rea
   await settle();
   await t.answer(ok(status()));
   assert.equal((await back).kind, "current");
+  t.sync.dispose();
+});
+
+test("going hidden invalidates without a request; a background write then revalidates, and the return event is not folded into an older request", async () => {
+  const t = rig();
+  t.sync.start();
+  fire(t, "hidden");
+  t.setHidden(true);
+  await settle();
+  assert.equal(t.pending.length, 0, "hiding only invalidates: polling stays paused");
+  const write = t.sync.beforeWrite(); // background autosave
+  await settle();
+  assert.equal(t.pending.length, 1, "before-save revalidation is allowed while hidden");
+  await t.answer(ok(status({ role: "VIEWER" })));
+  const result = await write;
+  assert.ok(result.kind === "current" && result.status.role === "VIEWER");
+
+  // A request that started before the hide does not cover a later write or the return event.
+  const t2 = rig();
+  t2.sync.start();
+  fire(t2, "focus");
+  await settle();
+  assert.equal(t2.pending.length, 1);
+  fire(t2, "hidden");
+  const write2 = t2.sync.beforeWrite();
+  await t2.answer(ok(status()));
+  assert.equal(t2.pending.length, 1, "the write waits for a request that started after the hide");
+  await t2.answer(ok(status()));
+  assert.equal((await write2).kind, "current");
+  t.sync.dispose(); t2.sync.dispose();
+});
+
+test("a status for another account is an account change: the controller stops, nothing is adopted, the shell is told once", async () => {
+  const t = rig();
+  t.sync.start();
+  await t.advance(10_000);
+  await t.answer(ok(status({ viewerId: "someone-else", role: "VIEWER", documentRevision: 9 })));
+  assert.deepEqual(t.log, ["account"], "no read, no bootstrap");
+  assert.equal(t.published.length, 0);
+  assert.equal(t.timers.length, 0);
+  assert.equal((await t.sync.revalidate("manual")).kind, "unavailable");
+  assert.equal((await t.sync.beforeWrite()).kind, "unavailable");
+  assert.equal(t.pending.length, 0);
   t.sync.dispose();
 });

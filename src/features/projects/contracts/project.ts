@@ -20,8 +20,9 @@ export type ProjectBootstrap = {
   realtime: RealtimeTopics;
 };
 
+/** `viewerId` is the caller's profile id: a page that sees another one has changed account and must tear down. */
 export type ProjectStatusView = {
-  status: "ACTIVE" | "ARCHIVED"; role: ProjectAccessRole; version: number; settingsVersion: number; approvalPolicyVersion: number; membershipVersion: number;
+  viewerId: string; status: "ACTIVE" | "ARCHIVED"; role: ProjectAccessRole; version: number; settingsVersion: number; approvalPolicyVersion: number; membershipVersion: number;
   designatedApproverId: string | null; currentDraftId: string; documentRevision: number; layoutRevision: number; realtimeEpoch: string; eventSequence: number;
 };
 
