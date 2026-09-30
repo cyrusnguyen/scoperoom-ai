@@ -48,7 +48,7 @@ type Sync = {
   liveState: LiveState;
   /** Other sessions of this project and draft, from Presence; advisory names and places, never authority. */
   roster: PresenceState[];
-  /** Remote cursors and drag ghosts: read `snapshot()` when notified, and again before `PREVIEW_TTL_MS` passes. */
+  /** Remote cursors and drag ghosts: `snapshot()` is referentially stable while unchanged; read it when notified and again before `PREVIEW_TTL_MS` passes (expiry only shows on a read). */
   previews: Pick<ProjectLive, "snapshot" | "subscribe">;
   sendCursor: ProjectLive["sendCursor"];
   sendDrag: ProjectLive["sendDrag"];

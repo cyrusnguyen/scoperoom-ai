@@ -19,13 +19,15 @@ type FakeChannel = SdkChannel & {
   handlers: Map<string, (payload: { payload?: unknown }) => void>; sent: unknown[]; tracked: unknown[]; presence: Record<string, unknown[]>;
 };
 
-function harness(script: (call: number) => ApiResult<{ accessToken: string; expiresAt: number }> = () => good(), retryMs = 5) {
+function harness(script: (call: number) => ApiResult<{ accessToken: string; expiresAt: number }> = () => good()) {
   let nowMs = T0 * 1000, calls = 0;
   const timers: { at: number; run: () => void; live: boolean }[] = [];
+  const retries: { run: () => void; live: boolean }[] = [];
+  const clients: SdkClient[] = [];
   const channels: FakeChannel[] = [];
   const log: string[] = [];
   let token!: Parameters<NonNullable<Parameters<typeof createSupabaseTransport>[0]>["makeClient"] & {}>[0];
-  const client: SdkClient = {
+  const makeFake = (): SdkClient => ({
     channel(topic, options) {
       const channel: FakeChannel = {
         topic, config: options.config, log: [], handlers: new Map(), sent: [], tracked: [], presence: {}, status: () => undefined,
@@ -41,10 +43,10 @@ function harness(script: (call: number) => ApiResult<{ accessToken: string; expi
     },
     removeAllChannels: async () => { log.push("removeAllChannels"); },
     realtime: { setAuth: async () => { log.push("setAuth"); }, disconnect: async () => { log.push("disconnect"); } },
-  };
+  });
   const transport = createSupabaseTransport({
-    makeClient: (source) => { token = source; return client; },
-    retryMs,
+    makeClient: (source) => { token = source; const client = makeFake(); clients.push(client); return client; },
+    setTimer: (run) => { const timer = { run, live: true }; retries.push(timer); return () => { timer.live = false; }; },
     token: {
       read: async () => script(calls++), now: () => nowMs,
       setTimer: (run, ms) => { const timer = { at: nowMs + ms, run, live: true }; timers.push(timer); return () => { timer.live = false; }; },
@@ -53,10 +55,13 @@ function harness(script: (call: number) => ApiResult<{ accessToken: string; expi
   });
   const states: LiveState[] = [], hints: unknown[] = [], peers: unknown[] = [], presences: unknown[][] = [];
   const connection = transport.connect(scope, { state: (v) => states.push(v), hint: (v) => hints.push(v), peer: (v) => peers.push(v), presence: (v) => presences.push(v) });
-  const [events, collab] = [() => channels.find((c) => c.topic === scope.topics.events)!, () => channels.find((c) => c.topic === scope.topics.collab)!];
+  const [events, collab] = [() => channels.findLast((c) => c.topic === scope.topics.events)!, () => channels.findLast((c) => c.topic === scope.topics.collab)!];
   return {
-    connection, channels, log, states, hints, peers, presences, events, collab, timers,
+    connection, channels, clients, log, states, hints, peers, presences, events, collab, timers,
     get token() { return token; },
+    /** Runs the pending retry wait, if any. */
+    async retry() { const timer = retries.find((t) => t.live); if (timer) { timer.live = false; timer.run(); } await settle(); },
+    liveRetries: () => retries.filter((t) => t.live).length,
     liveDeadlines: () => timers.filter((timer) => timer.live).length,
     passSeconds: (seconds: number) => { nowMs += seconds * 1000; },
     async subscribeBoth() { await settle(); events().status("SUBSCRIBED"); collab().status("SUBSCRIBED"); },
@@ -81,14 +86,14 @@ test("transport: authenticates before any channel; two private channels; listene
   assert.deepEqual(h.states, []);
 });
 
-test("transport: subscribed only when both channels are SUBSCRIBED; an error, timeout or close degrades; recovery needs both again", async () => {
+test("transport: subscribed only when both channels are SUBSCRIBED; an error or timeout degrades; recovery needs both again", async () => {
   const h = harness();
   await settle();
   h.events().status("SUBSCRIBED");
   assert.deepEqual(h.states, []);
   h.collab().status("SUBSCRIBED");
   assert.deepEqual(h.states, ["subscribed"]);
-  for (const failure of ["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"]) {
+  for (const failure of ["CHANNEL_ERROR", "TIMED_OUT"]) {
     h.states.length = 0;
     h.collab().status(failure);
     assert.deepEqual(h.states, ["degraded"], failure);
@@ -160,13 +165,59 @@ test("transport: terminal denial tears down channels and stops sends; the creden
   assert.equal(h.log.filter((entry) => entry === "removeAllChannels").length, 1, "teardown then dispose releases once");
 });
 
-test("transport: a credential that runs out ends the connection as degraded", async () => {
+test("transport: an expired credential drops the channels, reports degraded, then rejoins the same topics once renewed", async () => {
   const h = harness();
   await h.subscribeBoth();
+  const first = h.channels.slice();
   h.passSeconds(301);
-  h.timers.find((timer) => timer.live)!.run();
+  const deadline = h.timers.find((timer) => timer.live)!;
+  deadline.live = false; // it fires once
+  deadline.run(); // Task 1's teardown("expired")
   assert.deepEqual(h.states, ["subscribed", "degraded"]);
-  assert.ok(h.log.includes("removeAllChannels"));
+  await settle(); await settle();
+  assert.ok(h.log.includes("removeAllChannels") && h.log.includes("disconnect"), "the old channels are gone");
+  assert.equal(h.channels.length, 4, "two new channels");
+  assert.deepEqual(h.channels.slice(2).map((c) => c.topic), [scope.topics.events, scope.topics.collab], "on the same topics");
+  assert.equal(h.clients.length, 2);
+  assert.equal(h.liveDeadlines(), 1, "exactly one credential deadline after the renewal");
+  first[0]!.status("SUBSCRIBED"); first[1]!.status("CLOSED"); // callbacks of the dropped channels change nothing
+  assert.deepEqual(h.states, ["subscribed", "degraded", "connecting"]);
+  h.events().status("SUBSCRIBED"); h.collab().status("SUBSCRIBED");
+  assert.deepEqual(h.states, ["subscribed", "degraded", "connecting", "subscribed"]);
+  h.connection.sendPeer(peer);
+  await settle();
+  assert.equal(h.collab().sent.length, 1, "sends resume on the new channel");
+  assert.equal(first[1]!.sent.length, 0);
+  await h.connection.dispose();
+  assert.equal(h.liveDeadlines(), 0);
+});
+
+test("transport: a server-side CLOSED restarts the connection after the retry wait, on the same topics", async () => {
+  const h = harness();
+  await h.subscribeBoth();
+  h.collab().status("CLOSED");
+  assert.deepEqual(h.states, ["subscribed", "degraded"]);
+  await settle(); await settle();
+  assert.equal(h.channels.length, 2, "waits before rejoining");
+  assert.equal(h.liveRetries(), 1);
+  await h.retry();
+  assert.equal(h.channels.length, 4);
+  assert.deepEqual(h.channels.slice(2).map((c) => c.topic), [scope.topics.events, scope.topics.collab]);
+  h.events().status("SUBSCRIBED"); h.collab().status("SUBSCRIBED");
+  assert.deepEqual(h.states, ["subscribed", "degraded", "connecting", "subscribed"]);
+  assert.equal(h.liveDeadlines(), 1);
+  await h.connection.dispose();
+});
+
+test("transport: dispose during a restart wait cancels it and rejoins nothing", async () => {
+  const h = harness();
+  await h.subscribeBoth();
+  h.events().status("CLOSED");
+  await settle(); await settle();
+  await h.connection.dispose();
+  assert.equal(h.liveRetries(), 0);
+  await h.retry();
+  assert.equal(h.channels.length, 2);
 });
 
 test("transport: denial before the first join creates no channel", async () => {
@@ -178,12 +229,13 @@ test("transport: denial before the first join creates no channel", async () => {
 
 test("transport: an outage at connect is degraded and retried; the channels join once the endpoint answers", async () => {
   let up = false;
-  const h = harness(() => (up ? good() : refused(503)), 5);
+  const h = harness(() => (up ? good() : refused(503)));
   await settle();
   assert.equal(h.channels.length, 0);
   assert.deepEqual(h.states, ["degraded"]);
+  assert.equal(h.liveRetries(), 1);
   up = true;
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await h.retry();
   assert.equal(h.channels.length, 2);
   h.events().status("SUBSCRIBED"); h.collab().status("SUBSCRIBED");
   assert.deepEqual(h.states, ["degraded", "connecting", "subscribed"], "the renewed credential clears the outage, then both channels join");

@@ -44,6 +44,7 @@ export type ProjectLive = {
   state: () => LiveState;
   /** Other sessions of this project, epoch and draft (own excluded). */
   roster: () => PresenceState[];
+  /** The same object while its contents are unchanged (safe for useSyncExternalStore). Expiry shows on the next read: the consumer's one scheduler re-reads before PREVIEW_TTL_MS. */
   snapshot: () => PreviewSnapshot;
   /** Any change of state, roster or previews. */
   subscribe: (listener: () => void) => () => void;
@@ -74,6 +75,7 @@ export function createProjectLive(o: LiveOptions): ProjectLive {
   let generation = 0, scope: LiveScope | null = null, connection: LiveConnection | null = null;
   let state: LiveState = "connecting", degraded = false, saved: SavedView | null = null;
   let claim: PresenceClaim = { flowId: null, selection: null }, roster: PresenceState[] = [], rosterKey = "[]";
+  let shot: PreviewSnapshot = { cursors: [], drags: [] }, shotKey = JSON.stringify(shot);
   let sequence = 0, pending: Movement | null = null, lastTracked = -Infinity;
   let cancelHint: (() => void) | null = null, cancelMove: (() => void) | null = null, cancelPresence: (() => void) | null = null;
 
@@ -202,7 +204,11 @@ export function createProjectLive(o: LiveOptions): ProjectLive {
     endDrag: (gestureId) => queue({ type: "DRAG_END", gestureId }),
     state: () => state,
     roster: () => roster,
-    snapshot: () => store.snapshot(o.now()),
+    snapshot: () => {
+      const next = store.snapshot(o.now()), key = JSON.stringify(next);
+      if (key !== shotKey) { shot = next; shotKey = key; }
+      return shot;
+    },
     subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };
 }

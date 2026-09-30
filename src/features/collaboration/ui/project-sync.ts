@@ -115,7 +115,10 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
     return running = flight;
   }
   function revalidate(reason: ReconcileReason): Promise<AuthorityResult> {
-    if (!started || stopped || (reason === "poll" && o.visibility.hidden())) return Promise.resolve(unavailable); // hidden: paused until a return event
+    // Hidden: polls and hints are paused until a return event; a write barrier still works.
+    if (!started || stopped || ((reason === "poll" || reason === "hint") && o.visibility.hidden())) return Promise.resolve(unavailable);
+    // A (re)join proves nothing about what was missed: writes wait for the read this starts (or the one it queues behind).
+    if (reason === "subscribed") invalidate();
     if (!running) return begin(reason);
     if (queued) return queued;
     const at = session;

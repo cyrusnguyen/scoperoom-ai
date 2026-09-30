@@ -126,74 +126,105 @@ export type SdkClient = {
 export type TransportOptions = {
   makeClient?: (source: TokenSource) => SdkClient;
   token?: Pick<TokenSourceOptions, "read" | "now" | "setTimer" | "sessionEnded">;
-  /** Wait before asking for a credential again after an outage. */
+  /** Wait before asking for a credential again after an outage, or before rejoining after a server close. */
   retryMs?: number;
+  /** Timer for that wait (returns its canceller); the credential's own deadline is the token source's. */
+  setTimer?: (run: () => void, ms: number) => () => void;
 };
 
 const COLLAB_EVENT = "peer";
 const HINT_EVENT = "PROJECT_CHANGED";
-const FAILED = new Set(["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"]);
+const FAILED = new Set(["CHANNEL_ERROR", "TIMED_OUT"]); // realtime-js rejoins these itself
 
 /**
- * One SDK client and exactly two private channels per connection. Listeners are registered before `subscribe()`; `subscribed` needs
- * both SUBSCRIBED. A terminal credential end (denial or expiry) removes the channels and reports `degraded`: the status poll then
- * carries on alone until the project or epoch changes. Disposal removes channels, disconnects and disposes the token source.
+ * One SDK client and exactly two private channels per attempt. Listeners are registered before `subscribe()`; `subscribed` needs both
+ * SUBSCRIBED. A denial is terminal: channels are removed, `degraded` is reported and nothing rejoins. An expired credential or a
+ * server-side CLOSED is recoverable: the channels are dropped, `degraded` is reported and a fresh client re-enters the credential loop
+ * on the same topics until `subscribed` returns. Disposal removes channels, disconnects and disposes the token source.
  */
 export function createSupabaseTransport(options: TransportOptions = {}): RealtimeTransport {
   const makeClient = options.makeClient ?? ((source) => createRealtimeClient(source) as unknown as SdkClient);
+  const retryTimer = options.setTimer ?? ((run, ms) => { const id = setTimeout(run, ms); return () => clearTimeout(id); });
+  const drop = async (old: SdkClient) => {
+    await old.removeAllChannels().catch(() => undefined);
+    await old.realtime.disconnect().catch(() => undefined);
+  };
   return {
     connect(scope, handlers): LiveConnection {
-      let closed = false, dead = false, tokenDegraded = false, reported: LiveState = "connecting";
-      const status = { events: "", collab: "" };
+      let closed = false, dead = false, restarting = false, tokenDegraded = false, reported: LiveState = "connecting", attempt = 0;
+      let status = { events: "", collab: "" };
       let collab: SdkChannel | null = null, cancelRetry: (() => void) | null = null, released: Promise<void> | null = null;
 
-      const derive = (): LiveState => (dead || tokenDegraded || FAILED.has(status.events) || FAILED.has(status.collab) ? "degraded"
+      const stale = (mine: number) => closed || dead || mine !== attempt;
+      const derive = (): LiveState => (dead || restarting || tokenDegraded || FAILED.has(status.events) || FAILED.has(status.collab) ? "degraded"
         : status.events === "SUBSCRIBED" && status.collab === "SUBSCRIBED" ? "subscribed" : "connecting");
       const report = () => { const next = derive(); if (!closed && next !== reported) { reported = next; handlers.state(next); } };
+      /** Final: the source ends too. */
       const release = () => released ??= (async () => {
-        cancelRetry?.(); cancelRetry = null;
+        attempt++; cancelRetry?.(); cancelRetry = null;
         source.dispose();
-        await client.removeAllChannels().catch(() => undefined);
-        await client.realtime.disconnect().catch(() => undefined);
+        await drop(client);
       })();
 
       const source = createRealtimeTokenSource({
         projectId: scope.projectId,
         ...options.token,
-        onTeardown: () => { dead = true; report(); void release(); },
+        onTeardown: (reason) => {
+          if (reason === "denied") { dead = true; report(); void release(); } else restart(false);
+        },
         onDegraded: (on) => { tokenDegraded = on; report(); },
       });
-      const client = makeClient(source);
+      let client = makeClient(source);
       // Only while both channels are joined: realtime-js would otherwise fall back to its REST broadcast endpoint.
       const whenLive = (run: () => void) => {
-        if (closed || dead || derive() !== "subscribed") return;
+        const mine = attempt;
+        if (stale(mine) || derive() !== "subscribed") return;
         // Awaiting the token first means a tab that just resumed renews (or tears down) before anything is sent.
-        void source.get().then((token) => { if (token && !closed && !dead && derive() === "subscribed") run(); }).catch(() => undefined);
+        void source.get().then((token) => { if (token && !stale(mine) && derive() === "subscribed") run(); }).catch(() => undefined);
       };
 
-      const join = (purpose: "events" | "collab", wire: (channel: SdkChannel) => void) => {
-        const channel = client.channel(scope.topics[purpose], { config: { private: true, broadcast: { self: false, ack: false }, presence: { key: crypto.randomUUID(), enabled: purpose === "collab" } } });
+      function restart(wait: boolean) {
+        if (closed || dead) return;
+        const old = client, mine = ++attempt;
+        restarting = true; status = { events: "", collab: "" }; collab = null;
+        cancelRetry?.(); cancelRetry = null;
+        report();
+        client = makeClient(source);
+        void drop(old).then(() => run(mine, wait));
+      }
+
+      function join(c: SdkClient, mine: number, purpose: "events" | "collab", wire: (channel: SdkChannel) => void) {
+        const channel = c.channel(scope.topics[purpose], { config: { private: true, broadcast: { self: false, ack: false }, presence: { key: crypto.randomUUID(), enabled: purpose === "collab" } } });
         wire(channel);
-        channel.subscribe((value) => { if (closed || dead) return; status[purpose] = value; report(); });
-        return channel;
-      };
-
-      void (async () => {
-        let ready = false;
-        for (;;) {
-          ready = await authenticateRealtime(client, source).catch(() => false);
-          if (closed || dead) return; // disposed or ended while the credential was pending: subscribe nothing
-          if (ready) break;
-          await new Promise<void>((resolve) => { const timer = setTimeout(() => { cancelRetry = null; resolve(); }, options.retryMs ?? 5_000); cancelRetry = () => { clearTimeout(timer); resolve(); }; });
-          if (closed || dead) return;
-        }
-        join("events", (channel) => { channel.on("broadcast", { event: HINT_EVENT }, (message) => { if (!closed && !dead) handlers.hint(message.payload); }); });
-        collab = join("collab", (channel) => {
-          channel.on("broadcast", { event: COLLAB_EVENT }, (message) => { if (!closed && !dead) handlers.peer(message.payload); });
-          channel.on("presence", { event: "sync" }, () => { if (!closed && !dead) handlers.presence(Object.values(channel.presenceState()).flat()); });
+        channel.subscribe((value) => {
+          if (stale(mine)) return; // includes the CLOSED our own removal causes
+          if (value === "CLOSED") { restart(true); return; }
+          status[purpose] = value;
+          report();
         });
-      })();
+        return channel;
+      }
 
+      async function run(mine: number, wait: boolean) {
+        const c = client;
+        for (;;) {
+          if (wait) await new Promise<void>((resolve) => { const stop = retryTimer(() => { cancelRetry = null; resolve(); }, options.retryMs ?? 5_000); cancelRetry = () => { stop(); resolve(); }; });
+          if (stale(mine)) return;
+          const ready = await authenticateRealtime(c, source).catch(() => false);
+          if (stale(mine)) return; // disposed, denied or replaced while the credential was pending: subscribe nothing
+          if (ready) break;
+          wait = true;
+        }
+        restarting = false;
+        join(c, mine, "events", (channel) => { channel.on("broadcast", { event: HINT_EVENT }, (message) => { if (!stale(mine)) handlers.hint(message.payload); }); });
+        collab = join(c, mine, "collab", (channel) => {
+          channel.on("broadcast", { event: COLLAB_EVENT }, (message) => { if (!stale(mine)) handlers.peer(message.payload); });
+          channel.on("presence", { event: "sync" }, () => { if (!stale(mine)) handlers.presence(Object.values(channel.presenceState()).flat()); });
+        });
+        report();
+      }
+
+      void run(0, false);
       return {
         sendPeer: (message: PeerMessage) => whenLive(() => { void collab?.send({ type: "broadcast", event: COLLAB_EVENT, payload: message }).catch(() => undefined); }),
         trackPresence: (state: PresenceState) => whenLive(() => { void collab?.track(state).catch(() => undefined); }),

@@ -817,12 +817,69 @@ test("live: StrictMode double mount, remount and project switch leave one connec
   await t.advance(5_000);
   assert.deepEqual(t.calls.revalidate, ["subscribed"]);
   assert.equal(t.wires.flatMap((wire) => wire.sent).length, 0);
-  // A different project mounts its own session: exactly one live connection remains.
+  // A different project mounts its own session (the old one is unmounted): only its callbacks count.
   const other = liveRig();
   other.live.setScope({ ...SCOPE, projectId: uuid(50) });
   assert.equal(other.liveWires().length, 1);
-  const s = rig();
-  s.sync.start(); s.sync.dispose(); s.sync.start();
-  assert.equal(s.timers.length, 1, "one status timer");
+  t.wires[1]!.handlers.state("subscribed"); // the unmounted session's late callback
+  assert.deepEqual(other.calls.revalidate, []);
+  other.state("subscribed");
+  assert.deepEqual(other.calls.revalidate, ["subscribed"]);
+  assert.deepEqual(t.calls.revalidate, ["subscribed"], "the old session heard nothing more");
+  other.live.setScope(null);
+  assert.equal(other.liveWires().length + other.timers.length, 0);
+});
+
+test("SUBSCRIBED invalidates authority: a write after a (re)join waits for the status read it starts", async () => {
+  const s = rig(), t = liveRig();
+  s.sync.start();
+  t.onRevalidate((reason) => { void s.sync.revalidate(reason as "subscribed"); });
+  t.live.setScope(SCOPE);
+  t.state("subscribed");
+  await settle();
+  assert.equal(s.pending.length, 1);
+  let admitted = false;
+  const write = s.sync.beforeWrite().then((result) => { admitted = true; return result; });
+  await settle();
+  assert.equal(admitted, false, "not admitted before the status answers");
+  assert.equal(s.pending.length, 1, "it shares the in-flight read");
+  await s.answer(ok(status()));
+  assert.equal((await write).kind, "current");
+  // A rejoin after a drop does the same, even after authority was proven.
+  t.state("degraded"); t.state("subscribed");
+  await settle();
+  const again = s.sync.beforeWrite();
+  await settle();
+  assert.equal(s.pending.length, 1);
+  await s.answer(ok(status()));
+  assert.equal((await again).kind, "current");
   s.sync.dispose();
+});
+
+test("a hint while the tab is hidden fetches nothing; a return event still revalidates", async () => {
+  const s = rig();
+  s.sync.start();
+  s.setHidden(true);
+  assert.equal((await s.sync.revalidate("hint")).kind, "unavailable");
+  assert.equal(s.pending.length, 0);
+  s.setHidden(false);
+  void s.sync.revalidate("hint");
+  assert.equal(s.pending.length, 1);
+  await s.answer(ok(status()));
+  s.sync.dispose();
+});
+
+test("live: the preview snapshot keeps its identity while unchanged and changes when a preview arrives or expires", async () => {
+  const t = liveRig();
+  await t.ready();
+  t.live.setSavedView(savedViewOf(savedDraft(1)));
+  t.current.handlers.presence([peerPresence()]);
+  const empty = t.live.snapshot();
+  assert.equal(t.live.snapshot(), empty);
+  t.current.handlers.peer(wireMessage({ sequence: 1 }));
+  const drawn = t.live.snapshot();
+  assert.notEqual(drawn, empty);
+  assert.equal(t.live.snapshot(), drawn);
+  await t.advance(2_000);
+  assert.deepEqual(t.live.snapshot().cursors, [], "an expired entry drops on the next read");
 });
