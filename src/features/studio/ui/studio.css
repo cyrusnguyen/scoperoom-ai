@@ -119,6 +119,12 @@ button.item-row { width: 100%; border: 0; border-bottom: var(--panel-border); ba
 .participants { position: relative; }
 .participants-list { position: absolute; top: calc(100% + var(--space-1)); right: 0; z-index: 5; width: max-content; max-width: min(320px, 90vw); padding: var(--space-3); border: var(--panel-border); border-radius: var(--radius-overlay); background: var(--surface-raised); box-shadow: var(--shadow-overlay); }
 .participants-list .plain-list { padding-left: 0; list-style: none; }
+/* The toggle can sit anywhere in the wrapped toolbar, so a list anchored to it would leave the screen: span the toolbar instead. */
+@container editor (max-width: 639px) {
+  .studio-toolbar { position: relative; }
+  .participants { position: static; }
+  .participants-list { left: var(--space-3); right: var(--space-3); width: auto; max-width: none; }
+}
 .presence-dot { display: inline-block; width: 10px; height: 10px; margin-right: var(--space-2); border-radius: 50%; background: var(--foreground-subtle); }
 .presence-marks { display: inline-flex; gap: 2px; }
 .presence-marks .presence-dot { margin-right: 0; box-shadow: 0 0 0 1px var(--background); }
