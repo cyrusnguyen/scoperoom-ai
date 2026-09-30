@@ -73,6 +73,14 @@ export function admits(ui: Pick<StudioUi, "acknowledgedRevisions">, adopted: Dra
   return isNewer(candidate, adopted) && covers(candidate, ui.acknowledgedRevisions[candidate.id]);
 }
 
+/**
+ * Unsent or unconfirmed work whose base is another draft than the current one (the draft was replaced): it is never
+ * retargeted. The Studio keeps it in the read-only copy/discard recovery until the person discards it.
+ */
+export function stranded(outbox: Outbox, currentDraftId: string): boolean {
+  return Boolean(outbox.base && outbox.base.id !== currentDraftId && pendingCount(outbox) > 0);
+}
+
 /** "Apply my changes again" rebases onto the shown saved draft, so it waits for one that is readable and covers the floor. */
 export function canApplyAgain(ui: Pick<StudioUi, "acknowledgedRevisions" | "refreshFailed">, saved: DraftView): boolean {
   return !ui.refreshFailed && covers(saved, ui.acknowledgedRevisions[saved.id]);
