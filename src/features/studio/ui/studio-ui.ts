@@ -2,7 +2,7 @@ import type { CommandResult } from "../../drafts/contracts/commands.ts";
 import { COORDINATE_LIMIT, type DraftLayout } from "../../drafts/contracts/draft-layout.ts";
 import { NODE_KINDS, type DraftView, type NodeKind } from "../../drafts/contracts/scope-document.ts";
 import { dirtyFields, isDirty, type Buffers } from "./buffers.ts";
-import { covers, emptyOutbox, isNewer, pendingCount, type Outbox, type RevisionFloor } from "./outbox.ts";
+import { advance, covers, emptyOutbox, isNewer, pendingCount, type Outbox, type RevisionFloor } from "./outbox.ts";
 
 export { covers, isNewer } from "./outbox.ts";
 
@@ -76,6 +76,17 @@ export function admits(ui: Pick<StudioUi, "acknowledgedRevisions">, adopted: Dra
 /** "Apply my changes again" rebases onto the shown saved draft, so it waits for one that is readable and covers the floor. */
 export function canApplyAgain(ui: Pick<StudioUi, "acknowledgedRevisions" | "refreshFailed">, saved: DraftView): boolean {
   return !ui.refreshFailed && covers(saved, ui.acknowledgedRevisions[saved.id]);
+}
+
+/**
+ * What the Studio does with an adopted saved read: never while a save is pending (its captured guards stay frozen), and
+ * only when the read covers the acknowledged floor; otherwise `advance`. Returns the same outbox when nothing changes.
+ * With no active entries it keeps a compatible redo and clears an incompatible or unproved one, so a later redo cannot
+ * switch back to an old base. The caller compares the result: `=== outbox` with the read ahead of `outbox.base` means
+ * newer saved changes wait behind the frozen view; a shorter `redo` means redo history was cleared.
+ */
+export function advanceOnRead(outbox: Outbox, saved: DraftView, floor: RevisionFloor | undefined): Outbox {
+  return outbox.sending || !covers(saved, floor) ? outbox : advance(outbox, saved);
 }
 
 /** Only a read covering every acknowledged revision can clear this draft's outstanding read failure/floor. */

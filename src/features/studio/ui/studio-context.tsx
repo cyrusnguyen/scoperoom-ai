@@ -12,10 +12,10 @@ import { projectErrors } from "@/features/projects/contracts/errors";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
 import { follow } from "./buffers";
 import {
-  acknowledged, addDrop, advance, discardOutbox, enqueue, keepTheirs as keepTheirsChange, optimistic, pendingCount, rebase, redo as redoChange, replay, startSave, undo as undoChange,
+  acknowledged, addDrop, discardOutbox, enqueue, keepTheirs as keepTheirsChange, optimistic, pendingCount, rebase, redo as redoChange, replay, startSave, undo as undoChange,
   wireBody, withEntries, type ConflictTarget, type Outbox, type Placement, type Sending,
 } from "./outbox";
-import { afterDraftRead, AUTOSAVE_MS, covers, requireDraftRevision, type SaveState, type StudioUi } from "./studio-ui";
+import { advanceOnRead, afterDraftRead, AUTOSAVE_MS, covers, requireDraftRevision, type SaveState, type StudioUi } from "./studio-ui";
 
 export type Outcome<T> =
   | { ok: true; result: T }
@@ -116,19 +116,15 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   }, [update]);
 
   // Every adopted saved read (shell bootstrap or adoption, and `reload`) lands here as a new `savedDraft`. The frozen base
-  // follows it only when no request the outbox could still send changes (`advance`). Never while a save is pending: its
-  // captured guards stay byte-for-byte; the next adopted read after it resolves advances (`pending` re-runs this). And
-  // only once the read covers the acknowledged floor: a read adopted during a save can sit below a floor that arrived
-  // later, and moving the base to it would drop the acknowledged edit from view.
-  // Later notices derive from this call: `next === latest.current` with a saved draft ahead of the base means "newer
-  // saved changes are available"; fewer redo units after an advance means the redo history was cleared.
-  const pending = Boolean(outbox.sending);
+  // follows it through `advanceOnRead` (never while a save is pending; only once the read covers the acknowledged floor).
+  // It runs again when a save resolves (`pending`) and when the active entries become empty (`idle`, after an undo): a
+  // redo must not switch back to an old base. The store's updater advances the store's own current outbox, because the
+  // shell also writes it outside `change` (Discard) between this render and the effect.
+  const pending = Boolean(outbox.sending), idle = outbox.entries.length === 0;
   useEffect(() => {
-    const current = latest.current;
-    if (current.sending || !covers(savedDraft, floor)) return;
-    const next = advance(current, savedDraft);
-    if (next !== current) change(() => next);
-  }, [savedDraft, floor, pending, change]);
+    const before = latest.current, next = advanceOnRead(before, savedDraft, floor);
+    if (next !== before) change((current) => (current === before ? next : advanceOnRead(current, savedDraft, floor)));
+  }, [savedDraft, floor, pending, idle, change]);
 
   const reload = useCallback(async (): Promise<DraftView | null> => {
     const result = await apiRead<DraftView>(`/api/projects/${projectId}/drafts/${draftId}`);

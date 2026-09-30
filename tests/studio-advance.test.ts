@@ -5,8 +5,10 @@ import type { GraphCommand } from "../src/features/drafts/contracts/commands.ts"
 import { emptyDraft, LIMITS, type DraftView } from "../src/features/drafts/contracts/scope-document.ts";
 import { applyGraphCommand, dependencyPlan, GraphError } from "../src/features/drafts/domain/graph.ts";
 import { utf8Bytes } from "../src/features/drafts/contracts/strict.ts";
+import { discardDrafts, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
+import { advanceOnRead } from "../src/features/studio/ui/studio-ui.ts";
 import {
-  advance, applyBatch, build, emptyOutbox, enqueue, undo, wireBody, withEntries, addDrop, optimistic, type Outbox,
+  advance, applyBatch, discardOutbox, redo, pendingCount, build, emptyOutbox, enqueue, undo, wireBody, withEntries, addDrop, optimistic, type Outbox,
 } from "../src/features/studio/ui/outbox.ts";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -150,6 +152,59 @@ test("advance declines with no base, while a save is pending, or for a read that
   const older = { ...fresh, documentRevision: base.documentRevision - 1 };
   same(advance(queued, older), queued);
   assert.equal(advance(queued, { ...fresh, id: id(98) }), queued, "another draft is never adopted");
+});
+
+test("advanceOnRead declines below the acknowledged floor and while a save is pending, and advances once neither holds", () => {
+  const base = saved();
+  const outbox = queue(emptyOutbox, base, rename(1, start, "A")).outbox;
+  const fresh = remote(base, [rename(1, end, "B")]);
+  const floor = { documentRevision: fresh.documentRevision + 1, layoutRevision: fresh.layoutRevision };
+  assert.equal(advanceOnRead(outbox, fresh, floor), outbox, "the read has not seen an acknowledged save");
+  assert.equal(advanceOnRead(outbox, fresh, { documentRevision: fresh.documentRevision, layoutRevision: fresh.layoutRevision }).base, fresh);
+  const sending: Outbox = { ...outbox, entries: [], sending: { draftId: base.id, key: "k", batches: [build(base, outbox.entries).changes], state: "refused" } };
+  assert.equal(advanceOnRead(sending, fresh, undefined), sending);
+  assert.equal(advanceOnRead({ ...sending, sending: null, entries: outbox.entries }, fresh, undefined).base, fresh, "the next adopted read after it resolves advances");
+});
+
+test("undo to empty after a declined advance: the helper clears a conflicting redo, keeps a compatible one, and redo never restores the old base", () => {
+  const base = saved();
+  const both = queue(queue(emptyOutbox, base, rename(1, mid, "Mine")).outbox, base, rename(1, start, "Mine")).outbox;
+  const theirs = remote(base, [rename(1, mid, "Theirs")]);
+  assert.equal(advanceOnRead(both, theirs, undefined), both, "declined while the conflicting change is active");
+  const emptied = undo(undo(both));
+  assert.equal(emptied.entries.length, 0);
+  assert.equal(emptied.base, base);
+  const cleared = advanceOnRead(emptied, theirs, undefined);
+  assert.equal(cleared.base, theirs);
+  assert.deepEqual(cleared.redo, []);
+  assert.equal(optimistic(redo(cleared), theirs).document.nodes[mid]!.label, "Theirs", "nothing to redo, and the newer draft stays shown");
+
+  // A later read that changes nothing they can redo keeps the redo, and redo then builds on the new base.
+  const unrelated = remote(base, [rename(1, end, "Theirs")]);
+  const kept = advanceOnRead(emptied, unrelated, undefined);
+  assert.equal(kept.base, unrelated);
+  assert.equal(kept.redo, emptied.redo);
+  const again = redo(kept);
+  assert.equal(again.base, unrelated, "redo never switches back to an old base");
+  assert.equal(optimistic(again, unrelated).document.nodes[end]!.label, "Theirs");
+  assert.equal(optimistic(again, unrelated).document.nodes[mid]!.label, "Mine");
+});
+
+test("a Discard between a new saved read and its effect is not undone: the helper advances the store's own outbox", () => {
+  const base = saved();
+  const before = queue(emptyOutbox, base, rename(1, start, "Mine")).outbox;
+  const fresh = remote(base, [rename(1, end, "Theirs")]);
+  let store = updateUi({}, "p", () => ({ outbox: before }));
+  store = discardDrafts(store, "p");
+  // The effect's updater: its precomputed result is only used when the store still holds the outbox it was computed from.
+  const stale = advanceOnRead(before, fresh, undefined);
+  assert.equal(stale.entries.length, 1, "the pre-discard outbox would advance and bring the edit back");
+  const current = uiFor(store, "p").outbox;
+  const next = current === before ? stale : advanceOnRead(current, fresh, undefined);
+  assert.deepEqual(next.entries, []);
+  assert.equal(pendingCount(next), 0);
+  assert.equal(next.base, fresh);
+  assert.equal(discardOutbox(next).entries.length, 0);
 });
 
 // ---------------------------------------------------------------------------------------------------------------
