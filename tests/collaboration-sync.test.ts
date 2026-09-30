@@ -535,7 +535,7 @@ type Wire = {
 };
 
 function liveRig() {
-  let clock = 1_000;
+  let clock = 1_000, step = 0; // step > 0: every clock read advances the clock after returning
   const timers: { at: number; fn: () => void }[] = [];
   const wires: Wire[] = [];
   const calls = { revalidate: [] as string[], degraded: [] as boolean[] };
@@ -548,13 +548,14 @@ function liveRig() {
   };
   let revalidate = (reason: string) => { calls.revalidate.push(reason); };
   const live = createProjectLive({
-    transport, sessionId: ME, now: () => clock,
+    transport, sessionId: ME, now: () => { const at = clock; clock += step; return at; },
     setTimer: (fn, ms) => { const timer = { at: clock + ms, fn }; timers.push(timer); return () => { const at = timers.indexOf(timer); if (at >= 0) timers.splice(at, 1); }; },
     revalidate: (reason) => revalidate(reason),
     degraded: (on) => calls.degraded.push(on),
   });
   const harness = {
     live, wires, timers, calls,
+    tick(ms: number) { step = ms; },
     get current() { return wires.at(-1)!; },
     liveWires: () => wires.filter((wire) => !wire.disposed),
     onRevalidate(fn: (reason: string) => void) { revalidate = fn; },
@@ -884,6 +885,20 @@ test("a hint while the tab is hidden fetches nothing; a return event still reval
   assert.equal(s.pending.length, 1);
   await s.answer(ok(status()));
   s.sync.dispose();
+});
+
+test("live: snapshot and nextExpiry share one clock read, so an entry is never shown with no timer to expire it", async () => {
+  const t = liveRig();
+  await t.ready();
+  t.live.setSavedView(savedViewOf(savedDraft(1)));
+  t.current.handlers.presence([peerPresence()]);
+  t.current.handlers.peer(wireMessage({ sequence: 1 }));
+  const expiry = 1_000 + 2_000; // received at clock 1000, PREVIEW_TTL_MS 2000
+  await t.advance(1_999); // one millisecond before the cursor expires
+  t.tick(1); // the clock passes the expiry between two separate reads
+  const now = expiry - 1;
+  assert.equal(t.live.snapshot(now).cursors.length, 1);
+  assert.equal(t.live.nextExpiry(now), expiry, "the shown entry has an expiry to arm a timer for");
 });
 
 test("live: the preview snapshot keeps its identity while unchanged and changes when a preview arrives or expires", async () => {

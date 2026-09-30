@@ -18,8 +18,9 @@ function usePreviewSnapshot(): PreviewSnapshot {
     let timer: number | undefined;
     const read = () => {
       window.clearTimeout(timer);
-      setShot(previews.snapshot());
-      const delay = expiryDelay(previews.nextExpiry(), Date.now());
+      const now = Date.now(); // one reading for both, or an entry expiring between them is shown with no timer
+      setShot(previews.snapshot(now));
+      const delay = expiryDelay(previews.nextExpiry(now), now);
       timer = delay === null ? undefined : window.setTimeout(read, delay);
     };
     const unsubscribe = previews.subscribe(read);

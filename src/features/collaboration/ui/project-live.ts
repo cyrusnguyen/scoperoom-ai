@@ -44,10 +44,10 @@ export type ProjectLive = {
   state: () => LiveState;
   /** Other sessions of this project, epoch and draft (own excluded). */
   roster: () => PresenceState[];
-  /** The same object while its contents are unchanged (safe for useSyncExternalStore). Expiry shows on the next read: the consumer's one scheduler re-reads before PREVIEW_TTL_MS. */
-  snapshot: () => PreviewSnapshot;
+  /** The same object while its contents are unchanged (safe for useSyncExternalStore). Expiry shows on the next read: the consumer's one scheduler re-reads before PREVIEW_TTL_MS. Pass one `now` to both reads so an entry is never shown past the expiry the timer was armed for. */
+  snapshot: (now?: number) => PreviewSnapshot;
   /** When the earliest shown preview expires (epoch ms), or null: the consumer's one scheduler re-reads `snapshot` then. */
-  nextExpiry: () => number | null;
+  nextExpiry: (now?: number) => number | null;
   /** Any change of state, roster or previews. */
   subscribe: (listener: () => void) => () => void;
 };
@@ -206,12 +206,12 @@ export function createProjectLive(o: LiveOptions): ProjectLive {
     endDrag: (gestureId) => queue({ type: "DRAG_END", gestureId }),
     state: () => state,
     roster: () => roster,
-    snapshot: () => {
-      const next = store.snapshot(o.now()), key = JSON.stringify(next);
+    snapshot: (now = o.now()) => {
+      const next = store.snapshot(now), key = JSON.stringify(next);
       if (key !== shotKey) { shot = next; shotKey = key; }
       return shot;
     },
-    nextExpiry: () => store.nextExpiry(o.now()),
+    nextExpiry: (now = o.now()) => store.nextExpiry(now),
     subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };
 }
