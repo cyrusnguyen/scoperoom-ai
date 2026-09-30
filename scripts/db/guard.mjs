@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { Client } from "pg";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -10,7 +11,7 @@ function required(name) {
   return value;
 }
 
-function localConfig() {
+export function localConfig() {
   const config = readFileSync(process.env.SCOPEROOM_SUPABASE_CONFIG ?? new URL("../../supabase/config.toml", import.meta.url), "utf8");
   const projectId = config.match(/^project_id\s*=\s*"([^"]+)"/m)?.[1];
   const dbPort = config.match(/^\[db\][\s\S]*?^port\s*=\s*(\d+)/m)?.[1];
@@ -18,13 +19,14 @@ function localConfig() {
   return { dbPort, projectId };
 }
 
-function inspectLocalContainer(projectId, dbPort) {
+/** Verifies a local Supabase service container by CLI project label and loopback-only network; the database also needs its loopback port binding. */
+export function inspectLocalContainer(projectId, dbPort, service = "db") {
   const binaries = [process.env.SCOPEROOM_DOCKER_BIN, "docker", "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe"].filter(Boolean);
   let inspected;
   let selectedDocker;
   for (const docker of binaries) {
     try {
-      inspected = JSON.parse(execFileSync(docker, ["inspect", `supabase_db_${projectId}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }))[0];
+      inspected = JSON.parse(execFileSync(docker, ["inspect", `supabase_${service}_${projectId}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }))[0];
       selectedDocker = docker;
       break;
     } catch {}
@@ -33,7 +35,7 @@ function inspectLocalContainer(projectId, dbPort) {
     throw new Error("Database guard could not verify the configured local Supabase database container.");
   }
   const bindings = inspected.NetworkSettings?.Ports?.["5432/tcp"] ?? [];
-  const loopbackPort = bindings.some((binding) => binding.HostIp === "127.0.0.1" && binding.HostPort === dbPort);
+  const loopbackPort = service !== "db" || bindings.some((binding) => binding.HostIp === "127.0.0.1" && binding.HostPort === dbPort);
   const loopbackNetwork = Object.keys(inspected.NetworkSettings?.Networks ?? {}).some((network) => {
     try {
       const details = JSON.parse(execFileSync(selectedDocker, ["network", "inspect", network], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }))[0];
@@ -43,10 +45,10 @@ function inspectLocalContainer(projectId, dbPort) {
     }
   });
   if (!loopbackPort || !loopbackNetwork) throw new Error("Database guard rejected a non-loopback local Supabase database binding.");
-  return selectedDocker;
+  return { docker: selectedDocker, container: inspected };
 }
 
-function targetInput() {
+export function targetInput() {
   const connectionString = required("SCOPEROOM_BOOTSTRAP_DATABASE_URL");
   const expected = required("SCOPEROOM_ENVIRONMENT_ID");
   if (!uuid.test(expected)) throw new Error("Database guard needs a UUID SCOPEROOM_ENVIRONMENT_ID.");
@@ -131,7 +133,7 @@ async function provisionRuntimeRoles() {
 async function provisionMigrationAuthReference() {
   const { connectionString } = targetInput();
   const { projectId, dbPort } = localConfig();
-  const docker = inspectLocalContainer(projectId, dbPort);
+  const { docker } = inspectLocalContainer(projectId, dbPort);
   // Supabase owns auth.users; local postgres cannot delegate this grant.
   execFileSync(docker, ["exec", `supabase_db_${projectId}`, "psql", "-U", "supabase_admin", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "GRANT USAGE ON SCHEMA auth TO app_migrator; GRANT REFERENCES (id) ON auth.users TO app_migrator;"]);
   const client = new Client({ connectionString });
@@ -144,9 +146,11 @@ async function provisionMigrationAuthReference() {
   }
 }
 
+if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
 const mode = process.argv.includes("--initial") ? "initial" : process.argv.includes("--bind") ? "bind" : "bound";
 if (process.argv.includes("--provision-runtime")) await provisionRuntimeRoles();
 else if (process.argv.includes("--provision-migration-auth-reference")) await provisionMigrationAuthReference();
 else if (process.argv.includes("--migration")) await verifyMigrationTarget();
 else await verifyTarget(mode);
 console.log("target=verified-local");
+}

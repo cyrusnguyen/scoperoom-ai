@@ -32,5 +32,8 @@ const migrationUrl = new URL(process.env.MIGRATION_DATABASE_URL);
 migrationUrl.searchParams.set("schema", "app");
 process.env.MIGRATION_DATABASE_URL = migrationUrl.toString();
 
+run(process.execPath, ["scripts/db/realtime.mjs", "prepare"]);
 run(process.platform === "win32" ? "corepack.cmd" : "corepack", ["pnpm", "exec", "prisma", "migrate", "deploy"]);
 run(process.execPath, ["scripts/db/guard.mjs"]);
+run(process.execPath, ["scripts/db/realtime.mjs", "apply"]);
+run(process.execPath, ["scripts/db/realtime.mjs", "verify"]);
