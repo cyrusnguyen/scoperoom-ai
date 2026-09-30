@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import type { Client } from "pg";
 import { saveChanges } from "../../src/features/drafts/server/changes.ts";
 import { getDraft } from "../../src/features/drafts/server/execute-command.ts";
+import { ProjectError } from "../../src/features/projects/server/errors.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { draftOf, flowBatch, hintsFor, saveFlow } from "../integration/support/hints.ts";
 import { SILENCE_MS, withRealtimeFixture } from "./support.ts";
@@ -48,23 +50,30 @@ const RAISING_ADAPTER = `create or replace function app_private.enqueue_project_
 const adapterState = async (database: Client) =>
   (await database.query("select pg_get_functiondef(oid) as definition, pg_get_userbyid(proowner) as owner, proacl::text as acl, proconfig, prosecdef from pg_proc where oid = $1::regprocedure", [ADAPTER])).rows[0];
 
-/** Runs `sql` as the adapter's restricted owner: membership exists only inside this one transaction. Test-only; production never holds this role. */
-async function asNotifier(database: Client, sql: string) {
+/** Runs `sql` as a function's restricted owner: membership exists only inside this one transaction. Test-only; production never holds these roles. */
+async function asOwner(database: Client, role: string, sql: string) {
   await database.query("begin");
   try {
-    await database.query("grant app_realtime_notifier to current_user with inherit false, set true");
-    await database.query("grant create on schema app_private to app_realtime_notifier"); // CREATE OR REPLACE checks the schema even for the owner
-    await database.query("set local role app_realtime_notifier");
+    await database.query(`grant ${role} to current_user with inherit false, set true`);
+    await database.query(`grant create on schema app_private to ${role}`); // CREATE OR REPLACE checks the schema even for the owner
+    await database.query(`set local role ${role}`);
     await database.query(sql);
     await database.query("reset role");
-    await database.query("revoke create on schema app_private from app_realtime_notifier");
-    await database.query("revoke app_realtime_notifier from current_user");
+    await database.query(`revoke create on schema app_private from ${role}`);
+    await database.query(`revoke ${role} from current_user`);
     await database.query("commit");
   } catch (error) {
     await database.query("rollback");
     throw error;
   }
 }
+const asNotifier = (database: Client, sql: string) => asOwner(database, "app_realtime_notifier", sql);
+
+/** Runs the guarded read-only verification the way `test:realtime` and `db:migrate` do. Resolves its exit status and error text (never secrets). */
+const verifySetup = () => {
+  const run = spawnSync(process.execPath, ["scripts/db/realtime.mjs", "verify"], { encoding: "utf8" });
+  return { ok: run.status === 0, error: run.stderr };
+};
 
 test("a failing hint enqueue never costs the save: content, audit, sequence and receipt survive", async () => {
   await withRealtimeFixture(async (fixture, rt) => {
@@ -84,11 +93,15 @@ test("a failing hint enqueue never costs the save: content, audit, sequence and 
     try {
       await asNotifier(fixture.database, RAISING_ADAPTER);
       assert.match((await adapterState(fixture.database)).definition, /injected enqueue failure/);
+      const drifted = verifySetup();
+      assert.equal(drifted.ok, false, "guarded verification rejects the swapped adapter body");
+      assert.match(drifted.error, /enqueue_project_hint.*body differs/);
       saved = await saveChanges(owner, projectId, draftId, { ...body, key });
     } finally {
       await asNotifier(fixture.database, original.definition);
     }
     assert.deepEqual(await adapterState(fixture.database), original, "definition, owner, ACL and search path restored exactly");
+    assert.equal(verifySetup().ok, true, "guarded verification passes again after the restore");
 
     // The save is complete and readable; only the advisory hint is missing.
     assert.equal(saved.documentRevision, base.documentRevision + 2);
@@ -146,7 +159,7 @@ test("a failing required audit insert rolls back content, counter, receipt and h
     const constraint = `zz_fail_audit_${projectId.replaceAll("-", "")}`.slice(0, 60);
     await fixture.database.query(`alter table app.audit_event add constraint ${constraint} check (project_id <> '${projectId}') not valid`);
     try {
-      await assert.rejects(saveChanges(owner, projectId, draftId, { ...body, key }));
+      await assert.rejects(saveChanges(owner, projectId, draftId, { ...body, key }), (error: unknown) => error instanceof ProjectError && error.code === "UNAVAILABLE");
       assert.deepEqual(await snapshot(), before, "content, counter, audit, receipt and hint all rolled back");
       assert.equal((await getDraft(owner, projectId, draftId)).document.flows[flowId], undefined);
     } finally {
@@ -161,5 +174,31 @@ test("a failing required audit insert rolls back content, counter, receipt and h
     const saved = await saveChanges(owner, projectId, draftId, { ...body, key });
     assert.equal(((await delivered) as { eventSequence: number }).eventSequence, saved.eventSequence);
     assert.equal((await snapshot()).hints, before.hints + 1);
+  });
+});
+
+test("guarded verification rejects a permissive helper body and a leftover open policy", async () => {
+  await withRealtimeFixture(async (fixture) => {
+    const helper = "app_private.can_realtime(text,text)";
+    const { rows: [original] } = await fixture.database.query("select pg_get_functiondef(oid) as definition from pg_proc where oid = $1::regprocedure", [helper]);
+    try {
+      await asOwner(fixture.database, "app_realtime_reader", "create or replace function app_private.can_realtime(topic text, capability text) returns boolean language sql stable security definer set search_path = '' as $$ select true $$");
+      const permissive = verifySetup();
+      assert.equal(permissive.ok, false);
+      assert.match(permissive.error, /can_realtime.*body differs/);
+    } finally {
+      await asOwner(fixture.database, "app_realtime_reader", original.definition);
+    }
+    assert.equal(verifySetup().ok, true, "the restored helper verifies again");
+
+    try {
+      await fixture.database.query("create policy zz_open on realtime.messages for select to authenticated using (true)");
+      const open = verifySetup();
+      assert.equal(open.ok, false);
+      assert.match(open.error, /zz_open/);
+    } finally {
+      await fixture.database.query("drop policy if exists zz_open on realtime.messages");
+    }
+    assert.equal(verifySetup().ok, true, "verification passes once the policy is gone");
   });
 });

@@ -13,8 +13,12 @@ const HELPER = "app_private.can_realtime(text,text)";
 const ADAPTER = "app_private.enqueue_project_hint(jsonb,text)";
 const TRIGGER_FN = "app_private.notify_project_changed()";
 const OWNED = [[HELPER, READER], [ADAPTER, NOTIFIER], [TRIGGER_FN, NOTIFIER]]; // function -> restricted owner
+// md5 of each body with whitespace collapsed and trimmed (matches the migration source). A deliberate body change updates the constant in the same PR.
+const BODY_MD5 = { [HELPER]: "22006d3ee045a46dda7f71d8c07ff5dd", [ADAPTER]: "40fe2880c0393d55e06747fe6b8fb7d4", [TRIGGER_FN]: "835571f242df0171811a5a42c7f7c683" };
+const BODY = "md5(trim(regexp_replace(p.prosrc, '\\s+', ' ', 'g')))";
 const HINT_TOPIC = "^project:[0-9a-f-]{36}:[0-9a-f-]{36}:events$";
 const TENANT = "realtime-dev"; // fixed external id of the local Supabase CLI tenant
+const TENANT_WAIT_MS = 60_000;
 const ROLE_ATTRIBUTES = "nologin noinherit nosuperuser nocreatedb nocreaterole noreplication nobypassrls";
 const POLICIES = {
   scoperoom_rt_select: `create policy scoperoom_rt_select on realtime.messages for select to authenticated using (
@@ -47,15 +51,20 @@ function tenantApi() {
     const token = `${unsigned}.${createHmac("sha256", secret).update(unsigned).digest("base64url")}`;
     const args = ["exec", "-i", `supabase_realtime_${projectId}`, "curl", "-sS", "--max-time", "15", "-K", "-", "-w", "\n%{http_code}", "-H", "content-type: application/json"];
     if (method === "PUT") args.push("-X", "PUT", "-d", JSON.stringify(body));
-    let output;
-    try {
-      output = execFileSync(docker, [...args, `http://127.0.0.1:4000/api/tenants/${TENANT}`], { encoding: "utf8", input: `header = "Authorization: Bearer ${token}"\n`, stdio: ["pipe", "pipe", "ignore"] });
-    } catch {
-      throw new Error("Realtime setup could not reach the local tenant API.");
+    // A freshly started Realtime container may not accept connections yet (CI): retry until the deadline, then fail closed.
+    for (const deadline = Date.now() + TENANT_WAIT_MS; ; ) {
+      let output;
+      try {
+        output = execFileSync(docker, [...args, `http://127.0.0.1:4000/api/tenants/${TENANT}`], { encoding: "utf8", input: `header = "Authorization: Bearer ${token}"\n`, stdio: ["pipe", "pipe", "ignore"] });
+      } catch {
+        if (Date.now() >= deadline) throw new Error(`Realtime setup could not reach the local tenant API within ${TENANT_WAIT_MS / 1000}s.`);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+        continue;
+      }
+      const split = output.lastIndexOf("\n");
+      // Bodies hold encrypted provider settings, so they are parsed here and never printed.
+      return { status: Number(output.slice(split + 1)), data: (() => { try { return JSON.parse(output.slice(0, split)).data; } catch { return undefined; } })() };
     }
-    const split = output.lastIndexOf("\n");
-    // Bodies hold encrypted provider settings, so they are parsed here and never printed.
-    return { status: Number(output.slice(split + 1)), data: (() => { try { return JSON.parse(output.slice(0, split)).data; } catch { return undefined; } })() };
   };
 }
 
@@ -99,18 +108,21 @@ async function helperProblems(client) {
   const { rows: members } = await client.query(`select 1 from pg_auth_members where roleid in ('${READER}'::regrole, '${NOTIFIER}'::regrole) and (member <> 'postgres'::regrole or inherit_option or set_option)`); // postgres keeps only the ADMIN option it received as creator
   expect(members.length === 0, "restricted Realtime roles must not be usable by any other role");
   const { rows: [fn] } = await client.query(`
-    select pg_get_userbyid(p.proowner) as owner, p.prosecdef, p.provolatile, p.prorettype = 'boolean'::regtype as boolean_only, l.lanname, p.proconfig
+    select pg_get_userbyid(p.proowner) as owner, p.prosecdef, p.provolatile, p.prorettype = 'boolean'::regtype as boolean_only, l.lanname, p.proconfig, ${BODY} as body,
+      exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where a.grantee not in (p.proowner, 'authenticated'::regrole)) as shared
     from pg_proc p join pg_language l on l.oid = p.prolang where p.oid = to_regprocedure('${HELPER}')`);
   expect(fn, "the Realtime helper is missing");
   if (fn) {
     expect(fn.owner === READER, "the Realtime helper is not owned by the restricted reader");
     expect(fn.prosecdef && fn.provolatile === "s" && fn.boolean_only && fn.lanname === "sql", "the Realtime helper is not a stable boolean SQL SECURITY DEFINER function");
     expect(fn.proconfig?.length === 1 && fn.proconfig[0] === 'search_path=""', "the Realtime helper does not pin an empty search_path");
+    expect(fn.body === BODY_MD5[HELPER], `${HELPER} body differs from the migration`);
+    expect(!fn.shared, `${HELPER} is executable by a role other than its owner and authenticated`);
   }
   // The hint adapter and trigger function: notifier-owned SECURITY DEFINER plpgsql, empty search path, executable by nobody else.
   for (const [signature, kind] of [[ADAPTER, "void"], [TRIGGER_FN, "trigger"]]) {
     const { rows: [hint] } = await client.query(`
-      select pg_get_userbyid(p.proowner) as owner, p.prosecdef, p.prorettype = '${kind}'::regtype as returns_kind, l.lanname, p.proconfig,
+      select pg_get_userbyid(p.proowner) as owner, p.prosecdef, p.prorettype = '${kind}'::regtype as returns_kind, l.lanname, p.proconfig, ${BODY} as body,
         exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where a.grantee <> p.proowner) as shared,
         (select bool_or(has_function_privilege(r, p.oid, 'EXECUTE')) from unnest(array['authenticated', 'anon', 'app_web', 'app_worker', 'app_web_runtime', 'app_worker_runtime', 'app_migrator_runtime', '${READER}']) as r) as roles_execute
       from pg_proc p join pg_language l on l.oid = p.prolang where p.oid = to_regprocedure('${signature}')`);
@@ -119,6 +131,7 @@ async function helperProblems(client) {
     expect(hint.owner === NOTIFIER, `${signature} is not owned by the restricted notifier`);
     expect(hint.prosecdef && hint.returns_kind && hint.lanname === "plpgsql", `${signature} is not a SECURITY DEFINER plpgsql ${kind} function`);
     expect(hint.proconfig?.length === 1 && hint.proconfig[0] === 'search_path=""', `${signature} does not pin an empty search_path`);
+    expect(hint.body === BODY_MD5[signature], `${signature} body differs from the migration`);
     expect(!hint.shared && !hint.roles_execute, `${signature} is executable by PUBLIC or another role`);
   }
   const { rows: triggers } = await client.query(`
