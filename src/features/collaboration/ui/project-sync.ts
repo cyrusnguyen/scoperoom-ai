@@ -2,7 +2,7 @@ import type { ProjectStatusView } from "../../projects/contracts/project.ts";
 
 // One status controller per visible project (Stage 04.2). Pure: every effect it has on the world comes through the
 // injected seams below, so a fake clock and fake visibility can drive it in node tests. 04.3 adds "hint" | "subscribed".
-export type ReconcileReason = "poll" | "focus" | "reconnect" | "before-save" | "mutation" | "manual";
+export type ReconcileReason = "poll" | "focus" | "reconnect" | "before-save" | "manual";
 /** What the window reports: a return (focus, reconnect) revalidates; going hidden or blurred only invalidates: polling is paused or a sign-in in another window may follow, and the next write revalidates. */
 export type VisibilityEvent = ReconcileReason | "hidden" | "blur";
 export type AuthorityResult = { kind: "current"; generation: number; status: ProjectStatusView } | { kind: "unavailable" } | { kind: "denied" };
@@ -41,8 +41,7 @@ export type ProjectSync = {
   /** Resolves at once while authority is current; after `invalidate()` or a failed read it waits for one revalidation. */
   beforeWrite: () => Promise<AuthorityResult>;
   invalidate: () => void;
-  /** True while this generation is still the current one: check right before adopting anything. */
-  /** The current generation, or an earlier one whose result is being checked (an authority result carries its own). */
+  /** A check that generation `at` (default: the current one; an authority result carries its own) is still current: call it right before adopting anything. */
   fence: (at?: number) => () => boolean;
 };
 
@@ -118,7 +117,7 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
     if (!running) return begin(reason);
     if (queued) return queued;
     const at = session;
-    const next: Promise<AuthorityResult> = running.then(() => { if (queued === next) queued = null; return at === session && started ? begin(reason) : unavailable; });
+    const next: Promise<AuthorityResult> = running.then(() => { if (queued === next) queued = null; return at === session && started && !stopped ? begin(reason) : unavailable; });
     return queued = next;
   }
 

@@ -465,3 +465,15 @@ test("a status for another account is an account change: the controller stops, n
   assert.equal(t.pending.length, 0);
   t.sync.dispose();
 });
+
+test("a follow-up queued behind an account-change stop never fetches, so the shell is told exactly once", async () => {
+  const t = rig();
+  t.sync.start();
+  await t.advance(10_000); // the poll is in flight
+  const queued = t.sync.revalidate("manual"); // queued behind it
+  await t.answer(ok(status({ viewerId: "someone-else" })));
+  assert.equal(t.pending.length, 0, "no second status request after the stop");
+  assert.deepEqual(t.log, ["account"]);
+  assert.equal((await queued).kind, "unavailable");
+  t.sync.dispose();
+});
