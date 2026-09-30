@@ -12,7 +12,7 @@ import ProjectDetails from "@/features/projects/ui/project-details";
 import Inspector from "@/features/studio/ui/inspector";
 import { StudioProvider } from "@/features/studio/ui/studio-context";
 import { emptyOutbox, pendingCount } from "@/features/studio/ui/outbox";
-import { afterDraftRead, isNewer, type StudioUi } from "@/features/studio/ui/studio-ui";
+import { admits, afterDraftRead, type StudioUi } from "@/features/studio/ui/studio-ui";
 import Dialog, { CancelFocus } from "./dialog";
 import { resolveDock } from "./dock";
 import LifecycleDialog, { type LifecycleKind } from "./lifecycle-dialog";
@@ -40,12 +40,6 @@ function readPrefs(): Prefs {
   return { leftOpen: saved.leftOpen !== false, listTab: LIST_TABS.includes(saved.listTab as ListTab) ? saved.listTab as ListTab : "owned" };
 }
 
-/** A project re-read that raced a Studio save must not roll the draft back: keep whichever read is newer. */
-function keepNewerDraft(bootstrap: ProjectBootstrap, previous: Opened | null): ProjectBootstrap {
-  const kept = previous?.projectId === bootstrap.project.id ? previous.bootstrap?.draft : undefined;
-  return kept && isNewer(kept, bootstrap.draft) ? { ...bootstrap, draft: kept } : bootstrap;
-}
-
 export default function ProjectShell({ signOut, children }: { signOut: () => Promise<void>; children: ReactNode }) {
   const router = useRouter();
   const [navigating, startNavigation] = useTransition();
@@ -64,6 +58,9 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const [invites, setInvites] = useState<{ items: InviteRow[]; truncated: boolean } | null>(null);
   const [listsState, setListsState] = useState<"loading" | "ready" | "error">("loading");
   const [opened, setOpened] = useState<Opened | null>(null);
+  // Synchronous copy of `opened`: the admission gate must see a draft adopted in the same event.
+  const openedRef = useRef<Opened | null>(null);
+  const install = useCallback((next: Opened) => { openedRef.current = next; setOpened(next); }, []);
   const [store, setStore] = useState<UiStore>({});
   const latestStore = useRef(store);
   useLayoutEffect(() => { latestStore.current = store; }, [store]);
@@ -102,17 +99,26 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     // An unsignaled caller (Retry, projectChanged) can resolve after the user opened a different project.
     if (id !== projectIdRef.current) return;
     if (result.ok) {
-      setOpened((previous) => ({ projectId: id, bootstrap: keepNewerDraft(result.data, previous) }));
-      setStore((previous) => updateUi(previous, id, (current) => afterDraftRead(current, result.data.draft)));
+      // A re-read that raced a save or another read must not roll the draft back or below a receipt floor: the shown
+      // draft stays and the floor is left alone. With no draft shown yet the read is installed and the floor stays
+      // unless it covers it.
+      const previous = openedRef.current;
+      const shown = previous?.projectId === id ? previous.bootstrap?.draft : undefined;
+      const admitted = !shown || admits(uiFor(latestStore.current, id), shown, result.data.draft);
+      install({ projectId: id, bootstrap: admitted ? result.data : { ...result.data, draft: shown } });
+      if (admitted) setStore((current) => updateUi(current, id, (ui) => afterDraftRead(ui, result.data.draft)));
     }
-    else if (result.status === 404) { setOpened({ projectId: id, missing: true }); setStore((previous) => dropProject(previous, id)); }
-    else setOpened({ projectId: id, error: result.message });
-  }, []);
+    else if (result.status === 404) { install({ projectId: id, missing: true }); setStore((previous) => dropProject(previous, id)); }
+    else install({ projectId: id, error: result.message });
+  }, [install]);
 
-  // The Studio's saved draft lives with the bootstrap; a read replaces it only when neither revision goes backwards.
+  // The Studio's saved draft lives with the bootstrap; a read replaces it only through the admission gate. True when installed.
   const adoptDraft = useCallback((view: DraftView) => {
-    setOpened((previous) => previous?.bootstrap && isNewer(view, previous.bootstrap.draft) ? { ...previous, bootstrap: { ...previous.bootstrap, draft: view } } : previous);
-  }, []);
+    const previous = openedRef.current;
+    if (!previous?.bootstrap || !admits(uiFor(latestStore.current, previous.projectId), previous.bootstrap.draft, view)) return false;
+    install({ ...previous, bootstrap: { ...previous.bootstrap, draft: view } });
+    return true;
+  }, [install]);
   const updateStudio = useCallback((change: (ui: StudioUi) => Partial<StudioUi>) => {
     if (projectId) setStore((previous) => updateUi(previous, projectId, change));
   }, [projectId]);

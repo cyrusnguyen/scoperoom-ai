@@ -142,7 +142,7 @@ function SaveNote() {
   </div>;
   if (!editable && unsaved) return <div className="save-note" role="alert">
     <span>This draft is read-only now, so your unsaved changes can’t be saved. They’re listed here for copying:</span>
-    {list(describeAll(ui.outbox, optimistic(ui.outbox, savedDraft).document))}
+    {list(describeAll(ui.outbox, optimistic(ui.outbox, savedDraft, ui.acknowledgedRevisions[savedDraft.id]).document))}
     <span className="view-actions"><button type="button" className="button quiet small" onClick={discardChanges} disabled={busy}>Discard my changes</button></span>
   </div>;
   if (sending?.state === "refused") {

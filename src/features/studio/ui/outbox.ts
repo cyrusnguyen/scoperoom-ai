@@ -38,15 +38,24 @@ export function isNewer(candidate: DraftView, current: DraftView): boolean {
   return candidate.id === current.id && candidate.documentRevision >= current.documentRevision && candidate.layoutRevision >= current.layoutRevision;
 }
 
+/** The saved revisions a receipt proved (`StudioUi.acknowledgedRevisions`): a read below either has not seen that save. */
+export type RevisionFloor = Pick<DraftView, "documentRevision" | "layoutRevision">;
+/** A read at or above both floor revisions (no floor: every read). */
+export function covers(view: RevisionFloor, floor: RevisionFloor | undefined): boolean {
+  return !floor || (view.documentRevision >= floor.documentRevision && view.layoutRevision >= floor.layoutRevision);
+}
+
 /**
  * What unsaved changes build on. With nothing unsaved it is the saved draft, except just after a save whose re-read
- * has not landed (or failed): the locally replayed result of that save stays shown until a read catches up.
+ * has not landed (or failed): the locally replayed result of that save stays shown until a read that is newer and
+ * covers the acknowledged `floor` catches up (the replay's own revisions can lag the receipt's, so a newer-looking read
+ * may still lack the save).
  */
-export function baseOf(outbox: Outbox, saved: DraftView): DraftView {
+export function baseOf(outbox: Outbox, saved: DraftView, floor?: RevisionFloor): DraftView {
   const { base } = outbox;
   if (!base) return saved;
   if (outbox.sending || outbox.entries.length) return base;
-  return base.id === saved.id && !isNewer(saved, base) ? base : saved;
+  return base.id === saved.id && (!isNewer(saved, base) || !covers(saved, floor)) ? base : saved;
 }
 
 /** One batch exactly as the server applies it: documentRevision per effective command, layoutRevision once. */
@@ -121,8 +130,8 @@ export type Replayed = { draft: DraftView; skipped: string[]; overLimit: boolean
  * What every view shows: the saved draft with the segment being saved and the unsent changes replayed on it, plus a
  * description of anything that no longer applies (so it is listed, not silently missing) and the final size check.
  */
-export function replay(outbox: Outbox, saved: DraftView): Replayed {
-  let view = baseOf(outbox, saved);
+export function replay(outbox: Outbox, saved: DraftView, floor?: RevisionFloor): Replayed {
+  let view = baseOf(outbox, saved, floor);
   const names = view.document;
   const skipped: string[] = [];
   for (const batch of outbox.sending?.batches ?? []) {
@@ -136,8 +145,8 @@ export function replay(outbox: Outbox, saved: DraftView): Replayed {
   return { draft: built.draft, skipped: [...skipped, ...built.skipped.map(({ command }) => describe(command, names))], overLimit: built.overLimit };
 }
 
-export function optimistic(outbox: Outbox, saved: DraftView): DraftView {
-  return replay(outbox, saved).draft;
+export function optimistic(outbox: Outbox, saved: DraftView, floor?: RevisionFloor): DraftView {
+  return replay(outbox, saved, floor).draft;
 }
 
 export type Enqueued = { entries: Entry[]; createdIds: string[]; versions: Record<string, number>; retiredIds: string[]; documentRevision: number };
@@ -156,8 +165,8 @@ function coalesces(last: Entry | undefined, command: GraphCommand): last is Extr
  * Checks a command against the shown (optimistic) draft and returns the new unsent chain. A refusal throws the same
  * GraphError the server would send. Created ids are generated here and are final: the save proposes them.
  */
-export function enqueue(outbox: Outbox, saved: DraftView, command: GraphCommand, newId: () => string = () => crypto.randomUUID()): Enqueued {
-  const current = optimistic(outbox, saved);
+export function enqueue(outbox: Outbox, saved: DraftView, command: GraphCommand, newId: () => string = () => crypto.randomUUID(), floor?: RevisionFloor): Enqueued {
+  const current = optimistic(outbox, saved, floor);
   if (command.command === "RECONNECT_EDGE") command = {
     ...command, payload: { ...command.payload, expectedSides: current.layout.edgeSides[command.payload.edgeId] ?? null },
   };
@@ -168,7 +177,7 @@ export function enqueue(outbox: Outbox, saved: DraftView, command: GraphCommand,
   if (coalesces(last, command)) {
     const earlier = outbox.entries.slice(0, -1);
     const merged = { ...last.command, payload: { ...last.command.payload, ...command.payload } } as GraphCommand;
-    const before = optimistic({ ...outbox, entries: earlier }, saved);
+    const before = optimistic({ ...outbox, entries: earlier }, saved, floor);
     const again = applyGraphCommand(before, before.documentRevision, merged, () => { throw new Error("NO_IDS"); });
     if (!again.documentChanged && !again.layoutChanged) return { entries: earlier, createdIds: [], versions: {}, retiredIds: [], documentRevision: before.documentRevision };
     return { entries: [...earlier, { kind: "command", command: merged, proposedIds: [] }], createdIds: [], versions: again.versions, retiredIds: [], documentRevision: before.documentRevision + (again.documentChanged ? 1 : 0) };
@@ -180,13 +189,13 @@ export function enqueue(outbox: Outbox, saved: DraftView, command: GraphCommand,
 }
 
 /** Stores a new unsent chain. Any new change ends what could be redone. */
-export function withEntries(outbox: Outbox, saved: DraftView, entries: Entry[]): Outbox {
-  return { ...outbox, base: baseOf(outbox, saved), entries, redo: [] };
+export function withEntries(outbox: Outbox, saved: DraftView, entries: Entry[], floor?: RevisionFloor): Outbox {
+  return { ...outbox, base: baseOf(outbox, saved, floor), entries, redo: [] };
 }
 
 /** One drop of steps (a drag, the position form, or a new shape's drop point when `joined`). */
-export function addDrop(outbox: Outbox, saved: DraftView, flowId: string, items: Placement[], joined = false): Outbox {
-  return withEntries(outbox, saved, [...outbox.entries, { kind: "drop", flowId, items, ...(joined ? { joined: true as const } : {}) }]);
+export function addDrop(outbox: Outbox, saved: DraftView, flowId: string, items: Placement[], joined = false, floor?: RevisionFloor): Outbox {
+  return withEntries(outbox, saved, [...outbox.entries, { kind: "drop", flowId, items, ...(joined ? { joined: true as const } : {}) }], floor);
 }
 
 /** Removes the last unsent change (with anything joined to it). Nothing that is being or was saved can be undone. */
@@ -254,9 +263,9 @@ export function split({ commands, moves }: Changes): Changes[] {
  * Commands that no longer apply are left out and listed in `dropped`. A chain whose result would go over the draft's
  * size limit is not started at all (the outbox is returned unchanged; `overLimit` tells the caller).
  */
-export function startSave(outbox: Outbox, saved: DraftView, key: string): Outbox {
+export function startSave(outbox: Outbox, saved: DraftView, key: string, floor?: RevisionFloor): Outbox {
   if (outbox.sending || !outbox.entries.length) return outbox;
-  const base = baseOf(outbox, saved);
+  const base = baseOf(outbox, saved, floor);
   const built = build(base, outbox.entries);
   if (built.overLimit) return outbox;
   const batches = split(built.changes);

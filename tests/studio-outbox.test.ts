@@ -145,6 +145,41 @@ test("a save takes the queued changes; later edits form a new segment on top, an
   assert.equal(optimistic(undo(outbox), reread), reread);
 });
 
+/** Someone else saved revision 5 first, so this person's save landed at revision 6: the local replay is at 5, the receipt says 6. */
+function racedSave() {
+  const base = saved();
+  const { outbox: queued, result } = queue(emptyOutbox, base, addNode(4, "Pay"));
+  const acked = acknowledged(startSave(queued, base, "k1"), "k2");
+  const floor = { documentRevision: 6, layoutRevision: base.layoutRevision + 1 };
+  const theirs5 = { ...base, documentRevision: 5, layoutRevision: base.layoutRevision + 1, document: { ...base.document, nodes: { ...base.document.nodes, [end]: { ...base.document.nodes[end]!, label: "Theirs" } } } };
+  return { base, acked, floor, theirs5, payId: result.createdIds[0]! };
+}
+
+test("a delayed read below the acknowledged floor never replaces the acknowledged local replay", () => {
+  const { acked, floor, theirs5, payId } = racedSave();
+  assert.equal(acked.base!.documentRevision, 5, "the local replay lags the receipt");
+  const shown = optimistic(acked, theirs5, floor);
+  assert.ok(shown.document.nodes[payId], "the saved edit stays shown");
+  assert.equal(shown.document.nodes[end]!.label, "End");
+  assert.equal(optimistic(acked, theirs5).document.nodes[payId], undefined, "without a floor the edit would disappear");
+});
+
+test("a read adopted while the save was in flight cannot hide the edit once the receipt floor arrives", () => {
+  const { base, acked, floor, theirs5, payId } = racedSave();
+  const sending = startSave(queue(emptyOutbox, base, addNode(4, "Pay")).outbox, base, "k1");
+  // The read at 5 lands during `sending`: no floor exists yet, and the pending save keeps its own base.
+  assert.ok(optimistic(sending, theirs5).document.nodes[payId]);
+  // The receipt then raises the floor above the read that was adopted before it.
+  assert.ok(optimistic(acked, theirs5, floor).document.nodes[payId]);
+});
+
+test("a read covering the floor is followed", () => {
+  const { acked, floor, theirs5, payId } = racedSave();
+  const covering = { ...theirs5, documentRevision: 6 };
+  assert.equal(optimistic(acked, covering, floor), covering);
+  assert.equal(optimistic(acked, covering, floor).document.nodes[payId], undefined);
+});
+
 test("the outbox splits at the batch limits into sequential batches that apply like one", () => {
   const base = saved();
   let outbox = emptyOutbox;

@@ -3,7 +3,8 @@ import test from "node:test";
 import type { Changes } from "../src/features/drafts/contracts/changes.ts";
 import { edit, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
-import { afterDraftRead, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
+import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
+import { admits, afterDraftRead, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
 import { anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
 const closed = { acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, buffers: {}, endpointBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
@@ -88,7 +89,22 @@ test("reads must cover both acknowledged revision floors and clear only the qual
   assert.deepEqual(ui.acknowledgedRevisions, floors, "the original per-project state is immutable");
 });
 
-const deleteEdge = { commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: 3, payload: { edgeId: "e1" } } as const;
+test("one admission predicate: a read must be current, not older than the adopted draft, and cover the floor", () => {
+  const draft = (documentRevision: number, layoutRevision: number, draftId = "d1") => ({ id: draftId, documentRevision, layoutRevision }) as DraftView;
+  const ui = { ...defaultUi, acknowledgedRevisions: requireDraftRevision({}, { draftId: "d1", documentRevision: 6, layoutRevision: 3 }) };
+  const adopted = draft(5, 3);
+  assert.equal(admits(ui, adopted, draft(5, 3)), false, "below the document floor");
+  assert.equal(admits(ui, adopted, draft(6, 2)), false, "below the layout floor");
+  assert.equal(admits(ui, adopted, draft(6, 3)), true);
+  assert.equal(admits(ui, adopted, draft(7, 3, "d2")), false, "another draft is never admitted");
+  assert.equal(admits(ui, draft(8, 3), draft(6, 3)), false, "older than the adopted draft");
+  assert.equal(admits(defaultUi, adopted, draft(5, 3)), true, "no floor: any not-older read");
+  assert.equal(covers(draft(5, 3), undefined), true);
+  // Only an admitted read clears the floor.
+  assert.deepEqual(afterDraftRead(ui, draft(6, 3)).acknowledgedRevisions, {});
+});
+
+const deleteEdge ={ commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: 3, payload: { edgeId: "e1" } } as const;
 const batch: Changes = { commands: [{ command: deleteEdge, proposedIds: [] }], moves: [] };
 const withSave = (state: "waiting" | "sending" | "uncertain" | "refused"): Outbox => ({
   ...emptyOutbox, entries: [{ kind: "drop", flowId: "f", items: [{ nodeId: "n1", x: 1, y: 2 }] }], sending: { draftId: "d1", key: "receipt-1", batches: [batch], state },
