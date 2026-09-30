@@ -45,8 +45,8 @@ test("a member gets exactly a scoped credential; a stranger, a missing project a
     const claims = claimsOf(body.accessToken);
     expect(claims).toMatchObject({ role: "app_realtime_client", project_id: projectId, realtime_epoch: realtimeEpoch, exp: body.expiresAt });
     expect(claims).not.toHaveProperty("sub"); // scope only: no Auth subject, session or email
+    expect(claims.exp as number - (claims.iat as number)).toBe(300); // the documented lifetime, whatever the clocks say
     expect(body.expiresAt - Math.floor(Date.now() / 1000)).toBeGreaterThan(0);
-    expect(body.expiresAt - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(300 + 60);
 
     // A body is refused (400), whatever it holds.
     const withBody = await page.request.post(url, { headers: { Origin: appUrl }, data: { projectId } });
@@ -70,6 +70,7 @@ test("a member gets exactly a scoped credential; a stranger, a missing project a
       expect(text).not.toContain("accessToken");
       expect(JSON.parse(text).error.code).toBe("NOT_FOUND");
     }
-    expect((await errorOf(denials[0]!)).message).toBe((await errorOf(denials[2]!)).message);
+    const [first, ...rest] = await Promise.all(denials.map(async (denial) => { const { code, message } = await errorOf(denial); return { code, message }; }));
+    for (const other of rest) expect(other).toEqual(first); // a stranger, a malformed id and an unknown project are indistinguishable
   } finally { await other.close(); await cleanupUsers(database, admin, users, page); await database.end(); }
 });

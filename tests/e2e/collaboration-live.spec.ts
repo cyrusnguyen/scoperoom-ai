@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Route } from "@playwright/test";
 import type { Client } from "pg";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { interceptRealtime, poll, test } from "./collaboration-fixtures";
@@ -213,9 +213,11 @@ test("a Realtime outage never blocks saving: Save succeeds while Live updates de
   let dragging = true;
   const wiggle = (async () => { for (let step = 0; dragging; step++) { await ownerPage.mouse.move(x + 160 + (step % 2) * 4, y + 80); await ownerPage.waitForTimeout(140); } })();
 
+  const cutAt = Date.now();
   await wire.cut(); // the editor's sockets only; every HTTP request still works
   await expect(delayed(editorPage)).toBeVisible({ timeout: 20_000 });
-  await expect(ghostAt(editorPage, ids.startId)).toHaveCount(0, { timeout: 1_000 }); // the overlay ends with the connection, although the drag is still fresh
+  // The overlay ends with the connection: packets were still arriving right up to the cut, so the 2 s expiry cannot explain a ghost gone within 1.5 s of it.
+  await expect(ghostAt(editorPage, ids.startId)).toHaveCount(0, { timeout: Math.max(100, 1_500 - (Date.now() - cutAt)) });
   dragging = false;
   await wiggle;
   await ownerPage.mouse.up();
@@ -236,21 +238,28 @@ test("a Realtime outage never blocks saving: Save succeeds while Live updates de
   expect(during.document.nodes[ids.payId]!.label).toBe("Pay (editor)");
   expect(during.layout.positions[ids.shipId]!.version).toBeGreaterThan(shipBefore);
 
-  // Reconnect: the note clears, and a write made right after the rejoin is preceded by a status read.
-  const order: string[] = [];
-  editorPage.on("request", (request) => {
-    const path = new URL(request.url()).pathname;
-    if (/\/status$/.test(path)) order.push("status");
-    else if (request.method() === "POST" && /\/drafts\/[^/]+\/(changes|positions|commands)$/.test(path)) order.push("write");
-  });
+  // Reconnect. The first status read after the rejoin is held: a write made meanwhile must wait for it (RT-009), and goes out once it answers.
+  const writes: string[] = [];
+  editorPage.on("request", (request) => { if (request.method() === "POST" && /\/drafts\/[^/]+\/(changes|positions|commands)$/.test(new URL(request.url()).pathname)) writes.push(request.url()); });
+  const joinedBefore = wire.joined;
+  const heldStatus: Route[] = [];
+  const statusRoute = /\/status$/;
+  await editorPage.route(statusRoute, (route) => { if (wire.joined >= joinedBefore + 2 && !heldStatus.length) heldStatus.push(route); else void route.continue(); });
   wire.restore();
   await expect(delayed(editorPage)).toHaveCount(0, { timeout: 40_000 });
-  expect(wire.connections).toBeGreaterThan(1);
+  expect(wire.joined).toBe(joinedBefore + 2); // both channels rejoined, once each
+  expect(new Set(wire.joins).size).toBe(2);
+  await expect.poll(() => heldStatus.length).toBe(1); // a status read that began after the rejoin
   await renameLocally(editorPage, ids.startId, "Start (after)");
+  const writesBefore = writes.length;
   await headerSave(editorPage).click();
+  await editorPage.waitForTimeout(700); // a bounded window in which a premature write would already have been sent
+  expect(writes).toHaveLength(writesBefore);
+  await expect(status(editorPage)).not.toContainText("All changes saved");
+  await heldStatus[0]!.continue();
   await expect(status(editorPage)).toContainText("All changes saved");
-  expect(order.indexOf("status")).toBeGreaterThanOrEqual(0);
-  expect(order.indexOf("status")).toBeLessThan(order.indexOf("write"));
+  expect(writes.length).toBeGreaterThan(writesBefore);
+  await editorPage.unroute(statusRoute);
 
   // Peers converge, no stale ghost remains, and the saved draft holds both people's work after a reload.
   await expect(nodeAt(ownerPage, ids.payId)).toContainText("Pay (editor)", { timeout: 20_000 });
@@ -274,11 +283,11 @@ test("a renewed credential reaches the open socket through the heartbeat, with n
   const ids = await seedChain(ownerPage, projectId);
   const wire = await interceptRealtime(editorPage);
   const tokenRequests: string[] = [];
-  const statusReads: string[] = [];
+  const statusReads: { joined: number }[] = []; // join replies seen when each status read started
   editorPage.on("request", (request) => {
     const path = new URL(request.url()).pathname;
     if (request.method() === "POST" && /\/realtime-token$/.test(path)) tokenRequests.push(path);
-    if (/\/status$/.test(path)) statusReads.push(path);
+    if (/\/status$/.test(path)) statusReads.push({ joined: wire.joined });
   });
   await editorPage.addInitScript(() => { Math.random = () => 0; });
   await editorPage.clock.install();
@@ -294,26 +303,31 @@ test("a renewed credential reaches the open socket through the heartbeat, with n
     const replies = wire.heartbeatReplies;
     await editorPage.clock.runFor(25_000);
     await expect.poll(() => wire.heartbeatReplies, { timeout: 10_000 }).toBeGreaterThan(replies);
+    await new Promise((resolve) => setTimeout(resolve, 150)); // pacing, not convergence: the page handles the reply before its clock moves again
   }
   expect(tokenRequests.length).toBeGreaterThan(issuedAtLoad);
   await expect.poll(() => wire.accessTokens, { timeout: 10_000 }).toBe(2); // the renewed JWT reached the socket, once per joined channel
   expect(wire.connections).toBe(1);
   expect(wire.joins).toEqual(firstJoins); // no rejoin and no extra channel
+  const [initial] = wire.joinTokens;
+  expect(wire.joinTokens.every((token) => token === initial)).toBe(true);
+  expect(wire.pushTokens.every((token) => token !== initial && token === wire.pushTokens[0])).toBe(true); // both channels got the same, renewed credential
   await expect(delayed(editorPage)).toHaveCount(0);
 
   // A rejoin now presents the renewed credential: the provider accepts both joins, the status is read again, and no channel is duplicated.
-  const readsBefore = statusReads.length;
   await wire.cut();
   wire.restore();
   for (let step = 0; step < 40 && wire.joined < 4; step++) {
     await editorPage.clock.runFor(1_000);
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
+  // The clock stays paused from here on, so no poll timer can run: a status read that starts after the last join reply is the rejoin's own refetch.
   await expect.poll(() => wire.joined).toBe(4);
   expect(wire.joins).toHaveLength(4);
   expect(new Set(wire.joins).size).toBe(2);
+  expect(wire.joinTokens.slice(2).every((token) => token === wire.pushTokens[0] && token !== initial)).toBe(true); // the rejoins carry the renewed credential
+  await expect.poll(() => statusReads.filter((read) => read.joined >= 4).length, { timeout: 15_000 }).toBeGreaterThan(0);
   await expect(delayed(editorPage)).toHaveCount(0);
-  await expect.poll(() => statusReads.length).toBeGreaterThan(readsBefore); // the rejoin refetches status
 
   await saveLabel(ownerPage, projectId, ids.payId, "Pay (after refresh)");
   await poll(editorPage);
@@ -369,24 +383,37 @@ test("adversarial packets on a real editor channel reach nothing saved, and only
     });
     const send = async (payload: unknown) => expect(await channel.send({ type: "broadcast", event: "peer", payload }, { timeout: 5_000 })).toBe("ok"); // the provider acknowledges: an ACK is not a save
 
-    await send(packet(ids.startId, 1));
-    await expect(ghostAt(ownerPage, ids.startId)).toBeVisible({ timeout: 10_000 }); // control: this channel and this packet shape do draw
-    for (const payload of [
-      packet(randomUUID(), 2), // unknown node
-      packet(ids.payId, 3, { items: [{ nodeId: ids.payId, x: 200, y: 120, basePositionVersion: 0 }] }), // old base version
-      packet(ids.payId, 4, { flowId: randomUUID() }), // wrong flow
-      packet(ids.payId, 5, { epoch: randomUUID() }), // wrong epoch
-      packet(ids.payId, 6, { draftId: randomUUID() }), // wrong draft
-      packet(ids.payId, 7, { projectId: randomUUID() }), // wrong project
-      packet(ids.payId, 8, { userId: editorProfileId }), // spoofed identity key
-    ]) await send(payload);
-    await send(packet(ids.startId, 50)); // valid: raises the watermark
-    await send(packet(ids.payId, 40)); // out of order: below it
-    await send({ type: "CURSOR", ...context, sessionId, sequence: 55, x: 300, y: 200 });
-    await expect(ownerPage.locator(".live-cursor")).toBeVisible({ timeout: 10_000 }); // everything sent before the cursor has been delivered and judged
-    await expect(ownerPage.locator(`.live-ghost:not([data-node-id="${ids.startId}"])`)).toHaveCount(0);
+    let sequence = 0;
+    const next = () => ++sequence;
+    const cursorAt = (x: number) => ({ type: "CURSOR", ...context, sessionId, sequence: next(), x, y: 200 });
+    const hostile: [string, (sequence: number) => unknown][] = [
+      ["unknown node", (s) => packet(randomUUID(), s)],
+      ["old base version", (s) => packet(ids.payId, s, { items: [{ nodeId: ids.payId, x: 200, y: 120, basePositionVersion: 0 }] })],
+      ["wrong flow", (s) => packet(ids.payId, s, { flowId: randomUUID() })],
+      ["wrong epoch", (s) => packet(ids.payId, s, { epoch: randomUUID() })],
+      ["wrong draft", (s) => packet(ids.payId, s, { draftId: randomUUID() })],
+      ["wrong project", (s) => packet(ids.payId, s, { projectId: randomUUID() })],
+      ["spoofed userId key", (s) => packet(ids.payId, s, { userId: editorProfileId })],
+      ["out of order", (s) => packet(ids.payId, s - 1)], // at the watermark the valid packet just before it set
+    ];
+    const strangers = ownerPage.locator(`.live-ghost:not([data-node-id="${ids.startId}"])`);
 
-    await send(packet(ids.payId, 60)); // the same target, valid: accepted, so the silence above was the rejection and not an ineligible node
+    await send(packet(ids.startId, next()));
+    await expect(ghostAt(ownerPage, ids.startId)).toBeVisible({ timeout: 10_000 }); // control: this channel and this packet shape do draw
+    // One drag per session: a wrongly accepted packet would replace the Start ghost. So each round re-sends a valid Start packet (fresh inside the
+    // 2 s expiry, and the watermark the out-of-order case needs), sends one hostile packet, then a higher-sequence cursor at a distinct place. When
+    // the cursor has moved there, the hostile packet before it has been delivered and judged.
+    for (const [index, [label, build]] of hostile.entries()) {
+      await send(packet(ids.startId, next()));
+      await send(build(next()));
+      const x = 300 + index * 10;
+      await send(cursorAt(x));
+      await expect(ownerPage.locator(".live-cursor"), label).toHaveAttribute("style", new RegExp(`translate\\(${x}px, 200px\\)`), { timeout: 10_000 });
+      await expect(strangers, label).toHaveCount(0);
+      await expect(ghostAt(ownerPage, ids.startId), label).toBeVisible();
+    }
+
+    await send(packet(ids.payId, next())); // the same target, valid: accepted, so the silence above was the rejection and not an ineligible node
     await expect(ghostAt(ownerPage, ids.payId)).toBeVisible({ timeout: 10_000 });
     expect(await savedState(database, projectId)).toEqual(before); // nothing saved, receipted or audited
   } finally {

@@ -22,7 +22,7 @@ const CREDENTIAL_S = 300;
 const SHORT_LIFE_S = 20; // a back-dated credential with this many seconds left, so expiry can be observed inside a test
 const HEARTBEAT_MS = 25_000; // realtime-js default: the longest an idle socket goes without traffic
 
-const isProjectError = (error: unknown) => error instanceof ProjectError;
+const projectError = (code: string) => (error: unknown) => error instanceof ProjectError && error.code === code;
 const scopeOf = async (fixture: Fixture, who: Identity, projectId: string, epoch: string): Promise<RealtimeScope> => ({ profileId: await fixture.profileId(who), projectId, epoch });
 const shortLived = () => Date.now() - (CREDENTIAL_S - SHORT_LIFE_S) * 1000;
 const topicsOf = async (owner: Identity, projectId: string) => (await getProjectBootstrap(owner, projectId)).realtime;
@@ -71,11 +71,11 @@ test("removal ends backend access at once, refuses old-epoch joins, moves remain
     assert.notEqual(newEpoch, oldEpoch);
 
     // The application refuses the removed member at once: reads, saves and a new credential. Nothing was saved.
-    await assert.rejects(getProjectStatus(removed!, projectId), isProjectError);
-    await assert.rejects(getDraft(removed!, projectId, draft.draftId), isProjectError);
-    await assert.rejects(saveChanges(removed!, projectId, draft.draftId, { ...flowBatch(draft.base.documentRevision).body, key: randomUUID() }), isProjectError);
+    await assert.rejects(getProjectStatus(removed!, projectId), projectError("NOT_FOUND"));
+    await assert.rejects(getDraft(removed!, projectId, draft.draftId), projectError("NOT_FOUND"));
+    await assert.rejects(saveChanges(removed!, projectId, draft.draftId, { ...flowBatch(draft.base.documentRevision).body, key: randomUUID() }), projectError("NOT_FOUND"));
     assert.equal((await getDraft(owner!, projectId, draft.draftId)).documentRevision, draft.base.documentRevision, "the refused save changed nothing");
-    await assert.rejects(issueRealtimeToken(removed!, projectId), (error) => error instanceof ProjectError && error.code === "NOT_FOUND", "the removed member cannot mint a new credential");
+    await assert.rejects(issueRealtimeToken(removed!, projectId), projectError("NOT_FOUND"), "the removed member cannot mint a new credential");
 
     // A fresh join on the old epoch fails for the removed member's credential and for a remaining member's; the new epoch is the control just below.
     for (const [who, topic] of [[removed!, before.collab], [removed!, before.events], [editor!, before.collab]] as const) {
@@ -94,17 +94,19 @@ test("removal ends backend access at once, refuses old-epoch joins, moves remain
     const live = await broadcast(rt, editorNew.collab, [ownerNew.collab], true);
     assert.deepEqual([live.status, ...live.delivered], ["ok", true]);
 
-    // Record (never fail on) what the already joined removed socket still sees and sends on the old topic before its credential expires.
+    // Record what the already joined removed socket still sees and sends on the old topic before its credential expires (either outcome passes; only the owner control is asserted).
     const [removedSees, probeSees, ownerSees] = await probe(fixture, rt, before.collab, [removedOld, probeOld, ownerOld]);
     const sent = (await broadcast(rt, removedOld, [ownerOld], false)).delivered[0];
-    t.diagnostic(`already joined removed socket, before expiry: receives old-topic Broadcast=${removedSees} (member probe ${probeSees}, unexpired owner ${ownerSees}); its own send reaches the old topic=${sent}`);
+    assert.equal(ownerSees, true, "the unexpired old-epoch owner socket receives a database-originated Broadcast: the control that makes the removed socket's result readable");
+    const secondsLeft = Math.round((removedCredential.expiresAt * 1000 - Date.now()) / 1000);
+    t.diagnostic(`already joined removed socket, ${secondsLeft} s of credential left, state=${removedOld.state}: receives old-topic Broadcast=${removedSees} (member probe ${probeSees}, unexpired owner ${ownerSees}); its own send reaches the old topic=${sent}`);
 
     // Expiry: check with a socket that was never removed whether Realtime enforces exp on joined channels. Only then is the removed socket bound by it.
     const deadline = removedCredential.expiresAt * 1000 + HEARTBEAT_MS + 5_000;
     while (Date.now() < deadline && (removedOld.state === "joined" || probeOld.state === "joined")) await new Promise((resolve) => setTimeout(resolve, 500));
     await new Promise((resolve) => setTimeout(resolve, Math.max(0, removedCredential.expiresAt * 1000 - Date.now()))); // never conclude before the credential's own expiry
     const [removedLate, probeLate, ownerLate] = await probe(fixture, rt, before.collab, [removedOld, probeOld, ownerOld]);
-    if (ownerSees) assert.equal(ownerLate, true, "the unexpired old-epoch owner socket still receives: the silence below is the credential, not an outage");
+    assert.equal(ownerLate, true, "the unexpired old-epoch owner socket still receives: the silence below is the credential, not an outage");
     const lost = (channel: RealtimeChannel, received: boolean) => channel.state !== "joined" || !received;
     const enforced = lost(probeOld, probeLate);
     t.diagnostic(enforced
@@ -127,7 +129,7 @@ test("a downgraded member keeps new-epoch Presence and receive but loses collab 
     const { realtimeEpoch } = await getProjectStatus(owner!, projectId);
     assert.notEqual(realtimeEpoch, oldEpoch);
     assert.equal((await getProjectStatus(editor!, projectId)).role, "VIEWER");
-    await assert.rejects(saveChanges(editor!, projectId, draft.draftId, { ...flowBatch(draft.base.documentRevision).body, key: randomUUID() }), isProjectError, "the application stops the downgraded member's saves");
+    await assert.rejects(saveChanges(editor!, projectId, draft.draftId, { ...flowBatch(draft.base.documentRevision).body, key: randomUUID() }), projectError("FORBIDDEN"), "the application stops the downgraded member's saves");
     await assert.rejects(rt.join(await clientWithToken(rt, mintScoped(await scopeOf(fixture, editor!, projectId, oldEpoch)).token), before.collab), DENIED, "the old epoch is closed to a fresh join");
 
     const topics = await topicsOf(owner!, projectId);
@@ -156,7 +158,7 @@ test("an archived project keeps reads and Presence while Broadcast and authoring
     await archiveProject(owner!, projectId, { expectedProjectVersion: version, reason: "Wrapped up", key: randomUUID() }); // rotates the epoch
     assert.equal((await getProjectStatus(editor!, projectId)).status, "ARCHIVED");
     for (const who of [owner!, editor!]) {
-      await assert.rejects(saveChanges(who, projectId, draft.draftId, { ...flowBatch(draft.base.documentRevision).body, key: randomUUID() }), isProjectError, "authoring stops");
+      await assert.rejects(saveChanges(who, projectId, draft.draftId, { ...flowBatch(draft.base.documentRevision).body, key: randomUUID() }), projectError("CONFLICT"), "authoring stops on an archived project");
     }
 
     const topics = await topicsOf(owner!, projectId);

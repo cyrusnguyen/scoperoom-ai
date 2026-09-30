@@ -112,6 +112,9 @@ export type RealtimeWire = {
   readonly joins: string[];
   /** `access_token` pushes the page sent on joined channels: how a renewed credential reaches the provider. */
   readonly accessTokens: number;
+  /** The credential each `phx_join` carried, and each `access_token` push carried. Compare them; never print them. */
+  readonly joinTokens: string[];
+  readonly pushTokens: string[];
   /** Heartbeat replies the provider sent. */
   readonly heartbeatReplies: number;
   /** Join replies the provider answered "ok": a rejoin with the renewed credential shows here. */
@@ -124,7 +127,7 @@ export type RealtimeWire = {
 /** Sits on a page's Realtime WebSockets: forwards everything to the real provider, counts what matters and can drop hints or cut the sockets. Call before the page navigates. */
 export async function interceptRealtime(page: Page): Promise<RealtimeWire> {
   const open = new Set<{ ws: WebSocketRoute; server: WebSocketRoute }>();
-  const state = { dropEvents: false, offline: false, dropped: 0, connections: 0, joins: [] as string[], accessTokens: 0, heartbeatReplies: 0, joined: 0 };
+  const state = { dropEvents: false, offline: false, dropped: 0, connections: 0, joins: [] as string[], joinTokens: [] as string[], pushTokens: [] as string[], accessTokens: 0, heartbeatReplies: 0, joined: 0 };
   await page.routeWebSocket(/\/realtime\/v1\/websocket/, (ws) => {
     state.connections++;
     if (state.offline) { void ws.close({ code: 1011, reason: "test outage" }); return; }
@@ -132,8 +135,9 @@ export async function interceptRealtime(page: Page): Promise<RealtimeWire> {
     open.add({ ws, server });
     ws.onMessage((message) => {
       const frame = textFrame(message);
-      if (frame?.[3] === "phx_join") state.joins.push(String(frame[2]));
-      if (frame?.[3] === "access_token") state.accessTokens++;
+      const token = String((frame?.[4] as { access_token?: unknown } | undefined)?.access_token);
+      if (frame?.[3] === "phx_join") { state.joins.push(String(frame[2])); state.joinTokens.push(token); }
+      if (frame?.[3] === "access_token") { state.accessTokens++; state.pushTokens.push(token); }
       server.send(message);
     });
     server.onMessage((message) => {
@@ -150,6 +154,8 @@ export async function interceptRealtime(page: Page): Promise<RealtimeWire> {
     get dropped() { return state.dropped; },
     get connections() { return state.connections; },
     joins: state.joins,
+    joinTokens: state.joinTokens,
+    pushTokens: state.pushTokens,
     get accessTokens() { return state.accessTokens; },
     get heartbeatReplies() { return state.heartbeatReplies; },
     get joined() { return state.joined; },
