@@ -63,7 +63,7 @@ const unavailable: AuthorityResult = { kind: "unavailable" };
 
 export function createProjectSync(o: SyncOptions): ProjectSync {
   let generation = 0, session = 0, started = false, stopped = false, failures = 0, invalid = false, invalidations = 0, degraded = false;
-  // What the request in flight started with: an event-driven one that saw every invalidation covers a later beforeWrite or event.
+  // What the request in flight started with: one that saw every invalidation covers a later beforeWrite; a window event is covered only by another window event's or a write's request.
   let runSeen = -1, runReason: ReconcileReason = "poll";
   let last = o.initial, shown = "";
   let cancelTimer: (() => void) | null = null, unlisten: (() => void) | null = null;
@@ -143,7 +143,8 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
         // Background autosave keeps running while polling is paused, and another window can sign in as someone else: what was
         // true before this window hid or lost focus is no longer proven.
         if (reason === "hidden" || reason === "blur") { invalidate(); return; }
-        if (running && runSeen === invalidations && runReason !== "poll") return;
+        // A poll, hint or join read is not a window event: it may have started just before this return, so the return gets its own.
+        if (running && runSeen === invalidations && runReason !== "poll" && runReason !== "hint" && runReason !== "subscribed") return;
         invalidate(); void revalidate(reason);
       });
       schedule();

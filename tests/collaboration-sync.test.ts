@@ -382,6 +382,23 @@ test("focus and visibilitychange together cost one status request; an event duri
   t.sync.dispose();
 });
 
+test("a Realtime-started read (subscribed, hint) in flight does not swallow a focus: the return event gets its own read", async () => {
+  for (const reason of ["subscribed", "hint"] as const) {
+    const t = rig();
+    t.sync.start();
+    void t.sync.revalidate(reason);
+    await settle();
+    assert.equal(t.pending.length, 1);
+    fire(t, "focus");
+    const write = t.sync.beforeWrite();
+    await t.answer(ok(status()));
+    assert.equal(t.pending.length, 1, reason + " predates the focus, so one follow-up is required");
+    await t.answer(ok(status()));
+    assert.equal((await write).kind, "current");
+    t.sync.dispose();
+  }
+});
+
 test("a failed status read after an event keeps writes blocked until a later read succeeds", async () => {
   const t = rig();
   t.sync.start();
