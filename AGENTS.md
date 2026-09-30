@@ -20,7 +20,7 @@ The current user request determines authorized work. Historical documentation-on
 
 ## Agent team
 
-The primary session is the lead/integrator. It owns requirements, scope, shared interfaces, task assignment, integration and final verification; do not spawn a second coordinator. Use the project-scoped `repo_scout`, `implementer`, `verifier` and `reviewer` roles when they reduce uncertainty or provide independent evidence. Use `docs_drafter` for bounded documentation and plan drafts from settled decisions; the lead reviews its work and retains plan authority. Use `designer`, `investigator` and `security_auditor` only when their specialist scope is relevant. Small, clear tasks should stay with the lead.
+The primary session is the lead/integrator. It owns requirements, scope, shared interfaces, task assignment, integration and final verification; do not spawn a second coordinator. Use the project-scoped `repo_scout`, `implementer`, `verifier` and `reviewer` roles when they reduce uncertainty or provide independent evidence. If the local project-scoped `docs_drafter` role is available, use it for bounded documentation and plan drafts from settled decisions; otherwise the lead handles that work. The lead reviews its work and retains plan authority. Use `designer`, `investigator` and `security_auditor` only when their specialist scope is relevant. Small, clear tasks should stay with the lead.
 
 Keep one active writer per path or working tree. Settle shared contracts before parallel work, give each child an explicit objective, source of truth, owned paths, verification requirements and stop conditions, and review actual evidence rather than summaries. Test and review a stable change, then rerun meaningful checks after integration.
 
