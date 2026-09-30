@@ -29,6 +29,11 @@ export function apiRead<T>(url: string, signal?: AbortSignal): Promise<ApiResult
   return settle<T>(() => fetch(url, { cache: "no-store", signal }));
 }
 
+/** A same-origin POST with no body and no Idempotency-Key, for an endpoint that writes nothing (the Realtime credential). */
+export function apiPostEmpty<T>(url: string): Promise<ApiResult<T>> {
+  return settle<T>(() => fetch(url, { method: "POST", cache: "no-store" }));
+}
+
 /**
  * Callers keep `key` and reuse it to retry an uncertain result; a certain failure should get a new key.
  * `null` is for a nonmutating preview POST, which takes no Idempotency-Key.
