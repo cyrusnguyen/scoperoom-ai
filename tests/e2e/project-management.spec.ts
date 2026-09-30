@@ -2,7 +2,7 @@ import type { Client } from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
 import { emptyDraft, parseDraftPair } from "../../src/features/drafts/contracts/scope-document.ts";
-import { adminClient, cleanupUsers, e2eReady, openDatabase, signIn } from "./support";
+import { adminClient, cleanupUsers, e2eReady, openDatabase, signIn, withStatus } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -34,7 +34,7 @@ async function mockOwnerLists(page: Page) {
   await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: { items: [listItem(project.id, project.name, "OWNER"), listItem(other.id, other.name, "OWNER")], truncated: false }, shared: empty, archived: empty, capacity: { entitled: true, activeOwned: 2, maxOwned: 10, canCreate: true } } }));
   await page.route("**/api/invitations", (route) => route.fulfill({ json: empty }));
   await page.route(`**/api/projects/${project.id}/invitations`, (route) => route.fulfill({ json: { invitations: [] } }));
-  await page.route(`**/api/projects/${other.id}/bootstrap`, (route) => route.fulfill({ json: { project: { ...other, status: "ACTIVE", role: "OWNER", ownerId: project.ownerId }, draft } }));
+  await page.route(`**/api/projects/${other.id}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { ...other, status: "ACTIVE", role: "OWNER", ownerId: project.ownerId }, draft }) }));
 }
 
 // A beforeunload listener that calls preventDefault() is what makes the browser ask before leaving.
@@ -65,7 +65,7 @@ test.describe("project details", () => {
     const member = { profileId: "44444444-4444-4444-8444-444444444444", displayName: "Casey Collaborator", role: "VIEWER", version: 1 };
     let removed = false;
     await mockOwnerLists(page);
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { project: { ...project, status: status.status, role: "OWNER" }, draft } }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { ...project, status: status.status, role: "OWNER" }, draft }) }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner, ...(removed ? [] : [{ ...member, designatedApprover: status.designatedApproverId === member.profileId }])] } }));
     await page.route(`**/api/projects/${project.id}/members/${member.profileId}`, async (route) => {
@@ -161,7 +161,7 @@ test.describe("project details", () => {
   test("a non-owner reads the project and its members, with Leave instead of management controls", async ({ page }) => {
     await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: empty, shared: { items: [listItem(project.id, project.name, "VIEWER")], truncated: false }, archived: empty, capacity: { entitled: false, activeOwned: 0, maxOwned: 0, canCreate: false } } }));
     await page.route("**/api/invitations", (route) => route.fulfill({ json: empty }));
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { project: { ...project, status: "ACTIVE", role: "VIEWER" }, draft } }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { ...project, status: "ACTIVE", role: "VIEWER" }, draft }) }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: baseStatus }));
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: baseStatus, members: [owner, { profileId: "44444444-4444-4444-8444-444444444444", displayName: "Management Test", role: "VIEWER", version: 1, designatedApprover: false }] } }));
 
@@ -182,7 +182,7 @@ test.describe("project details", () => {
   test("unsaved Details edits survive panel close, tab changes and history, and a sidebar switch asks first", async ({ page }) => {
     let status = { ...baseStatus };
     await mockOwnerLists(page);
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { project: { ...project, status: "ACTIVE", role: "OWNER" }, draft } }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { ...project, status: "ACTIVE", role: "OWNER" }, draft }) }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner] } }));
     await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
@@ -242,7 +242,7 @@ test.describe("project details", () => {
     const keys: string[] = [];
     const member = { profileId: "44444444-4444-4444-8444-444444444444", displayName: "Casey Collaborator", role: "EDITOR", version: 1, designatedApprover: false };
     await mockOwnerLists(page);
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { project: { ...project, name: savedName, status: "ACTIVE", role: "OWNER" }, draft } }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { ...project, name: savedName, status: "ACTIVE", role: "OWNER" }, draft }) }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner, member] } }));
     await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
@@ -294,7 +294,7 @@ test.describe("project details", () => {
     let release = () => {};
     const held = new Promise<void>((resolve) => { release = resolve; });
     await mockOwnerLists(page);
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { project: { ...project, status: "ACTIVE", role: "OWNER" }, draft } }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { ...project, status: "ACTIVE", role: "OWNER" }, draft }) }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner] } }));
     await page.route(`**/api/projects/${project.id}/settings`, async (route) => {
@@ -321,7 +321,7 @@ test.describe("project details", () => {
   test("an unsaved edit does not linger as dirty after the project is archived", async ({ page }) => {
     let status = { ...baseStatus };
     await mockOwnerLists(page);
-    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { project: { ...project, status: status.status, role: "OWNER" }, draft } }));
+    await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { ...project, status: status.status, role: "OWNER" }, draft }) }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
     await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner] } }));
     await page.route(`**/api/projects/${project.id}/archive`, async (route) => {

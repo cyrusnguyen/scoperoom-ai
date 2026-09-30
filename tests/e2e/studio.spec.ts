@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
-import { appUrl, createProjectViaApi, e2eReady, emptyDraftView, headerSave, saveStudio } from "./support";
+import { appUrl, createProjectViaApi, e2eReady, emptyDraftView, headerSave, saveStudio, withStatus } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -1116,7 +1116,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await page.unrouteAll({ behavior: "ignoreErrors" });
     await page.route("**/api/projects", (route) => route.fulfill({ json: lists(role, status) }));
     await page.route("**/api/invitations", (route) => route.fulfill({ json: { items: [], truncated: false } }));
-    await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: draft(extraFlows) } }));
+    await page.route(`**/api/projects/${projectId}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: draft(extraFlows) }) }));
   }
 
 
@@ -1343,7 +1343,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     const attempts: { key: string; body: string }[] = [];
     const committed = { ...initial, documentRevision: 2, document: { ...initial.document, nodes: { ...initial.document.nodes, [start]: { ...initial.document.nodes[start]!, label: "Saved before change", version: 2 } } } };
     const currentDraft = () => change === "empty" && status === "ARCHIVED" ? { ...emptyDraftView(initial.id), documentRevision: 3 } : committed;
-    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: attempts.length ? currentDraft() : initial } }));
+    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: attempts.length ? currentDraft() : initial }) }));
     await page.route(`**/api/projects/${projectId}/status`, async (route) => route.fulfill({ json: { settingsVersion: 1, approvalPolicyVersion: 1, status } }));
     await page.route(`**/api/projects/${projectId}/members`, async (route) => route.fulfill({ json: { members: [] } }));
     await page.route(`**/api/projects/${projectId}/settings`, async (route) => {
@@ -1387,7 +1387,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     let role = "OWNER";
     let status = "ACTIVE";
     let writes = 0;
-    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: draft() } }));
+    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status, role, ownerId: projectId }, draft: draft() }) }));
     await page.route("**/changes", async (route) => {
       writes++;
       if (change === "role") role = "VIEWER";
@@ -1417,7 +1417,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
   test("a role downgrade removes an already-open Add step form", async ({ page }) => {
     await mock(page, "OWNER");
     let role = "OWNER";
-    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status: "ACTIVE", role, ownerId: projectId }, draft: draft() } }));
+    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status: "ACTIVE", role, ownerId: projectId }, draft: draft() }) }));
     await page.route("**/changes", async (route) => {
       role = "VIEWER";
       await route.fulfill({ status: 403, json: { error: { code: "FORBIDDEN", message: "Access changed" } } });
@@ -1439,7 +1439,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
   test("a role downgrade removes an already-open flow creation form", async ({ page }) => {
     await mock(page, "OWNER");
     let role = "OWNER";
-    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: { project: { id: projectId, name: "Intake project", status: "ACTIVE", role, ownerId: projectId }, draft: draft() } }));
+    await page.route(`**/api/projects/${projectId}/bootstrap`, async (route) => route.fulfill({ json: withStatus({ project: { id: projectId, name: "Intake project", status: "ACTIVE", role, ownerId: projectId }, draft: draft() }) }));
     await page.route("**/changes", async (route) => {
       role = "VIEWER";
       await route.fulfill({ status: 403, json: { error: { code: "FORBIDDEN", message: "Access changed" } } });

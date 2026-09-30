@@ -10,12 +10,13 @@ import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import { GraphError } from "@/features/drafts/domain/graph";
 import { projectErrors } from "@/features/projects/contracts/errors";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
+import { useSyncReader } from "@/features/collaboration/ui/sync-context";
 import { follow } from "./buffers";
 import {
   acknowledged, addDrop, discardOutbox, enqueue, keepTheirs as keepTheirsChange, optimistic, pendingCount, rebase, redo as redoChange, replay, startSave, undo as undoChange,
   wireBody, withEntries, type ConflictTarget, type Outbox, type Placement, type Sending,
 } from "./outbox";
-import { advanceOnRead, afterDraftRead, AUTOSAVE_MS, covers, requireDraftRevision, type SaveState, type StudioUi } from "./studio-ui";
+import { advanceOnRead, afterDraftRead, AUTOSAVE_MS, covers, requireDraftRevision, stranded, type SaveState, type StudioUi } from "./studio-ui";
 
 export type Outcome<T> =
   | { ok: true; result: T }
@@ -52,7 +53,7 @@ type Studio = {
   undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean;
   place: (command: ArrangeFlow, key?: string) => Promise<Outcome<PositionResult>>;
   preview: (request: ArrangementRequest) => Promise<Outcome<ArrangementPreview>>;
-  reload: () => Promise<DraftView | null>;
+  reload: (fence?: () => boolean) => Promise<DraftView | null>;
   /** The canvas reports a pointer drag in progress, so autosave never sends mid-drag. */
   dragActive: (active: boolean) => void;
   /** Opens the right panel on its Details tab (the Inspect toggle). */
@@ -92,7 +93,8 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   // Another instance may still own the request after browser history remounts this keyed provider.
   const busy = Boolean(request);
   const draftId = savedDraft.id;
-  const editable = !archived && (role === "OWNER" || role === "EDITOR");
+  // Unsent work on a replaced draft is never retargeted: the draft is read-only and the work waits in copy/discard recovery.
+  const editable = !archived && (role === "OWNER" || role === "EDITOR") && !stranded(outbox, draftId);
 
   // Synchronous copies, so actions in one event (a shape's step and its drop point) and async saves see every change
   // already made; each render catches them up with the store, which also changes from outside (discard, remounts).
@@ -126,9 +128,10 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     if (next !== before) change((current) => (current === before ? next : advanceOnRead(current, savedDraft, floor)));
   }, [savedDraft, floor, pending, idle, change]);
 
-  const reload = useCallback(async (): Promise<DraftView | null> => {
+  // `fence` (polling only) drops a response the sync controller has since replaced, right before anything is adopted.
+  const reload = useCallback(async (fence?: () => boolean): Promise<DraftView | null> => {
     const result = await apiRead<DraftView>(`/api/projects/${projectId}/drafts/${draftId}`);
-    if (sessionEnded(result)) return null;
+    if (sessionEnded(result) || (fence && !fence())) return null;
     if (!result.ok) {
       update(() => ({ refreshFailed: true }));
       if (result.status === 404) onAccessChanged();
@@ -140,6 +143,8 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     if (!covers(result.data, floorRef.current)) update(() => ({ refreshFailed: true }));
     return null;
   }, [projectId, draftId, adopt, onAccessChanged, update]);
+
+  useSyncReader(reload); // polling adopts through this same gated read
 
   const run = useCallback(async (command: GraphCommand): Promise<RunOutcome> => {
     if (!editable) return readOnly;

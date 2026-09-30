@@ -4,6 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransitio
 import { useParams, useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
 import { apiRead, sessionEnded } from "@/client/api";
+import type { Live } from "@/features/collaboration/ui/project-sync";
+import { SyncProvider } from "@/features/collaboration/ui/sync-context";
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { MyInvitation } from "@/features/projects/contracts/invitation";
 import type { CreatedProject, ProjectBootstrap, ProjectLists } from "@/features/projects/contracts/project";
@@ -93,9 +95,11 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     setListsState("ready");
   }, []);
 
-  const loadProject = useCallback(async (id: string, signal?: AbortSignal) => {
+  // `fence` (the sync controller) drops a response its generation has since replaced, and is the only caller allowed to
+  // install a different draft than the one shown: a replaced draft. Any other read of another draft is a stale one.
+  const loadProject = useCallback(async (id: string, signal?: AbortSignal, fence?: () => boolean) => {
     const result = await apiRead<ProjectBootstrap>(`/api/projects/${id}/bootstrap`, signal);
-    if (signal?.aborted || sessionEnded(result)) return;
+    if (signal?.aborted || sessionEnded(result) || (fence && !fence())) return;
     // An unsignaled caller (Retry, projectChanged) can resolve after the user opened a different project.
     if (id !== projectIdRef.current) return;
     if (result.ok) {
@@ -104,7 +108,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
       // unless it covers it.
       const previous = openedRef.current;
       const shown = previous?.projectId === id ? previous.bootstrap?.draft : undefined;
-      const admitted = !shown || admits(uiFor(latestStore.current, id), shown, result.data.draft);
+      const admitted = !shown || (fence && shown.id !== result.data.draft.id) || admits(uiFor(latestStore.current, id), shown, result.data.draft);
       install({ projectId: id, bootstrap: admitted ? result.data : { ...result.data, draft: shown } });
       if (admitted) setStore((current) => updateUi(current, id, (ui) => afterDraftRead(ui, result.data.draft)));
     }
@@ -119,6 +123,12 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     install({ ...previous, bootstrap: { ...previous.bootstrap, draft: view } });
     return true;
   }, [install]);
+  // What the sync controller compares each status with: the role, lifecycle and draft adopted right now.
+  const liveOf = useCallback((id: string): Live | null => {
+    const shown = openedRef.current;
+    const adopted = shown?.projectId === id ? shown.bootstrap : undefined;
+    return adopted ? { role: adopted.project.role, status: adopted.project.status, draftId: adopted.draft.id, documentRevision: adopted.draft.documentRevision, layoutRevision: adopted.draft.layoutRevision } : null;
+  }, []);
   const updateStudio = useCallback((change: (ui: StudioUi) => Partial<StudioUi>) => {
     if (projectId) setStore((previous) => updateUi(previous, projectId, change));
   }, [projectId]);
@@ -278,10 +288,12 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
             onInviteSettled={(text, error) => { notify(text, error); void loadLists(); }} />
         </div>
         {projectId && bootstrap
-          ? <StudioProvider key={projectId} projectId={projectId} draft={bootstrap.draft} role={bootstrap.project.role} archived={bootstrap.project.status === "ARCHIVED"}
+          ? <SyncProvider key={projectId} projectId={projectId} initial={bootstrap.status} live={() => liveOf(projectId)} bootstrap={(fence) => loadProject(projectId, undefined, fence)}>
+            <StudioProvider key={projectId} projectId={projectId} draft={bootstrap.draft} role={bootstrap.project.role} archived={bootstrap.project.status === "ARCHIVED"}
               narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={projectChanged} onInspect={() => setPanel(true)} saveRef={saveChangesRef}>
               {main}{panel}
             </StudioProvider>
+          </SyncProvider>
           : <>{main}{panel}</>}
       </>}
     </div>

@@ -12,7 +12,7 @@ import { currentFlow, recordOf } from "./graph-view";
 import { AddStepDialog, ConnectDialog, DeleteStepsDialog } from "./step-dialogs";
 import { compareOutbox, describeAll, optimistic } from "./outbox";
 import { ReadRecovery, staleCodes, useStudio } from "./studio-context";
-import { canApplyAgain, studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
+import { canApplyAgain, stranded, studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
 
 type StudioDialog = "add" | "connect" | "delete" | "arrange" | null;
 
@@ -141,7 +141,7 @@ function SaveNote() {
     <span className="view-actions"><button type="button" className="button primary small" onClick={() => void saveChanges()} disabled={busy}>Retry</button></span>
   </div>;
   if (!editable && unsaved) return <div className="save-note" role="alert">
-    <span>This draft is read-only now, so your unsaved changes can’t be saved. They’re listed here for copying:</span>
+    <span>{stranded(ui.outbox, savedDraft.id) ? "This project’s draft was replaced, so your unsaved changes can’t be saved to it. They’re listed here for copying:" : "This draft is read-only now, so your unsaved changes can’t be saved. They’re listed here for copying:"}</span>
     {list(describeAll(ui.outbox, optimistic(ui.outbox, savedDraft, ui.acknowledgedRevisions[savedDraft.id]).document))}
     <span className="view-actions"><button type="button" className="button quiet small" onClick={discardChanges} disabled={busy}>Discard my changes</button></span>
   </div>;

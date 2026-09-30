@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState, type SubmitEvent } from "react";
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
+import { useSync } from "@/features/collaboration/ui/sync-context";
 import { MAX_COLLABORATORS, projectMemberRoles, type ProjectMemberRole } from "../contracts/invitation";
-import type { ProjectAccessRole, ProjectBootstrap, ProjectStatusView } from "../contracts/project";
+import type { ProjectAccessRole, ProjectBootstrap } from "../contracts/project";
 import { roleLabel } from "./format";
 import ProjectShare from "./project-share";
 
@@ -27,7 +28,7 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
   const owner = project.role === "OWNER";
   const active = project.status === "ACTIVE";
   const manage = owner && active;
-  const [status, setStatus] = useState<ProjectStatusView | null>(null);
+  const sync = useSync();
   const [members, setMembers] = useState<Member[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [message, setMessage] = useState("");
@@ -49,26 +50,26 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
     if (!active || active === document.body) element.focus();
   });
 
+  // Versions come from the shared status (one controller per project); the members list stays this tab's own read.
+  // Both are fenced: an answer that the controller has since replaced (project switch, replaced draft) changes nothing.
+  const { status: shared, revalidate, fence } = sync;
+  const membershipVersion = shared.membershipVersion;
   const load = useCallback(async (signal?: AbortSignal) => {
-    const [nextStatus, nextMembers] = await Promise.all([
-      apiRead<ProjectStatusView>(`/api/projects/${project.id}/status`, signal),
-      apiRead<{ members: Member[] }>(`/api/projects/${project.id}/members`, signal),
-    ]);
-    if (signal?.aborted) return false;
-    if (sessionEnded(nextStatus) || sessionEnded(nextMembers)) return false;
-    const failed = !nextStatus.ok ? nextStatus.message : !nextMembers.ok ? nextMembers.message : null;
-    if (failed !== null || !nextStatus.ok || !nextMembers.ok) { setStatus(null); setMembers(null); setLoadError(failed ?? ""); return false; }
-    setStatus(nextStatus.data);
+    const current = fence();
+    const [authority, nextMembers] = await Promise.all([revalidate("manual"), apiRead<{ members: Member[] }>(`/api/projects/${project.id}/members`, signal)]);
+    if (signal?.aborted || !current()) return false;
+    if (sessionEnded(nextMembers)) return false;
+    if (authority.kind !== "current" || !nextMembers.ok) { setMembers(null); setLoadError(nextMembers.ok ? "ScopeRoom is unavailable right now. Try again." : nextMembers.message); return false; }
     setMembers(nextMembers.data.members);
     setLoadError("");
     return true;
-  }, [project.id]);
+  }, [project.id, revalidate, fence]);
 
   useEffect(() => {
     const controller = new AbortController();
     const timer = window.setTimeout(() => { void load(controller.signal); }, 0);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [load, project.status]); // an archive or restore reloads the versions this tab writes with
+  }, [load, project.status, membershipVersion]); // an archive, restore or membership change reloads the versions this tab writes with
 
   const mutate = async (mutation: Mutation, key = crypto.randomUUID()) => {
     focusAfter.current = mutation.focus;
@@ -115,6 +116,8 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
   };
 
   const name = drafts.name ?? project.name;
+  // A failed read disables the forms, as before: their versions would be a guess.
+  const status = loadError ? null : shared;
   const savedApprover = status?.designatedApproverId ?? "";
   const approver = drafts.approver ?? savedApprover;
   const ownerName = members?.find((member) => member.role === "OWNER")?.displayName;

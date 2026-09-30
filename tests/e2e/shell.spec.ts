@@ -1,7 +1,7 @@
 import type { Client } from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
-import { adminClient, cleanupUsers, e2eReady, emptyDraftView, openDatabase, signIn } from "./support";
+import { adminClient, cleanupUsers, e2eReady, emptyDraftView, openDatabase, signIn, withStatus } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -19,7 +19,7 @@ const defaultLists = {
 const noInvites = { items: [], truncated: false };
 const envelope = (code: string, message: string) => ({ error: { code, message, requestId: "00000000-0000-4000-8000-000000000000", retryable: false } });
 function bootstrap(id: string, name: string, role = "OWNER") {
-  return { project: { id, name, status: "ACTIVE", role, ownerId: ids.alpha }, draft: emptyDraftView() };
+  return withStatus({ project: { id, name, status: "ACTIVE", role, ownerId: ids.alpha }, draft: emptyDraftView() });
 }
 
 async function mockShell(page: Page, lists: unknown = defaultLists, invitations: unknown = noInvites) {
