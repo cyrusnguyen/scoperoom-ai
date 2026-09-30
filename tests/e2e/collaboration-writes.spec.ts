@@ -48,7 +48,8 @@ async function controlStatus(page: Page, projectId: string) {
     held: () => held.length,
     /** Lets the paused reads reach the real server (or answers them with an error). */
     async release(answer?: number) {
-      mode = "pass";
+      // A denial or failure keeps answering: a blur or focus arriving meanwhile makes the controller ask again, and that read must fail too.
+      mode = answer ? { fail: answer } : "pass";
       for (const route of held.splice(0)) {
         if (answer) await route.fulfill({ status: answer, json: envelope(answer === 503 ? "UNAVAILABLE" : answer === 404 ? "NOT_FOUND" : "FORBIDDEN", "No.", answer === 503) });
         else await route.continue();
@@ -127,6 +128,7 @@ test.describe("writes wait for the status controller (real draft)", () => {
     expect(writes).toHaveLength(0);
     // The person's change is still there; the next Save (status healthy again) sends it.
     await expect(status(page)).toContainText("Unsaved changes");
+    gate.pass();
     await headerSave(page).click();
     await expect(status(page)).toContainText("All changes saved");
     expect(writes).toHaveLength(1);
@@ -267,10 +269,38 @@ test.describe("writes wait for the status controller (real draft)", () => {
       await route.fulfill({ response: real, json: { ...(await real.json() as object), viewerId: "00000000-0000-4000-8000-000000000001" } });
     });
     await focusWindow(page);
+    await expect.poll(() => seen.length).toBe(1);
     await expect(page).toHaveURL(/\/app$/);
-    expect(seen).toHaveLength(1);
     expect(seen[0]).toContain("Your account changed");
     for (const gone of ["Writes project", "Unsaved changes", "Start", "Pay"]) expect(seen[0], gone).not.toContain(gone);
+    expect(writes).toHaveLength(0);
+  });
+
+  test("blur invalidates: autosave in a visible but unfocused window meets another account and sends nothing", async ({ page }) => {
+    await page.clock.install();
+    await open(page);
+    await connect(page, ids.payId, ids.shipId);
+    await expect(status(page)).toContainText("Unsaved changes");
+    const seen: string[] = [];
+    await page.exposeFunction("captureAtTeardown", (text: string) => { seen.push(text); });
+    await page.evaluate(() => {
+      window.addEventListener("scoperoom:session-ended", () => { void (window as unknown as { captureAtTeardown: (text: string) => Promise<void> }).captureAtTeardown(document.body.innerText); });
+    });
+    // Another window of this browser signs in as someone else: from here on /status answers for that account, once released.
+    const held: Route[] = [];
+    await page.route(`**/api/projects/${projectId}/status`, (route) => { held.push(route); });
+    await page.evaluate(() => { window.dispatchEvent(new Event("blur")); });
+    await page.clock.runFor(10_000); // autosave ticks; the write must wait for a status read
+    await expect.poll(() => held.length).toBeGreaterThan(0);
+    await quiet(page);
+    expect(writes).toHaveLength(0);
+    for (const route of held.splice(0)) {
+      const real = await route.fetch();
+      await route.fulfill({ response: real, json: { ...(await real.json() as object), viewerId: "00000000-0000-4000-8000-000000000001" } });
+    }
+    await expect.poll(() => seen.length).toBe(1);
+    await expect(page).toHaveURL(/\/app$/);
+    expect(seen[0]).toContain("Your account changed");
     expect(writes).toHaveLength(0);
   });
 

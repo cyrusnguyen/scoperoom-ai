@@ -3,8 +3,8 @@ import type { ProjectStatusView } from "../../projects/contracts/project.ts";
 // One status controller per visible project (Stage 04.2). Pure: every effect it has on the world comes through the
 // injected seams below, so a fake clock and fake visibility can drive it in node tests. 04.3 adds "hint" | "subscribed".
 export type ReconcileReason = "poll" | "focus" | "reconnect" | "before-save" | "mutation" | "manual";
-/** What the window reports: a return (focus, reconnect) revalidates; going hidden only invalidates, since polling is paused there. */
-export type VisibilityEvent = ReconcileReason | "hidden";
+/** What the window reports: a return (focus, reconnect) revalidates; going hidden or blurred only invalidates: polling is paused or a sign-in in another window may follow, and the next write revalidates. */
+export type VisibilityEvent = ReconcileReason | "hidden" | "blur";
 export type AuthorityResult = { kind: "current"; generation: number; status: ProjectStatusView } | { kind: "unavailable" } | { kind: "denied" };
 export type StatusRead = { ok: true; data: ProjectStatusView } | { ok: false; status: number };
 /** What the shell has adopted right now: the status is compared with this, so an own save's read costs no extra read. */
@@ -84,7 +84,7 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
     const read = await o.fetchStatus().catch((): StatusRead => ({ ok: false, status: 0 }));
     if (!fenceFor(at)()) return unavailable; // a late response after dispose or a newer generation adopts nothing
     if (!read.ok) {
-      if (read.status === 401) { stopped = true; return unavailable; } // the client already navigated to sign-in
+      if (read.status === 401) { stopped = true; generation++; return unavailable; } // the client already navigated to sign-in
       failures++; invalid = true;
       const denied = read.status === 403 || read.status === 404;
       publish(); schedule();
@@ -92,7 +92,7 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
       if (denied) await o.bootstrap(fenceFor(at)).catch(() => undefined);
       return denied ? { kind: "denied" } : unavailable;
     }
-    if (read.data.viewerId !== o.initial.viewerId) { stopped = true; o.accountChanged(); return unavailable; }
+    if (read.data.viewerId !== o.initial.viewerId) { stopped = true; generation++; o.accountChanged(); return unavailable; }
     failures = 0; last = read.data; publish();
     const live = o.live(), next = live ? plan(live, read.data) : "none";
     if (next === "replace") at = ++generation; // the draft changed: nothing from the old one may land any more
@@ -131,8 +131,9 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
       // Leaving and returning may have changed access: writes wait for a request that starts after the event. Focus and
       // visibilitychange fire together, so an event-started request that has seen every invalidation covers this one too.
       unlisten = o.visibility.listen((reason) => {
-        // Background autosave keeps running while polling is paused: whatever was true before the tab hid is no longer proven.
-        if (reason === "hidden") { invalidate(); return; }
+        // Background autosave keeps running while polling is paused, and another window can sign in as someone else: what was
+        // true before this window hid or lost focus is no longer proven.
+        if (reason === "hidden" || reason === "blur") { invalidate(); return; }
         if (running && runSeen === invalidations && runReason !== "poll") return;
         invalidate(); void revalidate(reason);
       });

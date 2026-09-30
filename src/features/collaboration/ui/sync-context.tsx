@@ -9,12 +9,14 @@ import { createProjectSync, type AuthorityResult, type Live, type ReconcileReaso
 const visibility: SyncOptions["visibility"] = {
   hidden: () => document.visibilityState === "hidden",
   listen: (on) => {
-    const focus = () => on("focus"), online = () => on("reconnect"), shown = () => on(document.visibilityState === "visible" ? "focus" : "hidden");
+    const focus = () => on("focus"), blur = () => on("blur"), online = () => on("reconnect"), shown = () => on(document.visibilityState === "visible" ? "focus" : "hidden");
     window.addEventListener("focus", focus);
+    window.addEventListener("blur", blur);
     window.addEventListener("online", online);
     document.addEventListener("visibilitychange", shown);
     return () => {
       window.removeEventListener("focus", focus);
+      window.removeEventListener("blur", blur);
       window.removeEventListener("online", online);
       document.removeEventListener("visibilitychange", shown);
     };

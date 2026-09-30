@@ -424,6 +424,34 @@ test("going hidden invalidates without a request; a background write then revali
   t.sync.dispose(); t2.sync.dispose();
 });
 
+test("blur invalidates without a request; the next write revalidates", async () => {
+  const t = rig();
+  t.sync.start();
+  fire(t, "blur");
+  await settle();
+  assert.equal(t.pending.length, 0);
+  const write = t.sync.beforeWrite();
+  await settle();
+  assert.equal(t.pending.length, 1, "the write waits for a status read");
+  await t.answer(ok(status()));
+  assert.equal((await write).kind, "current");
+  t.sync.dispose();
+});
+
+test("a stopped controller fences an authority result that had already resolved", async () => {
+  const t = rig();
+  t.sync.start();
+  const write = t.sync.beforeWrite();
+  const admitted = await write;
+  assert.equal(admitted.kind, "current");
+  const stillCurrent = t.sync.fence(admitted.kind === "current" ? admitted.generation : 0);
+  assert.equal(stillCurrent(), true);
+  await t.advance(10_000);
+  await t.answer(ok(status({ viewerId: "someone-else" })));
+  assert.equal(stillCurrent(), false, "account change bumps the generation");
+  t.sync.dispose();
+});
+
 test("a status for another account is an account change: the controller stops, nothing is adopted, the shell is told once", async () => {
   const t = rig();
   t.sync.start();
