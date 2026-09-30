@@ -20,7 +20,7 @@ function readConfig(env: Record<string, string | undefined>): Config | null {
   if (!key) return null;
   if (alg === "HS256") return key.length >= 32 && !key.includes("-----BEGIN") ? { alg, key } : null;
   if (alg !== "ES256" || !kid) return null;
-  const pem = key.replaceAll("\n", "\n"); // deployment secret stores often flatten newlines
+  const pem = key.replaceAll("\\n", "\n"); // deployment secret stores often flatten newlines
   try {
     const parsed = createPrivateKey(pem);
     return parsed.asymmetricKeyType === "ec" && parsed.asymmetricKeyDetails?.namedCurve === "prime256v1" ? { alg, key: pem, kid } : null;

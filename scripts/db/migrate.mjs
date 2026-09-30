@@ -6,7 +6,7 @@ import { historyProblem } from "./history.mjs";
 function run(command, args, { cleanup } = {}) {
   const result = spawnSync(command, args, { stdio: "inherit", env: process.env, shell: process.platform === "win32" && command.endsWith(".cmd") });
   if (result.status === 0) return;
-  if (cleanup) spawnSync(process.execPath, cleanup, { stdio: "inherit", env: process.env });
+  if (cleanup && spawnSync(process.execPath, cleanup, { stdio: "inherit", env: process.env }).status !== 0) console.error("Cleanup after the failed step also failed; run node scripts/db/realtime.mjs release.");
   process.exit(result.status ?? 1);
 }
 

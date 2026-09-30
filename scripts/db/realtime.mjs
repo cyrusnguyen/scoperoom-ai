@@ -237,8 +237,8 @@ async function transferOwner(client, signature, owner) {
 }
 
 async function apply(client) {
-  if (!(await client.query(`select to_regprocedure('${HELPER}') as fn, to_regprocedure('${ADAPTER}') as adapter, to_regprocedure('${TRIGGER_FN}') as trigger`)).rows.every((row) => row.fn && row.adapter && row.trigger)) throw new Error("Realtime setup needs the private Realtime migration applied first.");
   await release(client); // the migration is done: the reader is no longer lent to app_migrator
+  if (!(await client.query(`select to_regprocedure('${HELPER}') as fn, to_regprocedure('${ADAPTER}') as adapter, to_regprocedure('${TRIGGER_FN}') as trigger`)).rows.every((row) => row.fn && row.adapter && row.trigger)) throw new Error("Realtime setup needs the private Realtime migration applied first.");
   await requireProviderTable(client);
   providerSql(`GRANT USAGE ON SCHEMA realtime TO ${CLIENT}; GRANT SELECT, INSERT ON realtime.messages TO ${CLIENT}; GRANT USAGE ON SCHEMA auth TO ${READER}; GRANT EXECUTE ON FUNCTION auth.uid(), auth.jwt() TO ${READER}; GRANT USAGE ON SCHEMA realtime TO ${NOTIFIER}; GRANT EXECUTE ON FUNCTION realtime.send(jsonb, text, text, boolean) TO ${NOTIFIER}; GRANT INSERT ON realtime.messages TO ${NOTIFIER};`);
   await client.query(`

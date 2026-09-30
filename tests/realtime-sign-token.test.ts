@@ -45,6 +45,15 @@ test("an ES256 token carries the kid and a 64-byte P1363 signature that verifies
   assert.equal(verify("sha256", Buffer.from(`${header}.${payload}`), { key: ec.publicKey, dsaEncoding: "ieee-p1363" }, tampered), false);
 });
 
+test("an ES256 key whose newlines were flattened to literal backslash-n still signs and verifies", () => {
+  const flattened = pem.trim().split("\n").join(String.fromCharCode(92) + "n");
+  assert.ok(!flattened.includes("\n") && flattened.includes(String.fromCharCode(92) + "n"));
+  const result = signRealtimeToken(scope, { env: { ...es256, SCOPEROOM_REALTIME_SIGNING_KEY: flattened } });
+  assert.ok(result.ok);
+  const [header, payload, signature] = result.token.split(".") as [string, string, string];
+  assert.equal(verify("sha256", Buffer.from(`${header}.${payload}`), { key: ec.publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(signature, "base64url")), true);
+});
+
 test("missing, invalid or mismatched configuration fails closed and never falls back", () => {
   const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }).toString();
   const p384 = generateKeyPairSync("ec", { namedCurve: "P-384" }).privateKey.export({ type: "pkcs8", format: "pem" }).toString();

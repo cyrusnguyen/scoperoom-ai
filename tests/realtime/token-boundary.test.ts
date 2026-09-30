@@ -12,6 +12,7 @@ import { RECEIVE_TIMEOUT_MS, SILENCE_MS, withRealtimeFixture, type Realtime } fr
 // configuration, joined over real sockets and thrown at the Auth, Data API and Storage surfaces. Every denial is paired with a positive
 // control on the same channel or endpoint, so an outage cannot masquerade as a boundary.
 const DENIED = /Unauthorized|permissions/i;
+const REJECTED = /invalid|jwt|unauthori[sz]ed|expired|permissions/i; // the server's refusal of a bad credential; a bare timeout must not pass
 const CLIENT = "app_realtime_client";
 
 function mint(scope: RealtimeScope, now?: number) {
@@ -108,11 +109,11 @@ test("the scoped credential joins, sends and receives exactly what its member sc
     }
 
     // Expired and tampered credentials are refused although a fresh one for the same scope just joined this channel.
-    await assert.rejects(rt.join(await withToken(rt, mint(ownerScope!, Date.now() - 400_000)), topics.collab), Error, "expired");
+    await assert.rejects(rt.join(await withToken(rt, mint(ownerScope!, Date.now() - 400_000)), topics.collab), REJECTED, "expired");
     const [header, payload, signature] = mint(strangerScope!).split(".") as [string, string, string];
     const forged = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(payload, "base64url").toString()), profile_id: ownerScope!.profileId })).toString("base64url");
-    await assert.rejects(rt.join(await withToken(rt, `${header}.${forged}.${signature}`), topics.collab), Error, "tampered claims");
-    await assert.rejects(rt.join(await withToken(rt, `${header}.${payload}.${signature.slice(0, -2)}AA`), topics.collab), Error, "tampered signature");
+    await assert.rejects(rt.join(await withToken(rt, `${header}.${forged}.${signature}`), topics.collab), REJECTED, "tampered claims");
+    await assert.rejects(rt.join(await withToken(rt, `${header}.${payload}.${signature.slice(0, -2)}AA`), topics.collab), REJECTED, "tampered signature");
     assert.deepEqual((await broadcast(rt, ownerCollab, [editorCollab], true)).delivered, [true], "the channel still works for the valid scope");
   });
 });
@@ -164,18 +165,27 @@ test("the scoped credential reaches no Auth account, Data API or Storage operati
     const control = await call(accessToken, "/auth/v1/user");
     assert.equal(control.status, 200);
     assert.match(control.text, new RegExp(owner.authUserId));
-    const attempts: [string, string, { method?: string; body?: unknown }?][] = [
-      ["GET user", "/auth/v1/user"],
-      ["PUT password", "/auth/v1/user", { method: "PUT", body: { password: `Changed-${randomUUID()}-Pass!` } }],
-      ["PUT email", "/auth/v1/user", { method: "PUT", body: { email: `changed-${randomUUID()}@example.test` } }],
-      ["POST factors", "/auth/v1/factors", { method: "POST", body: { factor_type: "totp", friendly_name: "boundary" } }],
-      ["GET admin users", "/auth/v1/admin/users"],
-      ["GET Data API", "/rest/v1/"],
-      ["GET Storage buckets", "/storage/v1/bucket"],
+    // Auth refuses the subject-less token itself (MFA enrollment is disabled locally, so a bare 4xx on /factors would prove nothing): pin the observed codes.
+    const attempts: [string, string, { method?: string; body?: unknown }, string][] = [
+      ["GET user", "/auth/v1/user", {}, "bad_jwt"],
+      ["PUT password", "/auth/v1/user", { method: "PUT", body: { password: `Changed-${randomUUID()}-Pass!` } }, "bad_jwt"],
+      ["PUT email", "/auth/v1/user", { method: "PUT", body: { email: `changed-${randomUUID()}@example.test` } }, "bad_jwt"],
+      ["POST factors", "/auth/v1/factors", { method: "POST", body: { factor_type: "totp", friendly_name: "boundary" } }, "bad_jwt"],
+      ["GET admin users", "/auth/v1/admin/users", {}, "not_admin"],
     ];
-    for (const [label, path, init] of attempts) {
+    for (const [label, path, init, code] of attempts) {
       const result = await call(scoped, path, init);
+      assert.equal(result.status, 403, `${label} status`);
+      assert.equal(JSON.parse(result.text).error_code, code, `${label} error_code`);
+      assert.ok(!result.text.includes(owner.verifiedEmail) && !result.text.includes(owner.authUserId), `${label} exposed the account`);
+    }
+    // Data API and Storage: the ordinary token reaches the service (no 5xx) and is answered differently, so the scoped refusal is not an outage.
+    for (const [label, path] of [["Data API", "/rest/v1/"], ["Storage buckets", "/storage/v1/bucket"]] as const) {
+      const ordinary = await call(accessToken, path);
+      const result = await call(scoped, path);
+      assert.ok(ordinary.status < 500, `${label} control is reachable (status ${ordinary.status})`);
       assert.ok(result.status >= 400 && result.status < 500, `${label} was refused (status ${result.status})`);
+      assert.ok(result.status !== ordinary.status || result.text !== ordinary.text, `${label} answers the scoped token differently from an ordinary one`);
       assert.ok(!result.text.includes(owner.verifiedEmail) && !result.text.includes(owner.authUserId), `${label} exposed the account`);
     }
     // The refused password/email writes changed nothing: the ordinary token still reads the original account.
