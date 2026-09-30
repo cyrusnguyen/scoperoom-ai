@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { accountChanged, apiRead, sessionEnded } from "@/client/api";
 import type { ProjectStatusView } from "@/features/projects/contracts/project";
 import { createProjectSync, type AuthorityResult, type Live, type ReconcileReason, type SyncOptions, type SyncState } from "./project-sync";
@@ -80,6 +80,9 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
     publish: setState,
   }));
   useEffect(() => { sync.start(); return () => sync.dispose(); }, [sync]);
+  // A bootstrap installed outside the controller (Restore, Details, Retry) can be newer than its last read: prove authority again before the next write.
+  const installed = useRef(initial);
+  useEffect(() => { if (installed.current !== initial) { installed.current = initial; sync.invalidate(); } }, [initial, sync]);
   const setReader = useMemo(() => (read: Reader) => { Object.assign(bridge, { reader: read }); return () => { if (bridge.reader === read) Object.assign(bridge, { reader: null }); }; }, [bridge]);
   const value = useMemo<Sync>(() => ({ ...state, revalidate: sync.revalidate, beforeWrite: sync.beforeWrite, invalidate: sync.invalidate, fence: sync.fence, setReader }), [state, sync, setReader]);
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect } from "@playwright/test";
 import { test } from "./studio-fixtures";
-import { appUrl, createProjectViaApi, e2eReady, seedStudioChanges } from "./support";
+import { appUrl, createProjectViaApi, e2eReady, headerSave, seedStudioChanges } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -72,4 +72,35 @@ test("a transient bootstrap failure in the background keeps the Studio mounted a
   await recovered;
   await expect(page.getByRole("button", { name: "Restore…" })).toBeVisible();
   await expect(toolbar).toBeVisible();
+});
+
+// A bootstrap installed outside the controller (here the banner's Restore) must not leave the archived status as write authority.
+test("a project restored in place saves its first edit before any poll runs", async ({ page }) => {
+  test.setTimeout(90_000);
+  const projectId = await createProjectViaApi(page, "Restored in place");
+  const [flowId, nodeId] = [randomUUID(), randomUUID()];
+  await seedStudioChanges(page, projectId, [
+    { command: "CREATE_FLOW", payload: { title: "Restored", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" }, proposedIds: [flowId] },
+    { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Pay", description: "", actorLabel: "" }, proposedIds: [nodeId] },
+  ]);
+  const status = await (await page.request.get(`/api/projects/${projectId}/status`)).json() as { version: number };
+  const archived = await page.request.post(`/api/projects/${projectId}/archive`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedProjectVersion: status.version, reason: "Finished" } });
+  expect(archived.status()).toBe(200);
+  const writes: string[] = [];
+  page.on("request", (request) => { if (request.method() === "POST" && /\/changes$/.test(request.url())) writes.push(request.url()); });
+  await page.clock.install();
+  await page.goto(`/app/projects/${projectId}`);
+  await expect(page.getByRole("button", { name: "Restore…" })).toBeVisible();
+  await page.clock.pauseAt(new Date(Date.now() + 2_000)); // from here no poll can run: the archived status is all the controller has read
+  await page.getByRole("button", { name: "Restore…" }).click();
+  await page.clock.runFor(10); // the dialog reads its preview from a 0 ms timer
+  await page.getByRole("dialog", { name: "Restore Restored in place?" }).getByRole("button", { name: "Restore", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Restore…" })).toHaveCount(0);
+  const step = page.locator(`.react-flow__node[data-id="${nodeId}"]`);
+  await step.locator(".step-label").dblclick();
+  await step.getByRole("textbox", { name: "Step name" }).fill("Renamed");
+  await page.keyboard.press("Enter");
+  await headerSave(page).click();
+  await expect(page.locator(".studio-status")).toContainText("All changes saved");
+  expect(writes).toHaveLength(1);
 });
