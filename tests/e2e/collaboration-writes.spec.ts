@@ -193,6 +193,25 @@ test.describe("writes wait for the status controller (real draft)", () => {
     expect(writes).toEqual([`/api/projects/${projectId}/drafts/${(await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string } }).draft.id}/positions`]);
   });
 
+  test("Arrange Apply after a denied status says it is checking access, keeps the preview and applies once access is confirmed", async ({ page }) => {
+    await open(page);
+    await page.locator(".studio-toolbar").getByRole("button", { name: "Arrange" }).click();
+    const arrange = dialog(page, "Arrange flow");
+    await arrange.getByRole("button", { name: "Preview" }).click();
+    await expect(arrange.getByRole("button", { name: "Apply arrangement" })).toBeVisible();
+    await pauseAfterFocus(page);
+    await arrange.getByRole("button", { name: "Apply arrangement" }).click();
+    await gate.release(403);
+    await expect(arrange.getByRole("status").filter({ hasText: "Checking your access…" })).toBeVisible();
+    await expect(arrange.getByRole("alert")).toHaveCount(0);
+    await expect(arrange.getByRole("button", { name: "Apply arrangement" })).toBeVisible(); // the preview is kept
+    expect(writes).toHaveLength(0);
+    gate.pass();
+    await arrange.getByRole("button", { name: "Apply arrangement" }).click();
+    await expect(arrange).toBeHidden();
+    expect(writes).toHaveLength(1);
+  });
+
   test("Arrange Apply is refused without a request when status is unavailable", async ({ page }) => {
     await open(page);
     await page.locator(".studio-toolbar").getByRole("button", { name: "Arrange" }).click();

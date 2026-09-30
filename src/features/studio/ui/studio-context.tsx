@@ -323,7 +323,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     update(() => ({ request: key }));
     try {
       const { blocked, stillCurrent } = await admit(true, draftId);
-      if (blocked) return { ok: false, code: blocked.code === "DENIED" ? "FORBIDDEN" : blocked.code, message: blocked.message, uncertain: false };
+      if (blocked) return { ok: false, code: blocked.code, message: blocked.message, uncertain: false };
       if (!stillCurrent()) return { ok: false, code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message, uncertain: false };
       const result = await apiMutate<PositionResult>(`/api/projects/${projectId}/drafts/${draftId}/positions`, key, command);
       if (sessionEnded(result)) return { ok: false, code: "UNAUTHENTICATED", message: "", uncertain: false };

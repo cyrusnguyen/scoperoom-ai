@@ -221,6 +221,58 @@ test.describe("shell actions", () => {
     expect(sent).toEqual([]);
   });
 
+  test("a dialog opened after the account changed still compares with the account the page opened with", async ({ page }) => {
+    await signIn(page, admin, users, "Actions Test");
+    const sent: string[] = [];
+    await page.route("**/api/projects", (route) => route.fulfill({ json: { owned: group([item(ids.alpha, "Alpha plan")]), shared: group(), archived: group(), capacity: capacity(1, 10) } }));
+    await page.route("**/api/invitations", (route) => route.fulfill({ json: noInvites }));
+    // The bootstrap (the page's account) says MOCK_VIEWER_ID; every status read, the dialog's opening one too, already answers for another account.
+    await page.route(`**/api/projects/${ids.alpha}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { id: ids.alpha, name: "Alpha plan", status: "ACTIVE", role: "OWNER", ownerId: ids.alpha }, draft: emptyDraftView() }) }));
+    await page.route(`**/api/projects/${ids.alpha}/status`, (route) => route.fulfill({ json: { ...status(1), viewerId: OTHER_VIEWER } }));
+    await page.route(`**/api/projects/${ids.alpha}/archive`, (route) => { sent.push("archive"); return route.fulfill({ json: { ...status(2, "ARCHIVED"), replayed: false } }); });
+    await page.goto(`/app/projects/${ids.alpha}`);
+    await expect(page.getByRole("heading", { level: 1, name: "Alpha plan" })).toBeVisible();
+    const seen = await watchTeardown(page);
+    await sidebar(page).getByRole("button", { name: "Actions for Alpha plan" }).click();
+    await page.getByRole("menuitem", { name: "Archive…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Archive Alpha plan?" });
+    await dialog.getByLabel("Reason").fill("Pilot finished");
+    await expect(dialog.getByRole("button", { name: "Archive", exact: true })).toBeEnabled();
+    expect(seen).toEqual([]); // the status poll (10 s or later) has not torn the page down: only the dialog's own check can
+    await dialog.getByRole("button", { name: "Archive", exact: true }).click();
+    await expect.poll(() => seen.length).toBe(1);
+    expect(seen[0]).toContain("Your account changed");
+    expect(sent).toEqual([]);
+  });
+
+  test("an uncertain Leave that committed is settled by Retry: nothing is sent again, and Cancel reloads the lists", async ({ page }) => {
+    await signIn(page, admin, users, "Actions Test");
+    let former = false;
+    let listReads = 0;
+    const sent: string[] = [];
+    await page.route("**/api/projects", (route) => { listReads += 1; return route.fulfill({ json: { owned: group(), shared: group([{ ...item(ids.alpha, "Alpha plan"), role: "REVIEWER" }]), archived: group(), capacity: capacity(0, 10) } }); });
+    await page.route("**/api/invitations", (route) => route.fulfill({ json: noInvites }));
+    // Once the Leave has committed the caller is no longer a member, so the status read is a 404.
+    await page.route(`**/api/projects/${ids.alpha}/status`, (route) => former ? route.fulfill({ status: 404, json: envelope("NOT_FOUND", "This project or invitation is unavailable.") }) : route.fulfill({ json: { ...status(1), role: "REVIEWER" } }));
+    await page.route(`**/api/projects/${ids.alpha}/leave`, (route) => { sent.push("leave"); former = true; return route.abort("failed"); }); // committed, response lost
+    await page.goto("/app");
+    await sidebar(page).getByRole("tab", { name: "Shared with me" }).click();
+    await sidebar(page).getByRole("button", { name: "Actions for Alpha plan" }).click();
+    await page.getByRole("menuitem", { name: "Leave…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Leave Alpha plan?" });
+    await dialog.getByRole("button", { name: "Leave", exact: true }).click();
+    await expect(dialog.getByRole("alert")).toHaveText("We could not confirm this change. Retry uses the same request.");
+    await dialog.getByRole("button", { name: "Retry" }).click();
+    await expect(dialog.getByRole("alert")).toHaveText("You’re no longer a member of this project.");
+    expect(sent).toEqual(["leave"]); // Retry sent nothing more
+    await expect(dialog.getByRole("button", { name: "Leave", exact: true })).toBeDisabled();
+    const readsBeforeCancel = listReads;
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => listReads).toBeGreaterThan(readsBeforeCancel);
+    expect(sent).toEqual(["leave"]);
+  });
+
   test("an archive whose project already changed says so, sends nothing, and Cancel re-reads the lists and returns focus", async ({ page }) => {
     await signIn(page, admin, users, "Actions Test");
     let listReads = 0;

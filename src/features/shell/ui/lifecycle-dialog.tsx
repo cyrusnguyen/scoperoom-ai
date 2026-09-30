@@ -63,7 +63,13 @@ export default function LifecycleDialog({ kind, project, viewer, onClose, onDone
     // Read again now: the account can change while the dialog is open, which the opening read can't see.
     const fresh = await apiRead<ProjectStatusView>(`/api/projects/${project.id}/status`);
     if (sessionEnded(fresh)) return;
-    if (!fresh.ok) { setBusy(false); setError(fresh.message); return; }
+    if (!fresh.ok) {
+      setBusy(false);
+      // An uncertain Leave may have committed: a former member can't read status (404). That read can't say which account left, so nothing is sent and nothing is reported as done; Cancel reloads the lists.
+      if (kind === "leave" && uncertain && fresh.status === 404) { setUncertain(false); setVersion(null); setError("You’re no longer a member of this project."); return; }
+      setError(fresh.message);
+      return;
+    }
     if (fresh.data.viewerId !== (viewer() ?? opened.current)) { accountChanged(); return; }
     const input = kind === "archive" ? { expectedProjectVersion: version, reason } : kind === "restore" ? { expectedProjectVersion: version } : {};
     const result = await apiMutate(`/api/projects/${project.id}/${kind}`, key, input);

@@ -21,6 +21,8 @@ export function ArrangeDialog({ flowId, onClose }: { flowId: string; onClose: ()
   const [shown, setShown] = useState<ArrangementPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  // Access is being re-checked: nothing was sent and the preview stays, so Apply can be repeated once it is confirmed.
+  const [checking, setChecking] = useState(false);
   const [retryKey, setRetryKey] = useState<string | null>(null);
   const steps = Object.values(draft.document.nodes).filter((node) => node.flowId === flowId).length;
 
@@ -34,12 +36,14 @@ export function ArrangeDialog({ flowId, onClose }: { flowId: string; onClose: ()
   };
   const apply = async () => {
     if (!shown || busy) return;
+    setChecking(false);
     const key = retryKey ?? crypto.randomUUID();
     const outcome = await place({
       mode: "ARRANGE_FLOW", flowId, expectedDocumentRevision: shown.documentRevision, expectedLayoutRevision: shown.layoutRevision,
       direction: shown.direction, algorithmVersion: shown.algorithmVersion, arrangementHash: shown.arrangementHash,
     }, key);
     if (outcome.ok) { onClose(); return; }
+    if (outcome.code === "DENIED") { setChecking(true); setMessage(outcome.message); return; }
     if (outcome.uncertain) { setRetryKey(key); setMessage("We couldn’t confirm the arrangement. Apply again repeats the same request."); return; }
     setRetryKey(null);
     setShown(null);
@@ -61,6 +65,6 @@ export function ArrangeDialog({ flowId, onClose }: { flowId: string; onClose: ()
       <p>Arranges {steps} {steps === 1 ? "step" : "steps"} {DIRECTION_LABELS[shown.direction].toLowerCase()}. Nothing changes until you apply it.</p>
       <div className="arrange-preview"><FlowCanvas flowId={flowId} preview={{ positions: shown.positions, direction: shown.direction }} /></div>
     </> : <p className="muted">Preview shows the new layout before anything is saved.</p>}
-    {message && <p className="error-message" role="alert">{message}</p>}
+    {message && <p className={checking ? "muted" : "error-message"} role={checking ? "status" : "alert"}>{message}</p>}
   </Dialog>;
 }
