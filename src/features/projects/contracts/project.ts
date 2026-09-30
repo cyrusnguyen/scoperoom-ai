@@ -1,3 +1,4 @@
+import type { RealtimeTopics } from "../../collaboration/contracts/topics.ts";
 import type { DraftView } from "../../drafts/contracts/scope-document.ts";
 
 export type { ProjectErrorCode } from "./errors.ts";
@@ -15,10 +16,12 @@ export type ProjectLists = { owned: ProjectGroup; shared: ProjectGroup; archived
 export type ProjectBootstrap = {
   project: { id: string; name: string; status: "ACTIVE" | "ARCHIVED"; role: ProjectAccessRole; ownerId: string };
   draft: DraftView;
+  status: ProjectStatusView;
+  realtime: RealtimeTopics;
 };
 
 export type ProjectStatusView = {
-  status: "ACTIVE" | "ARCHIVED"; version: number; settingsVersion: number; approvalPolicyVersion: number; membershipVersion: number;
+  status: "ACTIVE" | "ARCHIVED"; role: ProjectAccessRole; version: number; settingsVersion: number; approvalPolicyVersion: number; membershipVersion: number;
   designatedApproverId: string | null; currentDraftId: string; documentRevision: number; layoutRevision: number; realtimeEpoch: string; eventSequence: number;
 };
 

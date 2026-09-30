@@ -1,4 +1,5 @@
 import { Prisma } from "../../../../prisma/generated/client.ts";
+import { realtimeTopics } from "../../collaboration/contracts/topics.ts";
 import { emptyDraft, parseDraftPair } from "../../drafts/contracts/scope-document.ts";
 import {
   PROJECT_LIST_LIMIT, type CreatedProject, type CreateProjectInput, type ProjectAccessRole, type ProjectBootstrap, type ProjectGroup,
@@ -6,7 +7,7 @@ import {
 } from "../contracts/project.ts";
 import {
   assertOwnerCapacity, checkReceipt, entitlementActive, findReceipt, lockActor, lockOwnerCapacity, profileFor, readProject,
-  receiptString, requestHash, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot,
+  receiptString, requestHash, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow,
 } from "./access.ts";
 import { ProjectError } from "./errors.ts";
 
@@ -77,6 +78,17 @@ export async function listProjects(identity: ProjectIdentity): Promise<ProjectLi
   });
 }
 
+type DraftCounters = { documentRevision: number; layoutRevision: number };
+
+// One mapping for both reads, so bootstrap's status and topics come from the same snapshot as its draft.
+function statusOf(project: ProjectRow, draft: DraftCounters & { id: string }, role: ProjectAccessRole): ProjectStatusView {
+  return {
+    status: project.status, role, version: project.version, settingsVersion: project.settingsVersion, approvalPolicyVersion: project.approvalPolicyVersion,
+    membershipVersion: project.membershipVersion, designatedApproverId: project.designatedApproverId, currentDraftId: draft.id,
+    documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, realtimeEpoch: project.realtimeEpoch, eventSequence: Number(project.eventSequence),
+  };
+}
+
 export async function getProjectBootstrap(identity: ProjectIdentity, projectId: string): Promise<ProjectBootstrap> {
   if (!uuid.test(projectId)) throw new ProjectError("NOT_FOUND");
   return withDatabase(async (database) => {
@@ -92,9 +104,12 @@ export async function getProjectBootstrap(identity: ProjectIdentity, projectId: 
       } catch {
         throw new ProjectError("UNAVAILABLE");
       }
+      const status = statusOf(project, draft, role);
       return {
         project: { id: project.id, name: project.name, status: project.status, role, ownerId: project.ownerId },
         draft: { id: draft.id, status: draft.status, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, ...saved },
+        status,
+        realtime: realtimeTopics(project.id, status.realtimeEpoch),
       };
     });
   });
@@ -106,14 +121,10 @@ export async function getProjectStatus(identity: ProjectIdentity, projectId: str
     const profile = await profileFor(database, identity);
     return withReadSnapshot(database, async (tx) => {
       const project = await readProject(tx, profile.id, projectId);
-      requireMember(project);
-      const draft = project.currentDraftId ? await tx.scopeDraft.findFirst({ where: { id: project.currentDraftId, projectId: project.id }, select: { documentRevision: true, layoutRevision: true } }) : null;
-      if (!draft || !project.currentDraftId) throw new ProjectError("NOT_FOUND");
-      return {
-        status: project.status, version: project.version, settingsVersion: project.settingsVersion, approvalPolicyVersion: project.approvalPolicyVersion,
-        membershipVersion: project.membershipVersion, designatedApproverId: project.designatedApproverId, currentDraftId: project.currentDraftId,
-        documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, realtimeEpoch: project.realtimeEpoch, eventSequence: Number(project.eventSequence),
-      };
+      const role = requireMember(project);
+      const draft = project.currentDraftId ? await tx.scopeDraft.findFirst({ where: { id: project.currentDraftId, projectId: project.id }, select: { id: true, documentRevision: true, layoutRevision: true } }) : null;
+      if (!draft) throw new ProjectError("NOT_FOUND");
+      return statusOf(project, draft, role);
     });
   });
 }

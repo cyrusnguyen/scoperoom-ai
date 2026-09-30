@@ -50,6 +50,34 @@ test("non-owners can leave active and archived projects; the owner cannot", { sk
   });
 });
 
+test("bootstrap returns one coherent status, the caller's role and exact topics", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project }) => {
+    const owner = await user("Owner"); const viewer = await user("Viewer"); const outsider = await user("Outsider");
+    const projectId = await project(owner);
+    await join(owner, projectId, viewer, "VIEWER");
+    const check = async (who: Identity, role: string, projectStatus: string) => {
+      const boot = await getProjectBootstrap(who, projectId);
+      assert.equal(boot.status.role, role);
+      assert.equal(boot.project.role, role);
+      assert.equal(boot.status.status, projectStatus);
+      assert.equal(boot.status.currentDraftId, boot.draft.id);
+      assert.equal(boot.status.documentRevision, boot.draft.documentRevision);
+      assert.equal(boot.status.layoutRevision, boot.draft.layoutRevision);
+      assert.deepEqual(boot.realtime, {
+        events: `project:${projectId}:${boot.status.realtimeEpoch}:events`,
+        collab: `project:${projectId}:${boot.status.realtimeEpoch}:collab`,
+      });
+      assert.deepEqual(boot.status, await getProjectStatus(who, projectId));
+    };
+    await check(owner, "OWNER", "ACTIVE");
+    await check(viewer, "VIEWER", "ACTIVE");
+    const status = await getProjectStatus(owner, projectId);
+    await archiveProject(owner, projectId, { expectedProjectVersion: status.version, reason: "Done", key: randomUUID() });
+    await check(viewer, "VIEWER", "ARCHIVED");
+    await assert.rejects(getProjectBootstrap(outsider, projectId), code("NOT_FOUND"));
+  });
+});
+
 test("removal revokes older pending invitations to the member's accepted email", { skip: !canRun }, async () => {
   await withFixture(async ({ user, project }) => {
     const owner = await user(); const target = await user("Removed");

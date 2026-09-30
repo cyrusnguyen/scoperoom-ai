@@ -13,7 +13,7 @@ const capacity = (activeOwned: number, maxOwned: number) => ({ entitled: true, a
 const noInvites = { items: [], truncated: false };
 const envelope = (code: string, message: string) => ({ error: { code, message, requestId: "00000000-0000-4000-8000-000000000000", retryable: false } });
 const status = (version: number, state = "ACTIVE") => ({
-  status: state, version, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null,
+  status: state, role: "OWNER", version, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null,
   currentDraftId: "55555555-5555-4555-8555-555555555555", documentRevision: 1, layoutRevision: 1, realtimeEpoch: "88888888-8888-4888-8888-888888888888", eventSequence: 1,
 });
 const sidebar = (page: Page) => page.locator("#projects-nav");
