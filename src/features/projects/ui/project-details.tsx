@@ -92,8 +92,9 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
     if (authority.kind !== "current") {
       setBusy(false);
       if (retry?.key === key) setRetry(retry);
-      if (authority.kind === "unavailable") { setMessage("Not saved. We couldn’t reach ScopeRoom."); setMessageError(true); }
-      return; // denied: the shell's teardown or recovery view takes over
+      // Denied: the shell's teardown or recovery view replaces this; if the Studio stays up, the person sees why nothing happened.
+      setMessage(authority.kind === "unavailable" ? "Not saved. We couldn’t reach ScopeRoom." : "Checking your access…"); setMessageError(authority.kind === "unavailable");
+      return;
     }
     const result = await apiMutate(mutation.url, key, mutation.body, mutation.method ?? "PATCH");
     if (sessionEnded(result)) { setBusy(false); return; }

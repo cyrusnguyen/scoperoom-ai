@@ -188,12 +188,12 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
    * The write barrier. Authority comes from the status controller, never from an earlier answer: after focus, reconnect,
    * a failed request or a draft change it waits for a fresh status read. A new batch needs an ACTIVE project, an owner or
    * editor and the draft it was made on; an uncertain retry only needs the person to still be a member (server guards stay
-   * final). Null admits the write; otherwise the reason. DENIED means the shell is already dropping the project.
+   * final). Null admits the write; otherwise the reason. DENIED means the shell is dropping the project or recovering, and says so meanwhile.
    */
   const admit = useCallback(async (write: boolean, target: string): Promise<Admission> => {
     const authority = await beforeWrite();
     if (authority.kind === "unavailable") return { blocked: { code: "UNAVAILABLE", message: "Not saved. We couldn’t reach ScopeRoom." } };
-    if (authority.kind === "denied") return { blocked: { code: "DENIED", message: "" } };
+    if (authority.kind === "denied") return { blocked: { code: "DENIED", message: "Checking your access…" } };
     const stillCurrent = fence(authority.generation);
     if (!stillCurrent()) return { blocked: { code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message } };
     if (write) {
@@ -221,7 +221,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
       // Before every new batch and every retry of an unconfirmed one. Nothing between this check and the request awaits.
       const { blocked, stillCurrent } = await admit(waiting?.state !== "uncertain", waiting ? waiting.draftId : saved.current.id);
       if (blocked) {
-        if (blocked.code !== "DENIED") update(() => ({ save: { state: "failed", message: blocked.message } }));
+        update(() => ({ save: { state: "failed", message: blocked.message } }));
         return false;
       }
       // Recheck right before the request: the person may have discarded, undone or unmounted, or the generation may have been
@@ -323,7 +323,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     update(() => ({ request: key }));
     try {
       const { blocked, stillCurrent } = await admit(true, draftId);
-      if (blocked) return { ok: false, code: blocked.code === "DENIED" ? "FORBIDDEN" : blocked.code, message: blocked.message || readOnly.message, uncertain: false };
+      if (blocked) return { ok: false, code: blocked.code === "DENIED" ? "FORBIDDEN" : blocked.code, message: blocked.message, uncertain: false };
       if (!stillCurrent()) return { ok: false, code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message, uncertain: false };
       const result = await apiMutate<PositionResult>(`/api/projects/${projectId}/drafts/${draftId}/positions`, key, command);
       if (sessionEnded(result)) return { ok: false, code: "UNAUTHENTICATED", message: "", uncertain: false };

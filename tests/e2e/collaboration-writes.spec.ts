@@ -126,12 +126,28 @@ test.describe("writes wait for the status controller (real draft)", () => {
     await gate.release(403);
     await quiet(page);
     expect(writes).toHaveLength(0);
-    // The person's change is still there; the next Save (status healthy again) sends it.
-    await expect(status(page)).toContainText("Unsaved changes");
+    // The Studio stays mounted (the real bootstrap still succeeds): Save says why nothing happened, and the change is still there.
+    await expect(status(page).getByRole("status").filter({ hasText: "Checking your access…" })).toBeVisible();
+    // The next Save (status healthy again) sends it.
     gate.pass();
     await headerSave(page).click();
     await expect(status(page)).toContainText("All changes saved");
     expect(writes).toHaveLength(1);
+  });
+
+  test("Details Save after a denied status read says it is checking access and sends nothing", async ({ page }) => {
+    await open(page);
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    const panel = page.locator("#right-panel");
+    await expect(panel.getByText("Loading details…")).toBeHidden(); // its own status read has finished, so the focus below starts a new one
+    await panel.getByLabel("Project name").fill("Renamed while denied");
+    const settings: string[] = [];
+    page.on("request", (request) => { if (request.method() === "PATCH" && /\/settings$/.test(request.url())) settings.push(request.url()); });
+    await pauseAfterFocus(page);
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await gate.release(403);
+    await expect(panel.getByRole("status").filter({ hasText: "Checking your access…" })).toBeVisible();
+    expect(settings).toHaveLength(0);
   });
 
   test("a status read that says 404 drops the project: nothing is sent and the unavailable-project recovery shows", async ({ page }) => {

@@ -48,8 +48,9 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
   const writable = async () => {
     const authority = await sync.beforeWrite();
     if (authority.kind === "current") return true;
-    if (authority.kind === "unavailable") { setMessage("Not saved. We couldn’t reach ScopeRoom."); setMessageError(true); }
-    return false; // denied: the shell's teardown or recovery view takes over
+    // Denied: the shell's teardown or recovery view replaces this; if the Studio stays up, the person sees why nothing happened.
+    setMessage(authority.kind === "unavailable" ? "Not saved. We couldn’t reach ScopeRoom." : "Checking your access…"); setMessageError(authority.kind === "unavailable");
+    return false;
   };
 
   const issue = async (event: SubmitEvent<HTMLFormElement>) => {
