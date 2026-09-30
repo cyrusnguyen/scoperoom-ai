@@ -218,7 +218,8 @@ function ManySteps({ ids }: { ids: string[] }) {
 
 /** Reconnect guards the document revision (topology), so it is a separate action from editing the condition text. */
 function Endpoints({ edge }: { edge: EdgeRecord }) {
-  const { draft, editable, ui, update, refreshFailed } = useStudio();
+  const { draft, editable, ui, update, savedDraft } = useStudio();
+  const refreshFailed = !canApplyAgain(ui, savedDraft); // as the field editor: conflict actions wait for a readable draft that covers the floor
   const submitCommand = useCommandSubmit();
   const key = bufferKey("EDGE", edge.id);
   const saved: Saved = { kind: "EDGE", id: edge.id, version: draft.documentRevision, fields: { fromId: edge.fromId, toId: edge.toId } };
@@ -273,12 +274,12 @@ function Endpoints({ edge }: { edge: EdgeRecord }) {
     <h3 id="inspector-ends">Endpoints</h3>
     {buffer?.conflict && <div className="inline-note" role="alert">
       <p>The flow changed while you were working. Your connection is kept; nothing was overwritten.</p>
-      <dl className="conflict-list">{[
+      {!refreshFailed && <dl className="conflict-list">{[
         { label: "Saved connection", fields: saved.fields }, { label: "Your connection", fields: buffer.values }, { label: "Before your edit", fields: buffer.original },
-      ].map(({ label, fields }) => <div key={label}><dt>{label}</dt><dd>{stepName(draft.document, fields.fromId!)} {"\u2192"} {stepName(draft.document, fields.toId!)}</dd></div>)}</dl>
+      ].map(({ label, fields }) => <div key={label}><dt>{label}</dt><dd>{stepName(draft.document, fields.fromId!)} {"\u2192"} {stepName(draft.document, fields.toId!)}</dd></div>)}</dl>}
       <div className="view-actions">
         <button type="button" className="button primary small" onClick={applyMine} disabled={refreshFailed || saved.version <= buffer.baseVersion}>Apply my connection</button>
-        <button type="button" className="button small" onClick={keepSaved}>Keep saved connection</button>
+        <button type="button" className="button small" onClick={keepSaved} disabled={refreshFailed}>Keep saved connection</button>
         <button type="button" className="button quiet small" onClick={() => void copyMine()}>Copy my connection</button>
       </div>
     </div>}

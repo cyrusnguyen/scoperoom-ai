@@ -133,11 +133,11 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
 
   // Every adopted saved read (shell bootstrap or adoption, and `reload`) lands here as a new `savedDraft`. The frozen base
   // follows it through `advanceOnRead` (never while a save is pending; only once the read covers the acknowledged floor).
-  // It runs again when a save resolves (`pending`) and whenever the active entries change (an undo to empty must not let a
-  // redo switch back to an old base; Keep theirs may remove the only conflicting entry). The store's updater advances the store's own current outbox, because the
-  // shell also writes it outside `change` (Discard) between this render and the effect.
-  // It also runs when the active entries change (Keep theirs, undo, redo, a new edit): the base must follow the adopted read as
-  // soon as no request would change, or the shown draft and the frozen notice (derived from the same test) disagree.
+  // It runs again when a save resolves (`pending`) and whenever the active entries change (Keep theirs, undo, redo, a new
+  // edit): the base must follow the adopted read as soon as no request would change, or the shown draft and the frozen
+  // notice (derived from the same test) disagree, and an undo to empty must not let a redo switch back to an old base.
+  // The store's updater advances the store's own current outbox, because the shell also writes it outside `change`
+  // (Discard) between this render and the effect.
   const pending = Boolean(outbox.sending), { entries } = outbox;
   useEffect(() => {
     const before = latest.current, next = advanceOnRead(before, savedDraft, floor);
