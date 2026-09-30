@@ -131,8 +131,8 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
     },
     fence: sync.fence, publish: setDirectory,
   }), [projectId, sync]);
-  // Once, and again when membership changes; a failed read is tried again on the next roster change.
-  useEffect(() => { void directoryLoader.update(state.status.membershipVersion); }, [directoryLoader, state.status.membershipVersion, roster]);
+  // Once, and again when membership changes; a failed read is tried again on the next roster or status change (a status poll that fails or moves publishes a new state).
+  useEffect(() => { void directoryLoader.update(state.status.membershipVersion); }, [directoryLoader, state, roster]);
   const setSavedDraft = useCallback((draft: DraftView) => realtime.setSavedView(savedViewOf(draft)), [realtime]);
   // A bootstrap installed outside the controller (Restore, Details, Retry) can be newer than its last read: prove authority again before the next write.
   const installed = useRef(initial);

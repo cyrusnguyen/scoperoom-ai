@@ -171,9 +171,6 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
 
   useSyncReader(reload); // polling adopts through this same gated read
   useSyncSavedDraft(savedDraft); // remote previews are validated against what was adopted
-  // The shown flow and selection are shared as an advisory claim (canvas and List use this one selection); it never affects saving.
-  const shownFlowId = currentFlow(savedDraft.document, ui.flowId)?.id ?? null;
-  useEffect(() => { setPresence(claimOf(shownFlowId, ui.selection)); }, [setPresence, shownFlowId, ui.selection]);
 
   const run = useCallback(async (command: GraphCommand): Promise<RunOutcome> => {
     if (!editable) return readOnly;
@@ -381,6 +378,10 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
 
   const replayed = useMemo(() => (editable ? replay(outbox, savedDraft, floor) : { draft: savedDraft, skipped: [] }), [editable, outbox, savedDraft, floor]);
   const { draft, skipped } = replayed;
+  // The flow shown (if others can see it in the saved draft) and the selection are shared as an advisory claim; canvas and List use this one selection, and it never affects saving.
+  const shown = currentFlow(draft.document, ui.flowId);
+  const shownFlowId = shown && savedDraft.document.flows[shown.id] ? shown.id : null;
+  useEffect(() => { setPresence(claimOf(shownFlowId, ui.selection)); }, [setPresence, shownFlowId, ui.selection]);
   const unsaved = pendingCount(outbox) > 0;
   const canUndo = editable && outbox.entries.length > 0, canRedo = editable && outbox.redo.length > 0;
   const value = useMemo<Studio>(() => ({

@@ -1,5 +1,5 @@
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
-import type { PresenceState } from "../contracts/messages";
+import { MAX_SELECTED_NODES, type PresenceState } from "../contracts/messages.ts";
 import type { PresenceClaim } from "./project-live";
 
 /** What the authorized members list gives a peer; the directory, not the peer's claim, decides names and roles. */
@@ -9,7 +9,6 @@ export type Person = { profileId: string; name: string; role: ProjectAccessRole 
 
 export const UNKNOWN_PARTICIPANT = "Unknown participant";
 export const PALETTE_SIZE = 6;
-const SELECTION_LIMIT = 20; // the Presence parser rejects more
 
 /** A stable 1..PALETTE_SIZE slot per profile (the `--presence-N` tokens); the same person has the same color on every screen. */
 export function paletteIndex(profileId: string): number {
@@ -54,7 +53,7 @@ type StudioSelection = { kind: "NODES"; ids: string[] } | { kind: "EDGE"; id: st
 export function claimOf(flowId: string | null, selection: StudioSelection): PresenceClaim {
   if (!flowId || !selection) return { flowId, selection: null };
   if (selection.kind !== "NODES") return { flowId, selection: { kind: selection.kind, ids: [selection.id] } };
-  return { flowId, selection: selection.ids.length && selection.ids.length <= SELECTION_LIMIT ? { kind: "NODES", ids: selection.ids } : null };
+  return { flowId, selection: selection.ids.length && selection.ids.length <= MAX_SELECTED_NODES ? { kind: "NODES", ids: selection.ids } : null };
 }
 
 /**
