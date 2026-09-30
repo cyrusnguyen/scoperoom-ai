@@ -73,6 +73,11 @@ export function admits(ui: Pick<StudioUi, "acknowledgedRevisions">, adopted: Dra
   return isNewer(candidate, adopted) && covers(candidate, ui.acknowledgedRevisions[candidate.id]);
 }
 
+/** "Apply my changes again" rebases onto the shown saved draft, so it waits for one that is readable and covers the floor. */
+export function canApplyAgain(ui: Pick<StudioUi, "acknowledgedRevisions" | "refreshFailed">, saved: DraftView): boolean {
+  return !ui.refreshFailed && covers(saved, ui.acknowledgedRevisions[saved.id]);
+}
+
 /** Only a read covering every acknowledged revision can clear this draft's outstanding read failure/floor. */
 export function afterDraftRead(ui: StudioUi, view: Pick<DraftView, "id" | "documentRevision" | "layoutRevision">): Pick<StudioUi, "acknowledgedRevisions" | "refreshFailed"> {
   if (!covers(view, ui.acknowledgedRevisions[view.id])) {

@@ -226,6 +226,8 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   const applyAgain = useCallback(async () => {
     if (!editable || inFlight.current || latest.current.sending?.state !== "refused") return;
     const fresh = saved.current;
+    // Rebasing onto a saved draft below the acknowledged floor would drop an acknowledged edit from view.
+    if (!covers(fresh, floorRef.current)) return;
     const names = optimistic(latest.current, fresh, floorRef.current).document;
     const rebased = rebase(latest.current, fresh, names);
     change(() => rebased, () => ({ save: { state: "idle", message: "" } }));

@@ -4,7 +4,7 @@ import type { Changes } from "../src/features/drafts/contracts/changes.ts";
 import { edit, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
-import { admits, afterDraftRead, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
+import { admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
 import { anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
 const closed = { acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, buffers: {}, endpointBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
@@ -104,7 +104,16 @@ test("one admission predicate: a read must be current, not older than the adopte
   assert.deepEqual(afterDraftRead(ui, draft(6, 3)).acknowledgedRevisions, {});
 });
 
-const deleteEdge ={ commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: 3, payload: { edgeId: "e1" } } as const;
+test("Apply my changes again waits for a readable saved draft that covers the acknowledged floor", () => {
+  const draft = (documentRevision: number) => ({ id: "d1", documentRevision, layoutRevision: 3 }) as DraftView;
+  const ui = { ...defaultUi, acknowledgedRevisions: requireDraftRevision({}, { draftId: "d1", documentRevision: 6, layoutRevision: 3 }) };
+  assert.equal(canApplyAgain(ui, draft(5)), false, "shown saved draft is below the floor: rebasing would hide the acknowledged edit");
+  assert.equal(canApplyAgain(ui, draft(6)), true);
+  assert.equal(canApplyAgain({ ...ui, refreshFailed: true }, draft(6)), false, "a failed read keeps conflict actions disabled");
+  assert.equal(canApplyAgain(defaultUi, draft(5)), true);
+});
+
+const deleteEdge = { commandSchemaVersion: 1, command: "DELETE_EDGE", expectedDocumentRevision: 3, payload: { edgeId: "e1" } } as const;
 const batch: Changes = { commands: [{ command: deleteEdge, proposedIds: [] }], moves: [] };
 const withSave = (state: "waiting" | "sending" | "uncertain" | "refused"): Outbox => ({
   ...emptyOutbox, entries: [{ kind: "drop", flowId: "f", items: [{ nodeId: "n1", x: 1, y: 2 }] }], sending: { draftId: "d1", key: "receipt-1", batches: [batch], state },

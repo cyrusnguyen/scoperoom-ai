@@ -12,7 +12,7 @@ import { currentFlow, recordOf } from "./graph-view";
 import { AddStepDialog, ConnectDialog, DeleteStepsDialog } from "./step-dialogs";
 import { compareOutbox, describeAll, optimistic } from "./outbox";
 import { ReadRecovery, staleCodes, useStudio } from "./studio-context";
-import { studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
+import { canApplyAgain, studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
 
 type StudioDialog = "add" | "connect" | "delete" | "arrange" | null;
 
@@ -163,7 +163,7 @@ function SaveNote() {
       </div>)}</dl>
     </>}
     <span className="view-actions">
-      <button type="button" className="button primary small" onClick={() => void applyAgain()} disabled={busy}>Apply my changes again</button>
+      <button type="button" className="button primary small" onClick={() => void applyAgain()} disabled={busy || !canApplyAgain(ui, savedDraft)}>Apply my changes again</button>
       <button type="button" className="button quiet small" onClick={discardChanges} disabled={busy}>Discard my changes</button>
     </span>
   </div>;
