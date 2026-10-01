@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, type Page } from "@playwright/test";
+import { interceptRealtime } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { appUrl, createProjectViaApi, e2eReady, headerSave, seedStudioChanges } from "./support";
@@ -287,6 +288,8 @@ test.describe("Frozen view, redo history, typed text and refreshing", () => {
   });
 
   test("a read that does not land says 'Refreshing saved changes…' once, then offers Retry at the poll's backoff cap", async ({ page }) => {
+    // The poll supplies the second failed read here; a save's hint can legitimately reach recovery before that poll.
+    (await interceptRealtime(page)).dropEvents = true;
     await open(page);
     let failing = true;
     await page.route(`**/api/projects/${projectId}/drafts/*`, (route) => (failing && route.request().method() === "GET"

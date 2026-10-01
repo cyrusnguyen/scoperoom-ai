@@ -8,7 +8,7 @@ import { appUrl, createProjectViaApi, e2eReady, headerSave, seedStudioChanges } 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
 type Seeded = { draftId: string; flowId: string; nodeIds: string[] };
-type Batch = { commands: unknown[]; moves: { flowId: string; items: { nodeId: string }[] }[] };
+type Batch = { commands: unknown[]; moves: { flowId: string; items: { nodeId: string; expectedPositionVersion: number }[] }[] };
 const status = (page: Page) => page.locator(".studio-status");
 const note = (page: Page) => page.locator(".save-note");
 const nodeAt = (page: Page, nodeId: string) => page.locator(`.react-flow__node[data-id="${nodeId}"]`);
@@ -52,8 +52,8 @@ async function moveViaApi(page: Page, projectId: string, seeded: Seeded, targets
 }
 
 /**
- * The tests that follow are about a save (or Apply) meeting someone else's move. With Realtime live the move's committed hint would make the page read it
- * first (a legitimate other path, covered by the collaboration specs), so the hints are withheld and the socket reopened by a reload: only the save finds out.
+ * Withhold committed hints for save-time recovery tests. Subscription and status reconciliation remain active,
+ * so a stale-edit setup must queue its local change before the peer saves rather than assume the page has not read it.
  */
 async function withholdHints(page: Page, nodeId: string) {
   (await interceptRealtime(page)).dropEvents = true;
@@ -289,9 +289,13 @@ test.describe("saved positions and arrangement", () => {
   test("a save that meets someone else's move shows theirs and mine, and keeps my placement until I choose", async ({ page }) => {
     const [, middle, end] = seeded.nodeIds;
     await withholdHints(page, middle!);
-    await moveViaApi(page, projectId, seeded, { [middle!]: { x: 900, y: 900 } });
+    const before = await draftOf(page, projectId);
     await drag(page, middle!, 150, 0);
+    await moveViaApi(page, projectId, seeded, { [middle!]: { x: 900, y: 900 } });
+    const refused = page.waitForResponse((response) => response.url().endsWith("/changes") && response.request().method() === "POST");
     await saveButton(page).click();
+    expect((await refused).status()).toBe(409);
+    expect((saves[0]!.postDataJSON() as Batch).moves.flatMap((group) => group.items).find((item) => item.nodeId === middle)!.expectedPositionVersion).toBe(before.layout.positions[middle!]!.version);
     await expect(note(page)).toContainText(STALE);
     const mine = await nodeAt(page, middle!).getAttribute("style");
     expect(mine).not.toContain("translate(900px, 900px)");
@@ -310,8 +314,8 @@ test.describe("saved positions and arrangement", () => {
     expect(applied.version).toBe(3);
     expect(mine).toContain(`translate(${applied.x}px, ${applied.y}px)`);
 
-    await moveViaApi(page, projectId, seeded, { [end!]: { x: 700, y: 700 } });
     await drag(page, end!, -120, 0);
+    await moveViaApi(page, projectId, seeded, { [end!]: { x: 700, y: 700 } });
     await saveButton(page).click();
     await expect(note(page)).toContainText(STALE);
     await expect(note(page).locator(".conflict-list")).toContainText("Saved value(700, 700)");

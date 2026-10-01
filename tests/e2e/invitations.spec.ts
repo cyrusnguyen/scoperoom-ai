@@ -19,7 +19,7 @@ async function createAccount(admin: SupabaseClient, users: string[], label: stri
 }
 
 async function logIn(page: Page, account: Account) {
-  await page.goto("/login");
+  // Both callers have landed here after sign-out; fill the rendered form without racing a late 401 redirect.
   await page.getByLabel("Email address").fill(account.email);
   await page.getByLabel("Password").fill(account.password);
   await page.getByRole("button", { name: "Sign in" }).click();
