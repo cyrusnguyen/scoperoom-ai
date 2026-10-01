@@ -19,6 +19,14 @@ function nullableText(value: unknown, max: number): string | null {
   return parsed === "" ? null : parsed;
 }
 
+function timestamp(value: unknown): string {
+  if (typeof value !== "string") invalid();
+  const match = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.(\d{1,3}))?Z$/.exec(value);
+  const instant = Date.parse(value);
+  if (!match || Number.isNaN(instant) || new Date(instant).toISOString() !== `${value.slice(0, 19)}.${(match[1] ?? "").padEnd(3, "0")}Z`) invalid();
+  return value;
+}
+
 function scanNesting(json: string) {
   let depth = 0;
   let quoted = false;
@@ -63,7 +71,7 @@ function parseNode(value: unknown): FlowFileNode {
   return {
     id: fileId(node.id), kind: oneOf(node.kind, NODE_KINDS), label: text(node.label, LIMITS.label, true),
     description: text(node.description, LIMITS.longText), actorLabel: nullableText(node.actorLabel, LIMITS.actorLabel),
-    assumptionNotes: node.assumptionNotes.map(note => text(note, LIMITS.note, true)),
+    assumptionNotes: Array.from(node.assumptionNotes, note => text(note, LIMITS.note, true)),
   };
 }
 
@@ -96,7 +104,7 @@ function parseOrigin(value: unknown): FlowFileOrigin {
 function parsePositions(value: unknown, nodeIds: ReadonlySet<string>): FlowFilePosition[] {
   if (!Array.isArray(value) || value.length !== nodeIds.size) invalid();
   const seen = new Set<string>();
-  return value.map(entry => {
+  return Array.from(value, entry => {
     const position = object(entry);
     keys(position, ["nodeId", "x", "y"]);
     const nodeId = fileId(position.nodeId);
@@ -109,7 +117,7 @@ function parsePositions(value: unknown, nodeIds: ReadonlySet<string>): FlowFileP
 function parseEdgeSides(value: unknown, edgeIds: ReadonlySet<string>): FlowFileEdgeSides[] {
   if (!Array.isArray(value) || value.length > edgeIds.size) invalid();
   const seen = new Set<string>();
-  return value.map(entry => {
+  return Array.from(value, entry => {
     const sides = object(entry);
     keys(sides, ["edgeId", "from", "to"]);
     const edgeId = fileId(sides.edgeId);
@@ -121,7 +129,7 @@ function parseEdgeSides(value: unknown, edgeIds: ReadonlySet<string>): FlowFileE
 
 function parseHints(value: unknown, nodeIds: ReadonlySet<string>): FlowFileLinkHint[] {
   if (!Array.isArray(value) || value.length > LIMITS.edges) invalid();
-  return value.map(entry => {
+  return Array.from(value, entry => {
     const hint = object(entry);
     keys(hint, ["nodeId", "requirementId", "requirementTitle"]);
     const nodeId = fileId(hint.nodeId);
@@ -133,16 +141,17 @@ function parseHints(value: unknown, nodeIds: ReadonlySet<string>): FlowFileLinkH
 function parseFile(value: unknown): FlowFileV1 {
   const file = object(value);
   keys(file, ["format", "formatVersion", "exportedAt", "producerVersion", "flow", "nodes", "edges", "origin"], ["positions", "edgeSides", "viewport", "linkHints"]);
-  if (file.format !== "scoperoom-flow" || file.formatVersion !== 1 || typeof file.exportedAt !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/.test(file.exportedAt) || Number.isNaN(Date.parse(file.exportedAt))) invalid();
+  if (file.format !== "scoperoom-flow" || file.formatVersion !== 1) invalid();
+  const exportedAt = timestamp(file.exportedAt);
   if (!Array.isArray(file.nodes) || file.nodes.length > LIMITS.nodes || !Array.isArray(file.edges) || file.edges.length > LIMITS.edges) invalid();
-  const nodes = file.nodes.map(parseNode);
-  const edges = file.edges.map(parseEdge);
+  const nodes = Array.from(file.nodes, parseNode);
+  const edges = Array.from(file.edges, parseEdge);
   const ids = new Set<string>();
   for (const entry of [...nodes, ...edges]) if (ids.has(entry.id)) invalid(); else ids.add(entry.id);
   const nodeIds = new Set(nodes.map(node => node.id));
   for (const edge of edges) if (!nodeIds.has(edge.fromId) || !nodeIds.has(edge.toId)) invalid();
   const result: FlowFileV1 = {
-    format: "scoperoom-flow", formatVersion: 1, exportedAt: file.exportedAt, producerVersion: text(file.producerVersion, 120, true),
+    format: "scoperoom-flow", formatVersion: 1, exportedAt, producerVersion: text(file.producerVersion, 120, true),
     flow: parseFlow(file.flow), nodes, edges, origin: parseOrigin(file.origin),
   };
   if (Object.hasOwn(file, "positions")) result.positions = parsePositions(file.positions, nodeIds);
@@ -165,7 +174,13 @@ export function parseFlowFile(bytes: Uint8Array): FlowFileV1 {
   let value: unknown;
   try { value = JSON.parse(json); } catch { return invalid(); }
   rejectDangerousKeys(value);
-  return parseFile(value);
+  const root = object(value);
+  // Retain the pure INVALID_INPUT contract while allowing the service to give native-format guidance.
+  if ((typeof root.format === "string" && root.format !== "scoperoom-flow") ||
+      (root.format === "scoperoom-flow" && typeof root.formatVersion === "number" && Number.isSafeInteger(root.formatVersion) && root.formatVersion > 0 && root.formatVersion !== 1)) {
+    throw new Error("INVALID_INPUT", { cause: "UNSUPPORTED_FLOW_FORMAT" });
+  }
+  return parseFile(root);
 }
 
 export function serializeFlowFile(file: FlowFileV1): Uint8Array {
