@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, type Page } from "@playwright/test";
+import { interceptRealtime } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { appUrl, createProjectViaApi, e2eReady } from "./support";
@@ -15,6 +16,8 @@ async function draftOf(page: Page, projectId: string): Promise<DraftView> {
 test("closing the switcher when its last flow disappears does not reopen it after the next flow is created", async ({ page }) => {
   test.setTimeout(90_000);
   const projectId = await createProjectViaApi(page, "Flow switcher project");
+    // Withhold Realtime hints (the page would otherwise read the other change first, which the collaboration specs cover) so only the save finds out.
+    (await interceptRealtime(page)).dropEvents = true;
     await page.goto(`/app/projects/${projectId}`);
     await expect(page.getByRole("heading", { level: 1, name: "Flow switcher project" })).toBeVisible();
 

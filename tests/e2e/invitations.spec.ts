@@ -293,6 +293,8 @@ test.describe("project invitations", () => {
     await page.getByRole("button", { name: "Create invitation" }).click();
     const url = await page.getByLabel("One-time invitation link").inputValue();
     await page.getByRole("button", { name: "Sign out" }).click();
+    // Sign-out is a server action: let it land on /login first, or a goto here races its redirect and any 401 navigation from reads still in flight.
+    await expect(page).toHaveURL(/\/login$/);
     await logIn(page, fixture.invitee);
     const expired = await expireAccessSession(page);
 
@@ -314,6 +316,8 @@ test.describe("project invitations", () => {
     await page.getByRole("button", { name: "Create invitation" }).click();
     const url = await page.getByLabel("One-time invitation link").inputValue();
     await page.getByRole("button", { name: "Sign out" }).click();
+    // Sign-out is a server action: let it land on /login first, or a goto here races its redirect and any 401 navigation from reads still in flight.
+    await expect(page).toHaveURL(/\/login$/);
     await logIn(page, fixture.outsider);
     await page.goto(url);
     await expect(page.getByRole("heading", { name: "Open a shared project" })).toBeVisible();

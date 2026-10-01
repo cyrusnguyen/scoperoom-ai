@@ -55,6 +55,9 @@ function denied(identity: Exclude<IdentityResult, { kind: "user" }>, requestId: 
     : apiError("UNAVAILABLE", projectErrors.UNAVAILABLE.message, 503, requestId);
 }
 
+const sameOrigin = (request: Request) => request.headers.get("origin") === readProcessEnv().appUrl;
+const rejected = (requestId: string) => apiError("INVALID_REQUEST", "This request could not be accepted.", 403, requestId);
+
 /** Authenticated GET: verified identity, shared envelope, no-store. */
 export async function readRoute(request: Request, run: (user: VerifiedIdentity) => Promise<unknown>) {
   const requestId = requestIdFor(request);
@@ -73,7 +76,7 @@ export async function mutationRoute(
   options: { createdStatus?: number; bodyLimit?: number; keyless?: boolean } = {},
 ) {
   const requestId = requestIdFor(request);
-  if (request.headers.get("origin") !== readProcessEnv().appUrl) return apiError("INVALID_REQUEST", "This request could not be accepted.", 403, requestId);
+  if (!sameOrigin(request)) return rejected(requestId);
   const identity = await currentIdentity();
   if (identity.kind !== "user") return denied(identity, requestId);
   const body = await boundedJsonBody(request, options.bodyLimit);
@@ -83,4 +86,19 @@ export async function mutationRoute(
     const result = await run(identity.user, options.keyless ? { ...(body as Record<string, unknown>) } : { ...(body as Record<string, unknown>), key });
     return apiResponse(result, options.createdStatus && !result.replayed ? options.createdStatus : 200, requestId);
   } catch (error) { return apiFailure(error, requestId); }
+}
+
+/**
+ * Authenticated same-origin POST that is not a domain mutation (the Realtime credential): exact Origin and an empty body, but
+ * no Idempotency-Key, receipt or audit, because it writes nothing and a retry is harmless.
+ */
+export async function credentialRoute(request: Request, run: (user: VerifiedIdentity) => Promise<unknown>) {
+  const requestId = requestIdFor(request);
+  if (!sameOrigin(request)) return rejected(requestId);
+  const identity = await currentIdentity();
+  if (identity.kind !== "user") return denied(identity, requestId);
+  const reader = request.body?.getReader();
+  const first = await reader?.read().catch(() => ({ done: false })); // one chunk is enough to see the body is not empty
+  if (first && !first.done) { await reader?.cancel().catch(() => undefined); return apiError("INVALID_INPUT", projectErrors.INVALID_INPUT.message, 400, requestId); }
+  try { return apiResponse(await run(identity.user), 200, requestId); } catch (error) { return apiFailure(error, requestId); }
 }

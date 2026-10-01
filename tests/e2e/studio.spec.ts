@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, type Locator, type Page } from "@playwright/test";
+import { interceptRealtime } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { appUrl, createProjectViaApi, e2eReady, emptyDraftView, headerSave, saveStudio, withStatus } from "./support";
@@ -482,6 +483,10 @@ test.describe("Studio on a real draft", () => {
   });
 
   test("typed text survives someone else's change; the person applies their changes again", async ({ page }) => {
+    // This test is about the save meeting the other tab's change. With Realtime live the change's committed hint would make the page read it first (a legitimate
+    // other path, covered by the collaboration specs), so the hints are withheld and the socket reopened by a reload: only the save can find out.
+    (await interceptRealtime(page)).dropEvents = true;
+    await page.reload();
     await createFlowInUi(page, "Billing");
     await addStepInUi(page, "Invoice", "Start");
     await saveStudio(page);
@@ -601,6 +606,9 @@ test.describe("Studio on a real draft", () => {
   });
 
   test("a step deleted in another tab keeps the typed text for copying and is never re-created", async ({ page }) => {
+    // Withhold Realtime hints (the page would otherwise read the other change first, which the collaboration specs cover) so only the save finds out.
+    (await interceptRealtime(page)).dropEvents = true;
+    await page.reload();
     await createFlowInUi(page, "Claims");
     await addStepInUi(page, "Assess", "Start");
     await saveStudio(page);
@@ -743,6 +751,8 @@ test.describe("Studio on a real draft", () => {
     const flowId = Object.keys(draft.document.flows)[0]!;
     await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
       payload: { flowId, fromId: nodes.Start, toId: nodes.Original, condition: "" } });
+    // Withhold Realtime hints (the page would otherwise read the other change first, which the collaboration specs cover) so only the save finds out.
+    (await interceptRealtime(page)).dropEvents = true;
     await page.reload();
     await toolbar(page).getByRole("button", { name: "List" }).click();
     await page.getByRole("list", { name: "Connections" }).getByRole("button", { name: /^Start/ }).click();
@@ -983,6 +993,8 @@ test.describe("Studio on a real draft", () => {
     const nodes = Object.fromEntries(Object.values(draft.document.nodes).map((node) => [node.label, node.id]));
     await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
       payload: { flowId: Object.keys(draft.document.flows)[0]!, fromId: nodes.Start, toId: nodes.Original, condition: "" } });
+    // Withhold Realtime hints (the page would otherwise read the other change first, which the collaboration specs cover) so only the save finds out.
+    (await interceptRealtime(page)).dropEvents = true;
     await page.reload();
     await expect(page.locator(".react-flow__edgeupdater-target")).toHaveCount(1);
     draft = await draftOf(page, projectId);

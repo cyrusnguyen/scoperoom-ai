@@ -71,6 +71,13 @@
   --diff-inferred: var(--info-foreground);
   --diff-inferred-background: var(--info-background);
   --diff-inferred-border: var(--info-border);
+  /* Advisory presence: one stable slot per person (chosen by hashing the profile id), never a status or authorship color. */
+  --presence-1: #e3a07a;
+  --presence-2: #86c1b0;
+  --presence-3: #9db4e8;
+  --presence-4: #d894c0;
+  --presence-5: #b7cf7a;
+  --presence-6: #c9a6ea;
   --kind-start: #b9cdf2;
   --kind-start-background: #232d3e;
   --kind-start-border: #6d86b3;

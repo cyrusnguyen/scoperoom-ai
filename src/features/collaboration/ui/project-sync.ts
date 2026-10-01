@@ -1,8 +1,8 @@
 import type { ProjectStatusView } from "../../projects/contracts/project.ts";
 
 // One status controller per visible project (Stage 04.2). Pure: every effect it has on the world comes through the
-// injected seams below, so a fake clock and fake visibility can drive it in node tests. 04.3 adds "hint" | "subscribed".
-export type ReconcileReason = "poll" | "focus" | "reconnect" | "before-save" | "manual";
+// injected seams below, so a fake clock and fake visibility can drive it in node tests.
+export type ReconcileReason = "poll" | "focus" | "reconnect" | "before-save" | "manual" | "hint" | "subscribed";
 /** What the window reports: a return (focus, reconnect) revalidates; going hidden or blurred only invalidates: polling is paused or a sign-in in another window may follow, and the next write revalidates. */
 export type VisibilityEvent = ReconcileReason | "hidden" | "blur";
 export type AuthorityResult = { kind: "current"; generation: number; status: ProjectStatusView } | { kind: "unavailable" } | { kind: "denied" };
@@ -41,12 +41,14 @@ export type ProjectSync = {
   /** Resolves at once while authority is current; after `invalidate()` or a failed read it waits for one revalidation. */
   beforeWrite: () => Promise<AuthorityResult>;
   invalidate: () => void;
+  /** Realtime is delayed: the poll runs on the 5 s base instead of 10 s (never a second timer; hints are hints, the poll is the guarantee). */
+  setDegraded: (on: boolean) => void;
   /** A check that generation `at` (default: the current one; an authority result carries its own) is still current: call it right before adopting anything. */
   fence: (at?: number) => () => boolean;
 };
 
-export function statusDelay(failures: number, random: number): number {
-  const backedOff = Math.min(30_000, 10_000 * 2 ** Math.min(failures, 2));
+export function statusDelay(failures: number, random: number, degraded = false): number {
+  const backedOff = Math.min(30_000, (degraded ? 5_000 : 10_000) * 2 ** Math.min(failures, 2));
   return Math.round(Math.min(30_000, backedOff * (0.9 + Math.max(0, Math.min(1, random)) * 0.2)));
 }
 
@@ -60,8 +62,8 @@ export function plan(live: Live, next: ProjectStatusView): Plan {
 const unavailable: AuthorityResult = { kind: "unavailable" };
 
 export function createProjectSync(o: SyncOptions): ProjectSync {
-  let generation = 0, session = 0, started = false, stopped = false, failures = 0, invalid = false, invalidations = 0;
-  // What the request in flight started with: an event-driven one that saw every invalidation covers a later beforeWrite or event.
+  let generation = 0, session = 0, started = false, stopped = false, failures = 0, invalid = false, invalidations = 0, degraded = false;
+  // What the request in flight started with: one that saw every invalidation covers a later beforeWrite; a window event is covered only by another window event's or a write's request.
   let runSeen = -1, runReason: ReconcileReason = "poll";
   let last = o.initial, shown = "";
   let cancelTimer: (() => void) | null = null, unlisten: (() => void) | null = null;
@@ -74,7 +76,7 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
   };
   function schedule() {
     cancelTimer?.();
-    cancelTimer = started && !stopped ? o.setTimer(() => { cancelTimer = null; void revalidate("poll"); }, statusDelay(failures, o.random())) : null;
+    cancelTimer = started && !stopped ? o.setTimer(() => { cancelTimer = null; void revalidate("poll"); }, statusDelay(failures, o.random(), degraded)) : null;
   }
 
   async function run(): Promise<AuthorityResult> {
@@ -113,7 +115,10 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
     return running = flight;
   }
   function revalidate(reason: ReconcileReason): Promise<AuthorityResult> {
-    if (!started || stopped || (reason === "poll" && o.visibility.hidden())) return Promise.resolve(unavailable); // hidden: paused until a return event
+    // Hidden: polls and hints are paused until a return event; a write barrier still works.
+    if (!started || stopped || ((reason === "poll" || reason === "hint") && o.visibility.hidden())) return Promise.resolve(unavailable);
+    // A (re)join proves nothing about what was missed: writes wait for the read this starts (or the one it queues behind).
+    if (reason === "subscribed") invalidate();
     if (!running) return begin(reason);
     if (queued) return queued;
     const at = session;
@@ -122,6 +127,11 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
   }
 
   function invalidate() { invalid = true; invalidations++; }
+  function setDegraded(on: boolean) {
+    if (on === degraded) return;
+    degraded = on;
+    if (cancelTimer) schedule(); // a waiting poll moves to the new cadence; one in flight schedules its own follow-up
+  }
 
   return {
     start() {
@@ -133,13 +143,14 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
         // Background autosave keeps running while polling is paused, and another window can sign in as someone else: what was
         // true before this window hid or lost focus is no longer proven.
         if (reason === "hidden" || reason === "blur") { invalidate(); return; }
-        if (running && runSeen === invalidations && runReason !== "poll") return;
+        // A poll, hint or join read is not a window event: it may have started just before this return, so the return gets its own.
+        if (running && runSeen === invalidations && runReason !== "poll" && runReason !== "hint" && runReason !== "subscribed") return;
         invalidate(); void revalidate(reason);
       });
       schedule();
     },
     dispose() {
-      started = false; generation++; session++; running = queued = null;
+      started = false; generation++; session++; running = queued = null; degraded = false;
       cancelTimer?.(); cancelTimer = null;
       unlisten?.(); unlisten = null;
     },
@@ -148,6 +159,7 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
       : !invalid ? Promise.resolve<AuthorityResult>({ kind: "current", generation, status: last })
       : running && runSeen === invalidations ? running : revalidate("before-save")),
     invalidate,
+    setDegraded,
     fence: (at = generation) => fenceFor(at),
   };
 }

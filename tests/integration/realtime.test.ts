@@ -209,7 +209,23 @@ test("helper ownership, search path and role privileges are minimal", { skip: !c
     const { rows: [rls] } = await database.query<{ enabled: boolean; owner: string }>("select relrowsecurity as enabled, pg_get_userbyid(relowner) as owner from pg_class where oid = 'realtime.messages'::regclass");
     assert.deepEqual(rls, { enabled: true, owner: "supabase_realtime_admin" });
     const { rows: policies } = await database.query<{ policyname: string; cmd: string; roles: string[] }>("select policyname::text, cmd::text, roles::text[] from pg_policies where schemaname = 'realtime' and tablename = 'messages' order by policyname");
+    // The scoped-credential role (E36): NOLOGIN, no membership anywhere, only realtime.messages SELECT/INSERT and the helper; nothing in app, Auth, Storage or public.
+    const { rows: [client] } = await database.query(`
+      select r.rolsuper or r.rolinherit or r.rolcanlogin or r.rolbypassrls or r.rolcreatedb or r.rolcreaterole or r.rolreplication as privileged,
+        (select count(*)::int from pg_auth_members where member = r.oid) as memberships,
+        (select count(*)::int from pg_auth_members where roleid = r.oid and (member <> 'postgres'::regrole or inherit_option or set_option)) as holders,
+        has_schema_privilege(r.oid, 'app_private', 'USAGE') and has_function_privilege(r.oid, 'app_private.can_realtime(text,text)', 'EXECUTE') as helper,
+        has_schema_privilege(r.oid, 'realtime', 'USAGE') and has_table_privilege(r.oid, 'realtime.messages', 'SELECT') and has_table_privilege(r.oid, 'realtime.messages', 'INSERT') as messages,
+        has_table_privilege(r.oid, 'realtime.messages', 'UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') as message_writes,
+        has_schema_privilege(r.oid, 'app', 'USAGE') or has_schema_privilege(r.oid, 'auth', 'USAGE') or has_schema_privilege(r.oid, 'storage', 'USAGE') as schemas,
+        exists (select 1 from pg_class c where c.relnamespace in ('app'::regnamespace, 'public'::regnamespace, 'auth'::regnamespace, 'storage'::regnamespace) and c.relkind in ('r', 'p', 'v', 'm', 'f')
+          and (has_any_column_privilege(r.oid, c.oid, 'SELECT,INSERT,UPDATE,REFERENCES') or has_table_privilege(r.oid, c.oid, 'DELETE,TRUNCATE,TRIGGER'))) as data,
+        has_function_privilege(r.oid, 'app_private.enqueue_project_hint(jsonb,text)', 'EXECUTE') or has_function_privilege(r.oid, 'app_private.notify_project_changed()', 'EXECUTE') as hints
+      from pg_roles r where r.rolname = 'app_realtime_client'`);
+    assert.deepEqual(client, { privileged: false, memberships: 0, holders: 0, helper: true, messages: true, message_writes: false, schemas: false, data: false, hints: false });
     assert.deepEqual(policies, [
+      { policyname: "scoperoom_rt_client_insert", cmd: "INSERT", roles: ["app_realtime_client"] },
+      { policyname: "scoperoom_rt_client_select", cmd: "SELECT", roles: ["app_realtime_client"] },
       { policyname: "scoperoom_rt_hint", cmd: "INSERT", roles: ["app_realtime_notifier"] },
       { policyname: "scoperoom_rt_insert", cmd: "INSERT", roles: ["authenticated"] },
       { policyname: "scoperoom_rt_select", cmd: "SELECT", roles: ["authenticated"] },

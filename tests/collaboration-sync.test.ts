@@ -5,6 +5,10 @@ import {
   createProjectSync, plan, statusDelay, type Live, type StatusRead, type VisibilityEvent,
 } from "../src/features/collaboration/ui/project-sync.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
+import type { PeerMessage, PresenceState } from "../src/features/collaboration/contracts/messages.ts";
+import { realtimeTopics } from "../src/features/collaboration/contracts/topics.ts";
+import { createProjectLive, savedViewOf, type LiveScope } from "../src/features/collaboration/ui/project-live.ts";
+import type { LiveState, RealtimeTransport } from "../src/features/collaboration/ui/realtime-transport.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import { stranded } from "../src/features/studio/ui/studio-ui.ts";
 
@@ -378,6 +382,23 @@ test("focus and visibilitychange together cost one status request; an event duri
   t.sync.dispose();
 });
 
+test("a Realtime-started read (subscribed, hint) in flight does not swallow a focus: the return event gets its own read", async () => {
+  for (const reason of ["subscribed", "hint"] as const) {
+    const t = rig();
+    t.sync.start();
+    void t.sync.revalidate(reason);
+    await settle();
+    assert.equal(t.pending.length, 1);
+    fire(t, "focus");
+    const write = t.sync.beforeWrite();
+    await t.answer(ok(status()));
+    assert.equal(t.pending.length, 1, reason + " predates the focus, so one follow-up is required");
+    await t.answer(ok(status()));
+    assert.equal((await write).kind, "current");
+    t.sync.dispose();
+  }
+});
+
 test("a failed status read after an event keeps writes blocked until a later read succeeds", async () => {
   const t = rig();
   t.sync.start();
@@ -476,4 +497,421 @@ test("a follow-up queued behind an account-change stop never fetches, so the she
   assert.deepEqual(t.log, ["account"]);
   assert.equal((await queued).kind, "unavailable");
   t.sync.dispose();
+});
+
+test("statusDelay: the degraded base is 5 s and backs off like the normal one", () => {
+  assert.deepEqual([0, 1, 2, 3].map((failures) => statusDelay(failures, 0.5, true)), [5_000, 10_000, 20_000, 20_000]);
+  assert.equal(statusDelay(0, 0.5, false), 10_000);
+});
+
+test("degraded moves the waiting poll to 5 s and recovery back to 10 s, always with exactly one timer", async () => {
+  const t = rig();
+  t.sync.start();
+  t.sync.setDegraded(true);
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [5_000]);
+  t.sync.setDegraded(true);
+  assert.equal(t.timers.length, 1);
+  await t.advance(5_000);
+  await t.answer(ok(status()));
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [5_000], "the next poll keeps the degraded cadence");
+  t.sync.setDegraded(false);
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [10_000]);
+  await t.advance(10_000);
+  t.sync.setDegraded(true); // mid-request: no timer yet, the request schedules its own follow-up
+  assert.equal(t.timers.length, 0);
+  await t.answer(ok(status()));
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [5_000]);
+  t.sync.dispose();
+  assert.equal(t.timers.length, 0);
+});
+
+// ---- Realtime session (04.3): a typed fake transport proves lifecycle order, not RLS or delivery. ----
+const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const P = uuid(1), E1 = uuid(2), E2 = uuid(3), D1 = uuid(4), D2 = uuid(5), F1 = uuid(6), F2 = uuid(7), ME = uuid(8), ME_PROFILE = uuid(9), PEER = uuid(10), PEER_PROFILE = uuid(11), NODE = uuid(12);
+const SCOPE: LiveScope = { projectId: P, epoch: E1, draftId: D1, profileId: ME_PROFILE, canSend: true };
+type Wire = {
+  scope: Parameters<RealtimeTransport["connect"]>[0]; handlers: Parameters<RealtimeTransport["connect"]>[1];
+  sent: PeerMessage[]; tracked: PresenceState[]; disposed: boolean;
+};
+
+function liveRig() {
+  let clock = 1_000, step = 0; // step > 0: every clock read advances the clock after returning
+  const timers: { at: number; fn: () => void }[] = [];
+  const wires: Wire[] = [];
+  const calls = { revalidate: [] as string[], degraded: [] as boolean[] };
+  const transport: RealtimeTransport = {
+    connect(scope, handlers) {
+      const wire: Wire = { scope, handlers, sent: [], tracked: [], disposed: false };
+      wires.push(wire);
+      return { sendPeer: (message) => wire.sent.push(message), trackPresence: (state) => wire.tracked.push(state), dispose: async () => { wire.disposed = true; } };
+    },
+  };
+  let revalidate = (reason: string) => { calls.revalidate.push(reason); };
+  const live = createProjectLive({
+    transport, sessionId: ME, now: () => { const at = clock; clock += step; return at; },
+    setTimer: (fn, ms) => { const timer = { at: clock + ms, fn }; timers.push(timer); return () => { const at = timers.indexOf(timer); if (at >= 0) timers.splice(at, 1); }; },
+    revalidate: (reason) => revalidate(reason),
+    degraded: (on) => calls.degraded.push(on),
+  });
+  const harness = {
+    live, wires, timers, calls,
+    tick(ms: number) { step = ms; },
+    get current() { return wires.at(-1)!; },
+    liveWires: () => wires.filter((wire) => !wire.disposed),
+    onRevalidate(fn: (reason: string) => void) { revalidate = fn; },
+    async advance(ms: number) {
+      const until = clock + ms;
+      for (;;) {
+        const due = timers.filter((timer) => timer.at <= until).sort((a, b) => a.at - b.at)[0];
+        if (!due) break;
+        clock = due.at;
+        timers.splice(timers.indexOf(due), 1);
+        due.fn();
+        await settle();
+      }
+      clock = until;
+    },
+    state: (value: LiveState) => wires.at(-1)!.handlers.state(value),
+    /** Connected, subscribed and standing on flow F1: ready to send. */
+    async ready(scope = SCOPE) {
+      live.setScope(scope);
+      live.setPresence({ flowId: F1, selection: null });
+      harness.state("subscribed");
+      await harness.advance(0);
+    },
+  };
+  return harness;
+}
+const peerPresence = (over: Partial<PresenceState> & { presence_ref?: string } = {}) => ({
+  projectId: P, epoch: E1, draftId: D1, flowId: F1, sessionId: PEER, profileId: PEER_PROFILE, selection: null, presence_ref: "ref-1", ...over,
+});
+const wireMessage = (over: Record<string, unknown>) => ({ projectId: P, epoch: E1, draftId: D1, flowId: F1, sessionId: PEER, sequence: 1, type: "CURSOR", x: 5, y: 6, ...over });
+const savedDraft = (positionVersion: number) => ({
+  id: D1, document: { nodes: { [NODE]: { flowId: F1 } } }, layout: { positions: { [NODE]: { x: 0, y: 0, version: positionVersion } } },
+}) as unknown as Parameters<typeof savedViewOf>[0];
+const dragOf = (version: number, gestureId = "g1") => ({
+  projectId: P, epoch: E1, draftId: D1, flowId: F1, sessionId: PEER, sequence: 1, type: "DRAG_PREVIEW", gestureId, items: [{ nodeId: NODE, x: 10, y: 20, basePositionVersion: version }],
+});
+const item = (x: number, y: number) => ({ nodeId: NODE, x, y, basePositionVersion: 1 });
+
+test("live: joins the bootstrap's topics; SUBSCRIBED revalidates once and clears the degraded flag", () => {
+  const t = liveRig();
+  t.live.setScope(SCOPE);
+  t.live.setScope({ ...SCOPE });
+  assert.equal(t.wires.length, 1, "an unchanged scope keeps the connection");
+  assert.deepEqual(t.current.scope, { projectId: P, epoch: E1, topics: realtimeTopics(P, E1) });
+  assert.equal(t.live.state(), "connecting");
+  t.state("subscribed");
+  t.state("subscribed");
+  assert.deepEqual(t.calls.revalidate, ["subscribed"]);
+  t.state("degraded");
+  t.state("subscribed");
+  assert.deepEqual(t.calls.revalidate, ["subscribed", "subscribed"], "a rejoin also closes its gap");
+  assert.deepEqual(t.calls.degraded, [true, false]);
+});
+
+test("live: hints are checked against project and epoch, then debounced 100 ms into one revalidation", async () => {
+  const t = liveRig();
+  t.live.setScope(SCOPE);
+  const hint = (over: Record<string, unknown> = {}) => t.current.handlers.hint({ type: "PROJECT_CHANGED", projectId: P, epoch: E1, eventSequence: 7, ...over });
+  for (const bad of [{ projectId: uuid(99) }, { epoch: E2 }, { eventSequence: -1 }, { type: "OTHER" }, { extra: 1 }]) hint(bad);
+  t.current.handlers.hint("PROJECT_CHANGED");
+  t.current.handlers.hint(null);
+  await t.advance(1_000);
+  assert.deepEqual(t.calls.revalidate, [], "invalid or other-context hints do nothing");
+  hint(); await t.advance(60); hint(); hint();
+  await t.advance(39);
+  assert.deepEqual(t.calls.revalidate, []);
+  await t.advance(1);
+  assert.deepEqual(t.calls.revalidate, ["hint"], "a burst is one revalidation");
+  hint({ id: "provider-id" }); // the provider adds an id to a sent payload
+  await t.advance(100);
+  assert.deepEqual(t.calls.revalidate, ["hint", "hint"]);
+});
+
+test("live + controller: a hint burst is one request in flight and one trailing", async () => {
+  const s = rig(), t = liveRig();
+  s.sync.start();
+  t.onRevalidate((reason) => { void s.sync.revalidate(reason as "hint"); });
+  t.live.setScope(SCOPE);
+  const hint = () => t.current.handlers.hint({ type: "PROJECT_CHANGED", projectId: P, epoch: E1, eventSequence: 2 });
+  hint(); await t.advance(100);
+  assert.equal(s.pending.length, 1);
+  hint(); hint(); await t.advance(100); hint(); await t.advance(100);
+  assert.equal(s.pending.length, 1, "still one request in flight");
+  await s.answer(ok(status()));
+  assert.equal(s.pending.length, 1, "one trailing request for every hint that arrived meanwhile");
+  await s.answer(ok(status()));
+  assert.equal(s.pending.length, 0);
+  assert.equal(s.timers.length, 1, "the poll stays a single timer");
+  s.sync.dispose();
+});
+
+test("live: a status epoch or draft change replaces the connection under a new generation; old callbacks are ignored", async () => {
+  const t = liveRig();
+  t.live.setScope(SCOPE);
+  const old = t.current;
+  t.live.setScope({ ...SCOPE, canSend: false }); // a role change only: no reconnect
+  assert.equal(t.wires.length, 1);
+  t.live.setScope({ ...SCOPE, epoch: E2 });
+  assert.equal(t.wires.length, 2);
+  assert.equal(old.disposed, true);
+  assert.deepEqual(t.current.scope.topics, realtimeTopics(P, E2));
+  t.live.setScope({ ...SCOPE, epoch: E2, draftId: D2 });
+  assert.equal(t.wires.length, 3);
+  assert.deepEqual(t.liveWires().map((wire) => wire.scope.topics), [realtimeTopics(P, E2)]);
+  // Everything the older generations report afterwards is dropped.
+  old.handlers.state("subscribed");
+  old.handlers.hint({ type: "PROJECT_CHANGED", projectId: P, epoch: E1, eventSequence: 9 });
+  old.handlers.peer(wireMessage({}));
+  old.handlers.presence([peerPresence()]);
+  t.wires[1]!.handlers.state("degraded");
+  await t.advance(1_000);
+  assert.deepEqual(t.calls.revalidate, []);
+  assert.deepEqual(t.calls.degraded, []);
+  assert.equal(t.live.state(), "connecting");
+  assert.deepEqual(t.live.roster(), []);
+  assert.equal(t.timers.length, 0);
+});
+
+test("live: movement is one trailing 125 ms scheduler keeping only the newest; DRAG_END supersedes a pending preview", async () => {
+  const t = liveRig();
+  await t.ready();
+  for (let x = 1; x <= 5; x++) { t.live.sendCursor({ x, y: x }); await t.advance(10); }
+  assert.equal(t.current.sent.length, 0, "nothing goes out before the trailing tick");
+  await t.advance(75);
+  assert.deepEqual(t.current.sent.map((m) => m.type === "CURSOR" && [m.x, m.y, m.sequence, m.flowId, m.sessionId]), [[5, 5, 1, F1, ME]]);
+  t.live.sendCursor({ x: 8, y: 8 });
+  t.live.sendDrag("g1", [item(1, 2)]);
+  await t.advance(125);
+  assert.deepEqual(t.current.sent.slice(1).map((m) => m.type), ["DRAG_PREVIEW"], "the newest pending replaces the cursor");
+  t.live.sendDrag("g1", [item(3, 4)]);
+  t.live.endDrag("g1");
+  t.live.sendCursor({ x: 9, y: 9 }); // movement never displaces an unsent end
+  await t.advance(125);
+  assert.deepEqual(t.current.sent.slice(2).map((m) => m.type), ["DRAG_END"]);
+  assert.deepEqual(t.current.sent.map((m) => m.sequence), [1, 2, 3], "strictly increasing");
+  assert.equal(t.timers.length, 0);
+  t.live.sendCursor({ x: 1, y: 1 });
+  t.live.sendCursor(null); // the pointer left the canvas
+  await t.advance(500);
+  assert.equal(t.current.sent.length, 3);
+});
+
+test("live: the sender's sequence keeps counting across flow changes and reconnects for the provider's lifetime", async () => {
+  const t = liveRig();
+  await t.ready();
+  t.live.sendCursor({ x: 1, y: 1 }); await t.advance(125);
+  t.live.setPresence({ flowId: F2, selection: null });
+  t.live.sendCursor({ x: 2, y: 2 }); await t.advance(125);
+  t.live.setScope({ ...SCOPE, epoch: E2 });
+  t.state("subscribed"); await t.advance(0);
+  t.live.sendCursor({ x: 3, y: 3 }); await t.advance(125);
+  const all = t.wires.flatMap((wire) => wire.sent);
+  assert.deepEqual(all.map((m) => [m.sequence, m.flowId, m.sessionId]), [[1, F1, ME], [2, F2, ME], [3, F2, ME]]);
+});
+
+test("live: nothing is sent unless both channels are subscribed, the viewer is an editor and a flow is open", async () => {
+  const t = liveRig();
+  t.live.setScope(SCOPE);
+  t.live.setPresence({ flowId: F1, selection: null });
+  t.live.sendCursor({ x: 1, y: 1 });
+  await t.advance(1_000);
+  assert.equal(t.current.sent.length + t.current.tracked.length, 0, "connecting");
+  t.state("subscribed"); await t.advance(0);
+  t.live.sendCursor({ x: 1, y: 1 });
+  t.state("degraded"); // the pending movement is dropped with the state
+  await t.advance(1_000);
+  assert.equal(t.current.sent.length, 0);
+  t.live.sendCursor({ x: 2, y: 2 });
+  await t.advance(1_000);
+  assert.equal(t.current.sent.length, 0, "no fallback while degraded");
+  t.state("subscribed"); await t.advance(0);
+  t.live.setScope({ ...SCOPE, canSend: false });
+  t.live.sendCursor({ x: 3, y: 3 }); t.live.sendDrag("g", [item(1, 1)]); t.live.endDrag("g");
+  await t.advance(1_000);
+  assert.equal(t.current.sent.length, 0, "a viewer or archived project never sends previews");
+  assert.ok(t.current.tracked.length >= 1, "but every member tracks Presence");
+  t.live.setScope({ ...SCOPE, epoch: E2 });
+  t.state("subscribed"); await t.advance(0);
+  t.live.setPresence({ flowId: null, selection: null });
+  t.live.sendCursor({ x: 1, y: 1 });
+  await t.advance(1_000);
+  assert.equal(t.current.sent.length, 0, "no flow, no cursor");
+  t.live.setPresence({ flowId: F1, selection: null });
+  t.live.sendDrag("g", []); // outside the wire limits: refused by the sender too
+  await t.advance(125);
+  assert.equal(t.current.sent.length, 0);
+});
+
+test("live: Presence tracks after join, then on selection or flow change at most once per second, never with coordinates", async () => {
+  const t = liveRig();
+  t.live.setScope(SCOPE);
+  t.state("subscribed"); await t.advance(0);
+  assert.equal(t.current.tracked.length, 1);
+  assert.deepEqual(t.current.tracked[0], { projectId: P, epoch: E1, draftId: D1, flowId: null, sessionId: ME, profileId: ME_PROFILE, selection: null });
+  t.live.setPresence({ flowId: F1, selection: null });
+  t.live.setPresence({ flowId: F1, selection: { kind: "NODES", ids: [NODE] } });
+  t.live.setPresence({ flowId: F1, selection: { kind: "FLOW", ids: [F1] } });
+  await t.advance(900);
+  assert.equal(t.current.tracked.length, 1, "within the second");
+  await t.advance(100);
+  assert.equal(t.current.tracked.length, 2);
+  assert.deepEqual(t.current.tracked[1]!.selection, { kind: "FLOW", ids: [F1] }, "only the latest claim goes out");
+  t.live.setPresence({ flowId: F1, selection: { kind: "FLOW", ids: [F1] } }); // unchanged
+  await t.advance(2_000);
+  assert.equal(t.current.tracked.length, 2);
+  assert.ok(t.current.tracked.every((state) => !("x" in state) && !("y" in state) && Object.keys(state).length === 7));
+});
+
+test("live: Presence feeds the roster (own, other-draft and malformed entries excluded; presence_ref stripped) and only rostered peers draw", async () => {
+  const t = liveRig();
+  await t.ready();
+  t.live.setSavedView(savedViewOf(savedDraft(1)));
+  t.current.handlers.peer(wireMessage({ sequence: 1 }));
+  assert.deepEqual(t.live.snapshot().cursors, [], "a packet before the first Presence sync draws nothing");
+  let notified = 0;
+  t.live.subscribe(() => { notified++; });
+  t.current.handlers.presence([
+    peerPresence(), peerPresence({ sessionId: ME }), peerPresence({ sessionId: uuid(20), draftId: D2 }), peerPresence({ sessionId: uuid(21), epoch: E2 }),
+    { ...peerPresence({ sessionId: uuid(22) }), email: "x@y.z" }, "junk", null,
+  ]);
+  assert.deepEqual(t.live.roster().map((entry) => entry.sessionId), [PEER]);
+  assert.ok(!("presence_ref" in t.live.roster()[0]!));
+  assert.equal(notified, 1);
+  t.current.handlers.presence([peerPresence({ presence_ref: "ref-2" })]);
+  assert.equal(notified, 1, "an unchanged roster does not notify");
+  t.current.handlers.peer(wireMessage({ sequence: 2 }));
+  assert.deepEqual(t.live.snapshot().cursors, [{ sessionId: PEER, x: 5, y: 6 }]);
+  t.current.handlers.peer(wireMessage({ sequence: 3, draftId: D2, x: 1 })); // another draft's packet
+  t.current.handlers.peer(wireMessage({ sequence: 4, flowId: F2, x: 2 }));
+  t.current.handlers.peer(wireMessage({ sessionId: ME, sequence: 9, x: 3 }));
+  t.current.handlers.peer({ ...wireMessage({ sequence: 5 }), label: "x" });
+  assert.deepEqual(t.live.snapshot().cursors, [{ sessionId: PEER, x: 5, y: 6 }]);
+  // The roster survives a flow change (setContext runs before syncSessions), and the peer draws again on the new flow.
+  t.live.setPresence({ flowId: F2, selection: null });
+  assert.deepEqual(t.live.snapshot().cursors, []);
+  t.current.handlers.peer(wireMessage({ sequence: 1, flowId: F2, x: 7, y: 8 }));
+  assert.deepEqual(t.live.snapshot().cursors, [{ sessionId: PEER, x: 7, y: 8 }]);
+  t.current.handlers.presence([]);
+  assert.deepEqual(t.live.snapshot().cursors, [], "a departed session loses its visuals");
+});
+
+test("live: previews are validated against the adopted saved draft and reconciled after every adoption; a drop clears overlays", async () => {
+  const t = liveRig();
+  await t.ready();
+  t.current.handlers.presence([peerPresence()]);
+  t.current.handlers.peer(dragOf(1));
+  assert.deepEqual(t.live.snapshot().drags, [], "no saved view adopted yet");
+  t.live.setSavedView(savedViewOf(savedDraft(1)));
+  t.current.handlers.peer({ ...dragOf(1), sequence: 2 });
+  assert.equal(t.live.snapshot().drags.length, 1);
+  t.live.setSavedView(savedViewOf(savedDraft(2))); // a save moved the node
+  assert.deepEqual(t.live.snapshot().drags, []);
+  t.current.handlers.peer({ ...dragOf(2), sequence: 3 });
+  assert.equal(t.live.snapshot().drags.length, 1);
+  t.state("degraded");
+  assert.deepEqual(t.live.snapshot(), { cursors: [], drags: [] });
+  assert.equal(t.live.roster().length, 1, "the roster waits for the next sync");
+});
+
+test("live: StrictMode double mount, remount and project switch leave one connection, no obsolete timers or callbacks", async () => {
+  const t = liveRig();
+  t.live.setScope(SCOPE); t.live.setScope(null); t.live.setScope(SCOPE); // a simulated unmount and remount of the same provider
+  assert.equal(t.wires.length, 2);
+  assert.deepEqual(t.liveWires(), [t.wires[1]]);
+  t.wires[0]!.handlers.state("subscribed");
+  t.wires[0]!.handlers.hint({ type: "PROJECT_CHANGED", projectId: P, epoch: E1, eventSequence: 1 });
+  await t.advance(1_000);
+  assert.deepEqual(t.calls.revalidate, []);
+  t.state("subscribed"); await t.advance(0);
+  t.live.setPresence({ flowId: F1, selection: null });
+  t.current.handlers.hint({ type: "PROJECT_CHANGED", projectId: P, epoch: E1, eventSequence: 2 });
+  t.live.sendCursor({ x: 1, y: 1 });
+  assert.ok(t.timers.length > 0);
+  t.live.setScope(null); // sign-out, project switch or unmount
+  assert.equal(t.liveWires().length, 0);
+  assert.equal(t.timers.length, 0, "pending hint, movement and Presence timers are cancelled");
+  await t.advance(5_000);
+  assert.deepEqual(t.calls.revalidate, ["subscribed"]);
+  assert.equal(t.wires.flatMap((wire) => wire.sent).length, 0);
+  // A different project mounts its own session (the old one is unmounted): only its callbacks count.
+  const other = liveRig();
+  other.live.setScope({ ...SCOPE, projectId: uuid(50) });
+  assert.equal(other.liveWires().length, 1);
+  t.wires[1]!.handlers.state("subscribed"); // the unmounted session's late callback
+  assert.deepEqual(other.calls.revalidate, []);
+  other.state("subscribed");
+  assert.deepEqual(other.calls.revalidate, ["subscribed"]);
+  assert.deepEqual(t.calls.revalidate, ["subscribed"], "the old session heard nothing more");
+  other.live.setScope(null);
+  assert.equal(other.liveWires().length + other.timers.length, 0);
+});
+
+test("SUBSCRIBED invalidates authority: a write after a (re)join waits for the status read it starts", async () => {
+  const s = rig(), t = liveRig();
+  s.sync.start();
+  t.onRevalidate((reason) => { void s.sync.revalidate(reason as "subscribed"); });
+  t.live.setScope(SCOPE);
+  t.state("subscribed");
+  await settle();
+  assert.equal(s.pending.length, 1);
+  let admitted = false;
+  const write = s.sync.beforeWrite().then((result) => { admitted = true; return result; });
+  await settle();
+  assert.equal(admitted, false, "not admitted before the status answers");
+  assert.equal(s.pending.length, 1, "it shares the in-flight read");
+  await s.answer(ok(status()));
+  assert.equal((await write).kind, "current");
+  // A rejoin after a drop does the same, even after authority was proven.
+  t.state("degraded"); t.state("subscribed");
+  await settle();
+  const again = s.sync.beforeWrite();
+  await settle();
+  assert.equal(s.pending.length, 1);
+  await s.answer(ok(status()));
+  assert.equal((await again).kind, "current");
+  s.sync.dispose();
+});
+
+test("a hint while the tab is hidden fetches nothing; a return event still revalidates", async () => {
+  const s = rig();
+  s.sync.start();
+  s.setHidden(true);
+  assert.equal((await s.sync.revalidate("hint")).kind, "unavailable");
+  assert.equal(s.pending.length, 0);
+  s.setHidden(false);
+  void s.sync.revalidate("hint");
+  assert.equal(s.pending.length, 1);
+  await s.answer(ok(status()));
+  s.sync.dispose();
+});
+
+test("live: snapshot and nextExpiry share one clock read, so an entry is never shown with no timer to expire it", async () => {
+  const t = liveRig();
+  await t.ready();
+  t.live.setSavedView(savedViewOf(savedDraft(1)));
+  t.current.handlers.presence([peerPresence()]);
+  t.current.handlers.peer(wireMessage({ sequence: 1 }));
+  const expiry = 1_000 + 2_000; // received at clock 1000, PREVIEW_TTL_MS 2000
+  await t.advance(1_999); // one millisecond before the cursor expires
+  t.tick(1); // the clock passes the expiry between two separate reads
+  const now = expiry - 1;
+  assert.equal(t.live.snapshot(now).cursors.length, 1);
+  assert.equal(t.live.nextExpiry(now), expiry, "the shown entry has an expiry to arm a timer for");
+});
+
+test("live: the preview snapshot keeps its identity while unchanged and changes when a preview arrives or expires", async () => {
+  const t = liveRig();
+  await t.ready();
+  t.live.setSavedView(savedViewOf(savedDraft(1)));
+  t.current.handlers.presence([peerPresence()]);
+  const empty = t.live.snapshot();
+  assert.equal(t.live.snapshot(), empty);
+  t.current.handlers.peer(wireMessage({ sequence: 1 }));
+  const drawn = t.live.snapshot();
+  assert.notEqual(drawn, empty);
+  assert.equal(t.live.snapshot(), drawn);
+  await t.advance(2_000);
+  assert.deepEqual(t.live.snapshot().cursors, [], "an expired entry drops on the next read");
 });

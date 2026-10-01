@@ -45,7 +45,7 @@ The Studio queues every edit in a local outbox on top of an optimistic draft and
 
 ## Saved-update polling (Stage 04.2)
 
-Saved changes by other people reach an admitted reader through the authenticated API alone; there is no browser Realtime client yet (Stage 04.3).
+Saved changes by other people reach an admitted reader through the authenticated API; Realtime (Stage 04.3, below) only hints that a read is due and never carries saved content.
 
 - **One controller per open project.** `SyncProvider` (`features/collaboration/ui/sync-context.tsx`, mounted by the shell and keyed by project) owns one `createProjectSync` controller (`project-sync.ts`, pure, effects injected). Canvas, List, inspector and Details share it; none starts a timer or status read of its own. Switching projects disposes the old controller (timer, listeners, generation) and starts a new one.
 - **Cadence.** A recursive timeout after each completed `GET status`: about 10 s with ±10% jitter, doubling per failed read to a 30 s cap; paused while the tab is hidden; focus, `online` and visibility return revalidate at once. A change of `eventSequence` alone fetches nothing; a changed `documentRevision`/`layoutRevision` triggers one coherent `D` read; a role, lifecycle or replaced-draft change reloads the bootstrap.
@@ -54,6 +54,12 @@ Saved changes by other people reach an admitted reader through the authenticated
 - **Write barrier.** Every dependent write (autosave, Save, Arrange Apply, Create/Duplicate flow, save-first switches, later batches of a split save) awaits `beforeWrite`. After a focus, blur, hide, reconnect or failed read the authority is invalid until a status read that started afterwards succeeds; 403/404 refuse the write with nothing sent, 503 shows Not saved and keeps the edit. Between events a valid controller lets writes through: the server still checks membership on every request.
 - **Identity.** `ProjectStatusView.viewerId` (the caller's profile id) is compared on every status and bootstrap; a different account tears the shell down and navigates, sending nothing. `readRoute`/`mutationRoute` (`src/server/web/api-request.ts`) classify Supabase Auth failures: a definitive denial is 401, an Auth outage is 503 `UNAVAILABLE`, so an outage never signs anyone out.
 - **Access loss.** A 404 status drops the project (`dropProject`); a 403 shows the error/recovery view without dropping it. Either way late responses cannot repopulate state and unsaved edits are not sent. A downgrade to a role that cannot edit leaves the edits shown for copy or discard.
+
+## Browser Realtime (Stage 04.3)
+
+- **Credential.** The browser never gets its Auth token for Realtime. `POST /api/projects/:id/realtime-token` (identity and membership checked, same-origin, `no-store`) returns a five-minute token with role `app_realtime_client` and only `profile_id`, `project_id` and `realtime_epoch` claims, signed from `SCOPEROOM_REALTIME_SIGNING_*`; the client renews it before expiry through the heartbeat. Authorization is the `can_realtime` helper plus the database role, as in Stage 04.1.
+- **Channels belong to the sync controller** (`project-live.ts`, `realtime-transport.ts`): the events channel carries committed-change hints, the collab channel carries Presence and throttled cursor/drag previews. A hint or SUBSCRIBED only calls `revalidate`; previews are advisory, parsed strictly, checked against the adopted saved draft and expire after about 2 s. A failed or degraded Realtime shows "Live updates delayed", switches polling to the 5 s cadence with no second timer, and never blocks saving. An epoch or draft change rejoins under a new generation.
+- **Limits.** Presence identity is an unverified claim and names come from the members list. Realtime enforces the credential expiry on joined sockets but does not evict a removed member at once (bounded by the 300 s credential plus a heartbeat). Evidence: [stage-04.md](../evidence/collaboration/stage-04.md).
 
 One project Realtime controller uses events/collab topics, current JWT policies, post-subscribe refetch and status reconciliation. Messages never write canonical records. Epoch rotation and backend authorization account for cached socket permissions; no instant-eviction promise.
 

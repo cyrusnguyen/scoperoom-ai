@@ -1,10 +1,16 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import {
   Background, BaseEdge, ConnectionMode, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
   useReactFlow, type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
 } from "@xyflow/react";
+import LiveOverlay from "@/features/collaboration/ui/live-overlay";
+import { gestureBases, gestureItems } from "@/features/collaboration/ui/live-canvas";
+import { savedViewOf } from "@/features/collaboration/ui/project-live";
+import { useSync } from "@/features/collaboration/ui/sync-context";
+import { SelectedBy, useParticipants } from "@/features/collaboration/ui/use-participants";
+import type { Person } from "@/features/collaboration/ui/participants";
 import { SIDES, STEP_SIZE, type Direction, type Side } from "@/features/drafts/contracts/draft-layout";
 import type { NodeKind } from "@/features/drafts/contracts/scope-document";
 import { bufferKey, discard, edit, editFields, refuse, type Saved } from "./buffers";
@@ -15,7 +21,7 @@ import { explain, useStudio } from "./studio-context";
 import { useKeyboardShortcuts } from "./use-keyboard-shortcuts";
 import { dropTarget, moveTargets, orientConnect, orientReconnect, parseShapePayload, selectEdge, selectNodes, SHAPE_DRAG_MIME, type SelectChange, type StudioUi } from "./studio-ui";
 
-type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction };
+type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction; selectedBy?: Person[] };
 type StepNode = Node<StepData, "step">;
 type FlowEdge = Edge<{ condition: string }, "flow">;
 type Point = { x: number; y: number };
@@ -67,6 +73,7 @@ function StepCard({ id, data, isConnectable }: NodeProps<StepNode>) {
   const { editing } = useContext(InlineEditingContext);
   return <div className="step-node" data-kind={data.kind}>
     <KindShape kind={data.kind} />
+    <SelectedBy people={data.selectedBy} />
     {/* React Flow's edge-drawing lookup only finds a saved *start* handle among `source`-typed handles (never
         `target`), so every side needs one of each type at the same id and position to draw as either end of a saved
         connection. The primary pass is the one interactive, visible handle per side, keeping HANDLE_ORDER's
@@ -187,7 +194,7 @@ export default function FlowCanvas(props: { flowId: string; preview?: { position
 }
 
 function CanvasInner({ flowId, preview }: { flowId: string; preview?: { positions: Record<string, Point>; direction: Direction } }) {
-  const { draft, editable, ui, update, run, inspect, moveSteps, dragActive, undo, redo, canUndo, canRedo, unsaved, busy, saveChanges } = useStudio();
+  const { draft, savedDraft, editable, ui, update, run, inspect, moveSteps, dragActive, undo, redo, canUndo, canRedo, unsaved, busy, saveChanges } = useStudio();
   const { document, layout } = draft;
   const flow = useReactFlow();
   const { screenToFlowPosition } = flow;
@@ -197,11 +204,29 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   const [editing, setEditing] = useState<Editing>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const interactive = !preview;
+  const { selectedBy } = useParticipants(flowId);
+  const { sendCursor, sendDrag, endDrag } = useSync();
+  // The advisory preview of the drag in progress: its id and the SAVED position versions captured when it began (null: nothing to preview).
+  const gesture = useRef<{ id: string; bases: Map<string, number> } | null>(null);
   // Ctrl/Cmd+S is the Save button: nothing to save (or a refused save awaiting its choice) is a no-op that still keeps the browser's save dialog away.
   const save = () => { if (unsaved && !busy && ui.outbox.sending?.state !== "refused") void saveChanges(); };
   useKeyboardShortcuts(flow, { undo: canUndo ? undo : undefined, redo: canRedo ? redo : undefined, save: editable ? save : undefined }, interactive);
   // A canvas unmounted mid-drag (flow removed elsewhere) must not leave autosave paused.
   useEffect(() => () => dragActive(false), [dragActive]);
+  useEffect(() => () => { if (gesture.current) endDrag(gesture.current.id); }, [endDrag]);
+  const beginDrag = (moved: StepNode[]) => {
+    dragActive(true);
+    const bases = gestureBases(moved, savedViewOf(savedDraft), flowId);
+    gesture.current = bases.size ? { id: crypto.randomUUID(), bases } : null;
+  };
+  const moveDrag = (moved: StepNode[]) => { if (gesture.current) sendDrag(gesture.current.id, gestureItems(gesture.current.bases, moved)); };
+  const localDragging = useMemo(() => new Set(Object.keys(dragging)), [dragging]);
+  const sizeOf = useCallback((nodeId: string) => { const node = document.nodes[nodeId]; return node ? STEP_SIZE[node.kind] : STEP_SIZE.ACTION; }, [document]);
+  // Cursors are published from the flow view only: the shape panel, controls and everything else outside it send nothing.
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (!interactive) return;
+    sendCursor((event.target as Element).closest(".react-flow") ? screenToFlowPosition({ x: event.clientX, y: event.clientY }) : null);
+  };
   // Inline editors exist only on an editable, live canvas (never read-only, archived or the arrangement preview).
   const canEdit = interactive && editable;
   // Every edit is local (queued in the outbox), so a save in flight never locks the canvas: new edits queue behind it.
@@ -251,10 +276,10 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
       return {
         id: node.id, type: "step", width: size.width, height: size.height,
         position: preview?.positions[node.id] ?? dragging[node.id] ?? { x: layout.positions[node.id]!.x, y: layout.positions[node.id]!.y },
-        data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction }, selected: selected.includes(node.id), measured: measured[node.id],
+        data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction, selectedBy: selectedBy.get(node.id) }, selected: selected.includes(node.id), measured: measured[node.id],
       };
     });
-  }, [document, layout, flowId, ui.selection, preview, dragging, interactive, measured]);
+  }, [document, layout, flowId, ui.selection, preview, dragging, interactive, measured, selectedBy]);
 
   const edges = useMemo<FlowEdge[]>(() => Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => {
     // A saved connection point (UI02 Task 13); absent, an edge renders with today's direction-based default.
@@ -290,6 +315,8 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   // A step drag and a drag of the selection box both end here: one local drop, however many steps it moved.
   const drop = (moved: StepNode[]) => {
     dragActive(false);
+    if (gesture.current) endDrag(gesture.current.id);
+    gesture.current = null;
     const targets = moveTargets(moved, layout);
     setDragging({});
     if (targets.length) void moveSteps(flowId, targets);
@@ -380,12 +407,12 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     inspect();
   };
 
-  return <InlineEditingContext.Provider value={inline}><div className="canvas" ref={wrapperRef} onDragOver={onShapeDragOver} onDrop={onShapeDrop} onKeyDown={canvasKeyDown}>
+  return <InlineEditingContext.Provider value={inline}><div className="canvas" ref={wrapperRef} onDragOver={onShapeDragOver} onDrop={onShapeDrop} onKeyDown={canvasKeyDown} onPointerMove={onPointerMove} onPointerLeave={() => sendCursor(null)}>
     <ReactFlow<StepNode, FlowEdge> key={preview ? `preview-${preview.direction}` : flowId} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions} connectionMode={ConnectionMode.Loose}
       onNodesChange={interactive ? onNodesChange : measure} onEdgesChange={interactive ? onEdgesChange : undefined}
-      onNodeDoubleClick={interactive ? nodeDoubleClick : undefined} onEdgeDoubleClick={interactive ? edgeDoubleClick : undefined} onNodeDragStart={interactive ? () => dragActive(true) : undefined} onNodeDragStop={interactive ? (_event, _node, moved) => drop(moved) : undefined}
-      onSelectionDragStart={interactive ? () => dragActive(true) : undefined} onSelectionDragStop={interactive ? (_event, moved) => drop(moved) : undefined}
+      onNodeDoubleClick={interactive ? nodeDoubleClick : undefined} onEdgeDoubleClick={interactive ? edgeDoubleClick : undefined} onNodeDragStart={interactive ? (_event, _node, moved) => beginDrag(moved) : undefined} onNodeDrag={interactive ? (_event, _node, moved) => moveDrag(moved) : undefined} onNodeDragStop={interactive ? (_event, _node, moved) => drop(moved) : undefined}
+      onSelectionDragStart={interactive ? (_event, moved) => beginDrag(moved) : undefined} onSelectionDrag={interactive ? (_event, moved) => moveDrag(moved) : undefined} onSelectionDragStop={interactive ? (_event, moved) => drop(moved) : undefined}
       onConnectStart={interactive ? beginConnect : undefined} onClickConnectStart={interactive ? beginClickConnect : undefined}
       onConnectEnd={interactive ? endGesture : undefined} onClickConnectEnd={interactive ? endClickConnect : undefined} onReconnectEnd={interactive ? endGesture : undefined}
       onReconnectStart={interactive ? (_event, _edge, keptType) => { reconnectEnd.current = keptType === "source" ? "target" : "source"; } : undefined}
@@ -394,6 +421,7 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
       fitView fitViewOptions={{ padding: 0.2, maxZoom: 1 }} minZoom={0.1} maxZoom={4}
       aria-label={preview ? "Arrangement preview" : `${editable ? "Editable" : "Read-only"} flow canvas: ${document.flows[flowId]?.title ?? ""}`}>
       <Background gap={24} size={1} />
+      {interactive && <LiveOverlay localDragging={localDragging} sizeOf={sizeOf} />}
     </ReactFlow>
     {interactive && <CanvasControls />}
     {canEdit && <ShapePanel onActivate={activateShape} />}

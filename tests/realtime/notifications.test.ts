@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import type { Client } from "pg";
+import { parseHint } from "../../src/features/collaboration/contracts/messages.ts";
 import { saveChanges } from "../../src/features/drafts/server/changes.ts";
 import { getDraft } from "../../src/features/drafts/server/execute-command.ts";
 import { ProjectError } from "../../src/features/projects/server/errors.ts";
@@ -33,6 +34,7 @@ test("a committed save delivers exactly the four-field hint to admitted subscrib
       assert.match(String(id), /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
       assert.deepEqual(Object.keys(fields).sort(), CONTRACT);
       assert.deepEqual(fields, { type: "PROJECT_CHANGED", projectId, epoch: realtimeEpoch, eventSequence: saved.eventSequence });
+      assert.deepEqual(parseHint(payload), { type: "PROJECT_CHANGED", projectId, epoch: realtimeEpoch, eventSequence: saved.eventSequence }, "the browser parser accepts the real delivered hint, provider id included");
     }
     assert.equal(saved.eventSequence, Number(eventSequence) + 2);
     assert.equal((await hintsFor(fixture.database, projectId)).length, earlier + 1, "one hint per changed save");

@@ -10,8 +10,10 @@ import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import { GraphError } from "@/features/drafts/domain/graph";
 import { projectErrors } from "@/features/projects/contracts/errors";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
-import { useSync, useSyncReader } from "@/features/collaboration/ui/sync-context";
+import { claimOf } from "@/features/collaboration/ui/participants";
+import { useSync, useSyncReader, useSyncSavedDraft } from "@/features/collaboration/ui/sync-context";
 import { follow } from "./buffers";
+import { currentFlow } from "./graph-view";
 import {
   acknowledged, addDrop, discardOutbox, enqueue, keepTheirs as keepTheirsChange, optimistic, pendingCount, rebase, redo as redoChange, replay, startSave, undo as undoChange,
   wireBody, withEntries, type ConflictTarget, type Outbox, type Placement, type Sending,
@@ -97,7 +99,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   saveRef?: RefObject<(() => Promise<boolean>) | null>; children: ReactNode;
 }) {
   const { outbox, request, save, refreshFailed } = ui;
-  const { beforeWrite, fence, invalidate } = useSync();
+  const { beforeWrite, fence, invalidate, setPresence } = useSync();
   // Another instance may still own the request after browser history remounts this keyed provider.
   const busy = Boolean(request);
   const draftId = savedDraft.id;
@@ -168,6 +170,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   }, [projectId, draftId, adopt, onAccessChanged, update, invalidate]);
 
   useSyncReader(reload); // polling adopts through this same gated read
+  useSyncSavedDraft(savedDraft); // remote previews are validated against what was adopted
 
   const run = useCallback(async (command: GraphCommand): Promise<RunOutcome> => {
     if (!editable) return readOnly;
@@ -375,6 +378,10 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
 
   const replayed = useMemo(() => (editable ? replay(outbox, savedDraft, floor) : { draft: savedDraft, skipped: [] }), [editable, outbox, savedDraft, floor]);
   const { draft, skipped } = replayed;
+  // The flow shown (if others can see it in the saved draft) and the selection are shared as an advisory claim; canvas and List use this one selection, and it never affects saving.
+  const shown = currentFlow(draft.document, ui.flowId);
+  const shownFlowId = shown && savedDraft.document.flows[shown.id] ? shown.id : null;
+  useEffect(() => { setPresence(claimOf(shownFlowId, ui.selection)); }, [setPresence, shownFlowId, ui.selection]);
   const unsaved = pendingCount(outbox) > 0;
   const canUndo = editable && outbox.entries.length > 0, canRedo = editable && outbox.redo.length > 0;
   const value = useMemo<Studio>(() => ({
@@ -401,6 +408,12 @@ export function formKeys(event: KeyboardEvent<HTMLFormElement>) {
   if (event.key !== "Enter") return;
   if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) { event.preventDefault(); return; } // 229: WebKit's IME-confirming Enter
   if ((event.ctrlKey || event.metaKey) && event.target instanceof HTMLTextAreaElement) { event.preventDefault(); event.currentTarget.requestSubmit(); }
+}
+
+/** Always mounted, so the one message is announced when it appears; saving is never blocked by it. */
+export function LiveStatus() {
+  const delayed = useSync().liveState === "degraded";
+  return <span className={delayed ? "muted" : "sr-only"} role="status">{delayed ? "Live updates delayed" : ""}</span>;
 }
 
 /**

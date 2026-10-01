@@ -2,6 +2,7 @@
 
 import { Fragment, useState, type KeyboardEvent } from "react";
 import { graphWarnings } from "@/features/drafts/domain/warnings";
+import { Participants } from "@/features/collaboration/ui/use-participants";
 import { Icon } from "@/features/shell/ui/icon";
 import { ArrangeDialog } from "./arrange-dialog";
 import { INCLUSION_LABELS } from "./fields";
@@ -11,7 +12,7 @@ import GraphList from "./graph-list";
 import { currentFlow, recordOf } from "./graph-view";
 import { AddStepDialog, ConnectDialog, DeleteStepsDialog } from "./step-dialogs";
 import { compareOutbox, describeAll, optimistic, type Conflict } from "./outbox";
-import { ReadRecovery, staleCodes, useStudio } from "./studio-context";
+import { LiveStatus, ReadRecovery, staleCodes, useStudio } from "./studio-context";
 import { canApplyAgain, stranded, studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
 
 type StudioDialog = "add" | "connect" | "delete" | "arrange" | null;
@@ -66,6 +67,7 @@ export default function Studio() {
       <h2 id="studio-flow-title" className="studio-flow-title" tabIndex={-1} title={flow.title}>{flow.title}</h2>
       <span className="badge" data-inclusion={flow.inclusion}>{INCLUSION_LABELS[flow.inclusion]}</span>
       <span className="editor-spacer" />
+      <Participants flowId={flow.id} />
       <div className="segmented" role="group" aria-label="Studio view">
         <button type="button" aria-pressed={view === "canvas"} onClick={() => update(() => ({ view: "canvas" }))}><Icon name="flow" size={14} />Canvas</button>
         <button type="button" aria-pressed={view === "list"} onClick={() => update(() => ({ view: "list" }))}><Icon name="list" size={14} />List</button>
@@ -104,7 +106,7 @@ function NoFlows({ onCreate }: { onCreate: () => void }) {
       </> : <p>Only the owner and editors can add flows.</p>}
     </>}
     <SaveNote />
-    <div className="studio-status"><RemovedRecovery /><ReadRecovery /><NoFlowsStatus /></div>
+    <div className="studio-status"><RemovedRecovery /><LiveStatus /><ReadRecovery /><NoFlowsStatus /></div>
   </div>;
 }
 
@@ -206,6 +208,7 @@ function StudioStatus({ flowId }: { flowId: string }) {
     <span className={redoCleared ? "muted" : "sr-only"} role="status">{redoCleared ? "Saved updates loaded. Redo history was cleared." : ""}</span>
     {redoCleared && <button type="button" className="button quiet small" onClick={dismissRedoCleared}>Dismiss</button>}
     <span className="editor-spacer" />
+    <LiveStatus />
     <ReadRecovery />
     <SaveStatus ui={ui} save={save} refreshFailed={refreshFailed} />
   </div>;

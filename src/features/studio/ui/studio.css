@@ -114,3 +114,44 @@ button.item-row { width: 100%; border: 0; border-bottom: var(--panel-border); ba
   .studio .field :is(input:not([type="checkbox"]), select, textarea) { min-height: 44px; }
   .modal :is(button, input:not([type="checkbox"]), select, textarea) { min-height: 44px; }
 }
+
+/* Advisory presence (Stage 04.3): who else is here and what they have selected. Colors are the --presence-N tokens. */
+.participants { position: relative; }
+.participants-list { position: absolute; top: calc(100% + var(--space-1)); right: 0; z-index: 5; width: max-content; max-width: min(320px, 90vw); padding: var(--space-3); border: var(--panel-border); border-radius: var(--radius-overlay); background: var(--surface-raised); box-shadow: var(--shadow-overlay); }
+.participants-list .plain-list { padding-left: 0; list-style: none; }
+/* The toggle can sit anywhere in the wrapped toolbar, so a list anchored to it would leave the screen: span the toolbar instead. */
+@container editor (max-width: 639px) {
+  .studio-toolbar { position: relative; }
+  .participants { position: static; }
+  .participants-list { left: var(--space-3); right: var(--space-3); width: auto; max-width: none; }
+}
+.presence-dot { display: inline-block; width: 10px; height: 10px; margin-right: var(--space-2); border-radius: 50%; background: var(--foreground-subtle); }
+.presence-marks { display: inline-flex; gap: 2px; }
+.presence-marks .presence-dot { margin-right: 0; box-shadow: 0 0 0 1px var(--background); }
+.step-node > .presence-marks { position: absolute; top: -6px; right: -6px; z-index: 2; }
+.step-row .presence-marks { margin-right: var(--space-2); }
+.presence-dot[data-presence="1"] { background: var(--presence-1); }
+.presence-dot[data-presence="2"] { background: var(--presence-2); }
+.presence-dot[data-presence="3"] { background: var(--presence-3); }
+.presence-dot[data-presence="4"] { background: var(--presence-4); }
+.presence-dot[data-presence="5"] { background: var(--presence-5); }
+.presence-dot[data-presence="6"] { background: var(--presence-6); }
+
+/* Advisory remote cursors and drag ghosts (Stage 04.3): flow-space outlines under the viewport transform, never node positions. */
+.live-overlay { position: absolute; top: 0; left: 0; z-index: 4; pointer-events: none; }
+.live-overlay [data-presence="1"] { color: var(--presence-1); }
+.live-overlay [data-presence="2"] { color: var(--presence-2); }
+.live-overlay [data-presence="3"] { color: var(--presence-3); }
+.live-overlay [data-presence="4"] { color: var(--presence-4); }
+.live-overlay [data-presence="5"] { color: var(--presence-5); }
+.live-overlay [data-presence="6"] { color: var(--presence-6); }
+.live-overlay > * { color: var(--foreground-subtle); }
+.live-ghost, .live-cursor { position: absolute; top: 0; left: 0; transform-origin: 0 0; pointer-events: none; transition: transform var(--duration) linear; }
+.live-ghost { border: 2px dashed currentColor; border-radius: var(--radius-card); }
+.live-label { position: absolute; top: 0; left: 0; padding: 0 var(--space-2); border-radius: var(--radius-control); background: currentColor; font-size: 12px; line-height: 18px; white-space: nowrap; transform-origin: 0 0; }
+.live-cursor-mark { display: block; width: 10px; height: 10px; border: 2px solid currentColor; border-radius: 50%; background: var(--background); }
+.live-label > span { color: var(--background); }
+.live-cursor .live-label { top: 12px; left: 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .live-ghost, .live-cursor { transition: none; }
+}
