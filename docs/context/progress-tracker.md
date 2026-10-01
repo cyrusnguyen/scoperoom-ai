@@ -1,6 +1,6 @@
 # Progress tracker
 
-## Stage 05.1 — implemented and verified locally, awaiting approval (2026-10-02)
+## Stage 05.1 — implemented and verified locally, PR approved (2026-10-02)
 
 Branch `feat/stage-5.1-inspect-files` in `.worktrees/stage-5.1-inspect-files` was created from freshly fetched `origin/main` at `dbfce8d`, with inherited uncommitted changes copied. The original checkout remains unchanged. Implementation and review commits are `3dfe0f6..57647b6`; the final tested application tree is `fa01fabc014ba292b7e32585447a4fd7b4e67dda`. No push or PR has been created. Local commits exclude `docs/superpowers/`, `.docs/superpowers/`, co-author trailers and the two inherited staged evidence deletions.
 
@@ -10,19 +10,7 @@ Branch `feat/stage-5.1-inspect-files` in `.worktrees/stage-5.1-inspect-files` wa
 - Only the session-created loopback stack `scoperoom-stage05-test` on 573xx was used. The Stage 04 saved-draft fingerprint survived the upgrade. After a known-synthetic-only inventory and target/sentinel checks, the exact five migrations replayed on a fresh task schema; subsequent replay found no pending migration. Existing developer/Stage03/Stage04 stacks were untouched. Maintenance dry-run passed; wrong-environment CLI invocation was rejected with preview/receipt snapshots unchanged.
 - Stage 05.2 still owns Apply/import UI, actual Apply-versus-cleanup races and complete appended document/layout byte admission; Stage 05.3 owns export. APPLIED retention/recovery here uses privileged fixtures, not a live Apply writer. Inspection reserves no capacity. Existing hosted role/signing, rate-limit, operator/deployment and manual NVDA gates remain open; these results establish local acceptance only.
 
-Next action: user approval before pushing/creating the Stage 05.1 PR or progressing to another stage. No further implementation is authorized by this checkpoint. Detailed local reports are `.superpowers/sdd/2026-10-01-stage-05-1-native-preview/final-review.md` and `final-verification.md`; logs remain in `.tmp/stage-05.1-stack/` and `test-results/`, all ignored. The plan under `docs/superpowers/` remains uncommitted.
-
-## Current handoff — 2026-10-01: Stage 05 planned as three PRs
-
-Stage 04 and its review corrections are merged in the inspected local history: HEAD `dbfce8d` is `fix: preserve Stage 4 edits and retry recovery (#20)`, following PR #19 at `6b611ca`. The older pending-PR #20 notes below are historical. This session created plans only, as requested; it did not implement Stage 05, run application tests, commit, push or mutate hosted services.
-
-1. [05.1 — Native file boundary and retention](../superpowers/plans/2026-10-01-stage-05-1-native-preview.md): strict parser, durable actor-scoped preview/read/discard APIs and bounded local preview/receipt cleanup; backend checkpoint with no import UI.
-2. [05.2 — Complete import and recovery](../superpowers/plans/2026-10-01-stage-05-2-import-apply.md): upload/inspect/discard/Apply UI together, one new unapproved copy per preview, exact geometry, current-access checks and uncertain-response recovery through existing Studio synchronization.
-3. [05.3 — Exact saved native export](../superpowers/plans/2026-10-01-stage-05-3-native-export.md): reader-authorized coherent saved pair, explicit handling of unsaved work, native round-trip and stage-exit verification.
-
-Plans follow the v1.6 Stage 05 split and current code; use existing parsers, layout, transactions, receipts and sync controller. At the user's request, simplified the plan boundaries: UI ships with Apply in 05.2; maintenance is one guarded local command/service; hosted operator setup waits for a requested hosted pilot. Native parsing remains format-compatible, while actual export hint controls wait for Stage 07 link data and snapshot export remains Stage 09; PNG is deferred. No new scheduler/provider is introduced. The plans are locally ignored under `docs/superpowers`; no ignore rule or staging was changed. The two pre-existing staged collaboration-evidence deletions were preserved. Documentation checks cover plan links, required sections, scope and shared interfaces; implementation commands in the plans are future checks, not passing evidence.
-
-Next action: review the three plans, then authorize implementation of 05.1 only. Existing hosted release, dependency, rate-limit and manual accessibility gates remain as recorded below; planning does not close them.
+The user approved pushing and creating the Stage 05.1 PR on 2026-10-02, with continued monitoring and fixes for review comments or CI. Next action: publish the PR and verify its checks and review feedback. Merge and later-stage progression are not part of this approval. Detailed local reports are `.superpowers/sdd/2026-10-01-stage-05-1-native-preview/final-review.md` and `final-verification.md`; logs remain in `.tmp/stage-05.1-stack/` and `test-results/`, all ignored. The plan under `docs/superpowers/` remains uncommitted.
 
 ## Current review — 2026-10-01: ready for Stage 05.1
 
