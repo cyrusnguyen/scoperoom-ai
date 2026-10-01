@@ -49,7 +49,7 @@ export async function boundedJsonBody(request: Request, limit = 4_096): Promise<
 async function boundedBytes(request: Request, limit: number): Promise<Uint8Array | "LIMIT" | null> {
   const length = request.headers.get("content-length");
   if (length && (!/^\d+$/.test(length) || Number(length) > limit)) return length && /^\d+$/.test(length) ? "LIMIT" : null;
-  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return null;
+  if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") return null;
   const reader = request.body?.getReader();
   if (!reader) return null;
   const chunks: Uint8Array[] = [];

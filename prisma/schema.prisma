@@ -224,6 +224,8 @@ model ScopeDraft {
 }
 
 model FlowImportPreview {
+  payloadHash              String          @map("payload_hash") @db.Char(64)
+  formatVersion            Int             @default(1) @map("format_version")
   id                       String          @id @db.Uuid
   projectId                String          @map("project_id") @db.Uuid
   draftId                  String          @map("draft_id") @db.Uuid
