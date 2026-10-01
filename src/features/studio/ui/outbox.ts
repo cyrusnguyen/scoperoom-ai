@@ -1,6 +1,7 @@
 import { CHANGES_BODY_LIMIT, MAX_CHANGE_COMMANDS, MAX_CHANGE_MOVES, type Change, type Changes, type MoveGroup } from "../../drafts/contracts/changes.ts";
 import type { GraphCommand } from "../../drafts/contracts/commands.ts";
 import type { MoveItem } from "../../drafts/contracts/positions.ts";
+import type { SavedPosition } from "../../drafts/contracts/draft-layout.ts";
 import type { DraftView, ScopeDocument } from "../../drafts/contracts/scope-document.ts";
 import { applyChanges } from "../../drafts/domain/changes.ts";
 import { applyGraphCommand, checkDraft, GraphError } from "../../drafts/domain/graph.ts";
@@ -12,7 +13,7 @@ import { stepName } from "./graph-view.ts";
 // one POST D/changes (Save, the 10-second autosave, or before Arrange and switches). The browser replays the outbox
 // with the server's own pure functions and the ids it proposed, so what is shown is exactly what the save produces.
 
-export type Placement = { nodeId: string; x: number; y: number };
+export type Placement = { nodeId: string; x: number; y: number; positionBase?: SavedPosition };
 /**
  * One unsaved change, in order: a command with the ids it creates, or one drop of steps. `joined` binds a change to
  * the one before it for undo (a shape's drop point belongs to the step it created).
@@ -25,7 +26,7 @@ export type Entry =
  * the current one's key. `waiting`: not sent yet; `uncertain`: retried only with the same key and body; `refused`:
  * waits for "Apply my changes again" or "Discard my changes".
  */
-export type Sending = { draftId: string; key: string; batches: Changes[]; state: "waiting" | "sending" | "uncertain" | "refused"; code?: string; message?: string };
+export type Sending = { draftId: string; key: string; batches: Changes[]; state: "waiting" | "sending" | "uncertain" | "refused"; code?: string; message?: string; positionBases?: Record<string, SavedPosition> };
 /**
  * `base` is the saved draft the chain builds on; `entries` are unsent changes behind `sending`; `redo` holds undone
  * changes (cleared by any new change or save); `dropped` lists what the last "Apply my changes again" had to leave out.
@@ -88,7 +89,7 @@ function applyCommands(view: DraftView, commands: Change[]) {
   }
 }
 
-export type Built = { changes: Changes; draft: DraftView; skipped: Change[]; overLimit: boolean };
+export type Built = { changes: Changes; draft: DraftView; skipped: Change[]; overLimit: boolean; positionConflict: boolean };
 
 /**
  * The batch for a chain of unsent changes and its result. Commands come first, then every moved step's final spot,
@@ -100,16 +101,24 @@ export function build(view: DraftView, entries: Entry[]): Built {
   const commands = commandsOf(entries);
   const applied = commands.length ? applyCommands(view, commands) : { kept: [], skipped: [], document: view.document, layout: view.layout, documentRevision: view.documentRevision, layoutChanged: false };
   const final = new Map<string, Placement>();
-  for (const entry of entries) if (entry.kind === "drop") for (const item of entry.items) final.set(item.nodeId, item);
+  for (const entry of entries) if (entry.kind === "drop") for (const item of entry.items) {
+    const positionBase = final.get(item.nodeId)?.positionBase ?? item.positionBase;
+    final.set(item.nodeId, { ...item, ...(positionBase ? { positionBase } : {}) });
+  }
   const groups = new Map<string, MoveItem[]>();
-  for (const { nodeId, x, y } of final.values()) {
+  for (const { nodeId, x, y, positionBase } of final.values()) {
     const node = applied.document.nodes[nodeId], at = applied.layout.positions[nodeId];
     if (!node || !at || (at.x === x && at.y === y)) continue;
-    groups.set(node.flowId, [...(groups.get(node.flowId) ?? []), { nodeId, expectedPositionVersion: at.version, x, y }]);
+    groups.set(node.flowId, [...(groups.get(node.flowId) ?? []), { nodeId, expectedPositionVersion: positionBase?.version ?? at.version, x, y }]);
   }
   const moves: MoveGroup[] = [...groups].map(([flowId, items]) => ({ flowId, items }));
+  const positionConflict = moves.some((group) => group.items.some((item) => item.expectedPositionVersion !== applied.layout.positions[item.nodeId]!.version));
   let layout = applied.layout;
-  for (const group of moves) layout = moveNodes({ document: applied.document, layout }, { mode: "MOVE_NODES", ...group }, { check: false }).layout;
+  // A stale captured drag stays visible, but its request retains the captured version so the server refuses it.
+  for (const group of moves) layout = moveNodes({ document: applied.document, layout }, {
+    mode: "MOVE_NODES", flowId: group.flowId,
+    items: group.items.map((item) => ({ ...item, expectedPositionVersion: layout.positions[item.nodeId]!.version })),
+  }, { check: false }).layout;
   const draft = {
     ...view, document: applied.document, layout, documentRevision: applied.documentRevision,
     layoutRevision: view.layoutRevision + (applied.layoutChanged || moves.length ? 1 : 0),
@@ -121,7 +130,7 @@ export function build(view: DraftView, entries: Entry[]): Built {
     // state must never throw out of a render and take every unsaved change with it.
     try { checkDraft(draft); } catch { overLimit = true; }
   }
-  return { changes: { commands: applied.kept, moves }, draft, skipped: applied.skipped, overLimit };
+  return { changes: { commands: applied.kept, moves }, draft, skipped: applied.skipped, overLimit, positionConflict };
 }
 
 export type Replayed = { draft: DraftView; skipped: string[]; overLimit: boolean };
@@ -137,6 +146,15 @@ export function replay(outbox: Outbox, saved: DraftView, floor?: RevisionFloor):
   for (const batch of outbox.sending?.batches ?? []) {
     try { view = applyBatch(view, batch); } catch (error) {
       if (!(error instanceof GraphError)) throw error;
+      if (error.code === "POSITION_CONFLICT") {
+        // Display the attempt even when a captured drag was already stale at drop. Only this local replay refreshes
+        // move versions: Sending's immutable batches still carry the original guards to the server.
+        view = build(view, [
+          ...batch.commands.map(({ command, proposedIds }): Entry => ({ kind: "command", command, proposedIds })),
+          ...batch.moves.map(({ flowId, items }): Entry => ({ kind: "drop", flowId, items: items.map(({ nodeId, x, y }) => ({ nodeId, x, y })) })),
+        ]).draft;
+        continue;
+      }
       skipped.push(...batch.commands.map(({ command }) => describe(command, names)));
     }
   }
@@ -270,7 +288,13 @@ export function startSave(outbox: Outbox, saved: DraftView, key: string, floor?:
   if (built.overLimit) return outbox;
   const batches = split(built.changes);
   const dropped = [...outbox.dropped, ...built.skipped.map(({ command }) => describe(command, base.document))];
-  return { ...outbox, base, entries: [], redo: [], dropped, sending: batches.length ? { draftId: base.id, key, batches, state: "waiting" } : null };
+  const positionBases: Record<string, SavedPosition> = {};
+  for (const entry of outbox.entries) if (entry.kind === "drop") for (const item of entry.items) {
+    if (item.positionBase && !positionBases[item.nodeId]) positionBases[item.nodeId] = item.positionBase;
+  }
+  return { ...outbox, base, entries: [], redo: [], dropped, sending: batches.length ? {
+    draftId: base.id, key, batches, state: "waiting", ...(Object.keys(positionBases).length ? { positionBases } : {}),
+  } : null };
 }
 
 /** The current batch is saved: the base advances by exactly that batch; the next one (if any) waits for its own key. */
@@ -280,7 +304,7 @@ export function acknowledged(outbox: Outbox, nextKey: string): Outbox {
   const [done, ...rest] = sending.batches;
   let next = base;
   try { next = applyBatch(base, done!); } catch (error) { if (!(error instanceof GraphError)) throw error; }
-  return { ...outbox, base: next, sending: rest.length ? { draftId: sending.draftId, key: nextKey, batches: rest, state: "waiting" } : null };
+  return { ...outbox, base: next, sending: rest.length ? { ...sending, key: nextKey, batches: rest, state: "waiting" } : null };
 }
 
 const ADVANCE_MAX_PREFIXES = 16;
@@ -324,6 +348,7 @@ export function advance(outbox: Outbox, fresh: DraftView): Outbox {
       const before = build(base, prefix), after = build(fresh, prefix);
       compared++;
       same = before.overLimit === after.overLimit
+        && before.positionConflict === after.positionConflict
         && (end !== activeEnd || !after.overLimit)
         && JSON.stringify(wireBody(before.changes)) === JSON.stringify(wireBody(after.changes));
     }
@@ -422,7 +447,8 @@ export function rebase(outbox: Outbox, saved: DraftView, names: ScopeDocument): 
     if (entry.kind === "drop") {
       const live = entry.items.filter((item) => current.document.nodes[item.nodeId]);
       for (const item of entry.items) if (!current.document.nodes[item.nodeId]) dropped.push(`Move ${stepName(names, item.nodeId)}`);
-      if (live.length) entries.push({ ...entry, items: live });
+      // Explicit review refreshes position guards as well as command guards.
+      if (live.length) entries.push({ ...entry, items: live.map(({ nodeId, x, y }) => ({ nodeId, x, y })) });
       continue;
     }
     const command = refreshed(entry.command, current);
@@ -492,11 +518,14 @@ export function compareOutbox(outbox: Outbox, saved: DraftView, names: ScopeDocu
       if (rows.length) conflicts.push({ label: describe(command, names), target: { kind: "command", command }, rows });
     }
   }
-  const moved = new Map<string, { x: number; y: number }>();
+  const moved = new Map<string, Placement>();
   for (const batch of outbox.sending?.batches ?? []) for (const group of batch.moves) for (const item of group.items) moved.set(item.nodeId, item);
-  for (const entry of outbox.entries) if (entry.kind === "drop") for (const item of entry.items) moved.set(item.nodeId, item);
+  for (const entry of outbox.entries) if (entry.kind === "drop") for (const item of entry.items) {
+    const positionBase = moved.get(item.nodeId)?.positionBase ?? item.positionBase;
+    moved.set(item.nodeId, { ...item, ...(positionBase ? { positionBase } : {}) });
+  }
   for (const [nodeId, mine] of moved) {
-    const before = base.layout.positions[nodeId], now = saved.layout.positions[nodeId];
+    const before = outbox.sending?.positionBases?.[nodeId] ?? mine.positionBase ?? base.layout.positions[nodeId], now = saved.layout.positions[nodeId];
     if (!before || !now || now.version === before.version) continue;
     conflicts.push({ label: `Move ${stepName(names, nodeId)}`, target: { kind: "move", nodeId }, rows: [{ field: "position", theirs: point(now), mine: point(mine), before: point(before) }] });
   }

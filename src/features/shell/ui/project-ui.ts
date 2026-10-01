@@ -50,7 +50,7 @@ export function anyDirty(store: UiStore): boolean {
 export function discardDrafts(store: UiStore, projectId: string): UiStore {
   const current = uiFor(store, projectId);
   const outbox = discardOutbox(current.outbox);
-  return { ...store, [projectId]: { ...current, drafts: {}, buffers: {}, endpointBuffers: {}, outbox, save: outbox.sending ? current.save : { state: "idle", message: "" } } };
+  return { ...store, [projectId]: { ...current, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox, save: outbox.sending ? current.save : { state: "idle", message: "" } } };
 }
 
 /** Access loss or leaving: forget everything held for that project. */

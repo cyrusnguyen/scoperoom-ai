@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { Client } from "pg";
 import { acceptInvitation, issueInvitation, listMyInvitations, listProjectInvitations, revokeInvitation } from "../../src/features/projects/server/invitations.ts";
 import { removeProjectMember, getProjectMembers } from "../../src/features/projects/server/management.ts";
 import { getProjectBootstrap } from "../../src/features/projects/server/projects.ts";
@@ -9,6 +10,46 @@ import { canRun, withFixture, type Identity } from "./support/fixture.ts";
 
 const code = (expected: string) => (error: unknown) => error instanceof ProjectError && error.code === expected;
 const tokenOf = (issued: { url?: string }) => issued.url!.split("/").at(-1)!;
+async function waitForLockWaiters(database: Client, holderPid: number, ready: (queries: string[]) => boolean, description: string) {
+  const deadline = Date.now() + 5_000;
+  let queries: string[] = [];
+  while (Date.now() < deadline) {
+    const result = await database.query<{ query: string }>(`
+      with recursive holder_chain(pid) as (
+        select $1::int
+        union
+        select waiting.pid from pg_stat_activity waiting
+        join holder_chain blocker on blocker.pid = any(pg_blocking_pids(waiting.pid))
+      )
+      select activity.query from pg_stat_activity activity
+      join holder_chain on holder_chain.pid = activity.pid
+      where activity.wait_event_type = 'Lock'`, [holderPid]);
+    queries = result.rows.map((row) => row.query);
+    if (ready(queries)) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for ${description}: ${queries.join(" | ")}`);
+}
+const countLockQueries = (queries: string[], fragment: string) => queries.filter((query) => query.includes(fragment)).length;
+const acceptanceWaiters = (queries: string[]) => countLockQueries(queries, "FROM app.project project") >= 2 ||
+  (countLockQueries(queries, "FROM app.project project") >= 1 && countLockQueries(queries, "FROM app.user_profile") >= 1);
+type HeldProjectLocks = { client: Client; pid: number };
+async function holdProjectLocks(projectIds: string[]) {
+  const holder = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query("select id from app.project where id = any($1::uuid[]) for update", [projectIds]);
+    const { rows: [row] } = await holder.query<{ pid: number }>("select pg_backend_pid()::int as pid");
+    return { client: holder, pid: row!.pid };
+  } catch (error) {
+    await holder.end();
+    throw error;
+  }
+}
+async function releaseHeldProjectLocks(holder: HeldProjectLocks) {
+  try { await holder.client.query("commit"); } finally { await holder.client.end(); }
+}
 async function invite(owner: Identity, projectId: string, email: string, role: "EDITOR" | "REVIEWER" | "VIEWER" = "EDITOR") {
   return issueInvitation(owner, projectId, { verifiedEmail: email, role, key: randomUUID() });
 }
@@ -127,14 +168,82 @@ test("two tabs accepting the same link at once both land on the membership", { s
     const projectId = await project(owner);
     const token = tokenOf(await invite(owner, projectId, member.verifiedEmail));
     // Queue both acceptances behind a held project lock so the second one re-reads the row the first one changed.
-    await database.query("begin");
-    await database.query("select id from app.project where id = $1 for update", [projectId]);
+    let holder = await holdProjectLocks([projectId]);
     const tabs = [acceptInvitation(member, { token, key: randomUUID() }), acceptInvitation(member, { token, key: randomUUID() })];
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    await database.query("commit");
-    const results = await Promise.all(tabs);
-    assert.deepEqual(results.map(({ replayed }) => replayed).sort(), [false, true]);
-    for (const result of results) assert.deepEqual({ projectId: result.projectId, role: result.role }, { projectId, role: "EDITOR" });
+    const settled = Promise.allSettled(tabs);
+    try {
+      await waitForLockWaiters(database, holder.pid, acceptanceWaiters, "both acceptances behind the held project lock");
+      await releaseHeldProjectLocks(holder); holder = null!;
+      const results = (await settled).map((result) => {
+        if (result.status !== "fulfilled") throw result.reason;
+        return result.value;
+      });
+      assert.deepEqual(results.map(({ replayed }) => replayed).sort(), [false, true]);
+      for (const result of results) assert.deepEqual({ projectId: result.projectId, role: result.role }, { projectId, role: "EDITOR" });
+    } finally {
+      if (holder) { await holder.client.query("rollback"); await holder.client.end(); }
+      await settled;
+    }
+  });
+});
+
+test("same-key acceptances queued behind a project lock replay the one established membership", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const member = await user("Same-key tabs");
+    const projectId = await project(owner);
+    const token = tokenOf(await invite(owner, projectId, member.verifiedEmail));
+    const key = randomUUID();
+    let holder = await holdProjectLocks([projectId]);
+    const tabs = [acceptInvitation(member, { token, key }), acceptInvitation(member, { token, key })];
+    const settled = Promise.allSettled(tabs);
+    try {
+      await waitForLockWaiters(database, holder.pid, acceptanceWaiters, "both acceptances behind the held project lock");
+      await releaseHeldProjectLocks(holder); holder = null!;
+      const results = (await settled).map((result) => {
+        if (result.status !== "fulfilled") throw result.reason;
+        return result.value;
+      });
+      assert.deepEqual(results.map(({ replayed }) => replayed).sort(), [false, true]);
+      for (const result of results) assert.deepEqual({ projectId: result.projectId, role: result.role }, { projectId, role: "EDITOR" });
+      const accepted = await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1 and action = 'INVITATION_ACCEPTED'", [projectId]);
+      const members = await database.query<{ count: number }>("select count(*)::int as count from app.project_membership where project_id = $1 and active", [projectId]);
+      const receipts = await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where key = $1", [key]);
+      assert.equal(accepted.rows[0]!.count, 1);
+      assert.equal(members.rows[0]!.count, 1);
+      assert.equal(receipts.rows[0]!.count, 1);
+    } finally {
+      if (holder) { await holder.client.query("rollback"); await holder.client.end(); }
+      await settled;
+    }
+  });
+});
+
+test("same USER key accepting different projects has one effect and reports key reuse", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const member = await user("Cross-project key");
+    const firstProjectId = await project(owner, "First"); const secondProjectId = await project(owner, "Second");
+    const firstToken = tokenOf(await invite(owner, firstProjectId, member.verifiedEmail));
+    const secondToken = tokenOf(await invite(owner, secondProjectId, member.verifiedEmail));
+    const key = randomUUID();
+    let holder = await holdProjectLocks([firstProjectId, secondProjectId]);
+    const attempts = [acceptInvitation(member, { token: firstToken, key }), acceptInvitation(member, { token: secondToken, key })];
+    const settled = Promise.allSettled(attempts);
+    try {
+      await waitForLockWaiters(database, holder.pid, acceptanceWaiters, "both acceptances behind the held project lock");
+      await releaseHeldProjectLocks(holder); holder = null!;
+      const results = await settled;
+      assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+      assert.ok(code("KEY_REUSED")((results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason));
+      const accepted = await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id in ($1, $2) and action = 'INVITATION_ACCEPTED'", [firstProjectId, secondProjectId]);
+      const members = await database.query<{ count: number }>("select count(*)::int as count from app.project_membership where project_id in ($1, $2) and active", [firstProjectId, secondProjectId]);
+      const receipts = await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where key = $1", [key]);
+      assert.equal(accepted.rows[0]!.count, 1);
+      assert.equal(members.rows[0]!.count, 1);
+      assert.equal(receipts.rows[0]!.count, 1);
+    } finally {
+      if (holder) { await holder.client.query("rollback"); await holder.client.end(); }
+      await settled;
+    }
   });
 });
 

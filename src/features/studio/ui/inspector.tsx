@@ -158,7 +158,7 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
 }
 
 function StepContext({ node }: { node: NodeRecord }) {
-  const { draft, editable, update } = useStudio();
+  const { draft, editable, update, ui } = useStudio();
   const [deleting, setDeleting] = useState(false);
   const { incoming, outgoing } = neighbours(draft.document, node.id);
   const link = (nodeId: string, label: string) => <button type="button" className="text-link" onClick={() => update(() => ({ selection: { kind: "NODES", ids: [nodeId] } }))}>{label}</button>;
@@ -169,7 +169,9 @@ function StepContext({ node }: { node: NodeRecord }) {
       {incoming.map((edge) => <li key={edge.id}>From {link(edge.fromId, stepName(draft.document, edge.fromId))}{edge.condition && <span className="muted"> · {edge.condition}</span>}</li>)}
       {outgoing.map((edge) => <li key={edge.id}>To {link(edge.toId, stepName(draft.document, edge.toId))}{edge.condition && <span className="muted"> · {edge.condition}</span>}</li>)}
     </ul>
-    {editable && draft.layout.positions[node.id] && <PositionForm key={`${node.id}:${JSON.stringify(draft.layout.positions[node.id])}`} node={node} />}
+    {editable && draft.layout.positions[node.id] && <PositionForm key={node.id} node={node} />}
+    {!editable && ui.positionBuffers[bufferKey("NODE", node.id)] && <RetainedText label="Your unsaved position" text={positionText(ui.positionBuffers[bufferKey("NODE", node.id)]!.values)}
+      onDiscard={() => update((current) => ({ positionBuffers: discard(current.positionBuffers, bufferKey("NODE", node.id)) }))} />}
     {editable && <button type="button" className="button danger small" onClick={() => setDeleting(true)}>Delete step…</button>}
     {editable && deleting && <DeleteStepsDialog flowId={node.flowId} nodeIds={[node.id]} onClose={() => setDeleting(false)} onDeleted={() => { setDeleting(false); update(() => ({ selection: null })); focusAfterRemoval(); }} />}
   </section>;
@@ -177,25 +179,51 @@ function StepContext({ node }: { node: NodeRecord }) {
 
 /** The keyboard way to move a step: a local move like a drop, saved at once with every other unsaved change. */
 function PositionForm({ node }: { node: NodeRecord }) {
-  const { draft, moveSteps } = useStudio();
-  const saved = draft.layout.positions[node.id]!;
-  const [x, setX] = useState(String(saved.x));
-  const [y, setY] = useState(String(saved.y));
+  const { draft, savedDraft, frozen, ui, update, moveSteps } = useStudio();
+  const position = draft.layout.positions[node.id]!;
+  const saved: Saved = { kind: "NODE", id: node.id, version: position.version, fields: { x: String(position.x), y: String(position.y) } };
+  const key = bufferKey("NODE", node.id);
+  const buffer = ui.positionBuffers[key];
+  const values = buffer?.values ?? saved.fields;
+  const adopted = savedDraft.layout.positions[node.id];
+  const frozenBase = frozen ? ui.outbox.base?.layout.positions[node.id] : undefined;
+  const changed = Boolean(buffer && changedElsewhere(buffer, position.version, frozen ? adopted?.version : undefined, frozenBase?.version));
+  const theirs = frozen && adopted ? { x: String(adopted.x), y: String(adopted.y) } : saved.fields;
+  const resolvable = !frozen && canApplyAgain(ui, savedDraft);
   const [error, setError] = useState("");
-  const submit = (event: SubmitEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const next = [x, y].map((value) => (value.trim() ? Number(value) : Number.NaN));
+  const apply = (reviewed = false) => {
+    if (changed && (!reviewed || !resolvable)) return;
+    const next = [values.x!, values.y!].map((value) => (value.trim() ? Number(value) : Number.NaN));
     if (next.some((value) => !Number.isFinite(value) || Math.abs(value) > COORDINATE_LIMIT)) { setError(`Enter numbers from -${COORDINATE_LIMIT} to ${COORDINATE_LIMIT}.`); return; }
     setError("");
+    // Queue the reviewed pair synchronously before any status/write await. Batch construction reads its
+    // position version from the outbox base; advance() preserves that guard once the move is queued.
+    update((current) => ({ positionBuffers: discard(current.positionBuffers, key) }));
     void moveSteps(node.flowId, [{ nodeId: node.id, x: next[0]!, y: next[1]! }], { save: true });
   };
+  const submit = (event: SubmitEvent<HTMLFormElement>) => { event.preventDefault(); apply(); };
+  const change = (field: string, value: string) => update((current) => ({ positionBuffers: edit(current.positionBuffers, saved, field, value) }));
+  const keepSaved = () => { update((current) => ({ positionBuffers: discard(current.positionBuffers, key) })); setError(""); };
   return <form className="position-form" onSubmit={submit} onKeyDown={formKeys} noValidate aria-labelledby="inspector-position">
     <h4 id="inspector-position" className="sr-only">Position</h4>
+    {changed && buffer && <div className="inline-note" role="status">
+      <p><strong>Position changed.</strong> Your coordinates are kept. Review them before moving.</p>
+      <dl className="conflict-list">
+        <div><dt>Saved position</dt><dd>({theirs.x}, {theirs.y})</dd></div>
+        <div><dt>Your position</dt><dd>({values.x}, {values.y})</dd></div>
+        <div><dt>Before your edit</dt><dd>({buffer.original.x}, {buffer.original.y})</dd></div>
+      </dl>
+      <div className="view-actions">
+        <button type="button" className="button small" onClick={() => apply(true)} disabled={!resolvable}>Move my edit</button>
+        <button type="button" className="button quiet small" onClick={keepSaved}>Keep saved position</button>
+      </div>
+    </div>}
     <label htmlFor="position-x">X</label>
-    <input id="position-x" inputMode="decimal" value={x} onChange={(event) => setX(event.target.value)} aria-invalid={Boolean(error)} aria-describedby={error ? "position-error" : undefined} />
+    <input id="position-x" inputMode="decimal" value={values.x} onChange={(event) => change("x", event.target.value)} aria-invalid={Boolean(error)} aria-describedby={error ? "position-error" : undefined} />
     <label htmlFor="position-y">Y</label>
-    <input id="position-y" inputMode="decimal" value={y} onChange={(event) => setY(event.target.value)} aria-invalid={Boolean(error)} aria-describedby={error ? "position-error" : undefined} />
-    <button type="submit" className="button small">Move</button>
+    <input id="position-y" inputMode="decimal" value={values.y} onChange={(event) => change("y", event.target.value)} aria-invalid={Boolean(error)} aria-describedby={error ? "position-error" : undefined} />
+    <button type="submit" className="button small" disabled={changed}>Move</button>
+    {buffer && !changed && <button type="button" className="button quiet small" onClick={keepSaved}>Discard coordinate changes</button>}
     {error && <small id="position-error" className="field-error" role="alert">{error}</small>}
   </form>;
 }
@@ -319,6 +347,8 @@ function endpointText(values: Fields) {
     .map(([field, label]) => `${label}: ${values[field]}`).join("\n");
 }
 
+function positionText(values: Fields) { return `X: ${values.x}\nY: ${values.y}`; }
+
 function RetainedText({ text, onDiscard, label = "Your unsaved text" }: { text: string; onDiscard: () => void; label?: string }) {
   const [message, setMessage] = useState("");
   const copy = async () => {
@@ -341,11 +371,12 @@ function Removed({ kind, id }: { kind: EntityKind; id: string }) {
   const key = bufferKey(kind, id);
   const buffer = ui.buffers[key];
   const endpoints = ui.endpointBuffers[key];
-  const text = [buffer ? typedText(kind, changes(buffer)) : "", endpoints ? endpointText(changes(endpoints)) : ""].filter(Boolean).join("\n");
+  const position = ui.positionBuffers[key];
+  const text = [buffer ? typedText(kind, changes(buffer)) : "", endpoints ? endpointText(changes(endpoints)) : "", position ? positionText(position.values) : ""].filter(Boolean).join("\n");
   return <section className="detail-section" aria-labelledby="inspector-removed">
     <h3 id="inspector-removed">This {NOUNS[kind]} was removed</h3>
-    {buffer || endpoints ? <RetainedText text={text}
-      onDiscard={() => update((current) => ({ buffers: discard(current.buffers, key), endpointBuffers: discard(current.endpointBuffers, key), selection: null }))} />
+    {buffer || endpoints || position ? <RetainedText text={text}
+      onDiscard={() => update((current) => ({ buffers: discard(current.buffers, key), endpointBuffers: discard(current.endpointBuffers, key), positionBuffers: discard(current.positionBuffers, key), selection: null }))} />
       : <p className="muted">Choose another item, or go back to the project.</p>}
   </section>;
 }

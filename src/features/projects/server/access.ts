@@ -60,8 +60,9 @@ export async function profileFor(database: PrismaClient, identity: ProjectIdenti
 }
 
 /** Lock order 1: the actor's profile, rechecking the Auth-to-profile mapping. */
-export async function lockActor(tx: Transaction, profileId: string, authUserId: string) {
-  const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM app.user_profile WHERE id = ${profileId}::uuid AND auth_user_id = ${authUserId}::uuid FOR SHARE`;
+export async function lockActor(tx: Transaction, profileId: string, authUserId: string, exclusive = false) {
+  const lock = exclusive ? Prisma.sql`FOR NO KEY UPDATE` : Prisma.sql`FOR SHARE`;
+  const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM app.user_profile WHERE id = ${profileId}::uuid AND auth_user_id = ${authUserId}::uuid ${lock}`;
   if (rows.length !== 1) throw new ProjectError("FORBIDDEN");
 }
 

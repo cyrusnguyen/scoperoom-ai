@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { Client } from "pg";
 import { acceptInvitation, issueInvitation, listProjectInvitations } from "../../src/features/projects/server/invitations.ts";
 import {
   archiveProject, changeProjectMember, getProjectMembers, leaveProject, removeProjectMember, restoreProject, updateApprovalPolicy, updateProjectSettings,
@@ -10,6 +11,43 @@ import { ProjectError } from "../../src/features/projects/server/errors.ts";
 import { canRun, withFixture, type Identity } from "./support/fixture.ts";
 
 const code = (expected: string) => (error: unknown) => error instanceof ProjectError && error.code === expected;
+async function waitForLockWaiters(database: Client, holderPid: number, expected: number) {
+  const deadline = Date.now() + 5_000;
+  let queries: string[] = [];
+  while (Date.now() < deadline) {
+    const result = await database.query<{ query: string }>(`
+      with recursive holder_chain(pid) as (
+        select $1::int
+        union
+        select waiting.pid from pg_stat_activity waiting
+        join holder_chain blocker on blocker.pid = any(pg_blocking_pids(waiting.pid))
+      )
+      select activity.query from pg_stat_activity activity
+      join holder_chain on holder_chain.pid = activity.pid
+      where activity.wait_event_type = 'Lock'`, [holderPid]);
+    queries = result.rows.map((row) => row.query);
+    if (queries.filter((query) => query.includes("FROM app.project project")).length >= expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for ${expected} leaves behind the held project lock: ${queries.join(" | ")}`);
+}
+type HeldProjectLock = { client: Client; pid: number };
+async function holdProjectLock(projectId: string) {
+  const holder = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query("select id from app.project where id = $1 for update", [projectId]);
+    const { rows: [row] } = await holder.query<{ pid: number }>("select pg_backend_pid()::int as pid");
+    return { client: holder, pid: row!.pid };
+  } catch (error) {
+    await holder.end();
+    throw error;
+  }
+}
+async function releaseHeldProjectLock(holder: HeldProjectLock) {
+  try { await holder.client.query("commit"); } finally { await holder.client.end(); }
+}
 async function join(owner: Identity, projectId: string, member: Identity, role: "EDITOR" | "REVIEWER" | "VIEWER" = "EDITOR") {
   const issued = await issueInvitation(owner, projectId, { verifiedEmail: member.verifiedEmail, role, key: randomUUID() });
   await acceptInvitation(member, { token: issued.url!.split("/").at(-1)!, key: randomUUID() });
@@ -47,6 +85,37 @@ test("non-owners can leave active and archived projects; the owner cannot", { sk
     const status = await getProjectStatus(owner, projectId);
     await archiveProject(owner, projectId, { expectedProjectVersion: status.version, reason: "Done", key: randomUUID() });
     assert.equal((await leaveProject(b, projectId, { key: randomUUID() })).left, true);
+  });
+});
+
+test("same-key leaves queued behind a project lock replay after membership ends", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const member = await user("Same-key leaver");
+    const projectId = await project(owner);
+    await join(owner, projectId, member);
+    const key = randomUUID();
+    let holder = await holdProjectLock(projectId);
+    const leaves = [leaveProject(member, projectId, { key }), leaveProject(member, projectId, { key })];
+    const settled = Promise.allSettled(leaves);
+    try {
+      await waitForLockWaiters(database, holder.pid, 2);
+      await releaseHeldProjectLock(holder); holder = null!;
+      const results = (await settled).map((result) => {
+        if (result.status !== "fulfilled") throw result.reason;
+        return result.value;
+      });
+      assert.deepEqual(results.map(({ replayed }) => replayed).sort(), [false, true]);
+      for (const result of results) assert.deepEqual({ projectId: result.projectId, left: result.left }, { projectId, left: true });
+      const events = await database.query<{ count: number }>("select count(*)::int as count from app.audit_event where project_id = $1 and action = 'PROJECT_MEMBER_LEFT'", [projectId]);
+      const members = await database.query<{ count: number }>("select count(*)::int as count from app.project_membership where project_id = $1 and active", [projectId]);
+      const receipts = await database.query<{ count: number }>("select count(*)::int as count from app.mutation_receipt where key = $1", [key]);
+      assert.equal(events.rows[0]!.count, 1);
+      assert.equal(members.rows[0]!.count, 0);
+      assert.equal(receipts.rows[0]!.count, 1);
+    } finally {
+      if (holder) { await holder.client.query("rollback"); await holder.client.end(); }
+      await settled;
+    }
   });
 });
 

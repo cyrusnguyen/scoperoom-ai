@@ -36,6 +36,8 @@ Unavailable future actions are hidden; simulated screens never claim real saved,
 
 ## User-visible truth
 
+The October 1 review preserves unsubmitted X/Y coordinates across remote moves, deletion and downgrade; these buffers count toward the leave guard and offer explicit keep/reapply or copy/discard recovery. Pointer drags retain their drag-start position guard, including while a newer saved move arrives; a refused save keeps the attempted geometry visible. Arrange pins its preview and direction while an Apply result is uncertain, so Retry sends the same attempt.
+
 - “Saved” follows backend acknowledgement or recovered receipt, never motion or a Broadcast ACK.
 - Dirty fields/composers and attempted positions survive remote updates and conflicts; late responses clear only their submitted value.
 - AI previews are distinct from saved content; values are edited after Apply or regenerated.

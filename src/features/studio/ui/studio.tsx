@@ -119,7 +119,7 @@ function NoFlowsStatus() {
 /** A removed item's local input remains reachable even after the last flow disappears. */
 function RemovedRecovery() {
   const { draft, ui, update, inspect } = useStudio();
-  const orphan = [...Object.values(ui.buffers), ...Object.values(ui.endpointBuffers)].find((buffer) => !recordOf(draft.document, buffer.kind, buffer.id));
+  const orphan = [...Object.values(ui.buffers), ...Object.values(ui.endpointBuffers), ...Object.values(ui.positionBuffers)].find((buffer) => !recordOf(draft.document, buffer.kind, buffer.id));
   if (!orphan) return null;
   const review = () => {
     update(() => ({ selection: orphan.kind === "NODE" ? { kind: "NODES", ids: [orphan.id] } : { kind: orphan.kind, id: orphan.id } }));

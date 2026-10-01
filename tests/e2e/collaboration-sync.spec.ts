@@ -235,11 +235,16 @@ test.describe("two real users converge through status polling", () => {
     await openBoth(collaboration);
     const writes = watchWrites(editorPage);
     await renameLocally(editorPage, ids.startId, "Mine");
+    await editorPage.getByRole("button", { name: "Inspect", exact: true }).click();
+    await editorPage.getByLabel("X", { exact: true }).fill("420");
     await setEditorRole("VIEWER");
     await poll(editorPage);
     await expect(notice(editorPage)).toContainText("This draft is read-only now, so your unsaved changes can’t be saved");
     await expect(notice(editorPage)).toContainText("Mine");
     await expect(notice(editorPage).getByRole("button", { name: "Discard my changes" })).toBeVisible();
+    await expect(editorPage.getByLabel("Your unsaved position")).toHaveValue(/X: 420/);
+    await editorPage.getByLabel("Your unsaved position").locator("..").getByRole("button", { name: "Discard", exact: true }).click();
+    await expect(editorPage.getByLabel("Your unsaved position")).toHaveCount(0);
     await editorPage.clock.runFor(POLL_DEADLINE + 10_000); // autosave and another poll: still nothing
     await quiet(editorPage);
     expect(writes).toHaveLength(0);

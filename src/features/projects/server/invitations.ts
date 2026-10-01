@@ -169,7 +169,8 @@ export async function acceptInvitation(identity: InvitationIdentity, input: unkn
   return withDatabase(async (database) => {
     const profile = await profileFor(database, identity);
     return database.$transaction(async (tx) => {
-      await lockActor(tx, profile.id, identity.authUserId);
+      // Serialize USER-scoped receipt lookup/save; NO KEY UPDATE still permits FK KEY SHARE checks.
+      await lockActor(tx, profile.id, identity.authUserId, true);
       const receipt = await findReceipt(tx, profile.id, "USER", profile.id, validated.key);
       if (receipt) {
         // A key with a receipt never falls through to new work, and replays only while access remains.

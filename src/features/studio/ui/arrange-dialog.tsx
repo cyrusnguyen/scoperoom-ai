@@ -27,6 +27,7 @@ export function ArrangeDialog({ flowId, onClose }: { flowId: string; onClose: ()
   const steps = Object.values(draft.document.nodes).filter((node) => node.flowId === flowId).length;
 
   const load = async () => {
+    if (busy || loading || retryKey) return;
     setLoading(true);
     setMessage("");
     setChecking(false);
@@ -36,7 +37,7 @@ export function ArrangeDialog({ flowId, onClose }: { flowId: string; onClose: ()
     else setMessage(staleCodes.has(outcome.code) ? "The flow changed. Preview again to see the current steps." : outcome.message);
   };
   const apply = async () => {
-    if (!shown || busy) return;
+    if (!shown || busy || loading) return;
     setChecking(false);
     const key = retryKey ?? crypto.randomUUID();
     const outcome = await place({
@@ -51,14 +52,14 @@ export function ArrangeDialog({ flowId, onClose }: { flowId: string; onClose: ()
     setMessage(staleCodes.has(outcome.code) ? "The flow changed since this preview. Preview it again." : outcome.message);
   };
 
-  return <Dialog title="Arrange flow" onClose={busy || loading ? () => {} : onClose} footer={<>
-    <button type="button" className="button quiet" onClick={onClose} disabled={busy || loading}>Cancel</button>
-    <button type="button" className="button" onClick={() => void load()} disabled={busy || loading}>{loading ? "Previewing…" : shown ? "Preview again" : "Preview"}</button>
+  return <Dialog title="Arrange flow" onClose={busy || loading || retryKey ? () => {} : onClose} footer={<>
+    <button type="button" className="button quiet" onClick={onClose} disabled={busy || loading || Boolean(retryKey)}>Cancel</button>
+    <button type="button" className="button" onClick={() => void load()} disabled={busy || loading || Boolean(retryKey)}>{loading ? "Previewing…" : shown ? "Preview again" : "Preview"}</button>
     {shown && <button type="button" className="button primary" onClick={() => void apply()} disabled={busy || loading}>{busy ? "Applying…" : retryKey ? "Apply again" : "Apply arrangement"}</button>}
   </>}>
     <div className="field">
       <label htmlFor="arrange-direction">Direction</label>
-      <select id="arrange-direction" value={direction} onChange={(event) => { setDirection(event.target.value as Direction); setShown(null); setRetryKey(null); }}>
+      <select id="arrange-direction" value={direction} disabled={busy || loading || Boolean(retryKey)} onChange={(event) => { setDirection(event.target.value as Direction); setShown(null); setRetryKey(null); }}>
         {(["TB", "LR"] as const).map((value) => <option key={value} value={value}>{DIRECTION_LABELS[value]}</option>)}
       </select>
     </div>
