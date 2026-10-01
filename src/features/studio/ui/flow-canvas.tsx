@@ -20,7 +20,7 @@ import ShapePanel from "./shape-panel";
 import { explain, useStudio } from "./studio-context";
 import { useKeyboardShortcuts } from "./use-keyboard-shortcuts";
 import { dropTarget, moveTargets, orientConnect, orientReconnect, parseShapePayload, selectEdge, selectNodes, SHAPE_DRAG_MIME, type SelectChange, type StudioUi } from "./studio-ui";
-import { optimistic } from "./outbox";
+import { baseOf, optimistic } from "./outbox";
 
 type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction; selectedBy?: Person[] };
 type StepNode = Node<StepData, "step">;
@@ -218,9 +218,10 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   useEffect(() => () => { if (gesture.current) endDrag(gesture.current.id); }, [endDrag]);
   const beginDrag = (moved: StepNode[]) => {
     dragActive(true);
-    // A request already in flight will advance the position before this queued drag is sent. Unsent drops still
-    // coalesce at their original saved version, so exclude those when capturing this gesture's guard.
-    const baseline = optimistic({ ...ui.outbox, entries: [] }, savedDraft, ui.acknowledgedRevisions[savedDraft.id]);
+    // Keep the frozen base of earlier unsent edits before excluding their drops. A request already in flight
+    // will advance the position before this queued drag is sent, so replay that request to capture its result.
+    const floor = ui.acknowledgedRevisions[savedDraft.id];
+    const baseline = optimistic({ ...ui.outbox, entries: [] }, baseOf(ui.outbox, savedDraft, floor), floor);
     dragPositions.current = new Map(moved.flatMap((node) => {
       const position = baseline.layout.positions[node.id];
       return position ? [[node.id, position] as const] : [];

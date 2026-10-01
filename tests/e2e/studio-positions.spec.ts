@@ -226,6 +226,40 @@ test.describe("saved positions and arrangement", () => {
     await expect(page.getByLabel("X", { exact: true })).toHaveValue("420");
   });
 
+  test("a drag after a queued coordinate move preserves its guard when a peer move is read", async ({ page }) => {
+    const middle = seeded.nodeIds[1]!;
+    await withholdHints(page, middle);
+    const original = (await draftOf(page, projectId)).layout.positions[middle]!;
+    await nodeAt(page, middle).click();
+    await page.getByRole("button", { name: "Inspect" }).click();
+    await page.getByLabel("X", { exact: true }).fill("420");
+    // Fail admission, leaving the coordinate move queued without sending a batch.
+    let unavailable = true;
+    await page.route(`**/api/projects/${projectId}/status`, async (route) => {
+      if (unavailable) await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Unavailable", retryable: true } } });
+      else await route.continue();
+    });
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await page.getByRole("button", { name: "Move", exact: true }).click();
+    await expect(status(page)).toContainText("Not saved");
+    expect(saves).toHaveLength(0);
+    await moveViaApi(page, projectId, seeded, { [middle]: { x: 900, y: 900 } });
+    unavailable = false;
+    const read = page.waitForResponse((response) => response.url().endsWith(`/drafts/${seeded.draftId}`) && response.request().method() === "GET");
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    expect(((await (await read).json()) as DraftView).layout.positions[middle]!.version).toBe(original.version + 1);
+    await expect(note(page)).toContainText("Newer saved changes are available.");
+    await page.getByRole("button", { name: "Inspect" }).click();
+    await page.getByRole("button", { name: "Canvas", exact: true }).click();
+    await expect(nodeAt(page, middle)).toBeVisible();
+    await drag(page, middle, 60, 20);
+    const saving = page.waitForResponse((response) => response.url().endsWith("/changes") && response.request().method() === "POST");
+    await saveButton(page).click();
+    expect((await saving).status()).toBe(409);
+    expect((saves[0]!.postDataJSON() as Batch).moves[0]!.items[0]!.expectedPositionVersion).toBe(original.version);
+    expect((await draftOf(page, projectId)).layout.positions[middle]).toEqual({ x: 900, y: 900, version: original.version + 1 });
+  });
+
   test("another drag of the same node during my save uses that save's resulting version", async ({ page }) => {
     const middle = seeded.nodeIds[1]!;
     let release!: () => void;
