@@ -394,6 +394,11 @@ test.describe("saved positions and arrangement", () => {
       await expect(dialog.getByRole("alert")).toContainText("We couldn’t confirm the arrangement");
       await expect(dialog.getByLabel("Direction")).toBeDisabled();
       await expect(dialog.getByRole("button", { name: "Preview again" })).toBeDisabled();
+      await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "Apply again" })).toBeEnabled();
       const committed = await draftOf(page, projectId);
       await dialog.getByRole("button", { name: "Apply again" }).click();
       await expect(dialog).toBeHidden();

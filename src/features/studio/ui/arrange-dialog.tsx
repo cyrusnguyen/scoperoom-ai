@@ -52,8 +52,8 @@ export function ArrangeDialog({ flowId, onClose }: { flowId: string; onClose: ()
     setMessage(staleCodes.has(outcome.code) ? "The flow changed since this preview. Preview it again." : outcome.message);
   };
 
-  return <Dialog title="Arrange flow" onClose={busy || loading ? () => {} : onClose} footer={<>
-    <button type="button" className="button quiet" onClick={onClose} disabled={busy || loading}>Cancel</button>
+  return <Dialog title="Arrange flow" onClose={busy || loading || retryKey ? () => {} : onClose} footer={<>
+    <button type="button" className="button quiet" onClick={onClose} disabled={busy || loading || Boolean(retryKey)}>Cancel</button>
     <button type="button" className="button" onClick={() => void load()} disabled={busy || loading || Boolean(retryKey)}>{loading ? "Previewing…" : shown ? "Preview again" : "Preview"}</button>
     {shown && <button type="button" className="button primary" onClick={() => void apply()} disabled={busy || loading}>{busy ? "Applying…" : retryKey ? "Apply again" : "Apply arrangement"}</button>}
   </>}>
