@@ -606,6 +606,9 @@ test.describe("Studio on a real draft", () => {
   });
 
   test("a step deleted in another tab keeps the typed text for copying and is never re-created", async ({ page }) => {
+    // Withhold Realtime hints (the page would otherwise read the other change first, which the collaboration specs cover) so only the save finds out.
+    (await interceptRealtime(page)).dropEvents = true;
+    await page.reload();
     await createFlowInUi(page, "Claims");
     await addStepInUi(page, "Assess", "Start");
     await saveStudio(page);
@@ -748,6 +751,8 @@ test.describe("Studio on a real draft", () => {
     const flowId = Object.keys(draft.document.flows)[0]!;
     await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
       payload: { flowId, fromId: nodes.Start, toId: nodes.Original, condition: "" } });
+    // Withhold Realtime hints (the page would otherwise read the other change first, which the collaboration specs cover) so only the save finds out.
+    (await interceptRealtime(page)).dropEvents = true;
     await page.reload();
     await toolbar(page).getByRole("button", { name: "List" }).click();
     await page.getByRole("list", { name: "Connections" }).getByRole("button", { name: /^Start/ }).click();
@@ -988,6 +993,8 @@ test.describe("Studio on a real draft", () => {
     const nodes = Object.fromEntries(Object.values(draft.document.nodes).map((node) => [node.label, node.id]));
     await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
       payload: { flowId: Object.keys(draft.document.flows)[0]!, fromId: nodes.Start, toId: nodes.Original, condition: "" } });
+    // Withhold Realtime hints (the page would otherwise read the other change first, which the collaboration specs cover) so only the save finds out.
+    (await interceptRealtime(page)).dropEvents = true;
     await page.reload();
     await expect(page.locator(".react-flow__edgeupdater-target")).toHaveCount(1);
     draft = await draftOf(page, projectId);

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, type Page, type Request } from "@playwright/test";
+import { interceptRealtime } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { appUrl, createProjectViaApi, e2eReady, headerSave, seedStudioChanges } from "./support";
@@ -48,6 +49,16 @@ async function moveViaApi(page: Page, projectId: string, seeded: Seeded, targets
   const items = Object.entries(targets).map(([nodeId, { x, y }]) => ({ nodeId, expectedPositionVersion: positions[nodeId]!.version, x, y }));
   const response = await page.request.post(`/api/projects/${projectId}/drafts/${seeded.draftId}/positions`, { headers: headers(), data: { mode: "MOVE_NODES", flowId: seeded.flowId, items } });
   expect(response.status()).toBe(200);
+}
+
+/**
+ * The tests that follow are about a save (or Apply) meeting someone else's move. With Realtime live the move's committed hint would make the page read it
+ * first (a legitimate other path, covered by the collaboration specs), so the hints are withheld and the socket reopened by a reload: only the save finds out.
+ */
+async function withholdHints(page: Page, nodeId: string) {
+  (await interceptRealtime(page)).dropEvents = true;
+  await page.reload();
+  await expect(nodeAt(page, nodeId)).toBeVisible();
 }
 
 /** A real pointer drag of one step (and any other selected steps) on the canvas, by a screen offset. */
@@ -180,6 +191,7 @@ test.describe("saved positions and arrangement", () => {
 
   test("a save that meets someone else's move shows theirs and mine, and keeps my placement until I choose", async ({ page }) => {
     const [, middle, end] = seeded.nodeIds;
+    await withholdHints(page, middle!);
     await moveViaApi(page, projectId, seeded, { [middle!]: { x: 900, y: 900 } });
     await drag(page, middle!, 150, 0);
     await saveButton(page).click();
@@ -268,6 +280,7 @@ test.describe("saved positions and arrangement", () => {
 
   test("Arrange saves unsaved changes first, and does not open while they cannot be saved", async ({ page }) => {
     const [start, middle] = seeded.nodeIds;
+    await withholdHints(page, start!);
     const toolbar = page.locator(".studio-toolbar");
     const dialog = page.getByRole("dialog", { name: "Arrange flow" });
     await drag(page, middle!, 150, 0);
@@ -292,6 +305,7 @@ test.describe("saved positions and arrangement", () => {
   });
 
   test("an arrangement meets a newer move: Apply is refused and a new preview applies", async ({ page }) => {
+    await withholdHints(page, seeded.nodeIds[2]!);
     await page.locator(".studio-toolbar").getByRole("button", { name: "Arrange" }).click();
     const dialog = page.getByRole("dialog", { name: "Arrange flow" });
     await dialog.getByRole("button", { name: "Preview" }).click();
@@ -417,6 +431,7 @@ test.describe("saved positions and arrangement", () => {
   test("a project switch whose save is refused asks first, and Discard drops the moved steps", async ({ page }) => {
     const middle = seeded.nodeIds[1]!;
     await createProjectViaApi(page, "Other project");
+    (await interceptRealtime(page)).dropEvents = true; // hints withheld (see withholdHints): the save, not a hint, meets the move
     await page.reload();
     await expect(nodeAt(page, middle)).toBeVisible();
     await moveViaApi(page, projectId, seeded, { [middle]: { x: 800, y: 800 } });

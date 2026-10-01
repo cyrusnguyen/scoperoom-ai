@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, type Page, type Request, type Route } from "@playwright/test";
+import { interceptRealtime } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { appUrl, createProjectViaApi, e2eReady, emptyDraftView, headerSave, saveStudio, seedStudioChanges, withStatus } from "./support";
@@ -217,6 +218,10 @@ test.describe("Inline label editing (real draft)", () => {
   });
 
   test("a save that meets someone else's rename keeps the typed name on screen; Apply my changes again saves it", async ({ page }) => {
+    // Withhold Realtime hints (the page would otherwise read the other change first, which the collaboration specs cover) so only the save finds out.
+    (await interceptRealtime(page)).dropEvents = true;
+    await page.reload();
+    await expect(nodeAt(page, ids.payId)).toBeVisible();
     const pay = nodeAt(page, ids.payId);
     await pay.locator(".step-label").dblclick();
     await stepEditor(page, ids.payId).fill("Mine");
