@@ -4,7 +4,7 @@ Local evidence only. Hosted Supabase was never touched; hosted release evidence 
 
 ## Branch, SHAs and environment
 
-- Branch `feat/stage-4.3-browser-presence-realtime`, based on the 04.2 head `50b3a02`. Task commits `649bfea..1a9d32e` (`git log --oneline 50b3a02..HEAD`). The full-suite gate ran at `784c517`; the final-review fix wave added `582dacc`, `8499b51`, `fa5d550` and `1a9d32e` (the last head, the one the rerun below ran at).
+- Branch `feat/stage-4.3-browser-presence-realtime`, based on the 04.2 head `50b3a02`. Code and test commits `649bfea..ccca523` (`git log --oneline 50b3a02..ccca523`); `ccca523` is the final code commit and the head the final full run ran at (two docs commits for this evidence and the tracker follow it). The first full-suite gate ran at `784c517`; the final-review fix wave added `582dacc`, `8499b51`, `fa5d550`, `1a9d32e`, `43e5760` and `ccca523`.
 - Node v24.21.0, pnpm through corepack, Windows 11, Chromium through Playwright (production build, `PLAYWRIGHT_PORT=3105 PLAYWRIGHT_WORKERS=2`).
 - Guarded disposable local stack `scoperoom-stage04-test`, API on 59321 (59xxx ports), database `127.0.0.1:59322`. `.env.local` targets only this stack; the guard refuses anything else.
 - `@supabase/realtime-js` / supabase-js 2.117.1. Local Auth 2.196.0, Realtime 2.130.0, CLI 2.117.0 as recorded in the [probe](2026-09-30-browser-token-probe.md) (taken on the sibling Stage 03 stack of the same CLI); Stage 04.1 recorded the same Realtime 2.130.0 on this stack. The versions were not re-read from the Stage 04 stack for this document.
@@ -22,19 +22,25 @@ Local evidence only. Hosted Supabase was never touched; hosted release evidence 
 
 | Command | Result |
 | --- | --- |
-| `corepack pnpm lint` | pass (at `784c517` and at `1a9d32e`) |
-| `corepack pnpm typecheck` | pass (both) |
+| `corepack pnpm lint` | pass (at `784c517`, `1a9d32e` and `ccca523`) |
+| `corepack pnpm typecheck` | pass (all three) |
 | `corepack pnpm build` | pass (both) |
-| `corepack pnpm test:unit` | 311/311 at `784c517`; **312/312** at `1a9d32e` (+1: one clock read for `snapshot`/`nextExpiry`) |
+| `corepack pnpm test:unit` | 311/311 at `784c517`; **312/312** at `1a9d32e` and `ccca523` (+1: one clock read for `snapshot`/`nextExpiry`) |
 | `corepack pnpm test:integration` | 87/87 at `784c517` (not rerun after the wave: no server or SQL change) |
 | `corepack pnpm test:realtime` (serial, alone on the stack) | 13/13 at `784c517`, zero skips (not rerun: no SQL or server change; `db:migrate` rerun, `verify-ok`) |
 | `corepack pnpm db:migrate` | `prepare-ok`, no pending migrations, `apply-ok`, `verify-ok` at `1a9d32e` (DEP0190 deprecation warning is noise from `migrate.mjs`) |
 | `test:e2e:production` (whole suite) at `784c517` | 223 passed, 1 failed, 5 did not run, 13.0 min. The failure and five not-run are all `access.spec.ts` (limitation below) |
+| `test:e2e:production` (whole suite) at `ccca523`, two runs | Run 1: **225 passed**, 2 failed, 5 did not run; test 461.6 s (7.7 min), total 471.9 s. Run 2: **225 passed**, 2 failed, 5 did not run; test 466.0 s (7.8 min), total 475.6 s. In both, one failure plus the five not-run are `access.spec.ts` (limitation below). The other failure differed per run and was a transient page load, not a product or spec defect: run 1 `collaboration-writes.spec.ts:279` (the shell rendered an empty main for 10 s after `goto`), run 2 `invitations.spec.ts:287` (`net::ERR_ABORTED` on `goto /login`, the Windows socket noise seen before). Each passed on rerun: `collaboration-writes.spec.ts` 51/51 (`--repeat-each=3`), `invitations.spec.ts` plus `collaboration-writes.spec.ts` 75/75 (`--repeat-each=3`). No suite run has been fully green apart from `access.spec.ts` |
+| `collaboration-polling`, `collaboration-a11y` and `studio.spec.ts` with `--repeat-each=2` at `ccca523` | 116/116 (3.9 min) |
 | `access.spec.ts` alone with a temporary allowlist edit (added 59321, reverted with `git checkout`, never committed) | 10/10 |
 | `test:e2e:production tests/e2e/collaboration-live.spec.ts collaboration-presence.spec.ts collaboration-a11y.spec.ts` at `1a9d32e` | 11/11 (1.5 min) |
 | Four `studio-*` specs (controls, shape panel, review polish, flow switcher) after the narrow-layout CSS change | 11/11 |
 
-`access.spec.ts` limitation: it has a hard-coded local-port allowlist that excludes the 59xxx guarded stack, so its first test fails and the rest depend on it. With the allowlist temporarily extended it passes 10/10. The same limitation applied to the 04.1 and 04.2 evidence. The whole suite was not rerun after the final wave (223 + 3 new a11y specs passing in focused runs); the wave touched the overlay clock read, one CSS block, `migrate.mjs` and docs.
+`access.spec.ts` limitation: it has a hard-coded local-port allowlist that excludes the 59xxx guarded stack, so its first test fails and the rest depend on it. With the allowlist temporarily extended it passes 10/10. The same limitation applied to the 04.1 and 04.2 evidence. Lint, typecheck and unit (312/312) were rerun at `ccca523`. Integration and `test:realtime` were not rerun after the wave (no server or SQL change; `db:migrate` rerun, `verify-ok`).
+
+Two tests that the full runs happened to pass were found to race the committed hints once Realtime is live (reproduced alone, and at `784c517`, so not caused by the final-review wave) and were fixed test-side in `43e5760` and `ccca523` without weakening what they prove:
+- `collaboration-polling.spec.ts:54` (transient bootstrap failure): the archive's own hint, or the join read, now reaches the lifecycle change before any poll, so the single 503 was consumed early and the next read recovered before the "still the active view" check. The 503 is now held for whichever read asks, then released; it still proves the Studio stays mounted with the same view (no "Project unavailable", no Restore) and recovers on the next poll. 3/3 alone (it failed 3/3 before).
+- `studio.spec.ts:484` (typed text survives another tab's change): the other tab's committed hint made the page read the change before the test's Save in about half of isolated runs (pre-existing at `784c517`: 4 of 6 failed). The test now withholds hints with `interceptRealtime` and reloads, so only the save can discover the change; 8/8 alone.
 
 ### First full run (at `d668567`): 210 passed, 14 failed (13 real + `access`), 5 not run
 
