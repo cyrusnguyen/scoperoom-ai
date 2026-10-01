@@ -113,6 +113,8 @@ test("JSONB storage caps reject formatted sizes even below compact JSON caps", {
     const flowId = randomUUID(); const result = { previewId: p.id, draftId, flowId, documentRevision: 1, layoutRevision: 1, eventSequence: 1 };
     for (const [mapping, applied] of [[{ flowId, nodes: {}, edges: {}, extra: "x".repeat(65536) }, result], [{ flowId, nodes: {}, edges: {} }, { ...result, extra: "x".repeat(65536) }]]) await assert.rejects(database.query("update app.flow_import_preview set state='APPLIED',applied_at=now(),result_flow_id=$2,applied_mapping=$3,applied_result=$4 where id=$1", [p.id, flowId, mapping, applied]), /check constraint/i);
     await assert.rejects(database.query("update app.flow_import_preview set state='APPLIED',applied_at=now(),result_flow_id=$2,applied_mapping=$3,applied_result='{}' where id=$1", [p.id, flowId, { flowId, nodes: {}, edges: {} }]), /result_shape/i);
+    await database.query("update app.flow_import_preview set state='APPLIED',applied_at=now(),result_flow_id=$2,applied_mapping=$3,applied_result=$4 where id=$1", [p.id, flowId, { flowId, nodes: {}, edges: {} }, result]);
+    await assert.rejects(database.query("update app.flow_import_preview set payload=null,positions=null,fidelity_report=null where id=$1", [p.id]), /retention boundary/i);
   });
 });
 
@@ -182,6 +184,8 @@ test("applied previews retain recovery metadata after bodies and receipts are cl
     assert.deepEqual((await getFlowImport(editor, projectId, preview.id)).result, { ...result, mapping });
     assert.deepEqual((await discardFlowImport(editor, projectId, preview.id, randomUUID())).result, { ...result, mapping });
     assert.deepEqual((await previewFlowImport(editor, projectId, draftId, preview.id, key, bytes)).result, { ...result, mapping });
+    const changed = JSON.parse(bytes.toString()); changed.producerVersion = "changed-after-cleanup";
+    await assert.rejects(previewFlowImport(editor, projectId, draftId, preview.id, key, Buffer.from(JSON.stringify(changed))), { code: "KEY_REUSED" });
     assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where actor_id=$1", [editorId])).rows[0].count, 0);
     for (const change of ["applied_mapping='{}'::jsonb", "applied_result='{}'::jsonb", "applied_at=now()", "result_flow_id=gen_random_uuid()", "state='DISCARDED'"]) await assert.rejects(database.query(`update app.flow_import_preview set ${change} where id=$1`, [preview.id]), /immutable/i);
     await database.query("update app.project_membership set active=false, deactivated_sequence=1 where project_id=$1 and profile_id=$2", [projectId, editorId]);
