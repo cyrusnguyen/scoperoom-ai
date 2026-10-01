@@ -64,6 +64,19 @@ test("keyboard only: the participants control is reached by Tab, shows a focus r
   await expect(toggle).toBeFocused(); // the recovery did not steal it either
 });
 
+test("a project with no flows still announces Live updates delayed during a Realtime outage", async ({ collaboration }) => {
+  test.setTimeout(90_000);
+  const { ownerPage: page, projectId } = collaboration;
+  const wire = await interceptRealtime(page);
+  await page.goto(`/app/projects/${projectId}`);
+  await expect(page.getByRole("heading", { name: "No flows yet" })).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => wire.joined, { timeout: 20_000 }).toBeGreaterThanOrEqual(2); // both channels joined
+  await wire.cut();
+  await expect(delayed(page)).toBeVisible({ timeout: 20_000 });
+  wire.restore();
+  await expect(delayed(page)).toHaveCount(0, { timeout: 40_000 });
+});
+
 test("at 390 px the Studio header with the participants control fits, is touch-sized and the list stays on screen", async ({ collaboration }) => {
   const { ownerPage: page } = collaboration;
   await page.setViewportSize({ width: 390, height: 844 });

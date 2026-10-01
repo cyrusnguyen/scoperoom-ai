@@ -106,7 +106,7 @@ function NoFlows({ onCreate }: { onCreate: () => void }) {
       </> : <p>Only the owner and editors can add flows.</p>}
     </>}
     <SaveNote />
-    <div className="studio-status"><RemovedRecovery /><ReadRecovery /><NoFlowsStatus /></div>
+    <div className="studio-status"><RemovedRecovery /><LiveStatus /><ReadRecovery /><NoFlowsStatus /></div>
   </div>;
 }
 
