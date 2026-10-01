@@ -1,11 +1,69 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { setImmediate } from "node:timers/promises";
 import { Client } from "pg";
 import { getProjectBootstrap } from "../../src/features/projects/server/projects.ts";
 import { cleanupTransient } from "../../src/server/maintenance/cleanup-transient.ts";
-import { getFlowImport } from "../../src/features/exchange/server/import-flow.ts";
+import { discardFlowImport, getFlowImport } from "../../src/features/exchange/server/import-flow.ts";
 import { canRun, withFixture } from "./support/fixture.ts";
+
+test("discard refreshes a preview that cleanup expires while the transaction waits", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, profileId, database }) => {
+    const owner = await user(); const projectId = await project(owner); const actorId = await profileId(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const previewId = randomUUID(); const key = randomUUID();
+    const actorGate = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL });
+    const cleaner = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL });
+    await actorGate.connect(); await cleaner.connect();
+    const blockedBy = async (pid: number) => {
+      const deadline = Date.now() + 4_000;
+      while (Date.now() < deadline) {
+        const { rows: [blocked] } = await database.query<{ xact_start: Date }>("select xact_start from pg_stat_activity where $1=any(pg_blocking_pids(pid)) and state='active'", [pid]);
+        if (blocked) return blocked.xact_start;
+        await setImmediate();
+      }
+      throw new Error("Discard did not reach the expected database lock.");
+    };
+    let discard: ReturnType<typeof discardFlowImport> | undefined;
+    try {
+      const actorPid = (await actorGate.query("select pg_backend_pid() pid")).rows[0].pid;
+      const cleanerPid = (await cleaner.query("select pg_backend_pid() pid")).rows[0].pid;
+      await actorGate.query("begin");
+      await actorGate.query("select id from app.user_profile where id=$1 for no key update", [actorId]);
+      discard = discardFlowImport(owner, projectId, previewId, key);
+      void discard.catch(() => undefined);
+      const startedAt = await blockedBy(actorPid);
+      // Install a valid aged fixture after the discard transaction starts, placing expiry strictly after its clock.
+      const file = { format: "scoperoom-flow", formatVersion: 1, exportedAt: "2026-10-01T00:00:00Z", producerVersion: "1.6",
+        flow: { title: "Expiring preview", purpose: "", classification: "USER_JOURNEY", direction: "TB" }, nodes: [], edges: [], origin: { kind: "DRAFT", documentRevision: 1, layoutRevision: 1 } };
+      await database.query(`insert into app.flow_import_preview (id,project_id,draft_id,actor_id,expected_document_revision,payload,positions,fidelity_report,preview_hash,payload_hash,created_at,expires_at)
+        values ($1,$2,$3,$4,1,$5,'[]','{"nodeCount":0,"edgeCount":0,"omittedLinkHintCount":0,"geometry":"SUPPLIED"}',repeat('a',64),repeat('a',64),now()-interval '24 hours',greatest(clock_timestamp(),$6::timestamptz+interval '1 millisecond'))`, [previewId, projectId, draftId, actorId, file, startedAt]);
+      const expiryDeadline = Date.now() + 4_000;
+      while (!(await database.query<{ expired: boolean }>("select clock_timestamp() >= expires_at expired from app.flow_import_preview where id=$1", [previewId])).rows[0].expired) {
+        assert.ok(Date.now() < expiryDeadline, "The preview must expire before cleanup starts.");
+        await setImmediate();
+      }
+      await cleaner.query("begin");
+      await cleaner.query("select id from app.flow_import_preview where id=$1 for update", [previewId]);
+      await actorGate.query("commit");
+      await blockedBy(cleanerPid);
+      // The unfixed service blocks at UPDATE after reading READY; the corrected service blocks at its locking read.
+      await cleaner.query("select * from app.cleanup_transient(false,100)");
+      const expired = (await cleaner.query("select state,payload from app.flow_import_preview where id=$1", [previewId])).rows[0];
+      assert.equal(expired.state, "EXPIRED"); assert.equal(expired.payload, null);
+      await cleaner.query("commit");
+      const result = await discard;
+      assert.equal(result.state, "EXPIRED"); assert.equal(result.file, null);
+      assert.deepEqual(await discardFlowImport(owner, projectId, previewId, key), result);
+      assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and key=$2", [projectId, key])).rows[0].count, 1);
+    } finally {
+      await actorGate.query("rollback"); await cleaner.query("rollback");
+      await discard?.catch(() => undefined);
+      await actorGate.end(); await cleaner.end();
+    }
+  });
+});
 
 test("transient cleanup dry-runs without mutation and sweeps expired previews in bounded batches", { skip: !canRun }, async () => {
   await withFixture(async ({ user, project, profileId, database }) => {

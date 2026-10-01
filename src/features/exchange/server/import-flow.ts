@@ -193,6 +193,9 @@ export async function discardFlowImport(identity: ProjectIdentity, projectId: st
       await lockActor(tx, profile.id, identity.authUserId, true);
       const project = await lockProject(tx, profile.id, projectId);
       const role = requireMember(project);
+      // Serialize terminal transitions with cleanup before reading the preview state.
+      await tx.$queryRaw`SELECT id FROM app.flow_import_preview
+        WHERE id = ${previewId}::uuid AND project_id = ${project.id}::uuid AND actor_id = ${profile.id}::uuid FOR UPDATE`;
       const preview = await tx.flowImportPreview.findFirst({ where: { id: previewId, projectId: project.id, actorId: profile.id } }) as StoredPreview | null;
       if (!preview) throw new ProjectError("NOT_FOUND");
       const now = await clock(tx);
