@@ -54,6 +54,16 @@ enum ScopeDraftStatus {
   @@schema("app")
 }
 
+enum FlowImportState {
+  READY
+  DISCARDED
+  EXPIRED
+  APPLIED
+
+  @@map("flow_import_state")
+  @@schema("app")
+}
+
 enum ProjectMemberRole {
   EDITOR
   REVIEWER
@@ -73,6 +83,7 @@ model UserProfile {
   ownedProjects         Project[]           @relation("project_owner")
   projectMemberships    ProjectMembership[]
   receipts              MutationReceipt[]
+  flowImportPreviews    FlowImportPreview[] @relation("flow_import_actor")
   drafts                ScopeDraft[]
   auditEvents           AuditEvent[]        @relation("audit_actor")
   invitationsSent       Invitation[]        @relation("invitation_inviter")
@@ -139,6 +150,7 @@ model Project {
   auditEvents           AuditEvent[]
   memberships           ProjectMembership[]
   invitations           Invitation[]
+  flowImportPreviews    FlowImportPreview[] @relation("flow_import_project")
 
   @@unique([id, currentDraftId])
   @@index([ownerId, status, updatedAt, id])
@@ -204,9 +216,37 @@ model ScopeDraft {
   project          Project          @relation("project_drafts", fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   creator          UserProfile      @relation(fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
   currentFor       Project?         @relation("project_current_draft")
+  flowImportPreviews FlowImportPreview[] @relation("flow_import_draft")
 
   @@unique([projectId, id])
   @@map("scope_draft")
+  @@schema("app")
+}
+
+model FlowImportPreview {
+  id                       String          @id @db.Uuid
+  projectId                String          @map("project_id") @db.Uuid
+  draftId                  String          @map("draft_id") @db.Uuid
+  actorId                  String          @map("actor_id") @db.Uuid
+  expectedDocumentRevision Int             @map("expected_document_revision")
+  state                    FlowImportState @default(READY)
+  payload                  Json?
+  positions                Json?
+  fidelityReport           Json?           @map("fidelity_report")
+  previewHash              String          @map("preview_hash") @db.Char(64)
+  expiresAt                DateTime        @map("expires_at") @db.Timestamptz(6)
+  appliedAt                DateTime?       @map("applied_at") @db.Timestamptz(6)
+  resultFlowId             String?         @map("result_flow_id") @db.Uuid
+  appliedMapping           Json?           @map("applied_mapping")
+  appliedResult            Json?           @map("applied_result")
+  createdAt                DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  project                  Project         @relation("flow_import_project", fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  draft                    ScopeDraft      @relation("flow_import_draft", fields: [projectId, draftId], references: [projectId, id], onDelete: Cascade, onUpdate: NoAction)
+  actor                    UserProfile     @relation("flow_import_actor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([expiresAt, id])
+  @@index([projectId, actorId, id])
+  @@map("flow_import_preview")
   @@schema("app")
 }
 
