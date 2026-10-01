@@ -56,7 +56,7 @@ test("discard refreshes a preview that cleanup expires while the transaction wai
       const result = await discard;
       assert.equal(result.state, "EXPIRED"); assert.equal(result.file, null);
       assert.deepEqual(await discardFlowImport(owner, projectId, previewId, key), result);
-      assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and key=$2", [projectId, key])).rows[0].count, 1);
+      assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and key=$2", [projectId, key])).rows[0].count, 0);
     } finally {
       await actorGate.query("rollback"); await cleaner.query("rollback");
       await discard?.catch(() => undefined);

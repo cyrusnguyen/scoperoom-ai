@@ -4,11 +4,17 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { Client } from "pg";
 import { parseDraftPair } from "../../src/features/drafts/contracts/scope-document.ts";
+import { FLOW_IMPORT_PREVIEW_LIMITS } from "../../src/features/exchange/contracts/import.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { discardFlowImport, getFlowImport, previewFlowImport } from "../../src/features/exchange/server/import-flow.ts";
 import { canRun, withFixture } from "./support/fixture.ts";
 
 const validFile = () => readFile(new URL("../fixtures/flow-files/valid.scoperoom-flow.json", import.meta.url));
+
+async function seedRetainedPreviews(database: Client, projectId: string, draftId: string, actorId: string, count: number, state: "DISCARDED" | "EXPIRED", createdAt = new Date(Date.now() - 2 * 60 * 60 * 1000)) {
+  await database.query(`insert into app.flow_import_preview (id,project_id,draft_id,actor_id,expected_document_revision,state,preview_hash,payload_hash,created_at,expires_at)
+    select gen_random_uuid(),$1,$2,$3,1,$4::text::app.flow_import_state,repeat('a',64),repeat('a',64),$5::timestamptz,$5::timestamptz+interval '1 day' from generate_series(1,$6)`, [projectId, draftId, actorId, state, createdAt, count]);
+}
 
 test("preview UUID spelling preserves target identity and keyed recovery", { skip: !canRun }, async () => {
   await withFixture(async ({ user, project, database }) => {
@@ -38,6 +44,46 @@ test("returned preview IDs and differently cased discard routes replay the same 
     const replay = await discardFlowImport(owner, projectId, preview.id, discardKey);
     // Cleanup may clear transient bodies between responses; the retained identity and state must still replay.
     assert.deepEqual(replay, { ...discarded, ...(replay.file === null ? { file: null, positions: null, fidelityReport: null } : {}) });
+  });
+});
+
+test("terminal discards do not retain fresh receipts", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const projectId = await project(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const previewKey = randomUUID(); const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), previewKey, await validFile());
+    const key = randomUUID(); await discardFlowImport(owner, projectId, preview.id, key);
+    const terminal = await discardFlowImport(owner, projectId, preview.id, randomUUID());
+    assert.equal(terminal.state, "DISCARDED");
+    assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and operation='FLOW_IMPORT_DISCARD_V1'", [projectId])).rows[0].count, 1);
+    const actorId = (await database.query<{ actor_id: string }>("select actor_id from app.flow_import_preview where id=$1", [preview.id])).rows[0]!.actor_id;
+    const expiredId = randomUUID();
+    await database.query(`insert into app.flow_import_preview (id,project_id,draft_id,actor_id,expected_document_revision,payload,positions,fidelity_report,preview_hash,payload_hash,created_at,expires_at)
+      values ($1,$2,$3,$4,1,'{}','[]','{"nodeCount":0,"edgeCount":0,"omittedLinkHintCount":0,"geometry":"SUPPLIED"}',repeat('a',64),repeat('a',64),now()-interval '2 days',now()-interval '1 second')`, [expiredId, projectId, draftId, actorId]);
+    assert.equal((await database.query("select state::text state from app.flow_import_preview where id=$1", [expiredId])).rows[0].state, "READY");
+    const expiredKey = randomUUID(); assert.equal((await discardFlowImport(owner, projectId, expiredId, expiredKey)).state, "EXPIRED");
+    assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and key=$2", [projectId, expiredKey])).rows[0].count, 0);
+    await assert.rejects(discardFlowImport(owner, projectId, expiredId, previewKey), { code: "KEY_REUSED" });
+  });
+});
+
+test("preview admission retains terminal identities while bounding actor rows", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, profileId, database }) => {
+    const owner = await user(); const projectId = await project(owner); const otherProjectId = await project(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const otherDraftId = (await getProjectBootstrap(owner, otherProjectId)).draft.id;
+    const actorId = await profileId(owner); const bytes = await validFile();
+    const applied = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), bytes);
+    const flowId = randomUUID();
+    await database.query("update app.flow_import_preview set state='APPLIED',applied_at=now(),result_flow_id=$2,applied_mapping=$3,applied_result=$4 where id=$1", [applied.id, flowId, { flowId, nodes: {}, edges: {} }, { previewId: applied.id, draftId, flowId, documentRevision: 1, layoutRevision: 1, eventSequence: 1 }]);
+    await seedRetainedPreviews(database, otherProjectId, otherDraftId, actorId, Math.floor((FLOW_IMPORT_PREVIEW_LIMITS.actor.rows - 1) / 2), "EXPIRED");
+    await seedRetainedPreviews(database, otherProjectId, otherDraftId, actorId, Math.ceil((FLOW_IMPORT_PREVIEW_LIMITS.actor.rows - 1) / 2), "DISCARDED");
+    assert.equal((await database.query("select count(*)::int count from app.flow_import_preview where actor_id=$1", [actorId])).rows[0].count, FLOW_IMPORT_PREVIEW_LIMITS.actor.rows);
+    assert.equal((await previewFlowImport(owner, projectId, draftId, applied.id, randomUUID(), bytes)).state, "APPLIED", "recovery precedes quota admission");
+    const rejectedId = randomUUID(); const rejectedKey = randomUUID();
+    await assert.rejects(previewFlowImport(owner, projectId, draftId, rejectedId, rejectedKey, bytes), { code: "LIMIT_EXCEEDED" });
+    assert.equal((await database.query("select count(*)::int count from app.flow_import_preview where id=$1", [rejectedId])).rows[0].count, 0);
+    assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and key=$2", [projectId, rejectedKey])).rows[0].count, 0);
   });
 });
 

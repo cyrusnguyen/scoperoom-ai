@@ -6,7 +6,7 @@ import { keyPattern, uuid, type ProjectIdentity } from "../../projects/contracts
 import { checkReceipt, findReceipt, lockActor, lockProject, profileFor, readProject, receiptString, requestHash, requireActive, requireMember, saveReceipt, withDatabase, withReadSnapshot, type Transaction } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import type { FlowFileV1 } from "../contracts/flow-file.ts";
-import type { ImportApplyResult, ImportFidelityReport, ImportPreviewView } from "../contracts/import.ts";
+import { FLOW_IMPORT_PREVIEW_LIMITS, type ImportApplyResult, type ImportFidelityReport, type ImportPreviewView } from "../contracts/import.ts";
 import { parseFlowFile } from "../domain/flow-file.ts";
 
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
@@ -108,6 +108,41 @@ async function clock(tx: Transaction) {
   return row.now;
 }
 
+/** The actor and project locks serialize these cumulative quotas across all projects and actors. */
+async function preflightPreviewAdmission(tx: Transaction, actorId: string, projectId: string) {
+  const [admission] = await tx.$queryRaw<Array<{ allowed: boolean }>>`
+    SELECT count(*) FILTER (WHERE actor_id = ${actorId}::uuid) < ${FLOW_IMPORT_PREVIEW_LIMITS.actor.rows}
+      AND count(*) FILTER (WHERE project_id = ${projectId}::uuid) < ${FLOW_IMPORT_PREVIEW_LIMITS.project.rows}
+      AND count(*) FILTER (WHERE actor_id = ${actorId}::uuid AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 hour') < ${FLOW_IMPORT_PREVIEW_LIMITS.actor.creationsPerHour}
+      AND count(*) FILTER (WHERE project_id = ${projectId}::uuid AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 hour') < ${FLOW_IMPORT_PREVIEW_LIMITS.project.creationsPerHour}
+      AND count(*) FILTER (WHERE actor_id = ${actorId}::uuid AND payload IS NOT NULL) < ${FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies}
+      AND count(*) FILTER (WHERE project_id = ${projectId}::uuid AND payload IS NOT NULL) < ${FLOW_IMPORT_PREVIEW_LIMITS.project.bodies}
+      AS allowed
+    FROM app.flow_import_preview
+    WHERE actor_id = ${actorId}::uuid OR project_id = ${projectId}::uuid`;
+  if (!admission?.allowed) throw new ProjectError("LIMIT_EXCEEDED");
+}
+
+async function admitPreviewBody(tx: Transaction, actorId: string, projectId: string, source: FlowFileV1, positions: NonNullable<FlowFileV1["positions"]>, fidelityReport: ImportFidelityReport) {
+  const [admission] = await tx.$queryRaw<Array<{ allowed: boolean }>>`
+    WITH candidate AS (
+      SELECT octet_length(${JSON.stringify(source)}::jsonb::text) AS payload_bytes,
+        octet_length(${JSON.stringify(positions)}::jsonb::text) AS positions_bytes,
+        octet_length(${JSON.stringify(fidelityReport)}::jsonb::text) AS report_bytes
+    ), usage AS (
+      SELECT COALESCE(sum(octet_length(payload::text) + octet_length(positions::text) + octet_length(fidelity_report::text)) FILTER (WHERE actor_id = ${actorId}::uuid AND payload IS NOT NULL), 0) AS actor_bytes,
+        COALESCE(sum(octet_length(payload::text) + octet_length(positions::text) + octet_length(fidelity_report::text)) FILTER (WHERE project_id = ${projectId}::uuid AND payload IS NOT NULL), 0) AS project_bytes
+      FROM app.flow_import_preview
+      WHERE actor_id = ${actorId}::uuid OR project_id = ${projectId}::uuid
+    )
+    SELECT candidate.payload_bytes <= 1048576 AND candidate.positions_bytes <= 262144 AND candidate.report_bytes <= 65536
+      AND usage.actor_bytes + candidate.payload_bytes + candidate.positions_bytes + candidate.report_bytes <= ${FLOW_IMPORT_PREVIEW_LIMITS.actor.bodyBytes}
+      AND usage.project_bytes + candidate.payload_bytes + candidate.positions_bytes + candidate.report_bytes <= ${FLOW_IMPORT_PREVIEW_LIMITS.project.bodyBytes}
+      AS allowed
+    FROM candidate CROSS JOIN usage`;
+  if (!admission?.allowed) throw new ProjectError("LIMIT_EXCEEDED");
+}
+
 async function lockedTarget(tx: Transaction, projectId: string, draftId: string, currentDraftId: string | null, file: FlowFileV1) {
   const [draft] = await tx.$queryRaw<Array<{ document_revision: number; status: string; document_json: ScopeDocument }>>`
     SELECT document_revision, status::text AS status, document_json FROM app.scope_draft WHERE id = ${draftId}::uuid AND project_id = ${projectId}::uuid FOR UPDATE`;
@@ -155,12 +190,11 @@ export async function previewFlowImport(identity: ProjectIdentity, projectId: st
       if (role !== "OWNER" && role !== "EDITOR") throw new ProjectError("FORBIDDEN");
       requireActive(project);
       const expectedDocumentRevision = await lockedTarget(tx, project.id, draftId, project.currentDraftId, parsed.source);
+      await preflightPreviewAdmission(tx, profile.id, project.id);
       const positions = parsed.suppliedPositions ?? automaticPositions(parsed.source);
       const fidelityReport: ImportFidelityReport = { nodeCount: parsed.source.nodes.length, edgeCount: parsed.source.edges.length, omittedLinkHintCount: parsed.source.linkHints?.length ?? 0, geometry: parsed.suppliedPositions ? "SUPPLIED" : "AUTOMATIC" };
       const hash = requestHash(PREVIEW_OPERATION, { projectId, draftId, previewId, actorId: profile.id, file: parsed.source, positions, fidelityReport });
-      const [sizes] = await tx.$queryRaw<Array<{ valid: boolean }>>`SELECT octet_length(${JSON.stringify(parsed.source)}::jsonb::text) <= 1048576
-        AND octet_length(${JSON.stringify(positions)}::jsonb::text) <= 262144 AND octet_length(${JSON.stringify(fidelityReport)}::jsonb::text) <= 65536 AS valid`;
-      if (!sizes?.valid) throw new ProjectError("LIMIT_EXCEEDED");
+      await admitPreviewBody(tx, profile.id, project.id, parsed.source, positions, fidelityReport);
       const preview = await tx.flowImportPreview.create({ data: { id: previewId, projectId: project.id, draftId, actorId: profile.id, expectedDocumentRevision, payload: parsed.source as Prisma.InputJsonValue, positions: positions as Prisma.InputJsonValue, fidelityReport: fidelityReport as Prisma.InputJsonValue, payloadHash: parsed.payloadHash, previewHash: hash, expiresAt: new Date(now.getTime() + PREVIEW_RETENTION_MS) } }) as StoredPreview;
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, PREVIEW_OPERATION, hash, { previewId, previewHash: hash, draftId });
       return viewOf(preview, now);
@@ -205,9 +239,10 @@ export async function discardFlowImport(identity: ProjectIdentity, projectId: st
       if (preview.state === "APPLIED") return viewOf(preview, now);
       if (role !== "OWNER" && role !== "EDITOR") throw new ProjectError("FORBIDDEN");
       requireActive(project);
-      if (preview.state === "READY" && preview.expiresAt > now) await tx.flowImportPreview.update({ where: { id: preview.id }, data: { state: "DISCARDED" } });
+      if (preview.state !== "READY" || preview.expiresAt <= now) return viewOf(preview, now);
+      await tx.flowImportPreview.update({ where: { id: preview.id }, data: { state: "DISCARDED" } });
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, DISCARD_OPERATION, hash, { previewId, previewHash: preview.previewHash });
-      return viewOf({ ...preview, state: preview.state === "READY" && preview.expiresAt > now ? "DISCARDED" : preview.state }, now);
+      return viewOf({ ...preview, state: "DISCARDED" }, now);
     });
   });
 }

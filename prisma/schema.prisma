@@ -248,6 +248,7 @@ model FlowImportPreview {
 
   @@index([expiresAt, id])
   @@index([projectId, actorId, id])
+  @@index([actorId, createdAt], map: "flow_import_preview_actor_created_at_idx")
   @@map("flow_import_preview")
   @@schema("app")
 }
