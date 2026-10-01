@@ -186,6 +186,8 @@ export async function leaveProject(identity: InvitationIdentity, projectId: stri
       if (receipt) { checkReceipt(receipt, operation, hash); return { projectId, left: true as const, replayed: true }; }
       const project = await lockProject(tx, profile.id, projectId);
       if (project.role === "OWNER") throw new ProjectError("OWNER_CANNOT_LEAVE");
+      const established = await findReceipt(tx, profile.id, "PROJECT", project.id, validated.key);
+      if (established) { checkReceipt(established, operation, hash); return { projectId, left: true as const, replayed: true }; }
       requireMember(project);
       await deactivate(tx, project, profile.id, profile.id, "PROJECT_MEMBER_LEFT", [identity.verifiedEmail]);
       await saveReceipt(tx, profile.id, "PROJECT", project.id, validated.key, operation, hash, { projectId, left: true });

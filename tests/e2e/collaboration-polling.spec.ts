@@ -65,20 +65,31 @@ test("a transient bootstrap failure in the background keeps the Studio mounted a
   const status = await (await page.request.get(`/api/projects/${projectId}/status`)).json() as { version: number };
   const unavailable = (route: Route) => route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "No.", requestId: "00000000-0000-4000-8000-000000000000", retryable: true } } });
   await page.route(`**/api/projects/${projectId}/bootstrap`, unavailable);
-  const failed = page.waitForResponse((response) => /\/bootstrap$/.test(new URL(response.url()).pathname) && response.status() === 503);
+  let failedReads = 0;
+  let recoveredReads = 0;
+  page.on("response", (response) => {
+    if (new URL(response.url()).pathname !== `/api/projects/${projectId}/bootstrap`) return;
+    if (response.status() === 503) failedReads++;
+    if (response.status() === 200) recoveredReads++;
+  });
   const archived = await page.request.post(`/api/projects/${projectId}/archive`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedProjectVersion: status.version, reason: "Finished" } });
   expect(archived.status()).toBe(200);
-  await failed;
-  await page.clock.runFor(11_000); // and the poll's own bootstrap attempt fails the same way
-  await page.waitForTimeout(300);
+  // Drive polling independently of whether the archive's hint or join arrives first. Short clock slices leave room to observe real responses.
+  await expect.poll(async () => {
+    await page.clock.runFor(1_000);
+    return failedReads;
+  }, { timeout: 5_000, intervals: [25] }).toBeGreaterThan(0);
   await expect(toolbar).toBeVisible();
   await expect(page.locator("#studio-flow-title")).toHaveText("Transient");
   await expect(page.getByRole("heading", { level: 1, name: "Project unavailable" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Restore…" })).toHaveCount(0); // still the active view
-  const recovered = page.waitForResponse((response) => /\/bootstrap$/.test(new URL(response.url()).pathname) && response.status() === 200);
+  const beforeRecovery = recoveredReads;
   await page.unroute(`**/api/projects/${projectId}/bootstrap`, unavailable);
-  await page.clock.runFor(11_000);
-  await recovered;
+  // Advance in short windows while the next scheduled read and its real recovery response settle.
+  await expect.poll(async () => {
+    await page.clock.runFor(1_000);
+    return recoveredReads;
+  }, { timeout: 5_000, intervals: [25] }).toBeGreaterThan(beforeRecovery);
   await expect(page.getByRole("button", { name: "Restore…" })).toBeVisible();
   await expect(toolbar).toBeVisible();
 });

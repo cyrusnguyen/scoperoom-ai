@@ -189,6 +189,103 @@ test.describe("saved positions and arrangement", () => {
     expect(saves).toHaveLength(1);
   });
 
+  test("typed coordinates survive a remote move and project switch until explicitly reviewed or discarded", async ({ page }) => {
+    const middle = seeded.nodeIds[1]!;
+    await createProjectViaApi(page, "Other project");
+    await page.reload();
+    await expect(nodeAt(page, middle)).toBeVisible();
+    await nodeAt(page, middle).click();
+    await page.getByRole("button", { name: "Inspect" }).click();
+    const original = (await draftOf(page, projectId)).layout.positions[middle]!;
+    await page.getByLabel("X", { exact: true }).fill("420");
+    expect(await warnsBeforeUnload(page)).toBe(true);
+    await page.locator("#projects-nav").getByRole("button", { name: "Other project", exact: true }).click();
+    const guard = page.getByRole("dialog", { name: "Unsaved changes in Positions project" });
+    await expect(guard).toBeVisible();
+    await guard.getByRole("button", { name: "Stay" }).click();
+    await expect(page.getByLabel("X", { exact: true })).toHaveValue("420");
+    await moveViaApi(page, projectId, seeded, { [middle]: { x: 900, y: 900 } });
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    const conflict = page.locator(".position-form .inline-note");
+    await expect(conflict).toContainText("Position changed");
+    await expect(page.getByLabel("X", { exact: true })).toHaveValue("420");
+    await expect(page.getByLabel("Y", { exact: true })).toHaveValue(String(original.y));
+    await expect(conflict).toContainText("Saved position(900, 900)");
+    await expect(page.getByRole("button", { name: "Move", exact: true })).toBeDisabled();
+    expect(saves).toHaveLength(0);
+    await conflict.getByRole("button", { name: "Move my edit" }).click();
+    await expect(status(page)).toContainText("All changes saved");
+    expect((await draftOf(page, projectId)).layout.positions[middle]).toEqual({ x: 420, y: original.y, version: 3 });
+    expect(await warnsBeforeUnload(page)).toBe(false);
+    await page.getByLabel("X", { exact: true }).fill("600");
+    await page.locator("#projects-nav").getByRole("button", { name: "Other project", exact: true }).click();
+    await guard.getByRole("button", { name: "Discard changes", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Other project" })).toBeVisible();
+    expect(await warnsBeforeUnload(page)).toBe(false);
+    await page.locator("#projects-nav").getByRole("button", { name: "Positions project", exact: true }).click();
+    await expect(page.getByLabel("X", { exact: true })).toHaveValue("420");
+  });
+
+  test("another drag of the same node during my save uses that save's resulting version", async ({ page }) => {
+    const middle = seeded.nodeIds[1]!;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/changes", async (route) => { await held; await route.continue(); }, { times: 1 });
+    try {
+      await drag(page, middle, 100, 0);
+      await saveButton(page).click();
+      await expect(status(page)).toContainText("Saving…");
+      await drag(page, middle, 80, 30);
+      release();
+      await expect(status(page)).toContainText("All changes saved");
+      expect(saves).toHaveLength(2);
+      expect((await draftOf(page, projectId)).layout.positions[middle]!.version).toBe(3);
+    } finally { release(); }
+  });
+
+  test("a deleted node retains typed coordinates for copy and discard", async ({ page }) => {
+    const middle = seeded.nodeIds[1]!;
+    await nodeAt(page, middle).click();
+    await page.getByRole("button", { name: "Inspect" }).click();
+    await page.getByLabel("X", { exact: true }).fill("420");
+    const before = await draftOf(page, projectId);
+    const removeEdgeIds = Object.values(before.document.edges).filter((edge) => edge.fromId === middle || edge.toId === middle).map((edge) => edge.id);
+    const response = await page.request.post(`/api/projects/${projectId}/drafts/${seeded.draftId}/changes`, { headers: headers(), data: {
+      commands: [{ commandSchemaVersion: 1, command: "DELETE_NODES", expectedDocumentRevision: before.documentRevision, payload: { flowId: seeded.flowId, nodeIds: [middle], removeEdgeIds }, proposedIds: [] }], moves: [],
+    } });
+    expect(response.status()).toBe(200);
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page.getByRole("heading", { name: "This step was removed" })).toBeVisible();
+    await expect(page.getByLabel("Your unsaved text")).toContainText("X: 420");
+    expect(await warnsBeforeUnload(page)).toBe(true);
+    await page.locator("#right-panel").getByRole("button", { name: "Discard", exact: true }).click();
+    expect(await warnsBeforeUnload(page)).toBe(false);
+    expect((await draftOf(page, projectId)).document.nodes[middle]).toBeUndefined();
+  });
+
+  test("a remote saved move during a pointer drag cannot replace the drag's captured version", async ({ page }) => {
+    const middle = seeded.nodeIds[1]!;
+    const original = (await draftOf(page, projectId)).layout.positions[middle]!;
+    const box = (await nodeAt(page, middle).boundingBox())!;
+    const x = box.x + box.width / 2, y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    try {
+      await page.mouse.move(x + 150, y + 20, { steps: 5 });
+      const read = page.waitForResponse((response) => response.request().method() === "GET" && response.url().endsWith(`/drafts/${seeded.draftId}`));
+      await moveViaApi(page, projectId, seeded, { [middle]: { x: 900, y: 900 } });
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await read;
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    } finally { await page.mouse.up(); }
+    await saveButton(page).click();
+    await expect(note(page)).toContainText(STALE);
+    await expect(note(page).locator(".conflict-list")).toContainText("Saved value(900, 900)");
+    const body = saves[0]!.postDataJSON() as { moves: { items: { nodeId: string; expectedPositionVersion: number }[] }[] };
+    expect(body.moves.flatMap((group) => group.items).find((item) => item.nodeId === middle)!.expectedPositionVersion).toBe(original.version);
+    expect((await draftOf(page, projectId)).layout.positions[middle]).toEqual({ x: 900, y: 900, version: original.version + 1 });
+  });
+
   test("a save that meets someone else's move shows theirs and mine, and keeps my placement until I choose", async ({ page }) => {
     const [, middle, end] = seeded.nodeIds;
     await withholdHints(page, middle!);
@@ -276,6 +373,35 @@ test.describe("saved positions and arrangement", () => {
     expect(after.layout.directions[seeded.flowId]).toBe("LR");
     for (const nodeId of seeded.nodeIds) expect({ x: after.layout.positions[nodeId]!.x, y: after.layout.positions[nodeId]!.y }).toEqual(preview.positions[nodeId]);
     expect(after.documentRevision).toBe(before.documentRevision);
+  });
+
+  test("an unconfirmed arrangement keeps its preview and retries the exact request", async ({ page }) => {
+    await page.locator(".studio-toolbar").getByRole("button", { name: "Arrange" }).click();
+    const dialog = page.getByRole("dialog", { name: "Arrange flow" });
+    await dialog.getByRole("button", { name: "Preview" }).click();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/positions", async (route) => {
+      await held;
+      // The arrangement commits, but its acknowledgement never reaches the browser.
+      expect((await route.fetch()).status()).toBe(200);
+      await route.abort("failed");
+    }, { times: 1 });
+    try {
+      await dialog.getByRole("button", { name: "Apply arrangement" }).click();
+      await expect(dialog.getByLabel("Direction")).toBeDisabled();
+      release();
+      await expect(dialog.getByRole("alert")).toContainText("We couldn’t confirm the arrangement");
+      await expect(dialog.getByLabel("Direction")).toBeDisabled();
+      await expect(dialog.getByRole("button", { name: "Preview again" })).toBeDisabled();
+      const committed = await draftOf(page, projectId);
+      await dialog.getByRole("button", { name: "Apply again" }).click();
+      await expect(dialog).toBeHidden();
+      expect(positionWrites).toHaveLength(2);
+      expect(positionWrites[1]!.headers()["idempotency-key"]).toBe(positionWrites[0]!.headers()["idempotency-key"]);
+      expect(positionWrites[1]!.postData()).toBe(positionWrites[0]!.postData());
+      expect((await draftOf(page, projectId)).layoutRevision).toBe(committed.layoutRevision);
+    } finally { release(); }
   });
 
   test("Arrange saves unsaved changes first, and does not open while they cannot be saved", async ({ page }) => {

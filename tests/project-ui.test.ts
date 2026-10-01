@@ -7,7 +7,7 @@ import type { DraftView } from "../src/features/drafts/contracts/scope-document.
 import { admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
 import { anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
-const closed = { acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, buffers: {}, endpointBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
+const closed = { acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("an unknown or absent project reads the closed default", () => {
@@ -40,6 +40,15 @@ test("Studio buffers count their dirty fields", () => {
   store = updateUi(store, "a", (ui) => ({ buffers: edit(ui.buffers, node, "description", "") }));
   assert.equal(dirtyCount(store, "a"), 0, "typing back the saved values is clean again");
   assert.equal(anyDirty(store), false);
+});
+
+test("typed positions count for leave guards and explicit discard clears them", () => {
+  const position: Saved = { kind: "NODE", id: "n1", version: 4, fields: { x: "10", y: "20" } };
+  const store = updateUi({}, "a", (ui) => ({ ...ui, positionBuffers: edit({}, position, "x", "30") }));
+  assert.equal(dirtyCount(store, "a"), 1);
+  assert.equal(anyDirty(store), true);
+  const discarded = discardDrafts(store, "a");
+  assert.equal(anyDirty(discarded), false);
 });
 
 test("updateUi merges a change computed from the current state", () => {

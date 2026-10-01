@@ -18,10 +18,12 @@ export const AUTOSAVE_MS = 10_000;
 // Endpoint buffers store document revisions in baseVersion and are applied only as RECONNECT_EDGE.
 export type StudioUi = {
   acknowledgedRevisions: Record<string, RevisionFloor>; save: SaveState; refreshFailed: boolean; buffers: Buffers; endpointBuffers: Buffers;
+  /** Coordinate inputs use position versions, independently of the node's semantic fields. */
+  positionBuffers: Buffers;
   outbox: Outbox; request: string | null; flowId: string | null; selection: Selection; view: StudioView | null;
 };
 export const defaultStudioUi: StudioUi = {
-  acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, buffers: {}, endpointBuffers: {},
+  acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, buffers: {}, endpointBuffers: {}, positionBuffers: {},
   outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null,
 };
 export type SelectChange = { id: string; selected: boolean };
@@ -52,7 +54,7 @@ export function toggleNode(selection: Selection, id: string): Selection {
 
 /** Typed text in buffers (one per dirty field) plus every unsaved change in the outbox, sent or not. */
 export function studioDirtyCount(ui: StudioUi): number {
-  const buffers = [...Object.values(ui.buffers), ...Object.values(ui.endpointBuffers)];
+  const buffers = [...Object.values(ui.buffers), ...Object.values(ui.endpointBuffers), ...Object.values(ui.positionBuffers)];
   return buffers.filter(isDirty).reduce((count, buffer) => count + Math.max(dirtyFields(buffer).length, 1), 0) + pendingCount(ui.outbox);
 }
 

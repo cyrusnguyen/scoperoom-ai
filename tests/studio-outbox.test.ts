@@ -6,7 +6,7 @@ import { emptyDraft, type DraftView } from "../src/features/drafts/contracts/sco
 import { applyChanges } from "../src/features/drafts/domain/changes.ts";
 import { applyGraphCommand, GraphError } from "../src/features/drafts/domain/graph.ts";
 import {
-  acknowledged, addDrop, build, compareOutbox, discardOutbox, emptyOutbox, enqueue, keepTheirs, optimistic, pendingCount, rebase, redo, replay, split, startSave, undo, wireBody, withEntries,
+  acknowledged, addDrop, advance, build, compareOutbox, discardOutbox, emptyOutbox, enqueue, keepTheirs, optimistic, pendingCount, rebase, redo, replay, split, startSave, undo, wireBody, withEntries,
   type Outbox,
 } from "../src/features/studio/ui/outbox.ts";
 import { largeDraft } from "./support/large-draft.ts";
@@ -68,6 +68,43 @@ test("the optimistic draft equals the server's apply of the same batch, with the
   assert.deepEqual(changes.moves, [{ flowId, items: [{ nodeId: payId, expectedPositionVersion: 1, x: 400, y: 300 }, { nodeId: end, expectedPositionVersion: 1, x: -20, y: 500 }] }]);
   assert.equal(shown.layout.positions[payId]!.x, 400);
   assert.equal(Object.keys(shown.document.flows).length, 2, "the duplicate is shown before any request");
+});
+
+test("a drag keeps its captured saved position guard when a newer move arrives before the drop", () => {
+  const before = saved();
+  const original = before.layout.positions[start]!;
+  const moved = applyChanges(before, before.documentRevision, { commands: [], moves: [{ flowId, items: [{ nodeId: start, x: 900, y: 900, expectedPositionVersion: original.version }] }] });
+  const fresh = { ...before, ...moved, layoutRevision: before.layoutRevision + 1 };
+  const target = { nodeId: start, x: 150, y: 20, positionBase: original };
+  const outbox = addDrop(emptyOutbox, fresh, flowId, [target]);
+  const built = build(fresh, outbox.entries);
+  assert.equal(built.changes.moves[0]!.items[0]!.expectedPositionVersion, original.version);
+  assert.equal(built.draft.layout.positions[start]!.x, 150, "the attempted drag remains shown");
+  assert.throws(() => applyChanges(fresh, fresh.documentRevision, built.changes), (error: unknown) => error instanceof GraphError && error.code === "POSITION_CONFLICT");
+  assert.equal(compareOutbox(outbox, fresh, fresh.document)[0]!.rows[0]!.before, `(${original.x}, ${original.y})`);
+  const startedEarlier = addDrop(emptyOutbox, before, flowId, [target]);
+  assert.equal(advance(startedEarlier, fresh), startedEarlier, "a read cannot advance a captured position guard");
+  const laterDrop = addDrop(outbox, fresh, flowId, [{ nodeId: start, x: 160, y: 30, positionBase: fresh.layout.positions[start] }]);
+  assert.equal(build(fresh, laterDrop.entries).changes.moves[0]!.items[0]!.expectedPositionVersion, original.version, "another unsaved drag cannot refresh an unreviewed guard");
+  assert.equal(build(fresh, redo(undo(laterDrop)).entries).changes.moves[0]!.items[0]!.expectedPositionVersion, original.version);
+  const sending = startSave(outbox, fresh, "captured-drag");
+  assert.equal(optimistic(sending, fresh).layout.positions[start]!.x, 150, "batching a stale drag never hides its attempted geometry");
+  assert.equal(optimistic({ ...sending, sending: { ...sending.sending!, state: "refused" } }, fresh).layout.positions[start]!.x, 150);
+  assert.equal(compareOutbox(sending, fresh, fresh.document)[0]!.rows[0]!.before, `(${original.x}, ${original.y})`);
+  const reviewed = rebase({ ...sending, sending: { ...sending.sending!, state: "refused" } }, fresh, fresh.document);
+  assert.equal(build(fresh, reviewed.entries).changes.moves[0]!.items[0]!.expectedPositionVersion, fresh.layout.positions[start]!.version);
+});
+
+test("a second drag made during my save starts from that save's projected position version", () => {
+  const base = saved();
+  const saving = startSave(addDrop(emptyOutbox, base, flowId, [{ nodeId: start, x: 100, y: 0 }]), base, "first-drop");
+  const capture = optimistic({ ...saving, entries: [] }, base).layout.positions[start]!;
+  assert.equal(capture.version, 2);
+  const queued = addDrop(saving, base, flowId, [{ nodeId: start, x: 200, y: 0, positionBase: capture }]);
+  const afterFirst = acknowledged(queued, "next-drop");
+  const next = startSave(afterFirst, base, "second-drop");
+  assert.equal(next.sending!.batches[0]!.moves[0]!.items[0]!.expectedPositionVersion, 2);
+  assert.equal(optimistic(next, base).layout.positions[start]!.x, 200);
 });
 
 test("guards come from the optimistic draft: a stale one is refused locally with its usual code", () => {

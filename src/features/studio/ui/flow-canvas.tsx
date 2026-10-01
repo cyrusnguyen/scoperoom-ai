@@ -11,7 +11,7 @@ import { savedViewOf } from "@/features/collaboration/ui/project-live";
 import { useSync } from "@/features/collaboration/ui/sync-context";
 import { SelectedBy, useParticipants } from "@/features/collaboration/ui/use-participants";
 import type { Person } from "@/features/collaboration/ui/participants";
-import { SIDES, STEP_SIZE, type Direction, type Side } from "@/features/drafts/contracts/draft-layout";
+import { SIDES, STEP_SIZE, type Direction, type SavedPosition, type Side } from "@/features/drafts/contracts/draft-layout";
 import type { NodeKind } from "@/features/drafts/contracts/scope-document";
 import { bufferKey, discard, edit, editFields, refuse, type Saved } from "./buffers";
 import { endpointGuard, inlinePlan, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
@@ -20,6 +20,7 @@ import ShapePanel from "./shape-panel";
 import { explain, useStudio } from "./studio-context";
 import { useKeyboardShortcuts } from "./use-keyboard-shortcuts";
 import { dropTarget, moveTargets, orientConnect, orientReconnect, parseShapePayload, selectEdge, selectNodes, SHAPE_DRAG_MIME, type SelectChange, type StudioUi } from "./studio-ui";
+import { optimistic } from "./outbox";
 
 type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction; selectedBy?: Person[] };
 type StepNode = Node<StepData, "step">;
@@ -208,6 +209,7 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   const { sendCursor, sendDrag, endDrag } = useSync();
   // The advisory preview of the drag in progress: its id and the SAVED position versions captured when it began (null: nothing to preview).
   const gesture = useRef<{ id: string; bases: Map<string, number> } | null>(null);
+  const dragPositions = useRef<Map<string, SavedPosition>>(new Map());
   // Ctrl/Cmd+S is the Save button: nothing to save (or a refused save awaiting its choice) is a no-op that still keeps the browser's save dialog away.
   const save = () => { if (unsaved && !busy && ui.outbox.sending?.state !== "refused") void saveChanges(); };
   useKeyboardShortcuts(flow, { undo: canUndo ? undo : undefined, redo: canRedo ? redo : undefined, save: editable ? save : undefined }, interactive);
@@ -216,6 +218,13 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   useEffect(() => () => { if (gesture.current) endDrag(gesture.current.id); }, [endDrag]);
   const beginDrag = (moved: StepNode[]) => {
     dragActive(true);
+    // A request already in flight will advance the position before this queued drag is sent. Unsent drops still
+    // coalesce at their original saved version, so exclude those when capturing this gesture's guard.
+    const baseline = optimistic({ ...ui.outbox, entries: [] }, savedDraft, ui.acknowledgedRevisions[savedDraft.id]);
+    dragPositions.current = new Map(moved.flatMap((node) => {
+      const position = baseline.layout.positions[node.id];
+      return position ? [[node.id, position] as const] : [];
+    }));
     const bases = gestureBases(moved, savedViewOf(savedDraft), flowId);
     gesture.current = bases.size ? { id: crypto.randomUUID(), bases } : null;
   };
@@ -317,7 +326,11 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     dragActive(false);
     if (gesture.current) endDrag(gesture.current.id);
     gesture.current = null;
-    const targets = moveTargets(moved, layout);
+    const targets = moveTargets(moved, layout).map((target) => {
+      const positionBase = dragPositions.current.get(target.nodeId);
+      return { ...target, ...(positionBase ? { positionBase } : {}) };
+    });
+    dragPositions.current.clear();
     setDragging({});
     if (targets.length) void moveSteps(flowId, targets);
   };

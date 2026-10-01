@@ -10,7 +10,7 @@ export async function createAuthClient() {
   const cookieStore = await cookies();
 
   return createServerClient(config.url, config.publishableKey, {
-    cookieOptions: sessionCookieOptions(process.env.NEXT_PUBLIC_APP_URL),
+    cookieOptions: sessionCookieOptions(),
     cookies: {
       getAll: () => cookieStore.getAll(),
       setAll: (cookiesToSet) => {
