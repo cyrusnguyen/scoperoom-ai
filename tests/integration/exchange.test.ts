@@ -10,6 +10,35 @@ import { canRun, withFixture } from "./support/fixture.ts";
 
 const validFile = () => readFile(new URL("../fixtures/flow-files/valid.scoperoom-flow.json", import.meta.url));
 
+test("preview UUID spelling preserves target identity and keyed recovery", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const projectId = await project(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const previewId = randomUUID(); const key = randomUUID(); const bytes = await validFile();
+    const preview = await previewFlowImport(owner, projectId.toUpperCase(), draftId.toUpperCase(), previewId.toUpperCase(), key, bytes);
+    assert.deepEqual({ id: preview.id, projectId: preview.projectId, draftId: preview.draftId }, { id: previewId, projectId, draftId });
+    assert.deepEqual(await previewFlowImport(owner, projectId, draftId, preview.id, key, bytes), preview);
+    assert.deepEqual(await getFlowImport(owner, projectId.toUpperCase(), previewId.toUpperCase()), preview);
+    const receipt = (await database.query("select result from app.mutation_receipt where scope_id=$1 and key=$2", [projectId, key])).rows[0].result;
+    assert.equal(receipt.previewId, previewId); assert.equal(receipt.draftId, draftId);
+    assert.equal((await database.query("select count(*)::int count from app.flow_import_preview where project_id=$1", [projectId])).rows[0].count, 1);
+  });
+});
+
+test("returned preview IDs and differently cased discard routes replay the same receipt", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project }) => {
+    const owner = await user(); const projectId = await project(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const previewId = randomUUID(); const key = randomUUID(); const bytes = await validFile();
+    const preview = await previewFlowImport(owner, projectId, draftId, previewId.toUpperCase(), key, bytes);
+    assert.deepEqual(await previewFlowImport(owner, projectId, draftId, preview.id, key, bytes), preview);
+    const discardKey = randomUUID();
+    const discarded = await discardFlowImport(owner, projectId.toUpperCase(), preview.id.toUpperCase(), discardKey);
+    assert.equal(discarded.state, "DISCARDED");
+    assert.deepEqual(await discardFlowImport(owner, projectId, preview.id, discardKey), discarded);
+  });
+});
+
 test("a preview is durable and leaves its draft and audit cursor unchanged", { skip: !canRun }, async () => {
   await withFixture(async ({ user, project, database }) => {
     const owner = await user("Preview owner");

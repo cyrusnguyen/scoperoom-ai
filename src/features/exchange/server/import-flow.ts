@@ -127,6 +127,9 @@ function parseUpload(bytes: Uint8Array) {
 
 export async function previewFlowImport(identity: ProjectIdentity, projectId: string, draftId: string, previewId: string, key: string, bytes: Uint8Array): Promise<ImportPreviewView> {
   if (!uuid.test(projectId) || !uuid.test(draftId) || !uuid.test(previewId)) throw new ProjectError("NOT_FOUND");
+  projectId = projectId.toLowerCase();
+  draftId = draftId.toLowerCase();
+  previewId = previewId.toLowerCase();
   if (!keyPattern.test(key)) throw new ProjectError("INVALID_INPUT");
   const parsed = parseUpload(bytes);
   return withDatabase(async (database) => {
@@ -181,6 +184,8 @@ export async function getFlowImport(identity: ProjectIdentity, projectId: string
 
 export async function discardFlowImport(identity: ProjectIdentity, projectId: string, previewId: string, key: string): Promise<ImportPreviewView> {
   if (!uuid.test(projectId) || !uuid.test(previewId)) throw new ProjectError("NOT_FOUND");
+  projectId = projectId.toLowerCase();
+  previewId = previewId.toLowerCase();
   if (!keyPattern.test(key)) throw new ProjectError("INVALID_INPUT");
   return withDatabase(async (database) => {
     const profile = await profileFor(database, identity);
