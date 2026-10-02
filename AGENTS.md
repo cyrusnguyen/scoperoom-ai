@@ -27,3 +27,13 @@ Keep one active writer per path or working tree. Settle shared contracts before 
 The lead, verifier and reviewer use a fix-forward policy: when they confirm an in-scope bug, regression, inadequate test or faulty design in the current change, they must report it and fix it in the same branch/change set without waiting for another delegation. They add or update focused regression coverage and rerun affected checks. This standing instruction does not authorize unrelated refactors, concurrent edits to another writer's paths, destructive actions, external mutations, or product decisions beyond the current request; those still require coordination or user authority.
 
 Workflow and handoff: [ai-workflow-rules.md](docs/context/ai-workflow-rules.md).
+
+## Commit and PR hygiene
+
+- Start every commit subject and PR title with a purpose prefix, such as `fix:`, `feat:`, `ci:`, `docs:`, `test:`, `refactor:`, `perf:`, `build:`, `chore:`, or `revert:`.
+- Use `style:` only for formatting changes.
+- Do not add co-author trailers to commits.
+- Do not add `Codex`, `Claude Code`, or other AI-related generated-by or contribution attribution to commits.
+- Do not commit `.docs/superpowers/`.
+- Keep evidence files out of commits.
+- Do not use em dashes in PR descriptions, commit messages, `README.md`, or other Markdown files.

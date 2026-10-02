@@ -11,6 +11,7 @@ const eslintConfig = defineConfig([
     ".next/**",
     ".next-e2e/**",
     ".worktrees/**",
+    ".tmp/**",
     ".claude/worktrees/**",
     "prisma/generated/**",
     "out/**",

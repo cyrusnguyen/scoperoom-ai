@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransitio
 import { useParams, useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
 import { accountChanged, apiRead, SESSION_ENDED, sessionEnded } from "@/client/api";
+import { clearImport, clearImportSessions } from "@/features/exchange/ui/import-recovery";
 import type { Live } from "@/features/collaboration/ui/project-sync";
 import { SyncProvider } from "@/features/collaboration/ui/sync-context";
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
@@ -80,6 +81,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
 
   useEffect(() => {
     const end = (event: Event) => flushSync(() => {
+      clearImportSessions();
       endedRef.current = true; openedRef.current = null;
       setEnded((event as CustomEvent<"session" | "account">).detail === "account" ? "account" : "session"); setStore({}); setOpened(null); setLists(null); setInvites(null); setDialog(null);
     });
@@ -127,7 +129,11 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
       install({ projectId: id, bootstrap: admitted ? result.data : { ...result.data, draft: shown } });
       if (admitted) setStore((current) => updateUi(current, id, (ui) => afterDraftRead(ui, result.data.draft)));
     }
-    else if (result.status === 404) { install({ projectId: id, missing: true }); setStore((previous) => dropProject(previous, id)); }
+    else if (result.status === 403 || result.status === 404) {
+      if (viewerRef.current) clearImport({ actorId: viewerRef.current, projectId: id });
+      install(result.status === 404 ? { projectId: id, missing: true } : { projectId: id, error: result.message });
+      setStore((previous) => result.status === 404 ? dropProject(previous, id) : updateUi(previous, id, () => ({ nativeImport: null })));
+    }
     // A background read (polling, Details) that fails transiently keeps what is shown: unmounting would stop the polling
     // that retries it. The unavailable view's own Retry has nothing shown, and 403 or 404 always show their recovery.
     else if (result.uncertain && openedRef.current?.projectId === id && openedRef.current.bootstrap) return;
@@ -322,7 +328,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     </div>
     <footer className="app-footer">
       <span className={notice.error ? "footer-error" : undefined} role={notice.error ? "alert" : "status"} aria-live="polite">{notice.text}</span>
-      <form action={signOut}><button type="submit">Sign out</button></form>
+      <form action={signOut} onSubmit={clearImportSessions}><button type="submit">Sign out</button></form>
     </footer>
     {children}
     {dialog?.kind === "create" && <NewProjectDialog onClose={() => closeDialog()} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}

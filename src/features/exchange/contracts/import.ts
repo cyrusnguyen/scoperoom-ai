@@ -11,6 +11,8 @@ export type ImportApplyResult = {
   previewId: string; draftId: string; flowId: string; mapping: ImportMapping;
   documentRevision: number; layoutRevision: number; eventSequence: number;
 };
+export type ImportApplyResponse = ImportApplyResult & { replayed: boolean };
+export type ImportApplyInput = { key: string; draftId: string; previewHash: string };
 export type ImportFidelityReport = {
   nodeCount: number; edgeCount: number; omittedLinkHintCount: number; geometry: "SUPPLIED" | "AUTOMATIC";
 };

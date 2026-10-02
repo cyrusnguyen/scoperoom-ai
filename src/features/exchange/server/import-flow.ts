@@ -1,17 +1,20 @@
-import { createHash } from "node:crypto";
-import type { Prisma } from "../../../../prisma/generated/client.ts";
+import { createHash, randomUUID } from "node:crypto";
+import { Prisma } from "../../../../prisma/generated/client.ts";
 import { arrange } from "../../drafts/server/layout.ts";
+import { asJson, graphFailure, nextRevision, requireStoredSize, storedDraft } from "../../drafts/server/execute-command.ts";
 import { LIMITS, type ScopeDocument } from "../../drafts/contracts/scope-document.ts";
 import { keyPattern, uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
-import { checkReceipt, findReceipt, lockActor, lockProject, profileFor, readProject, receiptString, requestHash, requireActive, requireMember, saveReceipt, withDatabase, withReadSnapshot, type Transaction } from "../../projects/server/access.ts";
+import { checkReceipt, findReceipt, lockActor, lockProject, profileFor, readProject, receiptString, recordEvent, requestHash, requireActive, requireMember, saveReceipt, withDatabase, withReadSnapshot, type Transaction } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import type { FlowFileV1 } from "../contracts/flow-file.ts";
-import { FLOW_IMPORT_PREVIEW_LIMITS, type ImportApplyResult, type ImportFidelityReport, type ImportPreviewView } from "../contracts/import.ts";
-import { parseFlowFile } from "../domain/flow-file.ts";
+import { FLOW_IMPORT_PREVIEW_LIMITS, type ImportApplyInput, type ImportApplyResult, type ImportFidelityReport, type ImportPreviewView } from "../contracts/import.ts";
+import { appendImportedFlow } from "../domain/import-flow.ts";
+import { parseFlowFile, parseStoredFlowFile } from "../domain/flow-file.ts";
 
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const PREVIEW_OPERATION = "FLOW_IMPORT_PREVIEW_V1";
 const DISCARD_OPERATION = "FLOW_IMPORT_DISCARD_V1";
+const APPLY_OPERATION = "FLOW_IMPORT_APPLY_V1";
 const PREVIEW_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 type StoredPreview = {
@@ -102,8 +105,45 @@ function appliedResult(preview: StoredPreview): ImportApplyResult | null {
   return { ...result, mapping } as ImportApplyResult;
 }
 
+/** Re-parse both persisted JSON values before their IDs can enter the append transform. */
+function storedImport(preview: StoredPreview): { file: FlowFileV1; positions: NonNullable<FlowFileV1["positions"]> } {
+  if (!preview.payload || !preview.positions) throw new ProjectError("UNAVAILABLE");
+  try {
+    const file = parseStoredFlowFile({ ...(preview.payload as object), positions: preview.positions });
+    if (!file.positions) throw new Error("Missing positions");
+    return { file, positions: file.positions };
+  } catch { throw new ProjectError("UNAVAILABLE"); }
+}
+
+async function requireStoredApplySize(tx: Transaction, mapping: ImportApplyResult["mapping"], result: Omit<ImportApplyResult, "mapping">) {
+  const receipt = { ...result, mapping };
+  const [size] = await tx.$queryRaw<Array<{ mappingBytes: number; resultBytes: number; receiptBytes: number }>>`
+    SELECT octet_length(${JSON.stringify(mapping)}::jsonb::text)::integer AS "mappingBytes",
+      octet_length(${JSON.stringify(result)}::jsonb::text)::integer AS "resultBytes",
+      octet_length(${JSON.stringify(receipt)}::jsonb::text)::integer AS "receiptBytes"`;
+  if (!size || size.mappingBytes > 65_536 || size.resultBytes > 65_536 || size.receiptBytes > 65_536) throw new ProjectError("LIMIT_EXCEEDED");
+}
+
+function parseApplyInput(input: ImportApplyInput): ImportApplyInput {
+  const value = input as unknown;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ProjectError("INVALID_INPUT");
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length !== 3 || !Object.hasOwn(record, "key") || !Object.hasOwn(record, "draftId") || !Object.hasOwn(record, "previewHash")
+    || typeof record.key !== "string" || typeof record.draftId !== "string" || typeof record.previewHash !== "string" || !keyPattern.test(record.key)
+    || !uuid.test(record.draftId) || !/^[0-9a-f]{64}$/.test(record.previewHash)) throw new ProjectError("INVALID_INPUT");
+  return { key: record.key, draftId: record.draftId.toLowerCase(), previewHash: record.previewHash };
+}
+
+async function lockImportPreview(tx: Transaction, projectId: string, previewId: string, actorId: string) {
+  await tx.$queryRaw`SELECT id FROM app.flow_import_preview
+    WHERE id = ${previewId}::uuid AND project_id = ${projectId}::uuid AND actor_id = ${actorId}::uuid FOR UPDATE`;
+  const preview = await tx.flowImportPreview.findFirst({ where: { id: previewId, projectId, actorId } }) as StoredPreview | null;
+  if (!preview) throw new ProjectError("NOT_FOUND");
+  return preview;
+}
+
 async function clock(tx: Transaction) {
-  const [row] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT CURRENT_TIMESTAMP AS now`;
+  const [row] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
   if (!row) throw new ProjectError("UNAVAILABLE");
   return row.now;
 }
@@ -216,6 +256,81 @@ export async function getFlowImport(identity: ProjectIdentity, projectId: string
   });
 }
 
+/**
+ * Appends a preview exactly once. It deliberately does not use `draftMutation`: an APPLIED preview is a durable result
+ * whose recovery must survive a later draft replacement, role downgrade, archive, and receipt cleanup.
+ */
+export async function applyFlowImport(identity: ProjectIdentity, projectId: string, previewId: string, rawInput: ImportApplyInput): Promise<ImportApplyResult & { replayed: boolean }> {
+  if (!uuid.test(projectId) || !uuid.test(previewId)) throw new ProjectError("NOT_FOUND");
+  projectId = projectId.toLowerCase();
+  previewId = previewId.toLowerCase();
+  const input = parseApplyInput(rawInput);
+  const hash = requestHash(APPLY_OPERATION, { projectId, previewId, draftId: input.draftId, previewHash: input.previewHash });
+  return withDatabase(async (database) => {
+    const profile = await profileFor(database, identity);
+    return database.$transaction(async (tx) => {
+      // Lock order is profile, project, preview, then the saved draft. Cleanup only takes the preview lock.
+      await lockActor(tx, profile.id, identity.authUserId, true);
+      const project = await lockProject(tx, profile.id, projectId);
+      requireMember(project);
+      const preview = await lockImportPreview(tx, project.id, previewId, profile.id);
+      if (preview.draftId !== input.draftId || preview.previewHash !== input.previewHash) throw new ProjectError("IMPORT_PAYLOAD_MISMATCH");
+
+      const receipt = await findReceipt(tx, profile.id, "PROJECT", project.id, input.key);
+      if (receipt) {
+        checkReceipt(receipt, APPLY_OPERATION, hash);
+        const result = appliedResult(preview);
+        if (!result) throw new ProjectError("UNAVAILABLE");
+        return { ...result, replayed: true };
+      }
+
+      // Terminal recovery is read-only, including after receipt cleanup, downgrade and archive.
+      const retained = appliedResult(preview);
+      if (retained) return { ...retained, replayed: true };
+
+      const now = await clock(tx);
+      if (preview.state === "EXPIRED" || preview.expiresAt <= now) throw new ProjectError("IMPORT_EXPIRED");
+      if (preview.state !== "READY") throw new ProjectError("IMPORT_STALE");
+      if (project.role !== "OWNER" && project.role !== "EDITOR") throw new ProjectError("FORBIDDEN");
+      requireActive(project);
+
+      const [stored] = await tx.$queryRaw<Array<{ id: string; status: string; document_revision: number; layout_revision: number; document_json: unknown; layout_json: unknown }>>`
+        SELECT id, status::text AS status, document_revision, layout_revision, document_json, layout_json
+        FROM app.scope_draft WHERE id = ${preview.draftId}::uuid AND project_id = ${project.id}::uuid FOR UPDATE`;
+      if (!stored || stored.id !== project.currentDraftId || stored.status !== "EDITABLE") throw new ProjectError("IMPORT_STALE");
+      if (preview.expiresAt <= await clock(tx)) throw new ProjectError("IMPORT_EXPIRED");
+
+      const source = storedImport(preview);
+      let appended: ReturnType<typeof appendImportedFlow>;
+      try { appended = appendImportedFlow(storedDraft(stored.document_json, stored.layout_json), source.file, source.positions, randomUUID); }
+      catch (error) { graphFailure(error); }
+      const documentRevision = nextRevision(stored.document_revision);
+      const layoutRevision = nextRevision(stored.layout_revision);
+      await requireStoredSize(tx, appended!.draft.document, appended!.draft.layout);
+      const appliedAt = await clock(tx);
+      if (preview.expiresAt <= appliedAt) throw new ProjectError("IMPORT_EXPIRED");
+      await tx.scopeDraft.update({ where: { id: stored.id }, data: {
+        documentJson: asJson(appended!.draft.document), layoutJson: asJson(appended!.draft.layout), documentRevision, layoutRevision,
+      }, select: { id: true } });
+      const eventSequence = Number(await recordEvent(tx, project, profile.id, "FLOW_IMPORTED", [
+        { kind: "DRAFT", id: stored.id }, { kind: "DRAFT_ENTITY", id: appended!.mapping.flowId },
+      ], { draftId: stored.id, flowId: appended!.mapping.flowId, nodeCount: source.file.nodes.length, edgeCount: source.file.edges.length, documentRevision, layoutRevision }));
+      const result = { previewId: preview.id, draftId: preview.draftId, flowId: appended!.mapping.flowId, documentRevision, layoutRevision, eventSequence };
+      await requireStoredApplySize(tx, appended!.mapping, result);
+      const durable = { ...result, mapping: appended!.mapping };
+      await tx.flowImportPreview.update({ where: { id: preview.id }, data: {
+        state: "APPLIED", appliedAt, resultFlowId: result.flowId, appliedMapping: asJson(appended!.mapping), appliedResult: asJson(result),
+      } }).catch((error: unknown) => {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2039"
+          && error.meta?.driverAdapterError instanceof Error && error.meta.driverAdapterError.message === "flow import expired") throw new ProjectError("IMPORT_EXPIRED");
+        throw error;
+      });
+      await saveReceipt(tx, profile.id, "PROJECT", project.id, input.key, APPLY_OPERATION, hash, asJson(durable));
+      return { ...durable, replayed: false };
+    });
+  });
+}
+
 export async function discardFlowImport(identity: ProjectIdentity, projectId: string, previewId: string, key: string): Promise<ImportPreviewView> {
   if (!uuid.test(projectId) || !uuid.test(previewId)) throw new ProjectError("NOT_FOUND");
   projectId = projectId.toLowerCase();
@@ -235,14 +350,20 @@ export async function discardFlowImport(identity: ProjectIdentity, projectId: st
       const now = await clock(tx);
       const hash = requestHash(DISCARD_OPERATION, { projectId, previewId, previewHash: preview.previewHash });
       const receipt = await findReceipt(tx, profile.id, "PROJECT", project.id, key);
-      if (receipt) { checkReceipt(receipt, DISCARD_OPERATION, hash); return viewOf(preview, now); }
+      if (receipt) {
+        checkReceipt(receipt, DISCARD_OPERATION, hash);
+        if (!preview.payload || preview.state === "APPLIED" || preview.state === "READY" || (role !== "OWNER" && role !== "EDITOR") || project.status !== "ACTIVE") return viewOf(preview, now);
+      }
       if (preview.state === "APPLIED") return viewOf(preview, now);
       if (role !== "OWNER" && role !== "EDITOR") throw new ProjectError("FORBIDDEN");
       requireActive(project);
-      if (preview.state !== "READY" || preview.expiresAt <= now) return viewOf(preview, now);
-      await tx.flowImportPreview.update({ where: { id: preview.id }, data: { state: "DISCARDED" } });
+      if (preview.state !== "READY" || preview.expiresAt <= now) {
+        const retired = await tx.flowImportPreview.update({ where: { id: preview.id }, data: { state: preview.state === "READY" ? "EXPIRED" : preview.state } }) as StoredPreview;
+        return viewOf(retired, now);
+      }
+      const discarded = await tx.flowImportPreview.update({ where: { id: preview.id }, data: { state: "DISCARDED" } }) as StoredPreview;
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, DISCARD_OPERATION, hash, { previewId, previewHash: preview.previewHash });
-      return viewOf({ ...preview, state: "DISCARDED" }, now);
+      return viewOf(discarded, now);
     });
   });
 }

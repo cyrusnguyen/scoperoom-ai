@@ -41,6 +41,7 @@ function rig(start = status()) {
     },
     visibility: { hidden: () => hidden, listen: (on) => { listeners.add(on); return () => { listeners.delete(on); }; } },
     accountChanged: () => { log.push("account"); },
+    sessionEnded: () => { log.push("session"); },
     live: () => shell.live,
     readDraft: async (fence) => { log.push(`read:${fence()}`); },
     bootstrap: async (fence) => { log.push(`bootstrap:${fence()}`); },
@@ -320,7 +321,7 @@ test("beforeWrite reports unavailable after a failed read and denied after 403/4
   t.sync.dispose();
 });
 
-test("a 401 stops the controller: no timer, no fetch, nothing adopted", async () => {
+test("a 401 ends the session and stops the controller: no timer, no fetch, nothing adopted", async () => {
   const t = rig();
   t.sync.start();
   await t.advance(10_000);
@@ -328,7 +329,7 @@ test("a 401 stops the controller: no timer, no fetch, nothing adopted", async ()
   assert.equal(t.timers.length, 0);
   assert.equal((await t.sync.revalidate("manual")).kind, "unavailable");
   assert.equal(t.pending.length, 0);
-  assert.deepEqual(t.log, []);
+  assert.deepEqual(t.log, ["session"]);
   t.sync.dispose();
 });
 
@@ -484,6 +485,22 @@ test("a status for another account is an account change: the controller stops, n
   assert.equal((await t.sync.revalidate("manual")).kind, "unavailable");
   assert.equal((await t.sync.beforeWrite()).kind, "unavailable");
   assert.equal(t.pending.length, 0);
+  t.sync.dispose();
+});
+
+test("a 401 from a disposed generation cannot end the new session", async () => {
+  const t = rig();
+  t.sync.start();
+  void t.sync.revalidate("manual");
+  assert.equal(t.pending.length, 1);
+  t.sync.dispose();
+  t.sync.start();
+  await t.answer(fail(401));
+  assert.deepEqual(t.log, []);
+  const current = t.sync.revalidate("manual");
+  assert.equal(t.pending.length, 1, "the replacement controller remains usable");
+  await t.answer(ok(status()));
+  assert.equal((await current).kind, "current");
   t.sync.dispose();
 });
 

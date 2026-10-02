@@ -332,4 +332,37 @@ test.describe("project invitations", () => {
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page).toHaveURL(new RegExp(`/app/projects/${fixture.projectId}$`), { timeout: 15_000 });
   });
+
+  test("a stale status 401 after sign-out cannot clear the next account's login form", async ({ page }) => {
+    test.setTimeout(60_000);
+    const fixture = await createFixture(page, database, admin, users);
+    await page.goto(`/app/projects/${fixture.projectId}`);
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let statusReads = 0;
+    let released = false, lateLoginNavigations = 0;
+    page.on("framenavigated", (frame) => {
+      if (released && frame === page.mainFrame() && new URL(frame.url()).pathname === "/login") lateLoginNavigations++;
+    });
+    await page.route(`**/api/projects/${fixture.projectId}/status`, async (route) => {
+      if (route.request().method() !== "GET" || ++statusReads !== 1) return route.continue();
+      await held;
+      await route.fulfill({ status: 401, json: { error: { code: "UNAUTHENTICATED", message: "Sign in to continue." } } });
+    });
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect.poll(() => statusReads).toBe(1);
+    await page.getByRole("button", { name: "Sign out" }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    const email = page.getByLabel("Email address");
+    await email.fill(fixture.outsider.email);
+    const statusFinished = page.waitForEvent("requestfinished", (request) => request.url().includes(`/api/projects/${fixture.projectId}/status`));
+    released = true;
+    release();
+    await statusFinished;
+    await expect(email).toHaveValue(fixture.outsider.email);
+    await page.getByLabel("Password").fill(fixture.outsider.password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page).toHaveURL(/\/app$/, { timeout: 15_000 });
+    expect(lateLoginNavigations).toBe(0);
+  });
 });

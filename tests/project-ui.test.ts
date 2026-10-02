@@ -7,8 +7,20 @@ import type { DraftView } from "../src/features/drafts/contracts/scope-document.
 import { admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
 import { anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
-const closed = { acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
+const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
+
+test("discard preserves an uncertain import's original per-project request; dropping access clears it", () => {
+  const record = { actorId: "actor", projectId: "a", draftId: "original-draft", previewId: "preview", createKey: "create", discardKey: "discard", fingerprint: "a".repeat(64), previewHash: "b".repeat(64), attempt: { key: "apply", draftId: "original-draft", previewHash: "b".repeat(64) } };
+  const nativeImport = { record, file: null, preview: null, state: "Applying" as const, message: "Unconfirmed" };
+  const store = updateUi(updateUi({}, "a", () => ({ nativeImport })), "b", () => ({ flowId: "unrelated" }));
+  const discarded = discardDrafts(store, "a");
+  assert.equal(uiFor(discarded, "a").nativeImport, nativeImport);
+  assert.deepEqual(uiFor(discarded, "a").nativeImport?.record.attempt, record.attempt);
+  const dropped = dropProject(discarded, "a");
+  assert.equal(uiFor(dropped, "a").nativeImport, null);
+  assert.equal(uiFor(dropped, "b").flowId, "unrelated");
+});
 
 test("an unknown or absent project reads the closed default", () => {
   assert.deepEqual(uiFor({}, "a"), closed);

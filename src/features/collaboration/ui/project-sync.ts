@@ -24,6 +24,8 @@ export type SyncOptions = {
   visibility: { hidden: () => boolean; listen: (on: (event: VisibilityEvent) => void) => () => void };
   /** A status for another account than the one the page opened with: the shell tears down and navigates. The controller stops first. */
   accountChanged: () => void;
+  /** The current status response proves the session ended. The controller stops first, so a late response cannot navigate. */
+  sessionEnded: () => void;
   live: () => Live | null;
   /** One coherent D read through the shell's admission gate. Must check `fence()` right before adopting. */
   readDraft: (fence: () => boolean) => Promise<unknown>;
@@ -85,7 +87,7 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
     const read = await o.fetchStatus().catch((): StatusRead => ({ ok: false, status: 0 }));
     if (!fenceFor(at)()) return unavailable; // a late response after dispose or a newer generation adopts nothing
     if (!read.ok) {
-      if (read.status === 401) { stopped = true; generation++; return unavailable; } // the client already navigated to sign-in
+      if (read.status === 401) { stopped = true; generation++; o.sessionEnded(); return unavailable; }
       failures++; invalid = true;
       const denied = read.status === 403 || read.status === 404;
       publish(); schedule();

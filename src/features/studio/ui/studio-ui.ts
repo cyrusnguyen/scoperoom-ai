@@ -3,6 +3,7 @@ import { COORDINATE_LIMIT, type DraftLayout } from "../../drafts/contracts/draft
 import { NODE_KINDS, type DraftView, type NodeKind } from "../../drafts/contracts/scope-document.ts";
 import { dirtyFields, isDirty, type Buffers } from "./buffers.ts";
 import { advance, covers, emptyOutbox, isNewer, pendingCount, type Outbox, type RevisionFloor } from "./outbox.ts";
+import type { NativeImportState } from "../../exchange/ui/import-recovery.ts";
 
 export { covers, isNewer } from "./outbox.ts";
 
@@ -17,12 +18,14 @@ export const AUTOSAVE_MS = 10_000;
 // key of the save or arrangement request in flight: a remounted provider must still see it and send nothing else.
 // Endpoint buffers store document revisions in baseVersion and are applied only as RECONNECT_EDGE.
 export type StudioUi = {
+  nativeImport: NativeImportState | null;
   acknowledgedRevisions: Record<string, RevisionFloor>; save: SaveState; refreshFailed: boolean; buffers: Buffers; endpointBuffers: Buffers;
   /** Coordinate inputs use position versions, independently of the node's semantic fields. */
   positionBuffers: Buffers;
   outbox: Outbox; request: string | null; flowId: string | null; selection: Selection; view: StudioView | null;
 };
 export const defaultStudioUi: StudioUi = {
+  nativeImport: null,
   acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, buffers: {}, endpointBuffers: {}, positionBuffers: {},
   outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null,
 };
