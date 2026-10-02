@@ -600,12 +600,17 @@ test.describe("saved positions and arrangement", () => {
   test("a project switch whose save is refused asks first, and Discard drops the moved steps", async ({ page }) => {
     const middle = seeded.nodeIds[1]!;
     await createProjectViaApi(page, "Other project");
-    (await interceptRealtime(page)).dropEvents = true; // hints withheld (see withholdHints): the save, not a hint, meets the move
-    await page.reload();
-    await expect(nodeAt(page, middle)).toBeVisible();
-    await moveViaApi(page, projectId, seeded, { [middle]: { x: 800, y: 800 } });
+    await withholdHints(page, middle);
+    const original = (await draftOf(page, projectId)).layout.positions[middle]!;
     await drag(page, middle, 150, 0);
+    await expect(status(page)).toContainText("Unsaved changes");
+    await moveViaApi(page, projectId, seeded, { [middle]: { x: 800, y: 800 } });
+    const refused = page.waitForResponse((response) => response.url().endsWith("/changes") && response.request().method() === "POST");
     await page.locator("#projects-nav").getByRole("button", { name: "Other project", exact: true }).click();
+    const response = await refused;
+    expect(response.status()).toBe(409);
+    expect((await response.json() as { error: { code: string } }).error.code).toBe("POSITION_CONFLICT");
+    expect((saves[0]!.postDataJSON() as Batch).moves.flatMap((group) => group.items).find((item) => item.nodeId === middle)!.expectedPositionVersion).toBe(original.version);
     const guard = page.getByRole("dialog", { name: "Unsaved changes in Positions project" });
     await expect(guard).toBeVisible();
     await expect(guard).toContainText("unsaved change(s).");

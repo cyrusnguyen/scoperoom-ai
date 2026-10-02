@@ -190,8 +190,15 @@ test.describe("two real users converge through status polling", () => {
     await openBoth(collaboration);
     const reads = await holdDraftReads(editorPage, projectId);
     await rename(ownerPage, projectId, ids.shipId, "Ship (theirs)");
-    await poll(editorPage);
+    // A status read may already have started and be waiting on R1, so no next poll is scheduled until R1 lands.
+    for (let waited = 0; !reads.held.length && waited < POLL_DEADLINE; waited += 250) {
+      await editorPage.clock.runFor(250);
+      await new Promise((resolve) => setTimeout(resolve, 25)); // let the intercepted read reach this process
+    }
     await expect.poll(() => reads.held.length).toBe(1); // read R1: has their rename, not my edit
+    const beforeSave = await reads.held[0]!.response.json() as DraftView;
+    expect(beforeSave.document.nodes[ids.shipId]!.label).toBe("Ship (theirs)");
+    expect(beforeSave.document.nodes[ids.startId]!.label).toBe("Start");
     await renameLocally(editorPage, ids.startId, "Mine");
     await headerSave(editorPage).click();
     await expect.poll(() => reads.held.length).toBe(2); // read R2, after my receipt: covers it
