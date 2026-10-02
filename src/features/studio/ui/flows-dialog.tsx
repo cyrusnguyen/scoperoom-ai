@@ -7,17 +7,18 @@ import { CLASSIFICATIONS, INCLUSIONS, LIMITS, type Classification, type Inclusio
 import { dependencyPlan } from "@/features/drafts/domain/graph";
 import Dialog from "@/features/shell/ui/dialog";
 import { Icon } from "@/features/shell/ui/icon";
+import { NativeImportDialog } from "@/features/exchange/ui/flow-exchange";
 import { CLASSIFICATION_LABELS, fieldErrors, INCLUSION_LABELS } from "./fields";
 import { currentFlow, flowsInOrder } from "./graph-view";
 import { explain, formKeys, useCommandSubmit, useStudio } from "./studio-context";
 
 const UNSAVED = "Your changes aren’t saved yet, so this flow stays open. Resolve them in the Studio, then switch.";
 
-/** Header control naming the open flow; it opens the Flows dialog. Hidden until the project has a flow. */
+/** Header control naming the open flow; the Flows dialog remains available in an empty draft. */
 export function FlowSwitcher() {
   const { draft, ui } = useStudio();
   const flow = currentFlow(draft.document, ui.flowId);
-  return flow ? <FlowSwitcherControl title={flow.title} /> : null;
+  return <FlowSwitcherControl title={flow?.title ?? "Flows"} />;
 }
 
 function FlowSwitcherControl({ title }: { title: string }) {
@@ -30,7 +31,7 @@ function FlowSwitcherControl({ title }: { title: string }) {
   </>;
 }
 
-type Mode = "list" | "create" | "delete";
+type Mode = "list" | "create" | "delete" | "import";
 type FlowValues = { title: string; classification: string; inclusion: string };
 
 /**
@@ -110,6 +111,8 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     await send({ commandSchemaVersion: 1, command: "DELETE_FLOW", expectedDocumentRevision: draft.documentRevision, payload: { flowId: current.id, removeNodeIds: plan.nodeIds, removeEdgeIds: plan.edgeIds } });
   };
 
+  if (mode === "import") return <NativeImportDialog onClose={onClose} />;
+
   if (editable && mode === "create") {
     return <Dialog title="New flow" onClose={onClose} footer={<>
       <button type="button" className="button quiet" onClick={() => (flows.length ? setMode("list") : onClose())}>Cancel</button>
@@ -151,6 +154,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   }
 
   return <Dialog title="Flows" onClose={onClose} footer={<button type="button" className="button quiet" onClick={onClose}>Close</button>}>
+    <div className="view-actions"><button type="button" className="button small" onClick={() => setMode("import")}>Import flow</button></div>
     <div className="form-row">
       <label htmlFor="flow-filter">Show</label>
       <select id="flow-filter" value={filter} onChange={(event) => setFilter(event.target.value as "ALL" | Inclusion)}>
