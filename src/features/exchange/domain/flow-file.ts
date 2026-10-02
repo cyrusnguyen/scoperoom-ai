@@ -166,6 +166,12 @@ function parseFile(value: unknown): FlowFileV1 {
   return result;
 }
 
+/** Semantic validation for separately bounded persisted payload and geometry; upload bytes remain capped below. */
+export function parseStoredFlowFile(value: unknown): FlowFileV1 {
+  rejectDangerousKeys(value);
+  return parseFile(value);
+}
+
 export function parseFlowFile(bytes: Uint8Array): FlowFileV1 {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength > FLOW_FILE_BYTE_LIMIT) invalid();
   let json: string;

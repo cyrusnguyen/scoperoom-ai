@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { Prisma } from "../../../../prisma/generated/client.ts";
+import { Prisma } from "../../../../prisma/generated/client.ts";
 import { arrange } from "../../drafts/server/layout.ts";
 import { asJson, graphFailure, nextRevision, requireStoredSize, storedDraft } from "../../drafts/server/execute-command.ts";
 import { LIMITS, type ScopeDocument } from "../../drafts/contracts/scope-document.ts";
@@ -9,7 +9,7 @@ import { ProjectError } from "../../projects/server/errors.ts";
 import type { FlowFileV1 } from "../contracts/flow-file.ts";
 import { FLOW_IMPORT_PREVIEW_LIMITS, type ImportApplyInput, type ImportApplyResult, type ImportFidelityReport, type ImportPreviewView } from "../contracts/import.ts";
 import { appendImportedFlow } from "../domain/import-flow.ts";
-import { parseFlowFile } from "../domain/flow-file.ts";
+import { parseFlowFile, parseStoredFlowFile } from "../domain/flow-file.ts";
 
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const PREVIEW_OPERATION = "FLOW_IMPORT_PREVIEW_V1";
@@ -109,7 +109,7 @@ function appliedResult(preview: StoredPreview): ImportApplyResult | null {
 function storedImport(preview: StoredPreview): { file: FlowFileV1; positions: NonNullable<FlowFileV1["positions"]> } {
   if (!preview.payload || !preview.positions) throw new ProjectError("UNAVAILABLE");
   try {
-    const file = parseFlowFile(new TextEncoder().encode(JSON.stringify({ ...(preview.payload as object), positions: preview.positions })));
+    const file = parseStoredFlowFile({ ...(preview.payload as object), positions: preview.positions });
     if (!file.positions) throw new Error("Missing positions");
     return { file, positions: file.positions };
   } catch { throw new ProjectError("UNAVAILABLE"); }
@@ -143,7 +143,7 @@ async function lockImportPreview(tx: Transaction, projectId: string, previewId: 
 }
 
 async function clock(tx: Transaction) {
-  const [row] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT CURRENT_TIMESTAMP AS now`;
+  const [row] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
   if (!row) throw new ProjectError("UNAVAILABLE");
   return row.now;
 }
@@ -284,16 +284,9 @@ export async function applyFlowImport(identity: ProjectIdentity, projectId: stri
         return { ...result, replayed: true };
       }
 
-      // This survives receipt expiry and never retargets a result to a replacement draft.
+      // Terminal recovery is read-only, including after receipt cleanup, downgrade and archive.
       const retained = appliedResult(preview);
-      if (retained) {
-        await requireStoredApplySize(tx, retained.mapping, {
-          previewId: retained.previewId, draftId: retained.draftId, flowId: retained.flowId,
-          documentRevision: retained.documentRevision, layoutRevision: retained.layoutRevision, eventSequence: retained.eventSequence,
-        });
-        await saveReceipt(tx, profile.id, "PROJECT", project.id, input.key, APPLY_OPERATION, hash, asJson(retained));
-        return { ...retained, replayed: true };
-      }
+      if (retained) return { ...retained, replayed: true };
 
       const now = await clock(tx);
       if (preview.state === "EXPIRED" || preview.expiresAt <= now) throw new ProjectError("IMPORT_EXPIRED");
@@ -305,6 +298,7 @@ export async function applyFlowImport(identity: ProjectIdentity, projectId: stri
         SELECT id, status::text AS status, document_revision, layout_revision, document_json, layout_json
         FROM app.scope_draft WHERE id = ${preview.draftId}::uuid AND project_id = ${project.id}::uuid FOR UPDATE`;
       if (!stored || stored.id !== project.currentDraftId || stored.status !== "EDITABLE") throw new ProjectError("IMPORT_STALE");
+      if (preview.expiresAt <= await clock(tx)) throw new ProjectError("IMPORT_EXPIRED");
 
       const source = storedImport(preview);
       let appended: ReturnType<typeof appendImportedFlow>;
@@ -313,6 +307,8 @@ export async function applyFlowImport(identity: ProjectIdentity, projectId: stri
       const documentRevision = nextRevision(stored.document_revision);
       const layoutRevision = nextRevision(stored.layout_revision);
       await requireStoredSize(tx, appended!.draft.document, appended!.draft.layout);
+      const appliedAt = await clock(tx);
+      if (preview.expiresAt <= appliedAt) throw new ProjectError("IMPORT_EXPIRED");
       await tx.scopeDraft.update({ where: { id: stored.id }, data: {
         documentJson: asJson(appended!.draft.document), layoutJson: asJson(appended!.draft.layout), documentRevision, layoutRevision,
       }, select: { id: true } });
@@ -323,8 +319,12 @@ export async function applyFlowImport(identity: ProjectIdentity, projectId: stri
       await requireStoredApplySize(tx, appended!.mapping, result);
       const durable = { ...result, mapping: appended!.mapping };
       await tx.flowImportPreview.update({ where: { id: preview.id }, data: {
-        state: "APPLIED", appliedAt: now, resultFlowId: result.flowId, appliedMapping: asJson(appended!.mapping), appliedResult: asJson(result),
-      } });
+        state: "APPLIED", appliedAt, resultFlowId: result.flowId, appliedMapping: asJson(appended!.mapping), appliedResult: asJson(result),
+      } }).catch((error: unknown) => {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2039"
+          && error.meta?.driverAdapterError instanceof Error && error.meta.driverAdapterError.message === "flow import expired") throw new ProjectError("IMPORT_EXPIRED");
+        throw error;
+      });
       await saveReceipt(tx, profile.id, "PROJECT", project.id, input.key, APPLY_OPERATION, hash, asJson(durable));
       return { ...durable, replayed: false };
     });

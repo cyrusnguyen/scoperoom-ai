@@ -84,7 +84,7 @@ test("concurrent Apply keys serialize on one preview without a second append", {
     assert.deepEqual({ ...first, replayed: undefined }, { ...second, replayed: undefined });
     assert.equal([first.replayed, second.replayed].filter(Boolean).length, 1);
     assert.equal((await database.query("select count(*)::int count from app.audit_event where project_id=$1 and action='FLOW_IMPORTED'", [projectId])).rows[0].count, 1);
-    assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and operation='FLOW_IMPORT_APPLY_V1'", [projectId])).rows[0].count, 2);
+    assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and operation='FLOW_IMPORT_APPLY_V1'", [projectId])).rows[0].count, 1);
     } finally { await holder.query("rollback").catch(() => undefined); await holder.end(); }
   });
 });
