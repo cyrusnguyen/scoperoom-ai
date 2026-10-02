@@ -100,11 +100,8 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
     setTimer: (run, ms) => { const timer = window.setTimeout(run, ms); return () => window.clearTimeout(timer); },
     visibility,
     accountChanged,
-    fetchStatus: async () => {
-      const result = await apiRead<ProjectStatusView>(`/api/projects/${projectId}/status`);
-      sessionEnded(result); // a 401 navigates to sign-in; the controller stops on it
-      return result;
-    },
+    sessionEnded: () => { sessionEnded({ ok: false, code: "UNAUTHENTICATED", message: "Sign in to continue.", status: 401, uncertain: false }); },
+    fetchStatus: () => apiRead<ProjectStatusView>(`/api/projects/${projectId}/status`),
     live: () => bridge.live(),
     readDraft: (fence) => bridge.reader?.(fence) ?? Promise.resolve(),
     bootstrap: (fence) => bridge.bootstrap(fence),
