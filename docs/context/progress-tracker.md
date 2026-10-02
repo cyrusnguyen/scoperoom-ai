@@ -1,5 +1,15 @@
 # Progress tracker
 
+## Stage 05.2 — import/apply flows: in progress (2026-10-02)
+
+Authorized scope is Stage 05.2 on `feat/stage-5.2-import-flows`, in `.worktrees/stage-5.2-import-flows`, based on fresh `origin/main` `b6a06b7` with Stage 05.1 merged. The source worktree remains separate. Inherited uncommitted deletions and ignored plan/spec references were copied; external documentation cleanup commit `3ccd35a` is preserved and was not authored by an agent. Task 1 feature commit `34db97d` and review correction `5addaa8` are approved. The correction restores the durable result shape and carries `replayed` on the HTTP response type; this reviewed contract supersedes the earlier Task 1 report wording.
+
+Task 1 evidence: focused unit tests **5/5** and original full unit suite **334/334** passed at `34db97d`; typecheck passed. At `5addaa8`, focused tests **5/5**, typecheck, scoped ESLint, boundary check and diff checks passed. These are local code checks, not database or browser acceptance.
+
+Infrastructure evidence: on the user-approved fresh local stack `scoperoom-stage052-test` on 563xx, six migrations applied; repeated migration replay reported no pending migrations and Realtime apply/verification passed. The unchanged projects smoke passed **10/10**, zero skipped. The default-concurrency full integration attempt was interrupted during Docker API 500/resource instability: output flushed one failure and two passes, but there is no complete summary. It is not a full-suite pass, and root cause is unproven.
+
+Task 2 backend work is active. Task 3 UI and final whole-branch review, stable full-suite checks and final acceptance remain outstanding. Stage 05.3 export is out of scope. No push, PR, stage progression or co-authoring is authorized; `docs/superpowers/` and `.docs/superpowers/` remain excluded from commits. User's explicit final approval is still required. Next action: finish Tasks 2 and 3, then complete the assigned final gates and request that approval. Do not treat this checkpoint as stage completion. Detailed evidence: `.superpowers/sdd/2026-10-01-stage-05-2-import-apply/progress.md`, `task-1-report.md`, `task-1-review.md`, and `.tmp/stage-05.2-stack/setup-report.md`.
+
 ## Stage 05.1 — implemented locally, PR #21 under review (2026-10-02)
 
 Branch `feat/stage-5.1-inspect-files` in `.worktrees/stage-5.1-inspect-files` was created from freshly fetched `origin/main` at `dbfce8d`, with inherited uncommitted changes copied. The original checkout remains unchanged. Implementation and review commits are `3dfe0f6..57647b6`; the final tested application tree is `fa01fabc014ba292b7e32585447a4fd7b4e67dda`. Pushed and open as [PR #21](https://github.com/cyrusnguyen/scoperoom-ai/pull/21). Local commits exclude `docs/superpowers/`, `.docs/superpowers/`, co-author trailers and the two inherited staged evidence deletions.
