@@ -92,7 +92,12 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
     if (!file) { setMessage("Select the same native flow file again. File contents are kept only in memory."); return; }
     if (file.size > 1_048_576) { setMessage("Invalid: native files must be at most 1 MiB."); return; }
     const current = fence(); setWorking(true); setMessage("");
-    const digest = await fingerprint(file);
+    let digest: string;
+    try { digest = await fingerprint(file); }
+    catch {
+      if (canAdopt(current)) { setWorking(false); setMessage("Could not read this file. Select it again, or cancel to return to the Studio."); }
+      return;
+    }
     if (!canAdopt(current)) return;
     const previous = latest.current;
     if (!fresh && previous && !previous.record.previewHash && previous.record.fingerprint !== digest) { setWorking(false); setMessage("Select the same file to recover the original upload, or explicitly start a new inspection."); return; }

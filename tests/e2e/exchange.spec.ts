@@ -575,3 +575,26 @@ test("403 project recovery clears protected import while retaining safe Studio t
   await openImport(page); await expect(dialog(page).getByText("Select a file", { exact: true })).toBeVisible();
   await expect(dialog(page)).not.toContainText("Checkout {flow}"); await expect(dialog(page).getByRole("button", { name: "Inspect file", exact: true })).toBeDisabled();
 });
+
+test("unreadable selected file releases inspection and preserves Studio text for dismissal and retry", async ({ page }) => {
+  const { id, first } = await setup(page, true); const before = await draftOf(page, id); const uploads = writes(page, "/preview");
+  await nodeAt(page, first).click(); await page.getByRole("button", { name: "Inspect", exact: true }).click();
+  await page.locator("#inspect-label").fill("Keep my unsaved text");
+  await openImport(page);
+  await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "journey.scoperoom-flow.json", mimeType: "application/json", buffer: await nativeFile() });
+  await page.evaluate(() => {
+    const original = File.prototype.arrayBuffer;
+    File.prototype.arrayBuffer = function () {
+      File.prototype.arrayBuffer = original;
+      return Promise.reject(new DOMException("The selected file is no longer readable", "NotReadableError"));
+    };
+  });
+  await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click();
+  await expect(dialog(page).getByRole("alert")).toContainText("Could not read this file");
+  await expect(dialog(page).getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
+  await expect(dialog(page).getByLabel("Native flow file")).toBeEnabled();
+  expect(uploads).toHaveLength(0); expect(await records(page)).toHaveLength(0); expect(await draftOf(page, id)).toEqual(before);
+  await page.keyboard.press("Escape"); await expect(dialog(page)).toBeHidden(); await expect(page.locator("#inspect-label")).toHaveValue("Keep my unsaved text");
+  await openImport(page); await inspect(page); expect(uploads).toHaveLength(1); expect(await draftOf(page, id)).toEqual(before);
+  await dialog(page).getByRole("button", { name: "Cancel", exact: true }).click(); await expect(page.locator("#inspect-label")).toHaveValue("Keep my unsaved text");
+});
