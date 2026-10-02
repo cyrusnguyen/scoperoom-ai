@@ -31,6 +31,19 @@ const writes = (page: Page, suffix = "/apply") => {
   page.on("request", (request) => { if (request.method() === "POST" && new URL(request.url()).pathname.endsWith(suffix)) list.push(request); });
   return list;
 };
+async function failImportStorage(page: Page, mode: "all" | "attempt", name = "QuotaExceededError") {
+  await page.evaluate(({ mode, name }) => {
+    const original = Storage.prototype.setItem;
+    Object.assign(window, { restoreImportStorage: () => { Storage.prototype.setItem = original; } });
+    Storage.prototype.setItem = function (key, value) {
+      if (key.startsWith("scoperoom:flow-import:") && (mode === "all" || JSON.parse(value).attempt)) throw new DOMException("Storage unavailable", name);
+      original.call(this, key, value);
+    };
+  }, { mode, name });
+}
+async function restoreImportStorage(page: Page) {
+  await page.evaluate(() => (window as unknown as { restoreImportStorage: () => void }).restoreImportStorage());
+}
 async function setup(page: Page, populated = false) {
   const id = await createProjectViaApi(page, "Import project");
   const flowId = randomUUID(), first = randomUUID(), second = randomUUID(), edge = randomUUID();
@@ -57,6 +70,90 @@ async function typeWhileModal(page: Page, selector: string, text: string) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }, text);
 }
+
+test("unknown upload recovery stays busy through delayed manual status validation", async ({ page }) => {
+  const { id, first } = await setup(page, true); const before = await draftOf(page, id); const uploads = writes(page, "/preview");
+  await nodeAt(page, first).click(); await page.getByRole("button", { name: "Inspect", exact: true }).click();
+  await page.locator("#inspect-label").fill("Keep my recovery text");
+  await page.route("**/flow-imports/preview?**", (route) => route.abort("failed"), { times: 1 });
+  await openImport(page);
+  await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "journey.scoperoom-flow.json", mimeType: "application/json", buffer: await nativeFile() });
+  await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click();
+  await expect(dialog(page).getByRole("alert")).toContainText("Upload not confirmed");
+  const original = (await records(page))[0]; let held: Route | undefined;
+  await page.route(`**/api/projects/${id}/status`, (route) => { held = route; });
+  await dialog(page).getByRole("button", { name: "Recover import status" }).click();
+  await expect.poll(() => Boolean(held)).toBe(true);
+  try {
+    for (const name of ["Start new inspection", "Inspect file", "Discard preview", "Cancel"]) await expect(dialog(page).getByRole("button", { name, exact: true })).toBeDisabled();
+    await expect(dialog(page).getByLabel("Native flow file")).toBeDisabled();
+    await page.keyboard.press("Escape"); await expect(dialog(page)).toBeVisible();
+    expect((await records(page))[0]).toEqual(original); expect(uploads).toHaveLength(1);
+  } finally {
+    if (held) await held.continue();
+    await page.unroute(`**/api/projects/${id}/status`);
+  }
+  await expect(dialog(page).getByRole("button", { name: "Inspect file", exact: true })).toBeEnabled();
+  expect((await records(page))[0]).toEqual(original); expect(await draftOf(page, id)).toEqual(before);
+  await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click();
+  await expect(dialog(page).getByText("Ready", { exact: true })).toBeVisible();
+  expect((await records(page))[0].previewId).toBe(original.previewId); expect(uploads).toHaveLength(2);
+  await dialog(page).getByRole("button", { name: "Cancel", exact: true }).click(); await expect(page.locator("#inspect-label")).toHaveValue("Keep my recovery text");
+});
+
+for (const name of ["QuotaExceededError", "SecurityError"]) test(`initial ${name} blocks inspection until opaque recovery identity can be stored`, async ({ page }) => {
+  const { id } = await setup(page); const before = await draftOf(page, id); const uploads = writes(page, "/preview"), applies = writes(page);
+  await openImport(page); await failImportStorage(page, "all", name);
+  await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "journey.scoperoom-flow.json", mimeType: "application/json", buffer: await nativeFile() });
+  await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click();
+  await expect(dialog(page).getByRole("alert")).toContainText("session storage");
+  expect(uploads).toHaveLength(0); expect(applies).toHaveLength(0); expect(await records(page)).toHaveLength(0); expect(await draftOf(page, id)).toEqual(before);
+  await restoreImportStorage(page);
+  await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click();
+  await expect(dialog(page).getByText("Ready", { exact: true })).toBeVisible(); expect(uploads).toHaveLength(1);
+  await applyButton(page).click(); await expect(dialog(page)).toBeHidden(); expect(applies).toHaveLength(1);
+});
+
+test("Apply attempt storage failure sends no Apply and storage restoration uses the same preview", async ({ page }) => {
+  const { id } = await setup(page); const before = await draftOf(page, id); const applies = writes(page);
+  await openImport(page); await inspect(page); const original = (await records(page))[0];
+  await failImportStorage(page, "attempt"); await applyButton(page).click();
+  await expect(dialog(page).getByRole("alert")).toContainText("session storage");
+  expect(applies).toHaveLength(0); expect((await records(page))[0]).toEqual(original); expect(await draftOf(page, id)).toEqual(before);
+  await expect(applyButton(page)).toBeEnabled(); await restoreImportStorage(page); await applyButton(page).click(); await expect(dialog(page)).toBeHidden();
+  expect(applies).toHaveLength(1); expect(applies[0]!.url()).toContain(original.previewId);
+  const after = await draftOf(page, id); expect(Object.values(after.document.flows)).toHaveLength(1); expect(after.documentRevision).toBe(before.documentRevision + 1); expect(after.layoutRevision).toBe(before.layoutRevision + 1);
+});
+
+test("unknown Apply retry retains its exact attempt when storage fails and GET still recovers the committed result", async ({ page }) => {
+  const { id } = await setup(page); const applies = writes(page);
+  await openImport(page); await inspect(page);
+  await page.route("**/flow-imports/*/apply", async (route) => { expect((await route.fetch()).status()).toBe(200); await route.abort("failed"); }, { times: 1 });
+  await applyButton(page).click(); await expect(dialog(page).getByRole("button", { name: "Retry import" })).toBeEnabled();
+  const original = (await records(page))[0]; const committed = await draftOf(page, id);
+  await failImportStorage(page, "all", "SecurityError"); await dialog(page).getByRole("button", { name: "Retry import" }).click();
+  await expect(dialog(page).getByRole("alert")).toContainText("session storage");
+  expect(applies).toHaveLength(1); expect((await records(page))[0]).toEqual(original);
+  for (const name of ["Cancel", "Discard preview", "Inspect again"]) await expect(dialog(page).getByRole("button", { name, exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape"); await expect(dialog(page)).toBeVisible();
+  await dialog(page).getByRole("button", { name: "Recover import status" }).click(); await expect(dialog(page)).toBeHidden();
+  expect(applies).toHaveLength(1); expect(await draftOf(page, id)).toEqual(committed);
+});
+
+test("unknown uncommitted Apply retries its original key after storage is restored", async ({ page }) => {
+  const { id } = await setup(page); const before = await draftOf(page, id); const applies = writes(page);
+  await openImport(page); await inspect(page);
+  await page.route("**/flow-imports/*/apply", (route) => route.abort("failed"), { times: 1 });
+  await applyButton(page).click(); await expect(dialog(page).getByRole("button", { name: "Retry import" })).toBeEnabled();
+  const original = (await records(page))[0];
+  await failImportStorage(page, "attempt"); await dialog(page).getByRole("button", { name: "Retry import" }).click();
+  await expect(dialog(page).getByRole("alert")).toContainText("session storage");
+  expect(applies).toHaveLength(1); expect((await records(page))[0]).toEqual(original); expect(await draftOf(page, id)).toEqual(before);
+  await expect(dialog(page).getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+  await restoreImportStorage(page); await dialog(page).getByRole("button", { name: "Retry import" }).click(); await expect(dialog(page)).toBeHidden();
+  expect(applies).toHaveLength(2); expect(applies[1]!.headers()["idempotency-key"]).toBe(original.attempt.key); expect(applies[1]!.postData()).toBe(applies[0]!.postData());
+  const after = await draftOf(page, id); expect(Object.values(after.document.flows)).toHaveLength(1); expect(after.documentRevision).toBe(before.documentRevision + 1); expect(after.layoutRevision).toBe(before.layoutRevision + 1);
+});
 
 test("inspection leaves an empty draft unchanged; Apply creates an unapproved independent copy", async ({ page }) => {
   test.setTimeout(90_000);

@@ -8,7 +8,7 @@ import type { GraphCommand } from "@/features/drafts/contracts/commands";
 import type { ArrangementPreview, ArrangeFlow, ArrangementRequest, PositionResult } from "@/features/drafts/contracts/positions";
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { ImportApplyResult } from "@/features/exchange/contracts/import";
-import { importBlocker, persistImport } from "@/features/exchange/ui/import-recovery";
+import { importBlocker, importStorageError, persistImport } from "@/features/exchange/ui/import-recovery";
 import { GraphError } from "@/features/drafts/domain/graph";
 import { projectErrors } from "@/features/projects/contracts/errors";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
@@ -322,7 +322,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
       const local = uiRef.current.nativeImport;
       if (!local || local.record.previewId !== previewId || local.record.draftId !== input.draftId || local.record.previewHash !== input.previewHash) return refused("IMPORT_PREVIEW_CHANGED", "Recover the original preview before importing.");
       const record = { ...local.record, attempt: { key, ...input } };
-      persistImport(record);
+      if (!persistImport(record)) return refused("IMPORT_STORAGE_UNAVAILABLE", importStorageError);
       update(() => ({ nativeImport: { ...local, record, state: "Applying", message: "" } }));
       const result = await apiMutate<ImportApplyResult>(`/api/projects/${projectId}/flow-imports/${previewId}/apply`, key, input);
       // Fence before session teardown, receipt adoption and reload: a late 401 must not end the next account.

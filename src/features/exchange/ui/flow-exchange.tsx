@@ -7,7 +7,7 @@ import Dialog from "@/features/shell/ui/dialog";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import { covers, requireDraftRevision } from "@/features/studio/ui/studio-ui";
 import type { ImportPreviewView } from "../contracts/import";
-import { clearImport, importStorageKey, parseImportRecord, persistImport, type ImportRecord, type NativeImportState } from "./import-recovery";
+import { clearImport, importStorageError, importStorageKey, parseImportRecord, persistImport, type ImportRecord, type NativeImportState } from "./import-recovery";
 import { ImportPreview } from "./import-preview";
 
 const denied = new Set(["NOT_FOUND", "DENIED", "UNAUTHENTICATED"]);
@@ -38,7 +38,11 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
     if (current()) return true;
     setWorking(false); return false;
   };
-  const setLocal = (next: NativeImportState) => { latest.current = next; persistImport(next.record); update(() => ({ nativeImport: next })); };
+  const setLocal = (next: NativeImportState) => {
+    const persisted = persistImport(next.record);
+    if (!persisted && !next.message.includes(importStorageError)) next = { ...next, message: [next.message, importStorageError].filter(Boolean).join(" ") };
+    latest.current = next; update(() => ({ nativeImport: next })); return persisted;
+  };
   const lost = (text: string) => {
     if (latest.current) clearImport(latest.current.record);
     latest.current = null; setSelected(null); setMessage(text);
@@ -58,19 +62,22 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
   };
   const recover = async (record = latest.current?.record ?? restored, file = latest.current?.file ?? null) => {
     if (!record || working) return;
-    const current = fence(); setWorking(true);
+    const authorityCurrent = fence();
+    const current = () => authorityCurrent() && latest.current?.record.previewId === record.previewId;
+    setWorking(true);
     const result = await apiRead<ImportPreviewView>(`/api/projects/${projectId}/flow-imports/${record.previewId}`);
     if (!canAdopt(current)) return;
-    setWorking(false);
-    if (sessionEnded(result)) return;
-    if (result.ok) { accept(result.data, record, file); if (result.data.result && result.data.result.draftId === savedDraft.id) await reload(current); return; }
+    if (sessionEnded(result)) { setWorking(false); return; }
+    if (result.ok) { accept(result.data, record, file); if (result.data.result && result.data.result.draftId === savedDraft.id) await reload(current); if (mounted.current) setWorking(false); return; }
     // An unknown upload can legitimately have no row yet. GET cannot distinguish it from denied preview access.
     if (result.code === "NOT_FOUND" && !record.previewHash) {
       const authority = await revalidate("manual");
       if (!canAdopt(current)) return;
+      setWorking(false);
       if (authority.kind === "denied") { lost("Access lost. This protected preview has been cleared."); return; }
       setLocal({ record, file, preview: null, state: "Validating", message: "Upload not confirmed. Retry status, or select the same file to retry the original upload." }); return;
     }
+    setWorking(false);
     if (denied.has(result.code)) { lost("Access lost. This protected preview has been cleared."); return; }
     setMessage(result.message);
   };
@@ -102,7 +109,7 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
     const previous = latest.current;
     if (!fresh && previous && !previous.record.previewHash && previous.record.fingerprint !== digest) { setWorking(false); setMessage("Select the same file to recover the original upload, or explicitly start a new inspection."); return; }
     const record: ImportRecord = !fresh && previous && !previous.record.previewHash ? previous.record : { actorId, projectId: projectScope, draftId: savedDraft.id, previewId: crypto.randomUUID(), createKey: crypto.randomUUID(), discardKey: crypto.randomUUID(), fingerprint: digest };
-    setLocal({ record, file, preview: null, state: "Validating", message: "" });
+    if (!setLocal({ record, file, preview: null, state: "Validating", message: "" })) { setWorking(false); return; }
     const authority = await beforeWrite();
     if (!canAdopt(current)) return;
     if (authority.kind !== "current" || !fence(authority.generation)() || authority.status.currentDraftId !== record.draftId || authority.status.status !== "ACTIVE" || !["OWNER", "EDITOR"].includes(authority.status.role)) { setWorking(false); setLocal({ record, file, preview: null, state: "Stale", message: "This target is no longer editable. Resolve access or inspect again for the current draft." }); return; }
@@ -133,7 +140,7 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
       setLocal({ ...original, record, state: "Applied", preview: original.preview ? { ...original.preview, state: "APPLIED", result: outcome.result } : { id: record.previewId, projectId, draftId: record.draftId, previewHash: record.previewHash!, expectedDocumentRevision: 0, expiresAt: "", state: "APPLIED", result: outcome.result, file: null, positions: null, fidelityReport: null }, message: "" }); return;
     }
     if (denied.has(outcome.code) || outcome.code === "FORBIDDEN" && !outcome.uncertain && status.role !== "OWNER" && status.role !== "EDITOR") { lost("Access lost. This protected preview has been cleared. Your safe local Studio edits remain available for copy or discard."); return; }
-    if (outcome.uncertain) { setLocal({ ...original, record: { ...original.record, attempt }, state: "Applying", message: "We couldn’t confirm the import. Retry the same request or recover its status." }); return; }
+    if (outcome.uncertain) { setLocal({ ...original, record: { ...original.record, attempt }, state: "Applying", message: outcome.code === "IMPORT_STORAGE_UNAVAILABLE" ? outcome.message : "We couldn’t confirm the import. Retry the same request or recover its status." }); return; }
     const { attempt: ignored, ...record } = original.record; void ignored;
     setLocal({ ...original, record, state: outcome.code === "IMPORT_EXPIRED" ? "Expired" : stale.has(outcome.code) ? "Stale" : original.preview ? "Ready" : "Invalid", message: outcome.message });
   };

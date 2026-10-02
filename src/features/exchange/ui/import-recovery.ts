@@ -3,6 +3,7 @@ import { isDirty } from "../../studio/ui/buffers.ts";
 import type { StudioUi } from "../../studio/ui/studio-ui.ts";
 
 export const IMPORT_STORAGE_PREFIX = "scoperoom:flow-import:";
+export const importStorageError = "Browser session storage is unavailable. Reload recovery is not guaranteed. Restore session storage before inspecting or applying; recover the original import status if a request was already sent.";
 export type ImportRecord = {
   actorId: string; projectId: string; draftId: string; previewId: string; createKey: string; discardKey: string;
   fingerprint: string; previewHash?: string; attempt?: ImportApplyInput;
@@ -30,8 +31,8 @@ export function parseImportRecord(raw: string | null, actorId: string, projectId
     return JSON.parse(storedImportRecord(value)) as ImportRecord;
   } catch { return null; }
 }
-export function persistImport(record: ImportRecord) {
-  try { sessionStorage.setItem(importStorageKey(record.actorId, record.projectId), storedImportRecord(record)); } catch { /* Memory still preserves the attempt; explain reload limits in the dialog. */ }
+export function persistImport(record: ImportRecord): boolean {
+  try { sessionStorage.setItem(importStorageKey(record.actorId, record.projectId), storedImportRecord(record)); return true; } catch { return false; }
 }
 export function clearImport(record: Pick<ImportRecord, "actorId" | "projectId">) {
   try { sessionStorage.removeItem(importStorageKey(record.actorId, record.projectId)); } catch { /* Storage can be disabled. */ }

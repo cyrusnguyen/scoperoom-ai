@@ -1,9 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultStudioUi } from "../src/features/studio/ui/studio-ui.ts";
-import { importBlocker, parseImportRecord, storedImportRecord } from "../src/features/exchange/ui/import-recovery.ts";
+import { importBlocker, parseImportRecord, persistImport, storedImportRecord } from "../src/features/exchange/ui/import-recovery.ts";
 
 const id = "00000000-0000-4000-8000-000000000001";
+test("import persistence reports whether the complete opaque pinned request was stored", (context) => {
+  const values = new Map<string, string>();
+  const original = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+  Object.defineProperty(globalThis, "sessionStorage", { configurable: true, writable: true, value: { setItem: (key: string, value: string) => values.set(key, value) } });
+  context.after(() => { if (original) Object.defineProperty(globalThis, "sessionStorage", original); else Reflect.deleteProperty(globalThis, "sessionStorage"); });
+  const record = { actorId: id, projectId: id, draftId: id, previewId: id, createKey: id, discardKey: id, previewHash: "a".repeat(64), fingerprint: "b".repeat(64), attempt: { key: id, draftId: id, previewHash: "a".repeat(64) }, prose: "private" };
+  assert.equal(persistImport(record), true);
+  const wire = [...values.values()][0]!;
+  assert.equal(wire.includes("private"), false);
+  assert.deepEqual(parseImportRecord(wire, id, id)?.attempt, record.attempt);
+  context.mock.property(globalThis, "sessionStorage", { setItem: () => { throw new DOMException("Unavailable", "QuotaExceededError"); } } as unknown as Storage);
+  assert.equal(persistImport(record), false);
+});
 test("import recovery stores only opaque original scope and pinned request", () => {
   const record = { actorId: id, projectId: id, draftId: id, previewId: id, createKey: id, discardKey: id, previewHash: "a".repeat(64), fingerprint: "b".repeat(64), attempt: { key: id, draftId: id, previewHash: "a".repeat(64) }, labels: "secret", file: "secret" };
   const wire = storedImportRecord(record);
