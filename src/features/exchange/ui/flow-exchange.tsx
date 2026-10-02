@@ -15,6 +15,8 @@ const stale = new Set(["DRAFT_REPLACED", "IMPORT_STALE", "IMPORT_PAYLOAD_MISMATC
 const fingerprint = async (file: File) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 async function inspectUpload(record: ImportRecord, file: File): Promise<ApiResult<ImportPreviewView>> {
+  // A retry may already have committed; failed persistence must preserve its uncertain identity.
+  if (!persistImport(record)) return { ok: false, code: "IMPORT_STORAGE_UNAVAILABLE", message: importStorageError, status: 0, uncertain: true };
   try {
     const response = await fetch(`/api/projects/${record.projectId}/flow-imports/preview?draftId=${record.draftId}&previewId=${record.previewId}`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": record.createKey }, body: file });
     const body = await response.json().catch(() => null);

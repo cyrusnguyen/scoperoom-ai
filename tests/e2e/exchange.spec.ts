@@ -231,6 +231,54 @@ for (const name of ["QuotaExceededError", "SecurityError"]) test(`initial ${name
   await applyButton(page).click(); await expect(dialog(page)).toBeHidden(); expect(applies).toHaveLength(1);
 });
 
+for (const action of ["Start new inspection", "Discard preview"] as const) test(`${action} after Cancel and reopen requires storage before resolving an unsent upload`, async ({ page }) => {
+  const { id } = await setup(page); const before = await draftOf(page, id); const uploads = writes(page, "/preview"), discards = writes(page, "/discard");
+  await openImport(page); await failImportStorage(page, "all");
+  await page.evaluate(() => {
+    const failedSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key.startsWith("scoperoom:flow-import:")) Object.assign(window, { attemptedImportRecord: JSON.parse(value) });
+      failedSetItem.call(this, key, value);
+    };
+  });
+  const attempted = () => page.evaluate(() => (window as unknown as { attemptedImportRecord: Record<string, string> }).attemptedImportRecord);
+  await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "original.json", mimeType: "application/json", buffer: await nativeFile() });
+  await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click();
+  await expect(dialog(page).getByRole("alert")).toContainText("session storage");
+  const original = await attempted(); expect(uploads).toHaveLength(0); expect(await records(page)).toHaveLength(0);
+  await dialog(page).getByRole("button", { name: "Cancel", exact: true }).click(); await expect(dialog(page)).toBeHidden();
+  await openImport(page); await expect(dialog(page).getByRole("alert")).toContainText("Upload not confirmed");
+  await expect(dialog(page).getByRole("button", { name: action, exact: true })).toBeEnabled();
+  await dialog(page).getByRole("button", { name: action, exact: true }).click();
+  await expect.poll(async () => uploads.length > 0 || await dialog(page).getByRole("alert").textContent().catch(() => "").then((text) => text?.startsWith("Browser session storage") ?? false)).toBe(true);
+  expect(uploads).toHaveLength(0); expect(discards).toHaveLength(0); expect(await records(page)).toHaveLength(0); expect(await attempted()).toEqual(original);
+  await expect(dialog(page).getByRole("button", { name: action, exact: true })).toBeEnabled();
+  expect(await draftOf(page, id)).toEqual(before);
+
+  await restoreImportStorage(page);
+  const bodies: Buffer[] = []; let lostAcknowledgement = false;
+  await page.route("**/flow-imports/preview?**", async (route) => {
+    const body = route.request().postDataBuffer(); expect(body).not.toBeNull(); bodies.push(body!);
+    if (bodies.length === 1) { expect((await route.fetch()).status()).toBe(200); await route.abort("failed"); lostAcknowledgement = true; }
+    else await route.continue();
+  });
+  await dialog(page).getByRole("button", { name: action, exact: true }).click();
+  await expect.poll(() => lostAcknowledgement).toBe(true);
+  await expect(dialog(page).getByRole("button", { name: action, exact: true })).toBeEnabled();
+  await expect(dialog(page).getByRole("alert")).toContainText("Upload not confirmed");
+  expect(uploads).toHaveLength(1); expect(discards).toHaveLength(0); expect((await records(page))[0]).toEqual(original);
+  expect(uploads[0]!.url()).toContain(`previewId=${original.previewId}`); expect(uploads[0]!.headers()["idempotency-key"]).toBe(original.createKey);
+  await dialog(page).getByRole("button", { name: action, exact: true }).click();
+  if (action === "Start new inspection") await replacementReady(page, original.previewId!);
+  else await expect(dialog(page)).toBeHidden();
+  expect(uploads).toHaveLength(action === "Start new inspection" ? 3 : 2);
+  expect(uploads[1]!.url()).toBe(uploads[0]!.url()); expect(uploads[1]!.headers()["idempotency-key"]).toBe(original.createKey);
+  expect(bodies[0]).toEqual(await nativeFile()); expect(bodies[1]).toEqual(bodies[0]);
+  expect(discards).toHaveLength(1); expect(discards[0]!.headers()["idempotency-key"]).toBe(original.discardKey);
+  const retired: ImportPreviewView = await (await page.request.get(`/api/projects/${id}/flow-imports/${original.previewId}`)).json();
+  expect(retired.state).toBe("DISCARDED"); expect([retired.file, retired.positions, retired.fidelityReport]).toEqual([null, null, null]);
+  expect(await draftOf(page, id)).toEqual(before);
+});
 test("Apply attempt storage failure sends no Apply and storage restoration uses the same preview", async ({ page }) => {
   const { id } = await setup(page); const before = await draftOf(page, id); const applies = writes(page);
   await openImport(page); await inspect(page); const original = (await records(page))[0];
