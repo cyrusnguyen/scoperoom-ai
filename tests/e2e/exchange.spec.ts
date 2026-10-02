@@ -558,3 +558,20 @@ test("status barrier rechecks typed coordinates immediately before sending Apply
   await applyButton(page).click(); await typeWhileModal(page, ".position-form input#position-x", "640"); await held!.continue();
   await expect(dialog(page).getByRole("alert")).toContainText("coordinates"); expect(applies).toHaveLength(0);
 });
+
+test("403 project recovery clears protected import while retaining safe Studio text", async ({ page }) => {
+  const { id, first } = await setup(page, true);
+  await nodeAt(page, first).click(); await page.getByRole("button", { name: "Inspect", exact: true }).click();
+  await page.locator("#inspect-label").fill("Safe local recovery text");
+  await openImport(page); await inspect(page); expect(await records(page)).toHaveLength(1);
+  const deny = (route: Route) => route.fulfill({ status: 403, json: { error: { code: "FORBIDDEN", message: "Project access denied" } } });
+  await page.route(`**/api/projects/${id}/status`, deny); await page.route(`**/api/projects/${id}/bootstrap`, deny);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("heading", { level: 1, name: /Project couldn/ })).toBeVisible();
+  expect(await records(page)).toHaveLength(0); await expect(dialog(page)).toHaveCount(0);
+  await page.unroute(`**/api/projects/${id}/status`, deny); await page.unroute(`**/api/projects/${id}/bootstrap`, deny);
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.locator("#inspect-label")).toHaveValue("Safe local recovery text");
+  await openImport(page); await expect(dialog(page).getByText("Select a file", { exact: true })).toBeVisible();
+  await expect(dialog(page)).not.toContainText("Checkout {flow}"); await expect(dialog(page).getByRole("button", { name: "Inspect file", exact: true })).toBeDisabled();
+});

@@ -129,7 +129,11 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
       install({ projectId: id, bootstrap: admitted ? result.data : { ...result.data, draft: shown } });
       if (admitted) setStore((current) => updateUi(current, id, (ui) => afterDraftRead(ui, result.data.draft)));
     }
-    else if (result.status === 404) { if (viewerRef.current) clearImport({ actorId: viewerRef.current, projectId: id }); install({ projectId: id, missing: true }); setStore((previous) => dropProject(previous, id)); }
+    else if (result.status === 403 || result.status === 404) {
+      if (viewerRef.current) clearImport({ actorId: viewerRef.current, projectId: id });
+      install(result.status === 404 ? { projectId: id, missing: true } : { projectId: id, error: result.message });
+      setStore((previous) => result.status === 404 ? dropProject(previous, id) : updateUi(previous, id, () => ({ nativeImport: null })));
+    }
     // A background read (polling, Details) that fails transiently keeps what is shown: unmounting would stop the polling
     // that retries it. The unavailable view's own Retry has nothing shown, and 403 or 404 always show their recovery.
     else if (result.uncertain && openedRef.current?.projectId === id && openedRef.current.bootstrap) return;
