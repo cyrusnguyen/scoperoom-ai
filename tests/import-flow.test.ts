@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { FlowFileV1 } from "../src/features/exchange/contracts/flow-file.ts";
+import type { ImportApplyResult } from "../src/features/exchange/contracts/import.ts";
 import { emptyDraft, LIMITS, parseDraftPair } from "../src/features/drafts/contracts/scope-document.ts";
 import { GraphError, type Draft } from "../src/features/drafts/domain/graph.ts";
 import { largeDraft } from "./support/large-draft.ts";
@@ -25,6 +26,12 @@ function savedDraft(): Draft {
     id: nodeId, flowId, version: 2, behaviourVersion: 2, kind: "ACTION", label: "Existing", description: "",
     actorLabel: "", origin: "HUMAN", sourceRefs: [], assumptionNotes: [],
   };
+  document.nodes[id(102)] = { ...document.nodes[nodeId]!, id: id(102), label: "Saved outcome", kind: "OUTCOME" };
+  document.edges[id(103)] = {
+    id: id(103), flowId, version: 4, fromId: nodeId, toId: id(102), condition: "Saved condition", origin: "HUMAN", sourceRefs: [],
+  };
+  layout.positions[id(102)] = { x: 125, y: 250, version: 9 };
+  layout.edgeSides[id(103)] = { from: "bottom", to: "top" };
   layout.directions[flowId] = "TB";
   layout.positions[nodeId] = { x: 25, y: 50, version: 7 };
   return parseDraftPair(document, layout);
@@ -54,13 +61,23 @@ test("append_resets_trust_and_preserves_existing_pair", () => {
 
   const result = appendImportedFlow(saved, imported, imported.positions!, ids());
 
-  const oldNodeId = id(101);
-  assert.deepEqual(result.draft.document.flows[id(100)], before.document.flows[id(100)]);
-  assert.deepEqual(result.draft.document.nodes[oldNodeId], before.document.nodes[oldNodeId]);
-  assert.deepEqual(result.draft.layout.positions[oldNodeId], before.layout.positions[oldNodeId]);
-  assert.equal(result.draft.document.flows[result.mapping.flowId]!.inclusion, "UNDECIDED");
-  assert.equal(result.draft.document.nodes[result.mapping.nodes.n1!]!.origin, "IMPORTED");
-  assert.deepEqual(result.draft.document.nodes[result.mapping.nodes.n1!]!.sourceRefs, []);
+  assert.deepEqual(saved, before);
+  for (const collection of ["flows", "nodes", "edges"] as const) {
+    for (const [entityId, record] of Object.entries(before.document[collection])) assert.deepEqual(result.draft.document[collection][entityId], record);
+  }
+  for (const collection of ["positions", "directions", "edgeSides"] as const) {
+    for (const [entityId, geometry] of Object.entries(before.layout[collection])) assert.deepEqual(result.draft.layout[collection][entityId], geometry);
+  }
+  assert.deepEqual(result.draft.document.retiredEntityIds, before.document.retiredEntityIds);
+  assert.deepEqual(result.draft.document.flows[result.mapping.flowId], {
+    id: id(1), version: 1, behaviourVersion: 1, title: "Imported", purpose: "New copy",
+    classification: "BUSINESS_PROCESS", inclusion: "UNDECIDED", confirmation: null, verificationMethod: null,
+  });
+  for (const nodeId of Object.values(result.mapping.nodes)) {
+    const node = result.draft.document.nodes[nodeId]!;
+    assert.equal(node.version, 1); assert.equal(node.behaviourVersion, 1);
+    assert.equal(node.origin, "IMPORTED"); assert.deepEqual(node.sourceRefs, []);
+  }
   assert.equal(result.draft.document.nodes[result.mapping.nodes.n1!]!.actorLabel, "");
   assert.equal(result.draft.document.edges[result.mapping.edges.e1!]!.condition, "");
 });
@@ -70,7 +87,13 @@ test("maps_all_endpoints_positions_and_sides", () => {
 
   const result = appendImportedFlow(savedDraft(), imported, imported.positions!, ids());
 
-  assert.deepEqual(result.mapping, { flowId: id(1), nodes: { n1: id(2), n2: id(3) }, edges: { e1: id(4) } });
+  // Durable APPLIED results omit per-request HTTP replay metadata.
+  const retained: ImportApplyResult = {
+    previewId: id(500), draftId: id(501), flowId: id(1),
+    mapping: { flowId: id(1), nodes: { n1: id(2), n2: id(3) }, edges: { e1: id(4) } },
+    documentRevision: 2, layoutRevision: 2, eventSequence: 1,
+  };
+  assert.deepEqual(result.mapping, retained.mapping);
   assert.deepEqual(result.draft.document.edges[id(4)], {
     id: id(4), flowId: id(1), version: 1, fromId: id(2), toId: id(3), condition: "", origin: "IMPORTED", sourceRefs: [],
   });
@@ -93,11 +116,17 @@ test("rejects_capacity_and_id_collision", () => {
   const imported = file();
   assert.throws(() => appendImportedFlow(atCapacity, imported, imported.positions!, ids()), (error: unknown) => error instanceof GraphError && error.code === "LIMIT_EXCEEDED");
 
-  const colliding = savedDraft();
-  colliding.document.retiredEntityIds = [id(1)];
-  const before = structuredClone(colliding);
-  assert.throws(() => appendImportedFlow(colliding, imported, imported.positions!, ids()), /ID_COLLISION/);
-  assert.deepEqual(colliding, before);
+  for (const collision of [id(100), id(101), id(103), id(1)]) {
+    const colliding = savedDraft();
+    colliding.document.retiredEntityIds = [id(1)];
+    const before = structuredClone(colliding);
+    assert.throws(() => appendImportedFlow(colliding, imported, imported.positions!, () => collision), /ID_COLLISION/);
+    assert.deepEqual(colliding, before);
+  }
+  const duplicate = savedDraft();
+  const before = structuredClone(duplicate);
+  assert.throws(() => appendImportedFlow(duplicate, imported, imported.positions!, () => id(1)), /ID_COLLISION/);
+  assert.deepEqual(duplicate, before);
 });
 
 test("accepts_peer_edits_without_revision_guard", () => {

@@ -9,8 +9,9 @@ export const FLOW_IMPORT_PREVIEW_LIMITS = {
 export type ImportMapping = { flowId: string; nodes: Record<string, string>; edges: Record<string, string> };
 export type ImportApplyResult = {
   previewId: string; draftId: string; flowId: string; mapping: ImportMapping;
-  documentRevision: number; layoutRevision: number; eventSequence: number; replayed: boolean;
+  documentRevision: number; layoutRevision: number; eventSequence: number;
 };
+export type ImportApplyResponse = ImportApplyResult & { replayed: boolean };
 export type ImportApplyInput = { key: string; draftId: string; previewHash: string };
 export type ImportFidelityReport = {
   nodeCount: number; edgeCount: number; omittedLinkHintCount: number; geometry: "SUPPLIED" | "AUTOMATIC";
