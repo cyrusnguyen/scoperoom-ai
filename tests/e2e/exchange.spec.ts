@@ -576,7 +576,13 @@ for (const mode of ["refused", "uncertain"] as const) test(`${mode} queued save 
   const { id } = await setup(page, true); const applies = writes(page), saves = writes(page, "/changes"); const before = await draftOf(page, id);
   await page.locator(".studio-toolbar").getByRole("button", { name: "Add step", exact: true }).click(); const add = page.getByRole("dialog", { name: "Add step", exact: true });
   await add.getByLabel("Name").fill("Waiting local edit"); await add.getByRole("button", { name: "Add step", exact: true }).click();
-  await page.route("**/changes", (route) => mode === "uncertain" ? route.abort("failed") : route.fulfill({ status: 409, json: { error: { code: "STALE_DOCUMENT_REVISION", message: "Peer saved first" } } }), { times: 1 });
+  // Not `{ times: 1 }`: its expiry turns interception off just as the refusal's draft re-read starts, which can leave that read hanging.
+  let intercepted = false;
+  await page.route("**/changes", (route) => {
+    if (intercepted) return route.fallback();
+    intercepted = true;
+    return mode === "uncertain" ? route.abort("failed") : route.fulfill({ status: 409, json: { error: { code: "STALE_DOCUMENT_REVISION", message: "Peer saved first" } } });
+  });
   await headerSave(page).click(); await expect(page.locator(".save-note")).toBeVisible();
   await openImport(page); await inspect(page); await applyButton(page).click(); await expect(dialog(page).getByRole("alert")).toContainText("Resolve the unconfirmed or refused save");
   expect(applies).toHaveLength(0); expect(saves).toHaveLength(1); expect(await draftOf(page, id)).toEqual(before);
