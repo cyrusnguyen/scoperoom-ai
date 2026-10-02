@@ -10,6 +10,7 @@ import { LIMITS, parseDraftPair } from "../../src/features/drafts/contracts/scop
 import { MAX_VERSION } from "../../src/features/drafts/contracts/strict.ts";
 import { appendImportedFlow } from "../../src/features/exchange/domain/import-flow.ts";
 import { getProjectBootstrap } from "../../src/features/projects/server/projects.ts";
+import { findReceipt, withDatabase } from "../../src/features/projects/server/access.ts";
 import { archiveProject, changeProjectMember, removeProjectMember } from "../../src/features/projects/server/management.ts";
 import { applyFlowImport, discardFlowImport, getFlowImport, previewFlowImport } from "../../src/features/exchange/server/import-flow.ts";
 import { cleanupTransient } from "../../src/server/maintenance/cleanup-transient.ts";
@@ -117,6 +118,36 @@ test("applied request key cannot leak another preview or another actor's result"
   });
 });
 
+test("recovery-only key stays unknown until a real mutation consumes it, then old Apply is KEY_REUSED", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, profileId, database }) => {
+    const owner = await user(); const projectId = await project(owner); const actorId = await profileId(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), await bytes());
+    const originalKey = randomUUID(); const recoveryKey = randomUUID();
+    const applied = await applyFlowImport(owner, projectId, preview.id, { key: originalKey, draftId, previewHash: preview.previewHash });
+    const before = await snapshot(database, projectId);
+    const receipt = () => withDatabase((db) => db.$transaction((tx) => findReceipt(tx, actorId, "PROJECT", projectId, recoveryKey)));
+    assert.equal(await receipt(), null);
+    assert.deepEqual(await applyFlowImport(owner, projectId, preview.id, { key: recoveryKey, draftId, previewHash: preview.previewHash }), { ...applied, replayed: true });
+    assert.equal(await receipt(), null, "terminal recovery does not consume a fresh key");
+    assert.deepEqual(await snapshot(database, projectId), before);
+    const command = { key: recoveryKey, commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision: applied.documentRevision,
+      payload: { title: "Later operation", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" } };
+    const created = await executeGraphCommand(owner, projectId, draftId, command);
+    assert.equal((await receipt())?.operation, "DRAFT_COMMAND_V1");
+    const consumed = await snapshot(database, projectId);
+    assert.equal(consumed.receipts.length, before.receipts.length + 1);
+    assert.equal(consumed.audit.length, before.audit.length + 1);
+    assert.equal(consumed.drafts[0].document_revision, before.drafts[0].document_revision + 1);
+    assert.equal(consumed.drafts[0].layout_revision, before.drafts[0].layout_revision + 1);
+    assert.ok(consumed.drafts[0].document_json.flows[created.createdIds[0]!]);
+    await assert.rejects(applyFlowImport(owner, projectId, preview.id, { key: recoveryKey, draftId, previewHash: preview.previewHash }), { code: "KEY_REUSED", message: "KEY_REUSED" });
+    assert.deepEqual(await executeGraphCommand(owner, projectId, draftId, command), { ...created, replayed: true });
+    for (const key of [originalKey, randomUUID()]) assert.deepEqual(await applyFlowImport(owner, projectId, preview.id, { key, draftId, previewHash: preview.previewHash }), { ...applied, replayed: true });
+    assert.deepEqual(await snapshot(database, projectId), consumed);
+  });
+});
+
 test("expiry at final SQL transition returns IMPORT_EXPIRED and rolls back draft, audit and receipts", { skip: !canRun }, async () => {
   await withFixture(async ({ user, project, database }) => {
     const owner = await user(); const projectId = await project(owner); const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
@@ -146,7 +177,8 @@ test("maximum legal IDs/counts admit layout, mapping and receipt JSONB; SQL caps
     const fileId = (kind: string, index: number) => `${kind}${String(index).padStart(63, "0")}`;
     file.nodes = Array.from({ length: 200 }, (_, i) => ({ id: fileId("n", i), kind: "ACTION", label: "Step", description: "", actorLabel: null, assumptionNotes: [] }));
     file.edges = Array.from({ length: 400 }, (_, i) => ({ id: fileId("e", i), fromId: file.nodes[0].id, toId: file.nodes[1].id, condition: null }));
-    file.positions = file.nodes.map((node: { id: string }) => ({ nodeId: node.id, x: 100_000, y: -100_000 }));
+    // JSONB expands scientific notation: negative subnormals need more storage than large coordinates.
+    file.positions = file.nodes.map((node: { id: string }) => ({ nodeId: node.id, x: -Number.MIN_VALUE, y: -Number.MIN_VALUE }));
     file.edgeSides = file.edges.map((edge: { id: string }) => ({ edgeId: edge.id, from: "bottom", to: "right" }));
     const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), Buffer.from(JSON.stringify(file)));
     const applied = await applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash });
@@ -155,11 +187,17 @@ test("maximum legal IDs/counts admit layout, mapping and receipt JSONB; SQL caps
     assert.deepEqual(before.audit.at(-1).entity_refs, [{ kind: "DRAFT", id: draftId }, { kind: "DRAFT_ENTITY", id: applied.flowId }]);
     assert.deepEqual(before.audit.at(-1).metadata, { draftId, flowId: applied.flowId, nodeCount: 200, edgeCount: 400, documentRevision: applied.documentRevision, layoutRevision: applied.layoutRevision });
     assert.ok(size.mapping > 64_000 && size.mapping <= 65_536); assert.ok(size.receipt > size.mapping && size.receipt <= 65_536); assert.ok(size.result < 1000); assert.ok(size.layout < LIMITS.layoutBytes);
+    const maximalDocument = structuredClone(before.drafts[0].document_json);
     const maximalLayout = structuredClone(before.drafts[0].layout_json);
-    for (const id of Object.keys(maximalLayout.positions)) maximalLayout.positions[id] = { x: -99999.99999999999, y: -99999.99999999999, version: MAX_VERSION };
+    for (const id of Object.keys(maximalLayout.positions)) maximalLayout.positions[id] = { x: -Number.MIN_VALUE, y: -Number.MIN_VALUE, version: MAX_VERSION };
     for (const id of Object.keys(maximalLayout.edgeSides)) maximalLayout.edgeSides[id] = { from: "bottom", to: "bottom" };
-    parseDraftPair(before.drafts[0].document_json, maximalLayout);
+    for (let i = 1; i < LIMITS.flows; i++) {
+      const id = randomUUID(); maximalDocument.flows[id] = { ...maximalDocument.flows[applied.flowId], id };
+      maximalLayout.directions[id] = "LR";
+    }
+    parseDraftPair(maximalDocument, maximalLayout);
     const maximalLayoutBytes = (await database.query("select octet_length($1::jsonb::text)::int size", [maximalLayout])).rows[0].size;
+    assert.ok(maximalLayoutBytes > 150_000, "the bound includes PostgreSQL decimal expansion");
     assert.ok(maximalLayoutBytes < LIMITS.layoutBytes);
     // ASCII file IDs max64, UUID values36, max600 entries: even max safe-integer counters fit below64KiB.
     const maximumCounters = { ...before.previews[0].applied_result, documentRevision: Number.MAX_SAFE_INTEGER, layoutRevision: Number.MAX_SAFE_INTEGER, eventSequence: Number.MAX_SAFE_INTEGER, mapping: applied.mapping };
