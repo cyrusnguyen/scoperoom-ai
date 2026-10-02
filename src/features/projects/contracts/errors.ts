@@ -22,6 +22,8 @@ export const projectErrors = {
   ARRANGEMENT_PREVIEW_CHANGED: { status: 409, message: "The flow changed since this preview. Preview the arrangement again." },
   UNSUPPORTED_FLOW_FORMAT: { status: 422, message: "Use a supported ScopeRoom flow file." },
   IMPORT_EXPIRED: { status: 409, message: "This import preview expired. Create a new preview." },
+  IMPORT_STALE: { status: 409, message: "This import target changed. Create a new preview." },
+  IMPORT_PAYLOAD_MISMATCH: { status: 409, message: "This import does not match its preview." },
 } as const;
 
 export type ProjectErrorCode = keyof typeof projectErrors;

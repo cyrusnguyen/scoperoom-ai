@@ -2,14 +2,142 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { setImmediate } from "node:timers/promises";
 import { Client } from "pg";
 import { parseDraftPair } from "../../src/features/drafts/contracts/scope-document.ts";
 import { FLOW_IMPORT_PREVIEW_LIMITS } from "../../src/features/exchange/contracts/import.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
-import { discardFlowImport, getFlowImport, previewFlowImport } from "../../src/features/exchange/server/import-flow.ts";
+import { applyFlowImport, discardFlowImport, getFlowImport, previewFlowImport } from "../../src/features/exchange/server/import-flow.ts";
 import { canRun, withFixture } from "./support/fixture.ts";
 
 const validFile = () => readFile(new URL("../fixtures/flow-files/valid.scoperoom-flow.json", import.meta.url));
+
+async function waitForLockChain(database: Client, holderPid: number, expected: number) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const { rows: [row] } = await database.query<{ count: number }>(`
+      with recursive chain(pid) as (
+        select $1::int union select waiting.pid from pg_stat_activity waiting join chain blocker on blocker.pid=any(pg_blocking_pids(waiting.pid))
+      ) select count(*)::int count from pg_stat_activity where pid in (select pid from chain) and wait_event_type='Lock'`, [holderPid]);
+    if (row!.count >= expected) return;
+    await setImmediate();
+  }
+  assert.fail("Apply callers did not reach the deterministic project-lock barrier.");
+}
+
+test("apply commits one imported pair and recovers it for every key", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const projectId = await project(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), await validFile());
+    const first = await applyFlowImport(owner, projectId.toUpperCase(), preview.id.toUpperCase(), { key: randomUUID(), draftId: draftId.toUpperCase(), previewHash: preview.previewHash });
+    const recovered = await applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash });
+    assert.deepEqual(recovered, { ...first, replayed: true });
+    const saved = await getProjectBootstrap(owner, projectId);
+    assert.ok(saved.draft.document.flows[first.flowId]);
+    for (const [sourceId, importedId] of Object.entries(first.mapping.nodes)) {
+      const position = preview.positions!.find((entry) => entry.nodeId === sourceId)!;
+      assert.deepEqual(saved.draft.layout.positions[importedId], { x: position.x, y: position.y, version: 1 });
+    }
+    assert.equal((await database.query("select count(*)::int count from app.audit_event where project_id=$1 and action='FLOW_IMPORTED'", [projectId])).rows[0].count, 1);
+    assert.equal((await database.query("select count(*)::int count from app.flow_import_preview where id=$1 and state='APPLIED'", [preview.id])).rows[0].count, 1);
+  });
+});
+
+test("applied imports recover with a fresh key when the target draft is replaced", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const projectId = await project(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), await validFile());
+    const applied = await applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash });
+    await database.query("delete from app.mutation_receipt where scope_id=$1 and operation='FLOW_IMPORT_APPLY_V1'", [projectId]);
+    const replacement = randomUUID();
+    await database.query("begin");
+    try {
+      await database.query("update app.scope_draft set status='ARCHIVED' where id=$1", [draftId]);
+      await database.query("insert into app.scope_draft (id,project_id,created_by,document_json,layout_json) select $2,project_id,created_by,document_json,layout_json from app.scope_draft where id=$1", [draftId, replacement]);
+      await database.query("update app.project set current_draft_id=$2 where id=$1", [projectId, replacement]);
+      await database.query("commit");
+    } catch (error) { await database.query("rollback"); throw error; }
+    const beforeRecovery = (await database.query("select document_json,layout_json from app.scope_draft where id=$1", [replacement])).rows[0];
+    const recovered = await applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash });
+    assert.deepEqual(recovered, { ...applied, replayed: true });
+    assert.deepEqual((await database.query("select document_json,layout_json from app.scope_draft where id=$1", [replacement])).rows[0], beforeRecovery);
+  });
+});
+
+test("concurrent Apply keys serialize on one preview without a second append", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const projectId = await project(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), await validFile());
+    const holder = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL }); await holder.connect();
+    try {
+      const holderPid = (await holder.query("select pg_backend_pid() pid")).rows[0].pid;
+      await holder.query("begin"); await holder.query("select id from app.project where id=$1 for update", [projectId]);
+      const attempts = [
+      applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash }),
+      applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash }),
+      ];
+      await waitForLockChain(database, holderPid, 2); await holder.query("commit");
+      const [first, second] = await Promise.all(attempts);
+    assert.deepEqual({ ...first, replayed: undefined }, { ...second, replayed: undefined });
+    assert.equal([first.replayed, second.replayed].filter(Boolean).length, 1);
+    assert.equal((await database.query("select count(*)::int count from app.audit_event where project_id=$1 and action='FLOW_IMPORTED'", [projectId])).rows[0].count, 1);
+    assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and operation='FLOW_IMPORT_APPLY_V1'", [projectId])).rows[0].count, 2);
+    } finally { await holder.query("rollback").catch(() => undefined); await holder.end(); }
+  });
+});
+
+test("concurrent retries with the same Apply key retain one receipt", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const projectId = await project(owner); const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), await validFile()); const key = randomUUID();
+    const [first, second] = await Promise.all([
+      applyFlowImport(owner, projectId, preview.id, { key, draftId, previewHash: preview.previewHash }),
+      applyFlowImport(owner, projectId, preview.id, { key, draftId, previewHash: preview.previewHash }),
+    ]);
+    assert.deepEqual({ ...first, replayed: undefined }, { ...second, replayed: undefined });
+    assert.equal([first.replayed, second.replayed].filter(Boolean).length, 1);
+    assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and key=$2", [projectId, key])).rows[0].count, 1);
+  });
+});
+
+test("durable Apply recovery survives downgrade and archive but removal denies it", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, join, profileId, database }) => {
+    const owner = await user(); const editor = await user(); const projectId = await project(owner); await join(owner, projectId, editor);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const preview = await previewFlowImport(editor, projectId, draftId, randomUUID(), randomUUID(), await validFile());
+    const applied = await applyFlowImport(editor, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash });
+    const editorId = await profileId(editor);
+    await database.query("delete from app.mutation_receipt where actor_id=$1 and operation='FLOW_IMPORT_APPLY_V1'", [editorId]);
+    await database.query("update app.project_membership set role='VIEWER' where project_id=$1 and profile_id=$2", [projectId, editorId]);
+    await database.query("update app.project set status='ARCHIVED' where id=$1", [projectId]);
+    assert.deepEqual(await applyFlowImport(editor, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash }), { ...applied, replayed: true });
+    await assert.rejects(previewFlowImport(editor, projectId, draftId, randomUUID(), randomUUID(), await validFile()), { code: "FORBIDDEN" });
+    await database.query("update app.project_membership set active=false,deactivated_sequence=1 where project_id=$1 and profile_id=$2", [projectId, editorId]);
+    await assert.rejects(applyFlowImport(editor, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash }), { code: "NOT_FOUND" });
+  });
+});
+
+test("Apply rechecks capacity after preview and leaves a READY preview untouched", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const projectId = await project(owner); const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), await validFile());
+    const base = (await getProjectBootstrap(owner, projectId)).draft;
+    const flows = Object.fromEntries(Array.from({ length: 5 }, () => {
+      const id = randomUUID(); return [id, { id, version: 1, behaviourVersion: 1, title: "Full", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED", confirmation: null, verificationMethod: null }];
+    }));
+    const full = { ...base.document, flows, nodes: {}, edges: {} }; const layout = { schemaVersion: 1, positions: {}, directions: Object.fromEntries(Object.keys(flows).map((id) => [id, "LR"])), edgeSides: {} };
+    parseDraftPair(full, layout);
+    await database.query("update app.scope_draft set document_json=$2,layout_json=$3 where id=$1", [draftId, full, layout]);
+    const before = await database.query("select document_revision,layout_revision from app.scope_draft where id=$1", [draftId]);
+    await assert.rejects(applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash }), { code: "LIMIT_EXCEEDED" });
+    assert.deepEqual((await database.query("select document_revision,layout_revision from app.scope_draft where id=$1", [draftId])).rows[0], before.rows[0]);
+    assert.equal((await getFlowImport(owner, projectId, preview.id)).state, "READY");
+    assert.equal((await database.query("select count(*)::int count from app.audit_event where project_id=$1 and action='FLOW_IMPORTED'", [projectId])).rows[0].count, 0);
+  });
+});
 
 async function seedRetainedPreviews(database: Client, projectId: string, draftId: string, actorId: string, count: number, state: "DISCARDED" | "EXPIRED", createdAt = new Date(Date.now() - 2 * 60 * 60 * 1000)) {
   await database.query(`insert into app.flow_import_preview (id,project_id,draft_id,actor_id,expected_document_revision,state,preview_hash,payload_hash,created_at,expires_at)
