@@ -25,6 +25,11 @@ async function inspect(page: Page, bytes = nativeFile()) {
 }
 const applyButton = (page: Page) => dialog(page).getByRole("button", { name: "Create unapproved copy", exact: true });
 const records = (page: Page) => page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.startsWith("scoperoom:flow-import:")).map((key) => JSON.parse(sessionStorage.getItem(key)!)));
+async function replacementReady(page: Page, previousId: string) {
+  await expect.poll(async () => (await records(page))[0]?.previewId).not.toBe(previousId);
+  await expect(dialog(page).getByRole("button", { name: "Inspect again", exact: true })).toBeEnabled();
+  await expect(dialog(page).getByText("Ready", { exact: true })).toBeVisible();
+}
 const nodeAt = (page: Page, id: string) => page.locator(`.react-flow__node[data-id="${id}"]`);
 const writes = (page: Page, suffix = "/apply") => {
   const list: Request[] = [];
@@ -70,6 +75,118 @@ async function typeWhileModal(page: Page, selector: string, text: string) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }, text);
 }
+
+test("reinspection retires each previous preview and continues beyond the ten body quota", async ({ page, workerAccount }) => {
+  const { id } = await setup(page); const before = await draftOf(page, id); const uploads = writes(page, "/preview");
+  await openImport(page); await inspect(page); const priorIds: string[] = [];
+  try {
+    for (let index = 0; index < 11; index++) {
+      const previousId = (await records(page))[0].previewId; priorIds.push(previousId);
+      await dialog(page).getByRole("button", { name: "Inspect again", exact: true }).click();
+      await replacementReady(page, previousId);
+    }
+  } finally {
+    const stored = (await workerAccount.database.query("select id,state::text state,payload is not null body from app.flow_import_preview where project_id=$1 order by created_at", [id])).rows;
+    await test.info().attach("retained-preview-identities", { body: JSON.stringify({ priorIds, stored, uploads: uploads.length, current: await records(page) }), contentType: "application/json" });
+  }
+  expect(uploads).toHaveLength(12);
+  const rows = (await workerAccount.database.query("select id,state::text state,payload,positions,fidelity_report from app.flow_import_preview where project_id=$1 order by created_at", [id])).rows;
+  expect(rows).toHaveLength(12);
+  for (const previousId of priorIds) expect(rows.find((row) => row.id === previousId)).toMatchObject({ state: "DISCARDED", payload: null, positions: null, fidelity_report: null });
+  expect(rows.filter((row) => row.payload !== null)).toHaveLength(1);
+  expect(await draftOf(page, id)).toEqual(before);
+});
+
+for (const failure of ["held", "lost", "refused"] as const) test(`${failure} retirement preserves the original preview and discard key until confirmed`, async ({ page }) => {
+  const { id } = await setup(page); const before = await draftOf(page, id); const uploads = writes(page, "/preview"), discards = writes(page, "/discard");
+  await openImport(page); await inspect(page); const original = (await records(page))[0]; let held: Route | undefined;
+  await page.route("**/flow-imports/*/discard", async (route) => {
+    if (failure === "held") { held = route; return; }
+    if (failure === "lost") { expect((await route.fetch()).status()).toBe(200); await route.abort("failed"); }
+    else await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Retirement not confirmed" } } });
+  }, { times: 1 });
+  await dialog(page).getByRole("button", { name: "Inspect again", exact: true }).click();
+  if (failure === "held") {
+    await expect.poll(() => Boolean(held)).toBe(true);
+    try {
+      for (const name of ["Inspect again", "Discard preview", "Cancel", "Recover import status"]) await expect(dialog(page).getByRole("button", { name, exact: true })).toBeDisabled();
+      await expect(dialog(page).getByLabel("Native flow file")).toBeDisabled(); await page.keyboard.press("Escape"); await expect(dialog(page)).toBeVisible();
+      expect((await records(page))[0]).toEqual(original); expect(uploads).toHaveLength(1); expect(await draftOf(page, id)).toEqual(before);
+    } finally { if (held) await held.continue(); }
+  } else {
+    await expect(dialog(page).getByRole("alert")).toBeVisible();
+    expect((await records(page))[0]).toEqual(original); expect(uploads).toHaveLength(1); expect(await draftOf(page, id)).toEqual(before);
+    await dialog(page).getByRole("button", { name: "Inspect again", exact: true }).click();
+  }
+  await replacementReady(page, original.previewId);
+  expect(uploads).toHaveLength(2);
+  expect(discards).toHaveLength(failure === "held" ? 1 : 2);
+  expect(discards.every((request) => request.headers()["idempotency-key"] === original.discardKey)).toBe(true);
+  const retired: ImportPreviewView = await (await page.request.get(`/api/projects/${id}/flow-imports/${original.previewId}`)).json();
+  expect(retired.state).toBe("DISCARDED"); expect(retired.file).toBeNull(); expect(await draftOf(page, id)).toEqual(before);
+});
+
+test("Apply winning retirement adopts the existing copy without a fresh inspection", async ({ page }) => {
+  const { id } = await setup(page); const before = await draftOf(page, id); const uploads = writes(page, "/preview");
+  await openImport(page); await inspect(page); const original = (await records(page))[0];
+  await page.route("**/flow-imports/*/discard", async (route) => {
+    const applied = await page.request.post(`/api/projects/${id}/flow-imports/${original.previewId}/apply`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { draftId: original.draftId, previewHash: original.previewHash } });
+    expect(applied.status()).toBe(200); await route.continue();
+  }, { times: 1 });
+  await dialog(page).getByRole("button", { name: "Inspect again", exact: true }).click(); await expect(dialog(page)).toBeHidden();
+  expect(uploads).toHaveLength(1);
+  const after = await draftOf(page, id); expect(Object.values(after.document.flows)).toHaveLength(1); expect(after.documentRevision).toBe(before.documentRevision + 1); expect(after.layoutRevision).toBe(before.layoutRevision + 1);
+});
+
+test("fresh inspection resolves an unknown upload with its original file and key before retirement", async ({ page }) => {
+  const { id } = await setup(page); const uploads = writes(page, "/preview"), discards = writes(page, "/discard");
+  const bodies: Buffer[] = [];
+  await page.route("**/flow-imports/preview?**", async (route) => {
+    const body = route.request().postDataBuffer(); expect(body).not.toBeNull(); bodies.push(body!);
+    if (bodies.length === 1) { expect((await route.fetch()).status()).toBe(200); await route.abort("failed"); }
+    else await route.continue();
+  });
+  await openImport(page); await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "original.json", mimeType: "application/json", buffer: await nativeFile() });
+  await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click(); await expect(dialog(page).getByRole("alert")).toContainText("Upload not confirmed");
+  const original = (await records(page))[0]; const replacement = JSON.parse((await nativeFile()).toString()); replacement.flow.title = "Replacement file";
+  await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "replacement.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(replacement)) });
+  await dialog(page).getByRole("button", { name: "Start new inspection", exact: true }).click(); await replacementReady(page, original.previewId);
+  expect(uploads).toHaveLength(3); expect(uploads[1]!.url()).toBe(uploads[0]!.url()); expect(uploads[1]!.headers()["idempotency-key"]).toBe(original.createKey); expect(bodies).toHaveLength(3); expect(bodies[1]).toEqual(bodies[0]); expect(bodies[0]).toEqual(await nativeFile());
+  expect(discards).toHaveLength(1); expect(discards[0]!.headers()["idempotency-key"]).toBe(original.discardKey);
+  const current: ImportPreviewView = await (await page.request.get(`/api/projects/${id}/flow-imports/${(await records(page))[0].previewId}`)).json(); expect(current.file?.flow.title).toBe("Replacement file");
+  const retired: ImportPreviewView = await (await page.request.get(`/api/projects/${id}/flow-imports/${original.previewId}`)).json(); expect(retired.state).toBe("DISCARDED"); expect(retired.file).toBeNull();
+});
+
+test("unknown upload after reload retains its identity until the original file can be resolved", async ({ page }) => {
+  const { id } = await setup(page); const uploads = writes(page, "/preview"), discards = writes(page, "/discard"); const before = await draftOf(page, id);
+  await page.route("**/flow-imports/preview?**", (route) => route.abort("failed"), { times: 1 });
+  await openImport(page); await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "original.json", mimeType: "application/json", buffer: await nativeFile() });
+  await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click(); await expect(dialog(page).getByRole("alert")).toContainText("Upload not confirmed");
+  const original = (await records(page))[0]; await page.reload(); await openImport(page); await expect(dialog(page).getByRole("alert")).toContainText("Upload not confirmed");
+  const replacement = JSON.parse((await nativeFile()).toString()); replacement.flow.title = "Different file";
+  await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "different.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(replacement)) });
+  await dialog(page).getByRole("button", { name: "Start new inspection", exact: true }).click(); await expect(dialog(page).getByRole("alert")).toContainText("Select the same file");
+  expect((await records(page))[0]).toEqual(original); expect(uploads).toHaveLength(1); expect(discards).toHaveLength(0); expect(await draftOf(page, id)).toEqual(before);
+  await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "original.json", mimeType: "application/json", buffer: await nativeFile() });
+  await dialog(page).getByRole("button", { name: "Start new inspection", exact: true }).click(); await replacementReady(page, original.previewId);
+  expect(uploads).toHaveLength(3); expect(uploads[1]!.headers()["idempotency-key"]).toBe(original.createKey); expect(discards).toHaveLength(1); expect(discards[0]!.headers()["idempotency-key"]).toBe(original.discardKey);
+  expect((await records(page))[0].previewId).not.toBe(original.previewId); expect(await draftOf(page, id)).toEqual(before);
+});
+
+for (const failure of ["invalid", "unsupported", "storage"] as const) test(`${failure} initial inspection can be replaced after a definite rejection or no POST`, async ({ page }) => {
+  const { id } = await setup(page); const uploads = writes(page, "/preview"), discards = writes(page, "/discard"); const before = await draftOf(page, id);
+  await openImport(page);
+  if (failure === "storage") await failImportStorage(page, "all");
+  const original = failure === "invalid" ? Buffer.from("{") : failure === "unsupported" ? Buffer.from((await nativeFile()).toString().replace('"formatVersion": 1', '"formatVersion": 99')) : await nativeFile();
+  await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "original.json", mimeType: "application/json", buffer: original });
+  await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click(); await expect(dialog(page).getByRole("alert")).toBeVisible();
+  if (failure === "storage") await restoreImportStorage(page);
+  const replacement = JSON.parse((await nativeFile()).toString()); replacement.flow.title = "Valid replacement";
+  await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "replacement.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(replacement)) });
+  await dialog(page).getByRole("button", { name: "Start new inspection", exact: true }).click(); await expect(dialog(page).getByText("Ready", { exact: true })).toBeVisible();
+  expect(uploads).toHaveLength(failure === "storage" ? 1 : 2); expect(discards).toHaveLength(0);
+  const current: ImportPreviewView = await (await page.request.get(`/api/projects/${id}/flow-imports/${(await records(page))[0].previewId}`)).json(); expect(current.file?.flow.title).toBe("Valid replacement"); expect(await draftOf(page, id)).toEqual(before);
+});
 
 test("unknown upload recovery stays busy through delayed manual status validation", async ({ page }) => {
   const { id, first } = await setup(page, true); const before = await draftOf(page, id); const uploads = writes(page, "/preview");
@@ -329,16 +446,18 @@ test("lost committed Apply stays pinned when Retry status barrier fails before i
   const after = await draftOf(page, id); expect(after.documentRevision).toBe(committed.documentRevision); expect(after.layoutRevision).toBe(committed.layoutRevision);
 });
 
-for (const operation of ["upload", "Apply"] as const) test(`same-mount replacement releases held ${operation} latch without adopting the old response`, async ({ page }) => {
+for (const operation of ["upload", "Apply", "retirement"] as const) test(`same-mount replacement releases held ${operation} latch without adopting the old response`, async ({ page }) => {
   const { id } = await setup(page, true); await openImport(page);
   await dialog(page).evaluate((element) => element.setAttribute("data-retained-modal", "true"));
   let held: Route | undefined;
-  if (operation === "Apply") await inspect(page);
-  await page.route(operation === "upload" ? "**/flow-imports/preview?**" : "**/flow-imports/*/apply", (route) => { held = route; }, { times: 1 });
+  if (operation !== "upload") await inspect(page);
+  const uploads = writes(page, "/preview");
+  await page.route(operation === "upload" ? "**/flow-imports/preview?**" : operation === "Apply" ? "**/flow-imports/*/apply" : "**/flow-imports/*/discard", (route) => { held = route; }, { times: 1 });
   if (operation === "upload") {
     await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "journey.scoperoom-flow.json", mimeType: "application/json", buffer: await nativeFile() });
     await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click();
-  } else await applyButton(page).click();
+  } else if (operation === "Apply") await applyButton(page).click();
+  else await dialog(page).getByRole("button", { name: "Inspect again", exact: true }).click();
   await expect.poll(() => Boolean(held)).toBe(true);
   const original = (await records(page))[0]; const response = await held!.fetch(); expect(response.status()).toBe(200);
   const replacementId = randomUUID(); let bootstrapped = false;
@@ -350,6 +469,7 @@ for (const operation of ["upload", "Apply"] as const) test(`same-mount replaceme
   await held!.fulfill({ response });
   await expect(dialog(page).getByRole("button", { name: "Recover import status" })).toBeEnabled();
   expect((await records(page))[0]).toEqual(original);
+  if (operation === "retirement") expect(uploads).toHaveLength(0);
   if (operation === "Apply") {
     await expect(dialog(page).getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
     await page.keyboard.press("Escape"); await expect(dialog(page)).toBeVisible();
@@ -379,7 +499,7 @@ for (const [code, state] of [["IMPORT_EXPIRED", "Expired"], ["IMPORT_STALE", "St
   await page.route("**/flow-imports/*/apply", (route) => route.fulfill({ status: 409, json: { error: { code, message: "Review target and capacity before inspecting again." } } }), { times: 1 });
   await applyButton(page).click(); await expect(dialog(page).getByText(state, { exact: true })).toBeVisible(); await expect(dialog(page).getByRole("alert")).toContainText("Review target");
   expect(await draftOf(page, id)).toEqual(before); expect((await records(page))[0].attempt).toBeUndefined();
-  await dialog(page).getByRole("button", { name: "Inspect again" }).click(); await expect(dialog(page).getByText("Ready", { exact: true })).toBeVisible(); expect((await records(page))[0].previewId).not.toBe(original.previewId);
+  await dialog(page).getByRole("button", { name: "Inspect again" }).click(); await replacementReady(page, original.previewId);
 });
 
 for (const lane of ["text", "coordinate", "endpoint", "redo"] as const) test(`${lane} unresolved local input cannot be silently saved or discarded by import`, async ({ page }) => {

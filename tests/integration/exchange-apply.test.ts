@@ -31,11 +31,16 @@ async function replacePreview(database: Client, id: string, replacements: Record
 }
 
 // Each barrier observes an independent service connection waiting on this exact backend, never elapsed time.
-async function waiter(database: Client, blocker: number, excluded: number[] = []) {
+async function waiter(database: Client, blocker: number, excluded: number[] = [], previewId: string | null = null) {
   const deadline = Date.now() + 4_000;
   while (Date.now() < deadline) {
     const { rows } = await database.query<{ pid: number; xact_start: Date }>(
-      "select pid,xact_start from pg_stat_activity where wait_event_type='Lock' and $1=any(pg_blocking_pids(pid)) and not(pid=any($2::int[]))", [blocker, excluded]);
+      `select a.pid,a.xact_start from pg_stat_activity a
+       where a.wait_event_type='Lock' and $1=any(pg_blocking_pids(a.pid)) and not(a.pid=any($2::int[]))
+       and ($3::uuid is null or exists (
+         select 1 from app.flow_import_preview p join pg_locks owned on owned.transactionid::text=p.xmax::text
+         where p.id=$3::uuid and owned.pid=a.pid and owned.locktype='transactionid' and owned.mode='ExclusiveLock' and owned.granted
+       ))`, [blocker, excluded, previewId]);
     if (rows[0]) return rows[0];
     await setImmediate();
   }
@@ -159,7 +164,7 @@ test("expiry at final SQL transition returns IMPORT_EXPIRED and rolls back draft
       const pid = (await gate.query("select pg_backend_pid() pid")).rows[0].pid;
       await gate.query("begin"); await gate.query("lock table app.flow_import_preview in share mode");
       apply = applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash }); void apply.catch(() => undefined);
-      const waiting = await waiter(database, pid);
+      const waiting = await waiter(database, pid, [], preview.id);
       const query = (await database.query("select query from pg_stat_activity where pid=$1", [waiting.pid])).rows[0].query;
       assert.match(query, /UPDATE.*flow_import_preview/i);
       const deadline = Date.now() + 4000;

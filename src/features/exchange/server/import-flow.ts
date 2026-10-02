@@ -350,14 +350,20 @@ export async function discardFlowImport(identity: ProjectIdentity, projectId: st
       const now = await clock(tx);
       const hash = requestHash(DISCARD_OPERATION, { projectId, previewId, previewHash: preview.previewHash });
       const receipt = await findReceipt(tx, profile.id, "PROJECT", project.id, key);
-      if (receipt) { checkReceipt(receipt, DISCARD_OPERATION, hash); return viewOf(preview, now); }
+      if (receipt) {
+        checkReceipt(receipt, DISCARD_OPERATION, hash);
+        if (!preview.payload || preview.state === "APPLIED" || preview.state === "READY" || (role !== "OWNER" && role !== "EDITOR") || project.status !== "ACTIVE") return viewOf(preview, now);
+      }
       if (preview.state === "APPLIED") return viewOf(preview, now);
       if (role !== "OWNER" && role !== "EDITOR") throw new ProjectError("FORBIDDEN");
       requireActive(project);
-      if (preview.state !== "READY" || preview.expiresAt <= now) return viewOf(preview, now);
-      await tx.flowImportPreview.update({ where: { id: preview.id }, data: { state: "DISCARDED" } });
+      if (preview.state !== "READY" || preview.expiresAt <= now) {
+        const retired = await tx.flowImportPreview.update({ where: { id: preview.id }, data: { state: preview.state === "READY" ? "EXPIRED" : preview.state } }) as StoredPreview;
+        return viewOf(retired, now);
+      }
+      const discarded = await tx.flowImportPreview.update({ where: { id: preview.id }, data: { state: "DISCARDED" } }) as StoredPreview;
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, DISCARD_OPERATION, hash, { previewId, previewHash: preview.previewHash });
-      return viewOf({ ...preview, state: "DISCARDED" }, now);
+      return viewOf(discarded, now);
     });
   });
 }

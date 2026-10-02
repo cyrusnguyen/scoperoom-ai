@@ -7,10 +7,139 @@ import { Client } from "pg";
 import { parseDraftPair } from "../../src/features/drafts/contracts/scope-document.ts";
 import { FLOW_IMPORT_PREVIEW_LIMITS } from "../../src/features/exchange/contracts/import.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
+import { requestHash } from "../../src/features/projects/server/access.ts";
 import { applyFlowImport, discardFlowImport, getFlowImport, previewFlowImport } from "../../src/features/exchange/server/import-flow.ts";
 import { canRun, withFixture } from "./support/fixture.ts";
 
 const validFile = () => readFile(new URL("../fixtures/flow-files/valid.scoperoom-flow.json", import.meta.url));
+
+test("discard frees preview bodies and bytes while retaining immutable keyed identities", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const projectId = await project(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const bytes = await validFile(); const before = await getProjectBootstrap(owner, projectId);
+    const previews = [];
+    for (let index = 0; index < FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies; index++) {
+      const key = randomUUID(); const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), key, bytes);
+      previews.push({ preview, key });
+    }
+    await assert.rejects(previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), bytes), { code: "LIMIT_EXCEEDED" });
+    const original = previews[0]!; const discardKey = randomUUID();
+    const retainedBefore = (await database.query("select *,octet_length(payload::text)+octet_length(positions::text)+octet_length(fidelity_report::text) body_bytes from app.flow_import_preview where id=$1", [original.preview.id])).rows[0];
+    const bytesBefore = Number((await database.query("select sum(octet_length(payload::text)+octet_length(positions::text)+octet_length(fidelity_report::text)) bytes from app.flow_import_preview where project_id=$1", [projectId])).rows[0].bytes);
+    const discarded = await discardFlowImport(owner, projectId, original.preview.id, discardKey);
+    assert.equal(discarded.state, "DISCARDED");
+    assert.deepEqual([discarded.file, discarded.positions, discarded.fidelityReport], [null, null, null]);
+    const stored = (await database.query("select state::text state,payload,positions,fidelity_report,preview_hash,payload_hash,created_at,expires_at from app.flow_import_preview where id=$1", [original.preview.id])).rows[0];
+    assert.equal(stored.state, "DISCARDED"); assert.equal(stored.payload, null); assert.equal(stored.positions, null); assert.equal(stored.fidelity_report, null);
+    assert.equal(stored.preview_hash, original.preview.previewHash);
+    for (const field of ["preview_hash", "payload_hash", "created_at", "expires_at"]) assert.deepEqual(stored[field], retainedBefore[field]);
+    const usageAfterDiscard = (await database.query("select count(*)::int identities,count(payload)::int bodies,sum(octet_length(payload::text)+octet_length(positions::text)+octet_length(fidelity_report::text)) bytes from app.flow_import_preview where project_id=$1", [projectId])).rows[0];
+    assert.equal(usageAfterDiscard.identities, 10); assert.equal(usageAfterDiscard.bodies, 9); assert.equal(Number(usageAfterDiscard.bytes), bytesBefore - retainedBefore.body_bytes);
+    assert.deepEqual(await discardFlowImport(owner, projectId, original.preview.id, discardKey), discarded);
+    assert.deepEqual(await previewFlowImport(owner, projectId, draftId, original.preview.id, original.key, bytes), discarded, "creation retry cannot resurrect a retired body");
+    const admitted = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), bytes);
+    assert.equal(admitted.state, "READY");
+    const usage = (await database.query("select count(*)::int identities,count(payload)::int bodies,coalesce(sum(octet_length(payload::text)+octet_length(positions::text)+octet_length(fidelity_report::text)),0)::int bytes from app.flow_import_preview where project_id=$1", [projectId])).rows[0];
+    assert.equal(usage.identities, 11); assert.equal(usage.bodies, 10); assert.ok(usage.bytes > 0);
+    const web = new Client({ connectionString: process.env.DATABASE_URL }); await web.connect();
+    try {
+      assert.equal((await web.query("select current_user role")).rows[0].role, "app_web");
+      await assert.rejects(web.query("update app.flow_import_preview set payload=null where id=$1", [admitted.id]), /permission denied/i);
+    } finally { await web.end(); }
+    assert.deepEqual(await getProjectBootstrap(owner, projectId), before);
+  });
+});
+
+test("discard retires expired READY bodies after a transaction-start lock wait without alias receipts", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const projectId = await project(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const source = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), await validFile());
+    const id = randomUUID();
+    await database.query(`insert into app.flow_import_preview (id,project_id,draft_id,actor_id,expected_document_revision,payload,positions,fidelity_report,preview_hash,payload_hash,created_at,expires_at)
+      select $2,project_id,draft_id,actor_id,expected_document_revision,payload,positions,fidelity_report,preview_hash,payload_hash,now()-interval '1 day',clock_timestamp()+interval '2 seconds' from app.flow_import_preview where id=$1`, [source.id, id]);
+    const holder = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL }); await holder.connect();
+    const key = randomUUID(); let pending: ReturnType<typeof discardFlowImport> | undefined;
+    try {
+      const holderPid = (await holder.query("select pg_backend_pid() pid")).rows[0].pid;
+      await holder.query("begin"); await holder.query("select actor_id from app.flow_import_preview where id=$1 for update", [id]);
+      pending = discardFlowImport(owner, projectId, id, key);
+      await waitForLockChain(database, holderPid, 1);
+      const timing = (await database.query("select bool_and(a.xact_start<p.expires_at) started_before from pg_stat_activity a cross join app.flow_import_preview p where p.id=$1 and $2=any(pg_blocking_pids(a.pid))", [id, holderPid])).rows[0];
+      assert.equal(timing.started_before, true);
+      const deadline = Date.now() + 5_000;
+      while (!(await database.query("select expires_at<=clock_timestamp() expired from app.flow_import_preview where id=$1", [id])).rows[0].expired) {
+        assert.ok(Date.now() < deadline, "expiry boundary was not reached"); await setImmediate();
+      }
+      await holder.query("commit");
+      const retired = await pending; assert.equal(retired.state, "EXPIRED"); assert.equal(retired.file, null);
+      assert.deepEqual((await database.query("select state::text state,payload,positions,fidelity_report from app.flow_import_preview where id=$1", [id])).rows[0], { state: "EXPIRED", payload: null, positions: null, fidelity_report: null });
+      assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and key=$2", [projectId, key])).rows[0].count, 0);
+      assert.equal((await discardFlowImport(owner, projectId, id, key)).state, "EXPIRED");
+    } finally { await holder.query("rollback"); await holder.end(); if (pending) await pending.catch(() => {}); }
+  });
+});
+
+test("discard clears legacy terminal bodies but preserves recent APPLIED bodies and results", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const projectId = await project(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), await validFile());
+    const key = randomUUID();
+    // An INSERT represents a body retained by the previously deployed discard trigger.
+    const legacy = randomUUID();
+    await database.query(`insert into app.flow_import_preview (id,project_id,draft_id,actor_id,expected_document_revision,state,payload,positions,fidelity_report,preview_hash,payload_hash,created_at,expires_at)
+      select $2,project_id,draft_id,actor_id,expected_document_revision,'DISCARDED',payload,positions,fidelity_report,preview_hash,payload_hash,created_at,expires_at from app.flow_import_preview where id=$1`, [preview.id, legacy]);
+    const legacyResult = await discardFlowImport(owner, projectId, legacy, key); assert.equal(legacyResult.state, "DISCARDED"); assert.equal(legacyResult.file, null);
+    assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and key=$2", [projectId, key])).rows[0].count, 0);
+    const applied = await applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash });
+    const saved = await getProjectBootstrap(owner, projectId); const storedBefore = (await database.query("select * from app.flow_import_preview where id=$1", [preview.id])).rows[0];
+    const { replayed, ...durable } = applied; void replayed;
+    assert.ok(storedBefore.payload, "the recent APPLIED body is retained in PostgreSQL");
+    const result = await discardFlowImport(owner, projectId, preview.id, randomUUID()); assert.equal(result.state, "APPLIED"); assert.equal(result.file, null); assert.deepEqual(result.result, durable);
+    assert.deepEqual((await database.query("select * from app.flow_import_preview where id=$1", [preview.id])).rows[0], storedBefore);
+    assert.deepEqual(await getProjectBootstrap(owner, projectId), saved);
+  });
+});
+
+test("legacy discard receipt cleanup requires current editing authority and preserves receipt conflicts", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, join, database }) => {
+    const owner = await user(); const editor = await user(); const projectId = await project(owner); await join(owner, projectId, editor);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const createKey = randomUUID(); const preview = await previewFlowImport(editor, projectId, draftId, randomUUID(), createKey, await validFile());
+    const holder = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL }); await holder.connect();
+    try {
+      const holderPid = (await holder.query("select pg_backend_pid() pid")).rows[0].pid;
+      for (const phase of ["downgraded", "archived", "editable"] as const) {
+        await database.query("update app.project_membership set role=$2::text::app.project_member_role where project_id=$1 and profile_id=(select actor_id from app.flow_import_preview where id=$3)", [projectId, phase === "downgraded" ? "VIEWER" : "EDITOR", preview.id]);
+        await database.query("update app.project set status=$2::text::app.project_status where id=$1", [projectId, phase === "archived" ? "ARCHIVED" : "ACTIVE"]);
+        let id = ""; const key = randomUUID(); let retained = false;
+        // Global cleanup may win fixture setup. Launch the replay only after locking a retained legacy body.
+        for (let attempt = 0; attempt < 5 && !retained; attempt++) {
+          id = randomUUID();
+          await database.query(`insert into app.flow_import_preview (id,project_id,draft_id,actor_id,expected_document_revision,state,payload,positions,fidelity_report,preview_hash,payload_hash,created_at,expires_at)
+            select $2,project_id,draft_id,actor_id,expected_document_revision,'DISCARDED',payload,positions,fidelity_report,preview_hash,payload_hash,created_at,expires_at from app.flow_import_preview where id=$1`, [preview.id, id]);
+          await holder.query("begin");
+          retained = Boolean((await holder.query("select payload from app.flow_import_preview where id=$1 for update", [id])).rows[0].payload);
+          if (!retained) await holder.query("rollback");
+        }
+        assert.ok(retained, "fixture must retain its legacy body before the API replay begins");
+        const hash = requestHash("FLOW_IMPORT_DISCARD_V1", { projectId, previewId: id, previewHash: preview.previewHash });
+        await database.query(`insert into app.mutation_receipt (actor_id,scope_kind,scope_id,key,operation,request_hash,result,expires_at)
+          select actor_id,'PROJECT',project_id,$2,'FLOW_IMPORT_DISCARD_V1',$3,$4,now()+interval '1 day' from app.flow_import_preview where id=$1`, [id, key, hash, { previewId: id, previewHash: preview.previewHash }]);
+        const pending = discardFlowImport(editor, projectId, id, key); void pending.catch(() => {});
+        try {
+          await waitForLockChain(database, holderPid, 1); await holder.query("commit");
+          const result = await pending;
+          assert.deepEqual(result, { ...preview, id, state: "DISCARDED", ...(phase === "editable" ? { file: null, positions: null, fidelityReport: null } : {}) });
+          await assert.rejects(discardFlowImport(editor, projectId, id, createKey), { code: "KEY_REUSED" });
+        } finally { await holder.query("rollback"); await pending.catch(() => {}); }
+      }
+    } finally { await holder.query("rollback"); await holder.end(); }
+    assert.equal((await database.query("select count(*)::int count from app.mutation_receipt where scope_id=$1 and operation='FLOW_IMPORT_DISCARD_V1'", [projectId])).rows[0].count, 3);
+  });
+});
 
 async function waitForLockChain(database: Client, holderPid: number, expected: number) {
   const deadline = Date.now() + 5_000;

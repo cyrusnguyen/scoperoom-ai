@@ -14,6 +14,14 @@ const denied = new Set(["NOT_FOUND", "DENIED", "UNAUTHENTICATED"]);
 const stale = new Set(["DRAFT_REPLACED", "IMPORT_STALE", "IMPORT_PAYLOAD_MISMATCH"]);
 const fingerprint = async (file: File) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
+async function inspectUpload(record: ImportRecord, file: File): Promise<ApiResult<ImportPreviewView>> {
+  try {
+    const response = await fetch(`/api/projects/${record.projectId}/flow-imports/preview?draftId=${record.draftId}&previewId=${record.previewId}`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": record.createKey }, body: file });
+    const body = await response.json().catch(() => null);
+    return response.ok && body !== null ? { ok: true, data: body } : { ok: false, code: body?.error?.code ?? "UNAVAILABLE", message: body?.error?.message ?? "Unable to confirm file inspection. Recover status or retry the original file.", status: response.status, uncertain: response.ok || response.status >= 500 };
+  } catch { return { ok: false, code: "NETWORK", message: "Upload not confirmed. Retry status or the same file and original upload.", status: 0, uncertain: true }; }
+}
+
 export function NativeImportDialog({ onClose }: { onClose: () => void }) {
   const { projectId, savedDraft, editable, narrow, ui, update, busy, importFlow, reload } = useStudio();
   const { status, beforeWrite, revalidate, fence } = useSync();
@@ -28,6 +36,7 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
   });
   const mounted = useRef(true);
   const latest = useRef(ui.nativeImport);
+  const unsubmitted = useRef<string | null>(null);
   useLayoutEffect(() => { latest.current = ui.nativeImport; }, [ui.nativeImport]);
   const local = ui.nativeImport;
   const locked = Boolean(local?.record.attempt) && local?.state !== "Applied";
@@ -51,7 +60,7 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
     update(() => ({ nativeImport: null }));
   };
   const accept = (preview: ImportPreviewView, record: ImportRecord, file: File | null) => {
-    if (preview.id !== record.previewId || preview.projectId.toLowerCase() !== projectScope || preview.draftId !== record.draftId || (record.previewHash && record.previewHash !== preview.previewHash)) { lost("Access lost. The recovered preview does not match this import."); return; }
+    if (preview.id !== record.previewId || preview.projectId.toLowerCase() !== projectScope || preview.draftId !== record.draftId || (record.previewHash && record.previewHash !== preview.previewHash)) { lost("Access lost. The recovered preview does not match this import."); return false; }
     const nextRecord = { ...record, previewHash: preview.previewHash };
     if (preview.state === "EXPIRED" || preview.state === "DISCARDED") delete nextRecord.attempt;
     const state = preview.state === "APPLIED" ? "Applied" : preview.state === "EXPIRED" ? "Expired" : preview.state === "DISCARDED" || preview.draftId !== savedDraft.id ? "Stale" : record.attempt ? "Applying" : "Ready";
@@ -59,6 +68,36 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
     if (preview.result) {
       update((value) => ({ acknowledgedRevisions: requireDraftRevision(value.acknowledgedRevisions, preview.result!) }));
     }
+    return true;
+  };
+  const retire = async (original: NativeImportState, current: () => boolean, originalFile: File | null) => {
+    if (!original.record.previewHash) {
+      if (original.state === "Invalid" || unsubmitted.current === original.record.previewId) return true;
+      if (!originalFile) { setMessage("Select the same file to resolve the original upload before starting a new inspection, or recover its status."); return false; }
+      const uploaded = await inspectUpload(original.record, originalFile);
+      if (!canAdopt(current) || sessionEnded(uploaded)) return false;
+      if (!uploaded.ok) {
+        if (!uploaded.uncertain && ["INVALID_INPUT", "UNSUPPORTED_FLOW_FORMAT"].includes(uploaded.code)) return true;
+        if (denied.has(uploaded.code) || uploaded.code === "FORBIDDEN") lost("Access lost. This protected preview has been cleared.");
+        else setMessage(uploaded.message);
+        return false;
+      }
+      if (!accept(uploaded.data, original.record, originalFile)) return false;
+      original = latest.current!;
+    }
+    const result = await apiMutate<ImportPreviewView>(`/api/projects/${projectId}/flow-imports/${original.record.previewId}/discard`, original.record.discardKey);
+    if (!canAdopt(current) || sessionEnded(result)) return false;
+    if (!result.ok) {
+      if (denied.has(result.code)) lost("Access lost. This protected preview has been cleared.");
+      else setMessage(result.message);
+      return false;
+    }
+    if (!accept(result.data, original.record, original.file)) return false;
+    if (result.data.state === "APPLIED") { if (result.data.result?.draftId === savedDraft.id) await reload(current); return false; }
+    if (!["DISCARDED", "EXPIRED"].includes(result.data.state) || result.data.file || result.data.positions || result.data.fidelityReport) {
+      setMessage("Preview retirement was not confirmed. Recover its status or retry the original preview."); return false;
+    }
+    return true;
   };
   const recover = async (record = latest.current?.record ?? restored, file = latest.current?.file ?? null) => {
     if (!record || working) return;
@@ -98,7 +137,11 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
     const file = selected ?? local?.file;
     if (!file) { setMessage("Select the same native flow file again. File contents are kept only in memory."); return; }
     if (file.size > 1_048_576) { setMessage("Invalid: native files must be at most 1 MiB."); return; }
-    const current = fence(); setWorking(true); setMessage("");
+    const previous = latest.current;
+    let previewId = previous?.record.previewId;
+    const authorityCurrent = fence();
+    const current = () => authorityCurrent() && latest.current?.record.previewId === previewId;
+    setWorking(true); setMessage("");
     let digest: string;
     try { digest = await fingerprint(file); }
     catch {
@@ -106,19 +149,29 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
       return;
     }
     if (!canAdopt(current)) return;
-    const previous = latest.current;
     if (!fresh && previous && !previous.record.previewHash && previous.record.fingerprint !== digest) { setWorking(false); setMessage("Select the same file to recover the original upload, or explicitly start a new inspection."); return; }
     const record: ImportRecord = !fresh && previous && !previous.record.previewHash ? previous.record : { actorId, projectId: projectScope, draftId: savedDraft.id, previewId: crypto.randomUUID(), createKey: crypto.randomUUID(), discardKey: crypto.randomUUID(), fingerprint: digest };
-    if (!setLocal({ record, file, preview: null, state: "Validating", message: "" })) { setWorking(false); return; }
+    if (!fresh || !previous) {
+      if (record.previewId !== previous?.record.previewId) unsubmitted.current = record.previewId;
+      previewId = record.previewId;
+      if (!setLocal({ record, file, preview: null, state: "Validating", message: "" })) { setWorking(false); return; }
+    }
     const authority = await beforeWrite();
     if (!canAdopt(current)) return;
-    if (authority.kind !== "current" || !fence(authority.generation)() || authority.status.currentDraftId !== record.draftId || authority.status.status !== "ACTIVE" || !["OWNER", "EDITOR"].includes(authority.status.role)) { setWorking(false); setLocal({ record, file, preview: null, state: "Stale", message: "This target is no longer editable. Resolve access or inspect again for the current draft." }); return; }
-    let result: ApiResult<ImportPreviewView>;
-    try {
-      const response = await fetch(`/api/projects/${projectId}/flow-imports/preview?draftId=${record.draftId}&previewId=${record.previewId}`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": record.createKey }, body: file });
-      const body = await response.json().catch(() => null);
-      result = response.ok && body !== null ? { ok: true, data: body } : { ok: false, code: body?.error?.code ?? "UNAVAILABLE", message: body?.error?.message ?? "Unable to confirm file inspection. Recover status or retry the original file.", status: response.status, uncertain: response.ok || response.status >= 500 };
-    } catch { result = { ok: false, code: "NETWORK", message: "Upload not confirmed. Retry status or the same file and original upload.", status: 0, uncertain: true }; }
+    if (authority.kind !== "current" || !fence(authority.generation)() || authority.status.currentDraftId !== record.draftId || authority.status.status !== "ACTIVE" || !["OWNER", "EDITOR"].includes(authority.status.role)) {
+      setWorking(false);
+      const message = "This target is no longer editable. Resolve access or inspect again for the current draft.";
+      if (fresh && previous) setMessage(message);
+      else setLocal({ record, file, preview: null, state: "Stale", message });
+      return;
+    }
+    if (fresh && previous) {
+      if (!await retire(previous, current, previous.file ?? (previous.record.fingerprint === digest ? file : null)) || !canAdopt(current)) { if (mounted.current) setWorking(false); return; }
+      unsubmitted.current = record.previewId; previewId = record.previewId;
+      if (!setLocal({ record, file, preview: null, state: "Validating", message: "" })) { setWorking(false); return; }
+    }
+    if (unsubmitted.current === record.previewId) unsubmitted.current = null;
+    const result = await inspectUpload(record, file);
     if (!canAdopt(current)) return;
     setWorking(false);
     if (sessionEnded(result)) return;
@@ -147,14 +200,18 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
   const discard = async () => {
     const original = latest.current;
     if (!original || blocked || original.state === "Applied") return;
-    setWorking(true); const current = fence();
-    const result = await apiMutate<ImportPreviewView>(`/api/projects/${projectId}/flow-imports/${original.record.previewId}/discard`, original.record.discardKey);
+    setWorking(true); setMessage(""); const authorityCurrent = fence();
+    const current = () => authorityCurrent() && latest.current?.record.previewId === original.record.previewId;
+    let file = original.file;
+    if (!file && selected) {
+      try { if (await fingerprint(selected) === original.record.fingerprint) file = selected; }
+      catch { setMessage("Could not read this file. Select it again to resolve the original upload."); }
+    }
     if (!canAdopt(current)) return;
-    setWorking(false); if (sessionEnded(result)) return;
-    if (result.ok && result.data.state === "APPLIED") { accept(result.data, original.record, original.file); return; }
-    if (result.ok) { clearImport(original.record); update(() => ({ nativeImport: null })); onClose(); }
-    else if (denied.has(result.code)) lost("Access lost. This protected preview has been cleared.");
-    else setMessage(result.message);
+    const retired = await retire(original, current, file);
+    if (!canAdopt(current)) return;
+    setWorking(false);
+    if (retired) { clearImport(original.record); latest.current = null; update(() => ({ nativeImport: null })); onClose(); }
   };
   const result = local?.preview?.result;
   const sameDraft = result?.draftId === savedDraft.id && result?.draftId === status.currentDraftId;
