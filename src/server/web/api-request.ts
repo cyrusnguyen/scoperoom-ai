@@ -46,6 +46,29 @@ export async function boundedJsonBody(request: Request, limit = 4_096): Promise<
   }
 }
 
+async function boundedBytes(request: Request, limit: number): Promise<Uint8Array | "LIMIT" | null> {
+  const length = request.headers.get("content-length");
+  if (length && (!/^\d+$/.test(length) || Number(length) > limit)) return length && /^\d+$/.test(length) ? "LIMIT" : null;
+  if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") return null;
+  const reader = request.body?.getReader();
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) return "LIMIT";
+      chunks.push(value);
+    }
+  } catch { return null; }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
+}
+
 export type { VerifiedIdentity };
 
 /** A definitive denial is 401; an Auth outage or missing configuration is a retryable 503 and never authorizes. */
@@ -86,6 +109,19 @@ export async function mutationRoute(
     const result = await run(identity.user, options.keyless ? { ...(body as Record<string, unknown>) } : { ...(body as Record<string, unknown>), key });
     return apiResponse(result, options.createdStatus && !result.replayed ? options.createdStatus : 200, requestId);
   } catch (error) { return apiFailure(error, requestId); }
+}
+
+/** Authenticated same-origin native file upload: bounded raw JSON bytes, never a decoded string wrapper. */
+export async function nativeUploadRoute(request: Request, run: (identity: VerifiedIdentity, bytes: Uint8Array, key: string) => Promise<object>): Promise<Response> {
+  const requestId = requestIdFor(request);
+  if (!sameOrigin(request)) return rejected(requestId);
+  const identity = await currentIdentity();
+  if (identity.kind !== "user") return denied(identity, requestId);
+  const key = request.headers.get("idempotency-key");
+  const bytes = await boundedBytes(request, 1_048_576);
+  if (!key || bytes === null) return apiError("INVALID_INPUT", projectErrors.INVALID_INPUT.message, 400, requestId);
+  if (bytes === "LIMIT") return apiError("LIMIT_EXCEEDED", projectErrors.LIMIT_EXCEEDED.message, 413, requestId);
+  try { return apiResponse(await run(identity.user, bytes, key), 200, requestId); } catch (error) { return apiFailure(error, requestId); }
 }
 
 /**

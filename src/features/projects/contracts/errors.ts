@@ -20,6 +20,8 @@ export const projectErrors = {
   POSITION_CONFLICT: { status: 409, message: "Someone moved this step first. Keep the saved position or apply yours again." },
   STALE_LAYOUT_REVISION: { status: 409, message: "The layout changed. Preview the arrangement again." },
   ARRANGEMENT_PREVIEW_CHANGED: { status: 409, message: "The flow changed since this preview. Preview the arrangement again." },
+  UNSUPPORTED_FLOW_FORMAT: { status: 422, message: "Use a supported ScopeRoom flow file." },
+  IMPORT_EXPIRED: { status: 409, message: "This import preview expired. Create a new preview." },
 } as const;
 
 export type ProjectErrorCode = keyof typeof projectErrors;

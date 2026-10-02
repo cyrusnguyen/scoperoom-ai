@@ -1,0 +1,11 @@
+{
+  "format": "scoperoom-flow",
+  "formatVersion": 1,
+  "exportedAt": "2026-10-01T00:00:00Z",
+  "producerVersion": "1.6.0",
+  "flow": {"title": "Unsafe", "purpose": "", "classification": "USER_JOURNEY", "direction": "TB"},
+  "nodes": [],
+  "edges": [],
+  "origin": {"kind": "DRAFT", "documentRevision": 1, "layoutRevision": 1},
+  "approval": {"status": "APPROVED"}
+}

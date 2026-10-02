@@ -1,0 +1,40 @@
+{
+  "format": "scoperoom-flow",
+  "formatVersion": 1,
+  "exportedAt": "2026-10-01T00:00:00Z",
+  "producerVersion": "1.6.0",
+  "flow": {
+    "title": "Checkout {flow}",
+    "purpose": "A complete exploratory journey",
+    "classification": "USER_JOURNEY",
+    "direction": "LR"
+  },
+  "nodes": [
+    {"id": "n-start", "kind": "START", "label": "Begin", "description": "", "actorLabel": null, "assumptionNotes": []},
+    {"id": "n-action", "kind": "ACTION", "label": "Choose \"plan\"", "description": "Supports Unicode: caf\u00e9", "actorLabel": "Customer", "assumptionNotes": ["A plan exists"]},
+    {"id": "n-decision", "kind": "DECISION", "label": "Eligible?", "description": "", "actorLabel": "", "assumptionNotes": []},
+    {"id": "n-data", "kind": "DATA_STORE", "label": "Plan catalogue", "description": "", "actorLabel": null, "assumptionNotes": []},
+    {"id": "n-outcome", "kind": "OUTCOME", "label": "Subscribed", "description": "", "actorLabel": null, "assumptionNotes": []}
+  ],
+  "edges": [
+    {"id": "e1", "fromId": "n-start", "toId": "n-action", "condition": null},
+    {"id": "e2", "fromId": "n-action", "toId": "n-decision", "condition": "Eligible"},
+    {"id": "e3", "fromId": "n-decision", "toId": "n-data", "condition": "No"},
+    {"id": "e4", "fromId": "n-data", "toId": "n-outcome", "condition": ""},
+    {"id": "e5", "fromId": "n-outcome", "toId": "n-outcome", "condition": null}
+  ],
+  "positions": [
+    {"nodeId": "n-start", "x": 0, "y": 0},
+    {"nodeId": "n-action", "x": 240, "y": 0},
+    {"nodeId": "n-decision", "x": 480, "y": 0},
+    {"nodeId": "n-data", "x": 720, "y": 0},
+    {"nodeId": "n-outcome", "x": 960, "y": 0}
+  ],
+  "edgeSides": [
+    {"edgeId": "e1", "from": "right", "to": "left"},
+    {"edgeId": "e2", "from": "bottom", "to": "top"}
+  ],
+  "viewport": {"x": 10, "y": -20, "zoom": 1.25},
+  "linkHints": [{"nodeId": "n-action", "requirementId": "REQ-1", "requirementTitle": "Select a plan"}],
+  "origin": {"kind": "SNAPSHOT", "documentRevision": 3, "layoutRevision": 2, "sourceInclusion": "INCLUDED", "snapshotId": "00000000-0000-4000-8000-000000000001", "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reviewHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+}
