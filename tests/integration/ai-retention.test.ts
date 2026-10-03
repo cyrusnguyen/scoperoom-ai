@@ -131,6 +131,42 @@ test("repeated cleanup is idempotent: one expiry event per run and no new writes
   });
 });
 
+test("bounded expiry dry-run and apply select the same mixed-disposition batch across projects", { skip: !canRun }, async () => {
+  await withWorld(async ({ admin, owner, seed, row }) => {
+    const person = await owner();
+    const projects: string[] = [];
+    for (let index = 0; index < 4; index += 1) projects.push(await insertProject(admin, person));
+    projects.sort();
+    const runs: Awaited<ReturnType<typeof seed>>[] = [];
+    for (const [index, projectId] of projects.entries()) {
+      // Project order puts the FAILED pair first; terminal-time order puts the AVAILABLE pair first. LIMIT 2 must describe one batch.
+      runs.push(await seed(person, { projectId, hours: (index < 2 ? 8 : 10) * 24, shape: index < 2 ? "FAILED" : "SUCCEEDED", uncounted: true }));
+    }
+    const snapshot = async () => {
+      const rows = [];
+      for (const run of runs) rows.push(await row(run.runId));
+      return rows;
+    };
+    const before = await snapshot();
+    await admin.query("begin");
+    try {
+      const dry = (await admin.query("select * from app.expire_ai_run_bodies(true, 2)")).rows[0];
+      assert.deepEqual(await snapshot(), before, "dry-run preserves every body");
+      const applied = (await admin.query("select * from app.expire_ai_run_bodies(false, 2)")).rows[0];
+      assert.deepEqual(applied, dry, "without contention, the dry-run predicts the exact bounded counts");
+      assert.deepEqual(applied, { expiredResults: 0, clearedBodies: 2 });
+      const after = await snapshot();
+      assert.deepEqual(after.map((run) => run.no_capture), [true, true, false, false], "the deterministic project order chooses only two rows");
+      const nextDry = (await admin.query("select * from app.expire_ai_run_bodies(true, 2)")).rows[0];
+      const nextApplied = (await admin.query("select * from app.expire_ai_run_bodies(false, 2)")).rows[0];
+      assert.deepEqual(nextApplied, nextDry);
+      assert.deepEqual(nextApplied, { expiredResults: 2, clearedBodies: 0 });
+    } finally {
+      await admin.query("rollback"); // the global sweep cannot persist a change to any foreign fixture
+    }
+  });
+});
+
 test("late provider output cannot recreate a purged body or reach a model", { skip: !canRun }, async () => {
   await withWorld(async ({ admin, worker, owner, seed, row, sweep }) => {
     const person = await owner();
