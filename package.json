@@ -21,17 +21,21 @@
     "db:reset": "node --env-file-if-exists=.env.local scripts/db/reset.mjs",
     "db:generate": "prisma generate",
     "test:integration": "node --env-file-if-exists=.env.local --experimental-strip-types --test tests/integration/*.test.ts",
+    "test:workers": "node --env-file-if-exists=.env.local --experimental-strip-types --test tests/workers/*.test.ts",
     "test:realtime": "node --env-file-if-exists=.env.local --experimental-strip-types --test --test-concurrency=1 tests/realtime/*.test.ts",
     "test:e2e:chromium": "playwright test --project=chromium",
     "test:e2e:production": "node --env-file-if-exists=.env.local scripts/e2e/production.mjs"
   },
   "dependencies": {
+    "@ai-sdk/google": "4.0.87",
     "@dagrejs/dagre": "3.1.1",
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.117.1",
+    "@trigger.dev/sdk": "4.7.2",
     "@xyflow/react": "12.11.6",
+    "ai": "7.0.127",
     "next": "16.3.6",
     "pg": "8.23.0",
     "react": "19.3.0",
@@ -48,6 +52,7 @@
     "eslint-config-next": "16.3.6",
     "prisma": "7.10.0",
     "supabase": "2.117.0",
+    "trigger.dev": "4.7.2",
     "typescript": "6.0.3"
   }
 }

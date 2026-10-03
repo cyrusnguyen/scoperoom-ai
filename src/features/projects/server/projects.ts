@@ -9,6 +9,7 @@ import {
   assertOwnerCapacity, checkReceipt, entitlementActive, findReceipt, lockActor, lockOwnerCapacity, profileFor, readProject,
   receiptString, requestHash, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow,
 } from "./access.ts";
+import { settleOverdueRuns } from "../../proposals/server/settle-runs.ts";
 import { ProjectError } from "./errors.ts";
 
 const CREATE_OPERATION = "CREATE_PROJECT_V2";
@@ -86,6 +87,7 @@ function statusOf(project: ProjectRow, draft: DraftCounters & { id: string }, ro
     viewerId, status: project.status, role, version: project.version, settingsVersion: project.settingsVersion, approvalPolicyVersion: project.approvalPolicyVersion,
     membershipVersion: project.membershipVersion, designatedApproverId: project.designatedApproverId, currentDraftId: draft.id,
     documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, realtimeEpoch: project.realtimeEpoch, eventSequence: Number(project.eventSequence),
+    aiRevision: project.aiRevision, approvedSnapshotId: project.approvedSnapshotId,
   };
 }
 
@@ -93,6 +95,7 @@ export async function getProjectBootstrap(identity: ProjectIdentity, projectId: 
   if (!uuid.test(projectId)) throw new ProjectError("NOT_FOUND");
   return withDatabase(async (database) => {
     const profile = await profileFor(database, identity);
+    await settleOverdueRuns(database, profile.id, projectId); // a bounded authorized write, before and never inside the READ ONLY snapshot
     return withReadSnapshot(database, async (tx) => {
       const project = await readProject(tx, profile.id, projectId);
       const role = requireMember(project);
@@ -119,6 +122,7 @@ export async function getProjectStatus(identity: ProjectIdentity, projectId: str
   if (!uuid.test(projectId)) throw new ProjectError("NOT_FOUND");
   return withDatabase(async (database) => {
     const profile = await profileFor(database, identity);
+    await settleOverdueRuns(database, profile.id, projectId);
     return withReadSnapshot(database, async (tx) => {
       const project = await readProject(tx, profile.id, projectId);
       const role = requireMember(project);

@@ -7,6 +7,9 @@ import { getProjectBootstrap } from "../../src/features/projects/server/projects
 import { cleanupTransient } from "../../src/server/maintenance/cleanup-transient.ts";
 import { discardFlowImport, getFlowImport } from "../../src/features/exchange/server/import-flow.ts";
 import { canRun, withFixture } from "./support/fixture.ts";
+import { serializeSweeps } from "./support/sweep-lock.ts";
+
+serializeSweeps(); // these tests sweep, or seed rows a sweep would take: see sweep-lock.ts
 
 test("discard refreshes a preview that cleanup expires while the transaction waits", { skip: !canRun }, async () => {
   await withFixture(async ({ user, project, profileId, database }) => {

@@ -10,6 +10,9 @@ import { getProjectBootstrap, getProjectStatus } from "../../src/features/projec
 import { requestHash } from "../../src/features/projects/server/access.ts";
 import { applyFlowImport, discardFlowImport, getFlowImport, previewFlowImport } from "../../src/features/exchange/server/import-flow.ts";
 import { canRun, withFixture } from "./support/fixture.ts";
+import { serializeSweeps } from "./support/sweep-lock.ts";
+
+serializeSweeps(); // these tests sweep, or seed rows a sweep would take: see sweep-lock.ts
 
 const validFile = () => readFile(new URL("../fixtures/flow-files/valid.scoperoom-flow.json", import.meta.url));
 
