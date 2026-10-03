@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { emptyDraft, type ScopeDocument } from "../src/features/drafts/contracts/scope-document.ts";
 import { canonicalJson, captureInput, evidenceStats, jsonbTextBytes, normalizeEvidence, type SavedContext, type SavedSource } from "../src/features/proposals/domain/capture.ts";
+import { lineStarts } from "../src/features/sources/contracts/source-version.ts";
 import { AI_LIMITS, TASK_EDITS, parseStartRunInput, type StartRunInput } from "../src/features/proposals/contracts/tasks.ts";
 
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
@@ -202,4 +203,9 @@ test("the 64 KiB start body bound rejects too many sources before any lookup and
   assert.throws(() => parseStartRunInput(body(600), KEY), (error) => error instanceof Error && error.cause === "START_BODY_BYTES");
   assert.equal(AI_LIMITS.startBodyBytes, 65_536);
   assert.equal(AI_LIMITS.admissionAttemptsPerMinute, 30);
+});
+
+test("lineStarts maps each normalized line to its code point offset", () => {
+  assert.deepEqual(lineStarts(""), [0]);
+  assert.deepEqual(lineStarts("a\n\nb \u{1F600}\n"), [0, 2, 3, 7]);
 });

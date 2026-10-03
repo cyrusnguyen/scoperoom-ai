@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Prisma, type PrismaClient } from "../../../../prisma/generated/client.ts";
 import { getDatabase } from "../../../server/db.ts";
 import { resolveProfile } from "../../access/server/profile.ts";
-import type { ProjectAccessRole, ProjectIdentity } from "../contracts/project.ts";
+import { uuid, type ProjectAccessRole, type ProjectIdentity } from "../contracts/project.ts";
 import { ProjectError } from "./errors.ts";
 
 export type Transaction = Prisma.TransactionClient;
@@ -21,13 +21,15 @@ export type ProjectRow = {
   currentDraftId: string | null;
   realtimeEpoch: string;
   eventSequence: bigint;
+  aiRevision: number;
+  approvedSnapshotId: string | null;
   role: ProjectAccessRole | null;
 };
 
 type RawProject = {
   id: string; owner_id: string; name: string; status: string; version: number; settings_version: number;
   approval_policy_version: number; membership_version: number; designated_approver_id: string | null;
-  current_draft_id: string | null; realtime_epoch: string; event_sequence: bigint;
+  current_draft_id: string | null; realtime_epoch: string; event_sequence: bigint; ai_revision: bigint; approved_snapshot_id: string | null;
 };
 
 export function requestHash(operation: string, input: unknown) {
@@ -51,6 +53,26 @@ export function withReadSnapshot<T>(database: PrismaClient, run: (tx: Transactio
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
 
+/**
+ * An authenticated member read: resolve the profile, run an optional write-side `prepare` (never inside the snapshot), then one
+ * READ ONLY snapshot that rechecks current access before `run` sees anything. A non-member and a missing project are the same NOT_FOUND.
+ */
+export async function readAsMember<T>(
+  identity: ProjectIdentity, projectId: string, run: (tx: Transaction, project: ProjectRow, profileId: string) => Promise<T>,
+  prepare?: (database: PrismaClient, profileId: string, projectId: string) => Promise<unknown>,
+): Promise<T> {
+  if (!uuid.test(projectId)) throw new ProjectError("NOT_FOUND");
+  return withDatabase(async (database) => {
+    const profile = await profileFor(database, identity);
+    await prepare?.(database, profile.id, projectId);
+    return withReadSnapshot(database, async (tx) => {
+      const project = await readProject(tx, profile.id, projectId);
+      requireMember(project);
+      return run(tx, project, profile.id);
+    });
+  });
+}
+
 export async function profileFor(database: PrismaClient, identity: ProjectIdentity) {
   try {
     return await resolveProfile(database, identity);
@@ -70,7 +92,7 @@ function projectQuery(projectId: string, lock: boolean) {
   return Prisma.sql`
     SELECT project.id, project.owner_id, project.name, project.status::text AS status, project.version, project.settings_version,
       project.approval_policy_version, project.membership_version, project.designated_approver_id, project.current_draft_id,
-      project.realtime_epoch::text AS realtime_epoch, project.event_sequence
+      project.realtime_epoch::text AS realtime_epoch, project.event_sequence, project.ai_revision, project.approved_snapshot_id
     FROM app.project project
     WHERE project.id = ${projectId}::uuid AND project.status IN ('ACTIVE'::app.project_status, 'ARCHIVED'::app.project_status)
     ${lock ? Prisma.sql`FOR UPDATE OF project` : Prisma.empty}`;
@@ -93,7 +115,8 @@ function toProjectRow(row: RawProject | undefined, role: ProjectAccessRole | nul
   return {
     id: row.id, ownerId: row.owner_id, name: row.name, status: row.status, version: row.version, settingsVersion: row.settings_version,
     approvalPolicyVersion: row.approval_policy_version, membershipVersion: row.membership_version, designatedApproverId: row.designated_approver_id,
-    currentDraftId: row.current_draft_id, realtimeEpoch: row.realtime_epoch, eventSequence: row.event_sequence, role,
+    currentDraftId: row.current_draft_id, realtimeEpoch: row.realtime_epoch, eventSequence: row.event_sequence,
+    aiRevision: Number(row.ai_revision), approvedSnapshotId: row.approved_snapshot_id, role,
   };
 }
 

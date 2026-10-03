@@ -1,4 +1,5 @@
 import "server-only";
+import type { ErrorDetails } from "@/contracts/http";
 import { projectErrors } from "@/features/projects/contracts/errors";
 import { readProcessEnv } from "@/server/env";
 import { authConfig } from "./auth-config.ts";
@@ -11,9 +12,10 @@ async function currentIdentity(): Promise<IdentityResult> {
   return identityFrom(async () => (await createAuthClient()).auth.getUser());
 }
 
-export async function boundedJsonBody(request: Request, limit = 4_096): Promise<unknown | null> {
+export async function boundedJsonBody(request: Request, limit = 4_096, onLimit?: () => void): Promise<unknown | null> {
   const length = request.headers.get("content-length");
-  if (length && (!/^\d+$/.test(length) || Number(length) > limit)) return null;
+  if (length && /^\d+$/.test(length) && Number(length) > limit) { onLimit?.(); return null; }
+  if (length && !/^\d+$/.test(length)) return null;
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return null;
   const reader = request.body?.getReader();
   if (!reader) return null;
@@ -25,6 +27,7 @@ export async function boundedJsonBody(request: Request, limit = 4_096): Promise<
       if (done) break;
       size += value.byteLength;
       if (size > limit) {
+        onLimit?.();
         await reader.cancel();
         return null;
       }
@@ -92,17 +95,21 @@ export async function readRoute(request: Request, run: (user: VerifiedIdentity) 
 /**
  * Authenticated POST/PATCH/DELETE: exact same-origin, bounded JSON object body (4 KiB unless `bodyLimit` says otherwise), and the
  * Idempotency-Key header passed to the validator as `key`. `keyless` is for a nonmutating preview: no key is required or passed.
+ * `limitDetails` makes an oversize body a 413 LIMIT_EXCEEDED carrying those details.
  */
 export async function mutationRoute(
   request: Request,
   run: (user: VerifiedIdentity, input: Record<string, unknown>) => Promise<object & { replayed?: boolean }>,
-  options: { createdStatus?: number; bodyLimit?: number; keyless?: boolean } = {},
+  options: { createdStatus?: number; bodyLimit?: number; keyless?: boolean; limitDetails?: ErrorDetails } = {},
 ) {
   const requestId = requestIdFor(request);
   if (!sameOrigin(request)) return rejected(requestId);
   const identity = await currentIdentity();
   if (identity.kind !== "user") return denied(identity, requestId);
-  const body = await boundedJsonBody(request, options.bodyLimit);
+  let oversize = false;
+  const body = await boundedJsonBody(request, options.bodyLimit, () => { oversize = true; });
+  // A route that names its limit reports an oversize body as LIMIT_EXCEEDED, still before any parsing; others keep the generic 400.
+  if (oversize && options.limitDetails) return apiError("LIMIT_EXCEEDED", projectErrors.LIMIT_EXCEEDED.message, 413, requestId, options.limitDetails);
   const key = request.headers.get("idempotency-key");
   if (!body || typeof body !== "object" || Array.isArray(body) || Object.hasOwn(body, "key") || (!key && !options.keyless)) return apiError("INVALID_INPUT", projectErrors.INVALID_INPUT.message, 400, requestId);
   try {

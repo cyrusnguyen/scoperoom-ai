@@ -14,7 +14,7 @@ import { stranded } from "../src/features/studio/ui/studio-ui.ts";
 
 const status = (over: Partial<ProjectStatusView> = {}): ProjectStatusView => ({
   viewerId: "v1", status: "ACTIVE", role: "OWNER", version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null,
-  currentDraftId: "d1", documentRevision: 1, layoutRevision: 1, realtimeEpoch: "e1", eventSequence: 1, ...over,
+  currentDraftId: "d1", documentRevision: 1, layoutRevision: 1, realtimeEpoch: "e1", eventSequence: 1, aiRevision: 0, approvedSnapshotId: null, ...over,
 });
 const liveOf = (s: ProjectStatusView): Live => ({ role: s.role, status: s.status, draftId: s.currentDraftId, documentRevision: s.documentRevision, layoutRevision: s.layoutRevision });
 const ok = (s: ProjectStatusView): StatusRead => ({ ok: true, data: s });

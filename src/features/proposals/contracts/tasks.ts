@@ -11,7 +11,7 @@ export type TaskKind = (typeof TASK_KINDS)[number];
 // Capture and result bounds are measured as PostgreSQL stores them (jsonbTextBytes), so an accepted body never fails its CHECK.
 export const AI_LIMITS = {
   promptCodePoints: 8_000, maxInputTokens: 16_000, maxOutputTokens: 6_000, maxGraphNodes: 20, maxGraphEdges: 40,
-  startBodyBytes: 64 * 1024, captureBytes: 256 * 1024, resultBytes: 128 * 1024,
+  runPageSize: 50, startBodyBytes: 64 * 1024, captureBytes: 256 * 1024, resultBytes: 128 * 1024,
   ownerConcurrentRuns: 2, ownerDailyRuns: 30, applicableResults: 10,
   // Operational default, not a product promise: start attempts per actor per minute, counted by the keyed AI_ADMISSION bucket.
   admissionAttemptsPerMinute: 30,
@@ -118,10 +118,15 @@ export type RunUsage = { inputTokens: number | null; outputTokens: number | null
 export type RunSummary = {
   id: string; taskType: TaskKind; state: RunState; disposition: RunDisposition | null; actorId: string; flowId: string | null;
   createdAt: string; deadlineAt: string; terminalAt: string | null; cancelRequestedAt: string | null; failureCode: string | null; usage: RunUsage;
+  /** The project event sequence of this run's last committed change (the aiRevision it advanced to). */
+  lastEventSequence: number;
 };
 export type RunAttemptView = { number: number; outcome: string | null; callMayHaveStarted: boolean; startedAt: string; usage: RunUsage };
+/** Apply is derived, never a competing state: UNAVAILABLE (no applicable proposal, cancelled, expired or archived), STALE (draft, revision or baseline moved) or APPLICABLE. */
+export type RunApplicability = "APPLICABLE" | "STALE" | "UNAVAILABLE";
 export type RunView = RunSummary & {
   draftId: string; documentRevision: number; parentSnapshotId: string | null; model: string;
   capture: CapturedInput | null; result: ValidatedProposal | null; resultHash: string | null; attempts: RunAttemptView[];
+  applicability: RunApplicability; expiresAt: string | null;
 };
 export type RunPage = { runs: RunSummary[]; nextCursor: string | null };

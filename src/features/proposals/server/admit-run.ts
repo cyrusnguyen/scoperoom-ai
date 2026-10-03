@@ -8,9 +8,10 @@ import {
 } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { assertSourceCapacity, insertPromptEvidence } from "../../sources/server/source-versions.ts";
-import { AI_LIMITS, startBody, startBodyBytes, type StartRunInput } from "../contracts/tasks.ts";
+import { AI_LIMITS, parseStartRunInput, startBody, startBodyBytes, type StartRunInput } from "../contracts/tasks.ts";
 import { evidenceStats } from "../domain/capture.ts";
 import { captureSaved } from "./capture.ts";
+import { settleOverdueRuns } from "./settle-runs.ts";
 
 const START_OPERATION = "AI_RUN_START_V1";
 const RATE_ACTION = "AI_ADMISSION";
@@ -69,7 +70,7 @@ async function admitLocked(tx: Transaction, project: ProjectRow, actorId: string
   // The owner allowance serializes admission across the owner's projects; its count is read afterwards, in a fresh statement.
   await tx.$executeRaw`INSERT INTO app.ai_owner_allowance (owner_id) VALUES (${project.ownerId}::uuid) ON CONFLICT DO NOTHING`;
   await tx.$queryRaw`SELECT owner_id FROM app.ai_owner_allowance WHERE owner_id = ${project.ownerId}::uuid FOR UPDATE`;
-  const [owner] = await tx.$queryRaw<Array<{ active: number }>>`SELECT count(*)::integer AS active FROM app.ai_run WHERE owner_id = ${project.ownerId}::uuid AND state IN ('QUEUED', 'RUNNING', 'VALIDATING')`;
+  const [owner] = await tx.$queryRaw<Array<{ active: number }>>`SELECT count(*)::integer AS active FROM app.ai_run WHERE owner_id = ${project.ownerId}::uuid AND state IN ('QUEUED', 'RUNNING', 'VALIDATING') AND deadline_at > transaction_timestamp()`;
   if (!owner || owner.active >= AI_LIMITS.ownerConcurrentRuns) throw new ProjectError("AI_BUSY", { scope: "OWNER" });
   const [clock] = await tx.$queryRaw<Array<{ now: Date; day: string }>>`SELECT transaction_timestamp() AS now, ((transaction_timestamp() AT TIME ZONE 'UTC')::date)::text AS day`;
   if (!clock) throw new ProjectError("UNAVAILABLE");
@@ -117,7 +118,7 @@ export async function admitRun(identity: ProjectIdentity, projectId: string, inp
     const profile = await profileFor(database, identity);
     const outcome = await database.$transaction(async (tx) => {
       await lockActor(tx, profile.id, identity.authUserId, true);
-      const project = await lockProject(tx, profile.id, projectId);
+      let project = await lockProject(tx, profile.id, projectId);
       const role = requireMember(project);
       const receipt = await findReceipt(tx, profile.id, "PROJECT", project.id, input.key);
       if (receipt) {
@@ -127,6 +128,8 @@ export async function admitRun(identity: ProjectIdentity, projectId: string, inp
       if (role !== "OWNER" && role !== "EDITOR") throw new ProjectError("FORBIDDEN");
       requireActive(project);
       await countAttempt(tx, profile.id);
+      // An overdue run on this project is settled under the locks already held; settlement advances the event sequence, so reread it.
+      if (await settleOverdueRuns(tx, profile.id, project.id)) project = await lockProject(tx, profile.id, projectId);
       // A refusal after this point still commits the attempt count but nothing else.
       await tx.$executeRaw`SAVEPOINT ai_admission`;
       try {
@@ -140,4 +143,17 @@ export async function admitRun(identity: ProjectIdentity, projectId: string, inp
     if ("refusal" in outcome) throw outcome.refusal;
     return outcome.result;
   });
+}
+
+/** The HTTP entry: parses the strict body (the parser's size refusal is LIMIT_EXCEEDED on START_BODY_BYTES, every other failure INVALID_INPUT), then admits. */
+export async function startRun(identity: ProjectIdentity, projectId: string, input: Record<string, unknown>): Promise<AdmitResult> {
+  const { key, ...body } = input;
+  let parsed: StartRunInput;
+  try {
+    parsed = parseStartRunInput(body, typeof key === "string" ? key : "");
+  } catch (error) {
+    throw error instanceof Error && error.message === "LIMIT_EXCEEDED" && error.cause === "START_BODY_BYTES"
+      ? new ProjectError("LIMIT_EXCEEDED", { limit: "START_BODY_BYTES" }) : new ProjectError("INVALID_INPUT");
+  }
+  return admitRun(identity, projectId, parsed);
 }

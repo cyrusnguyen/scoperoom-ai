@@ -264,9 +264,10 @@ test("the 31st owner/day reservation fails for any model or collaborator; midnig
     const owner = await person(); const [p1, p2, p3] = [await projectFor(owner), await projectFor(owner), await projectFor(owner)] as [string, string, string];
     const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
     await seedRun(database, { projectId: p1, owner: owner.profile, createdAt: twoDaysAgo }); await seedRun(database, { projectId: p2, owner: owner.profile, createdAt: twoDaysAgo });
-    await assert.rejects(admitRun(owner.identity, p3, await start(database, p3), CONFIG), refused("AI_BUSY")); // pre-settlement behaviour: overdue runs are not yet settled on admission (Task 3 settles them and updates this assertion)
-    await database.query("update app.ai_run set state = 'FAILED', failure_code = 'TEST', terminal_at = now() where project_id = $1", [p1]);
+    // Overdue runs no longer hold an owner slot (their deadline passed); each settles when its own project is next read or admitted to.
     await admitRun(owner.identity, p3, await start(database, p3), CONFIG); // today's budget is separate from the old day's
+    const { rows: stale } = await database.query("select state::text from app.ai_run where project_id = any($1::uuid[])", [[p1, p2]]);
+    assert.deepEqual(stale.map((row) => row.state), ["QUEUED", "QUEUED"]);
     const { rows } = await database.query("select day::text from app.ai_budget_day where owner_id = $1 order by day", [owner.profile]);
     assert.equal(rows.length, 2);
   });
