@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { withoutProviderSecrets } from "./scripts/e2e/provider-env.mjs";
 
 // Keep test Auth traffic away from the normal developer app on port 3100.
 const port = Number(process.env.PLAYWRIGHT_PORT?.trim() || 3101);
@@ -21,7 +22,7 @@ export default defineConfig({
   webServer: production || process.platform !== "win32" ? {
     command: `node node_modules/next/dist/bin/next ${production ? "start" : "dev"} --hostname 127.0.0.1 --port ${port}`,
     url: appUrl,
-    env: { SCOPEROOM_E2E: "1", NEXT_PUBLIC_APP_URL: appUrl },
+    env: withoutProviderSecrets({ SCOPEROOM_E2E: "1", NEXT_PUBLIC_APP_URL: appUrl }), // blank provider keys: the e2e server stays network-free
     reuseExistingServer: false,
     timeout: 120_000,
     stdout: "pipe",

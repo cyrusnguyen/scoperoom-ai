@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { delimiter, join } from "node:path";
+import { withoutProviderSecrets } from "./provider-env.mjs";
 
 const port = Number(process.env.PLAYWRIGHT_PORT?.trim() || 3101);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PLAYWRIGHT_PORT must be a valid TCP port.");
@@ -21,7 +22,8 @@ if (missing.length) throw new Error(`Production browser tests require: ${missing
 
 const require = createRequire(import.meta.url);
 const origin = `http://127.0.0.1:${port}`;
-const env = {
+// The managed server never sees provider keys, so dispatch finds no dispatcher and no test can reach a provider.
+const env = withoutProviderSecrets({
   ...process.env,
   SCOPEROOM_E2E: "1",
   SCOPEROOM_E2E_SERVER: "production",
@@ -29,7 +31,7 @@ const env = {
   // Admission only needs a model name and an opaque binding (no provider call is made); real values are never required for the gate.
   AI_MODEL: process.env.AI_MODEL?.trim() || "e2e-model",
   AI_EXECUTION_BINDING: process.env.AI_EXECUTION_BINDING?.trim() || "e2e-binding",
-};
+});
 if (process.platform === "win32") {
   // Playwright stops its managed webServer with taskkill, which lives in System32.
   const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "Path";
