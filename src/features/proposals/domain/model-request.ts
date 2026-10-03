@@ -1,5 +1,5 @@
 import { CLASSIFICATIONS, INCLUSIONS, NODE_KINDS } from "../../drafts/contracts/scope-document.ts";
-import { AI_LIMITS, TASK_EDITS, type CapturedInput } from "../contracts/tasks.ts";
+import { TASK_EDITS, type CapturedInput } from "../contracts/tasks.ts";
 import type { Json, ModelRequest } from "../server/ports.ts";
 
 const text: Json = { type: "string" };
@@ -8,7 +8,9 @@ const choice = (values: readonly string[]): Json => ({ type: "string", enum: [..
 
 /**
  * The model's wire contract (Data 04). Deliberately plain: provider structured output only guides the model, `validateResult` is the
- * authority, so a provider that ignores a keyword costs nothing but a refused result.
+ * authority, so a provider that ignores a keyword costs nothing but a refused result. Keep it to keywords the provider's schema subset
+ * accepts: the live probe found gemini-3.8-flash answers 400 INVALID_ARGUMENT to `maxItems` here, so the 100 operation limit lives in
+ * `validateResult`.
  */
 export const OUTPUT_SCHEMA: Json = {
   type: "object",
@@ -16,7 +18,7 @@ export const OUTPUT_SCHEMA: Json = {
     schemaVersion: { type: "integer", enum: [1] },
     kind: choice(["proposal", "clarification"]),
     message: text,
-    operations: { type: "array", maxItems: AI_LIMITS.operations, items: { type: "object", properties: {
+    operations: { type: "array", items: { type: "object", properties: {
       id: text, dependsOn: list(text),
       edit: { type: "object", properties: {
         command: choice([...new Set(Object.values(TASK_EDITS).flat())]),

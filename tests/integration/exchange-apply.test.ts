@@ -15,6 +15,9 @@ import { archiveProject, changeProjectMember, removeProjectMember } from "../../
 import { applyFlowImport, discardFlowImport, getFlowImport, previewFlowImport } from "../../src/features/exchange/server/import-flow.ts";
 import { cleanupTransient } from "../../src/server/maintenance/cleanup-transient.ts";
 import { canRun, withFixture } from "./support/fixture.ts";
+import { serializeSweeps } from "./support/sweep-lock.ts";
+
+serializeSweeps(); // these tests sweep, or seed rows a sweep would take: see sweep-lock.ts
 
 const bytes = () => readFile(new URL("../fixtures/flow-files/valid.scoperoom-flow.json", import.meta.url));
 const connection = async () => { const client = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL }); await client.connect(); return client; };

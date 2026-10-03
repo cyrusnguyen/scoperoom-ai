@@ -7,6 +7,9 @@ import { canonicalJson, captureInput, jsonbTextBytes, sha256 } from "../../src/f
 import { parseStartRunInput } from "../../src/features/proposals/contracts/tasks.ts";
 import { requireEnv } from "../support/env.ts";
 import { insertProfile, insertProject, removeSchemaRows } from "./support/schema-fixture.ts";
+import { serializeSweeps } from "./support/sweep-lock.ts";
+
+serializeSweeps(); // body expiry is a global sweep: see sweep-lock.ts
 
 // Restricted AI storage (Stage 06.1): constraints and triggers are proved on the owner/bootstrap connection, privileges on the real
 // web and worker runtime connections, and the claim/settle/expire functions through the worker runtime that will call them.
@@ -360,7 +363,7 @@ test("body expiry is bounded, spares applied evidence and marks only unused resu
     assert.equal(by(unused).result_hash, HASH); assert.match(by(unused).capture_hash, /^[0-9a-f]{64}$/); // identity survives
     assert.equal(owned(rows).length, 6);
     assert.ok((await admin.query("select ai_revision::int ai from app.project where id = $1", [unused.projectId])).rows[0].ai > before, "expiry advances the AI cursor");
-    for (const runtime of [web, worker]) await assert.rejects(runtime.query("select * from app.expire_ai_run_bodies(false, 100)"), code(DENIED)); // no runtime role is the scheduler yet
+    for (const runtime of [web, worker]) await assert.rejects(runtime.query("select * from app.expire_ai_run_bodies(false, 100)"), code(DENIED)); // no runtime role may run the raw expiry; the worker wrapper is run_worker_cleanup
   });
 });
 

@@ -11,6 +11,9 @@ import { seedRun } from "../integration/support/ai-runs.ts";
 import { insertProfile, insertProject, removeSchemaRows } from "../integration/support/schema-fixture.ts";
 import { edgeOp, nodeOp, flowOp, proposal } from "../support/ai-results.ts";
 import { requireEnv } from "../support/env.ts";
+import { serializeSweeps } from "../integration/support/sweep-lock.ts";
+
+serializeSweeps(); // repair sweeps every overdue run in the database: see sweep-lock.ts
 
 // Worker services against the real local database through the restricted worker role, with injected fake ports only: no provider
 // key, no network. Every assertion inspects persisted attempt/run/budget rows; the gateway counter is only a cross-check (<= 2).

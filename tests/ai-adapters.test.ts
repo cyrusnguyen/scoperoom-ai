@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { AI_LIMITS } from "../src/features/proposals/contracts/tasks.ts";
-import { buildModelRequest, estimateInputTokens } from "../src/features/proposals/domain/model-request.ts";
+import { buildModelRequest, estimateInputTokens, OUTPUT_SCHEMA } from "../src/features/proposals/domain/model-request.ts";
 import { MAX_RESPONSE_BYTES, boundedFetch, createModelGateway } from "../src/features/proposals/server/adapters/model.ts";
 import { RUN_AI_TASK_ID, createJobDispatcher, type TriggerApi } from "../src/features/proposals/server/adapters/trigger.ts";
 import type { ModelRequest } from "../src/features/proposals/server/ports.ts";
@@ -84,6 +84,11 @@ test("a timeout, an abort and a network failure are unknown, and the reply never
   assert.deepEqual(failed, { kind: "unknown" });
 });
 
+test("the wire schema avoids keywords the provider rejects outright", () => {
+  // Live probe finding (Stage 06.1): gemini-3.8-flash answers 400 INVALID_ARGUMENT to maxItems, which refuses every real run. validateResult owns the limits.
+  assert.ok(!JSON.stringify(OUTPUT_SCHEMA).includes("maxItems"));
+});
+
 test("the input token ceiling is enforced before any provider call", async () => {
   const model = gateway(() => respond(gemini("{}")));
   const big = request();
@@ -124,9 +129,10 @@ test("dispatch maps dispatchId to the idempotency key, pins the captured binding
   for (const call of calls.trigger) {
     assert.equal(call.id, RUN_AI_TASK_ID);
     assert.deepEqual(call.payload, job); // exactly {runId, dispatchId, executionBinding, deadlineAt}
-    const options = call.options as { idempotencyKey: string; version: string; ttl: number };
+    const options = call.options as { idempotencyKey: string; externalDeploymentId: string; ttl: number };
     assert.equal(options.idempotencyKey, job.dispatchId);
-    assert.equal(options.version, job.executionBinding);
+    assert.equal(options.externalDeploymentId, job.executionBinding); // the external deployment id from `trigger.dev deploy --external-id`
+    assert.ok(!("version" in options), "no numeric version is ever sent");
     assert.ok(options.ttl >= 1 && options.ttl <= 200);
   }
 });
@@ -137,6 +143,10 @@ test("dispatch is unavailable for an unknown binding, a provider failure or an e
   const expired = fakeTrigger();
   assert.deepEqual(await expired.dispatcher.dispatch({ ...job, deadlineAt: new Date(Date.now() - 1_000).toISOString() }), { kind: "unavailable" });
   assert.equal(expired.calls.trigger.length, 0, "no call past the deadline");
+  const long = fakeTrigger(); // Trigger ignores an id over 128 characters, which would run the task on whatever deployment is current
+  assert.deepEqual(await long.dispatcher.dispatch({ ...job, executionBinding: "b".repeat(129) }), { kind: "unavailable" });
+  assert.equal(long.calls.trigger.length, 0);
+  assert.deepEqual(await long.dispatcher.dispatch({ ...job, executionBinding: "b".repeat(128) }), { kind: "accepted", taskId: "task-1" });
 });
 
 test("cancel distinguishes requested, terminal and unknown, and a request never claims the task stopped", async () => {

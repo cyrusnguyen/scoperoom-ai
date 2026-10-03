@@ -6,6 +6,8 @@ import ts from "typescript";
 const sourceExtensions = new Set([".ts", ".tsx", ".mts", ".cts"]);
 const trustedPaths = ["src/server/", "src/trigger/", "src/app/api/", "scripts/", "prisma/", "supabase/"];
 const nextPaths = ["src/app/", "src/server/web/"];
+// The local operator sweep holds a bootstrap credential; a worker may only reach cleanup through its restricted role.
+const bootstrapOnly = ["src/server/maintenance/cleanup-transient.ts"];
 // Provider SDKs are server-only and may be imported only by their adapters and the Trigger entrypoints.
 const sdkPattern = /^(?:ai|@ai-sdk\/[^/]+|@trigger\.dev\/sdk)(?:\/|$)/;
 const sdkOwners = ["src/features/proposals/server/adapters/model.ts", "src/features/proposals/server/adapters/trigger.ts", "src/trigger/"];
@@ -69,6 +71,10 @@ export function checkBoundaries(root = process.cwd()) {
       const targetPath = relative(absoluteRoot, target).replaceAll("\\", "/");
       if (mode === "client" && (trustedPaths.some(path => inside(targetPath, path)) || featureServer(targetPath))) {
         findings.push(`${relative(absoluteRoot, absoluteFile)} client import reaches trusted module ${targetPath}.`);
+        continue;
+      }
+      if (mode === "worker" && bootstrapOnly.includes(targetPath)) {
+        findings.push(`${relative(absoluteRoot, absoluteFile)} worker import reaches bootstrap-credential module ${targetPath}.`);
         continue;
       }
       if (mode === "worker" && nextPaths.some(path => inside(targetPath, path))) {

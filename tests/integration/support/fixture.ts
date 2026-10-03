@@ -71,16 +71,17 @@ export async function withFixture(run: (fixture: Fixture) => Promise<void>) {
       },
     });
   } finally {
-    if (authIds.length) {
-      const profiles = "(select id from app.user_profile where auth_user_id = any($1::uuid[]))";
-      await database.query(`delete from app.mutation_receipt where actor_id in ${profiles}`, [authIds]);
-      await database.query(`delete from app.project where owner_id in ${profiles}`, [authIds]);
-      await database.query(`delete from app.ai_budget_day where owner_id in ${profiles}`, [authIds]);
-      await database.query(`delete from app.ai_owner_allowance where owner_id in ${profiles}`, [authIds]);
-      await database.query(`delete from app.pilot_entitlement where profile_id in ${profiles}`, [authIds]);
-      await database.query("delete from app.user_profile where auth_user_id = any($1::uuid[])", [authIds]);
-      await Promise.all(authIds.map((id) => admin.auth.admin.deleteUser(id)));
-    }
-    await database.end();
+    try {
+      if (authIds.length) {
+        const profiles = "(select id from app.user_profile where auth_user_id = any($1::uuid[]))";
+        await database.query(`delete from app.mutation_receipt where actor_id in ${profiles}`, [authIds]);
+        await database.query(`delete from app.project where owner_id in ${profiles}`, [authIds]);
+        await database.query(`delete from app.ai_budget_day where owner_id in ${profiles}`, [authIds]);
+        await database.query(`delete from app.ai_owner_allowance where owner_id in ${profiles}`, [authIds]);
+        await database.query(`delete from app.pilot_entitlement where profile_id in ${profiles}`, [authIds]);
+        await database.query("delete from app.user_profile where auth_user_id = any($1::uuid[])", [authIds]);
+        await Promise.all(authIds.map((id) => admin.auth.admin.deleteUser(id)));
+      }
+      } finally { await database.end(); }
   }
 }

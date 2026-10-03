@@ -182,6 +182,12 @@ test("boundary checker keeps worker services off Next and web modules, providers
     assert.match(checkBoundaries(root).join("\n"), /worker import reaches Next module next\/headers/);
     await put("src/features/proposals/server/run-ai.ts", "export const run = 1;");
     assert.deepEqual(checkBoundaries(root), []);
+    await mkdir(join(root, "src/server/maintenance"), { recursive: true }); // the worker may not borrow the bootstrap-credential operator sweep
+    await put("src/server/maintenance/cleanup-transient.ts", "export const sweep = 1;");
+    await put("src/features/proposals/server/run-ai.ts", "import { sweep } from '../../../server/maintenance/cleanup-transient.ts'; export const run = sweep;");
+    assert.match(checkBoundaries(root).join("\n"), /worker import reaches bootstrap-credential module src\/server\/maintenance\/cleanup-transient\.ts/);
+    await put("src/features/proposals/server/run-ai.ts", "export const run = 1;");
+    assert.deepEqual(checkBoundaries(root), []);
 
     await put("src/client/panel.tsx", "'use client'; import { providers } from '../features/proposals/server/providers.ts'; export const x = providers;");
     assert.match(checkBoundaries(root).join("\n"), /client import reaches trusted module src\/features\/proposals\/server\/providers\.ts/);

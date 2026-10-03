@@ -24,8 +24,9 @@ export type AiConfiguration = { model: string; executionBinding: string };
 
 export function aiConfiguration(env: Partial<NodeJS.ProcessEnv> = process.env): AiConfiguration {
   const { AI_MODEL: model, AI_EXECUTION_BINDING: executionBinding } = env;
-  const valid = (value: string | undefined): value is string => Boolean(value) && value!.length <= 200 && /^[\x21-\x7e]+$/.test(value!);
-  if (!valid(model) || !valid(executionBinding)) throw new ProjectError("UNAVAILABLE");
+  const valid = (value: string | undefined, max: number): value is string => Boolean(value) && value!.length <= max && /^[\x21-\x7e]+$/.test(value!);
+  // The binding is a Trigger external deployment id, whose own limit is 128 characters.
+  if (!valid(model, 200) || !valid(executionBinding, 128)) throw new ProjectError("UNAVAILABLE");
   return { model, executionBinding };
 }
 
@@ -49,19 +50,13 @@ async function countAttempt(tx: Transaction, profileId: string) {
       SELECT subject_hash, action, window_start FROM app.rate_limit_bucket WHERE expires_at <= clock_timestamp() ORDER BY expires_at LIMIT 20 FOR UPDATE SKIP LOCKED)`;
 }
 
-/** Built from the stored run for both the first response and a replay, so the two always agree. */
-async function manifestOf(tx: Transaction, projectId: string, runId: string): Promise<RunManifest> {
-  const [row] = await tx.$queryRaw<Array<{ task_type: TaskKind; draft_id: string; expected_document_revision: number; parent_snapshot_id: string | null; capture_hash: string; source_ids: string[] | null }>>`
-    SELECT task_type::text AS task_type, draft_id, expected_document_revision, parent_snapshot_id, capture_hash, jsonb_path_query_array(capture, '$.sources[*].sourceVersionId') AS source_ids
-    FROM app.ai_run WHERE id = ${runId}::uuid AND project_id = ${projectId}::uuid`;
-  if (!row) throw new ProjectError("UNAVAILABLE");
-  return { taskType: row.task_type, draftId: row.draft_id, documentRevision: row.expected_document_revision, parentSnapshotId: row.parent_snapshot_id, sourceVersionIds: row.source_ids ?? [], captureHash: row.capture_hash };
-}
-
-function replayOf(result: Prisma.JsonValue): Pick<AdmitResult, "runId" | "state" | "aiRevision"> {
+/** The manifest is stored in the receipt result, so a replay after the capture body expired (bodies 7 days, receipts 30) is unchanged. */
+function replayOf(result: Prisma.JsonValue): Pick<AdmitResult, "runId" | "state" | "aiRevision" | "manifest"> {
   const record = result && typeof result === "object" && !Array.isArray(result) ? result : null;
-  if (!record || typeof record.runId !== "string" || record.state !== "QUEUED" || typeof record.aiRevision !== "number") throw new ProjectError("UNAVAILABLE");
-  return { runId: record.runId, state: "QUEUED", aiRevision: record.aiRevision };
+  const manifest = record?.manifest && typeof record.manifest === "object" && !Array.isArray(record.manifest) ? record.manifest : null;
+  if (!record || typeof record.runId !== "string" || record.state !== "QUEUED" || typeof record.aiRevision !== "number"
+    || !manifest || !Array.isArray(manifest.sourceVersionIds) || typeof manifest.captureHash !== "string") throw new ProjectError("UNAVAILABLE");
+  return { runId: record.runId, state: "QUEUED", aiRevision: record.aiRevision, manifest: manifest as unknown as RunManifest };
 }
 
 /**
@@ -110,16 +105,18 @@ async function admitLocked(tx: Transaction, project: ProjectRow, actorId: string
     { taskType: capture.taskType, draftId: capture.draftId, documentRevision: capture.documentRevision, sourceCount: capture.sources.length, model: configuration.model });
   await tx.$executeRaw`UPDATE app.project SET ai_revision = ${sequence}::bigint WHERE id = ${project.id}::uuid`;
   await tx.$executeRaw`UPDATE app.ai_run SET last_event_sequence = ${sequence}::bigint WHERE id = ${runId}::uuid`;
-  const result = { runId, state: "QUEUED" as const, aiRevision: Number(sequence) };
+  const manifest: RunManifest = { taskType: capture.taskType, draftId: capture.draftId, documentRevision: capture.documentRevision, parentSnapshotId: capture.parentSnapshotId,
+    sourceVersionIds: capture.sources.map((source) => source.sourceVersionId), captureHash };
+  const result = { runId, state: "QUEUED" as const, aiRevision: Number(sequence), manifest };
   await saveReceipt(tx, actorId, "PROJECT", project.id, input.key, START_OPERATION, hash, result);
-  return { ...result, replayed: false, manifest: await manifestOf(tx, project.id, runId) };
+  return { ...result, replayed: false };
 }
 
 /**
  * One short admission transaction (Data 04): actor, project, current access, receipt replay, capability, the actor's attempt counter,
  * then the locked capture, capacity, owner allowance and owner/day reservation. No model, tokenizer or network call runs inside it.
  */
-export async function admitRun(identity: ProjectIdentity, projectId: string, input: StartRunInput, configuration: AiConfiguration = aiConfiguration()): Promise<AdmitResult> {
+export async function admitRun(identity: ProjectIdentity, projectId: string, input: StartRunInput, configuration?: AiConfiguration): Promise<AdmitResult> {
   if (!uuid.test(projectId)) throw new ProjectError("NOT_FOUND");
   projectId = projectId.toLowerCase();
   if (!keyPattern.test(input.key)) throw new ProjectError("INVALID_INPUT");
@@ -134,18 +131,18 @@ export async function admitRun(identity: ProjectIdentity, projectId: string, inp
       const receipt = await findReceipt(tx, profile.id, "PROJECT", project.id, input.key);
       if (receipt) {
         checkReceipt(receipt, START_OPERATION, hash);
-        const replayed = replayOf(receipt.result);
-        return { result: { ...replayed, replayed: true, manifest: await manifestOf(tx, project.id, replayed.runId) } };
+        return { result: { ...replayOf(receipt.result), replayed: true } };
       }
       if (role !== "OWNER" && role !== "EDITOR") throw new ProjectError("FORBIDDEN");
       requireActive(project);
+      const activeConfiguration = configuration ?? aiConfiguration();
       await countAttempt(tx, profile.id);
       // An overdue run on this project is settled under the locks already held; settlement advances the event sequence, so reread it.
       if (await settleOverdueRuns(tx, profile.id, project.id)) project = await lockProject(tx, profile.id, projectId);
       // A refusal after this point still commits the attempt count but nothing else.
       await tx.$executeRaw`SAVEPOINT ai_admission`;
       try {
-        return { result: await admitLocked(tx, project, profile.id, input, hash, configuration) };
+        return { result: await admitLocked(tx, project, profile.id, input, hash, activeConfiguration) };
       } catch (error) {
         if (!(error instanceof ProjectError)) throw error;
         await tx.$executeRaw`ROLLBACK TO SAVEPOINT ai_admission`;

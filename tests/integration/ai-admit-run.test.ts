@@ -8,6 +8,9 @@ import { AI_LIMITS, parseStartRunInput, type StartRunInput } from "../../src/fea
 import { canonicalJson, captureInput, sha256 } from "../../src/features/proposals/domain/capture.ts";
 import { admissionSubject, admitRun, aiConfiguration } from "../../src/features/proposals/server/admit-run.ts";
 import { canRun, withFixture, type Fixture, type Identity } from "./support/fixture.ts";
+import { serializeSweeps } from "./support/sweep-lock.ts";
+
+serializeSweeps(); // the expiry test sweeps globally: see sweep-lock.ts
 
 // Atomic AI admission (Stage 06.1 Task 2) through the real service on the web runtime role, with independent connections.
 const CONFIG = { model: "test-model", executionBinding: "binding-1" };
@@ -88,13 +91,13 @@ async function seedRun(db: Client, p: { projectId: string; owner: string; actor?
      values ($1, $2, $3, 1, 'AI instruction', $4, char_length($4), octet_length($4), $5, $6)`, [versionId, p.projectId, sourceId, capture.prompt, capture.promptHash, actor]);
   await db.query("commit");
   await db.query("insert into app.ai_owner_allowance (owner_id) values ($1) on conflict do nothing", [p.owner]);
-  await db.query("insert into app.ai_budget_day (owner_id, day) values ($1, ($2::timestamptz at time zone 'UTC')::date) on conflict do nothing", [p.owner, createdAt]);
+  await db.query("insert into app.ai_budget_day (owner_id, day, reserved_runs, consumed_runs) values ($1, ($2::timestamptz at time zone 'UTC')::date, $3, $4) on conflict (owner_id, day) do update set reserved_runs = ai_budget_day.reserved_runs + $3, consumed_runs = ai_budget_day.consumed_runs + $4", [p.owner, createdAt, p.terminal ? 0 : 1, p.terminal ? 1 : 0]);
   const { rows: [run] } = await db.query<{ id: string }>(
     `insert into app.ai_run (project_id, draft_id, actor_id, owner_id, admission_day, prompt_source_version_id, task_type, model, execution_binding, capture, capture_hash, expected_document_revision, deadline_at, created_at)
      values ($1, $2, $3, $4, ($5::timestamptz at time zone 'UTC')::date, $6, 'PROPOSE_FLOW', 'seed-model', 'seed-binding', $7::jsonb, $8, 1, $5::timestamptz + interval '300 seconds', $5) returning id`,
     [p.projectId, draft.id, actor, p.owner, createdAt, versionId, JSON.stringify(capture), hash]);
   if (p.terminal) {
-    await db.query("update app.ai_run set state = 'RUNNING' where id = $1", [run!.id]);
+    await db.query("update app.ai_run set state = 'RUNNING', budget_state = 'CONSUMED' where id = $1", [run!.id]);
     await db.query("update app.ai_run set state = 'SUCCEEDED', disposition = 'AVAILABLE', result = $2::jsonb, result_hash = $3, terminal_at = now() where id = $1", [run!.id, JSON.stringify({ schemaVersion: 1, kind: "clarification", message: "x" }), "a".repeat(64)]);
   }
   return run!.id;
@@ -202,6 +205,8 @@ test("an archived project and an unconfigured or oversized request are refused w
     const before = await footprint(database, projectId, owner.profile);
     assert.throws(() => aiConfiguration({}), refused("UNAVAILABLE"));
     assert.deepEqual(aiConfiguration({ AI_MODEL: "m", AI_EXECUTION_BINDING: "b" }), { model: "m", executionBinding: "b" });
+    assert.throws(() => aiConfiguration({ AI_MODEL: "m", AI_EXECUTION_BINDING: "b".repeat(129) }), refused("UNAVAILABLE")); // a Trigger external deployment id is at most 128 characters
+    assert.equal(aiConfiguration({ AI_MODEL: "m", AI_EXECUTION_BINDING: "b".repeat(128) }).executionBinding.length, 128);
     const input = await start(database, projectId);
     const many = Array.from({ length: 600 }, () => ({ sourceVersionId: randomUUID(), expectedCurrentVersionId: randomUUID() }));
     assert.throws(() => parseStartRunInput({ taskType: "PROPOSE_FLOW", prompt: "x", draftId: input.draftId, expectedDocumentRevision: 1, expectedParentSnapshotId: null, context: { selection: null, sources: many } }, randomUUID()));
@@ -392,5 +397,43 @@ test("the AI_ADMISSION bucket limits new attempts across connections, counts ref
     assert.ok(bucket.expires_at > bucket.window_start);
     assert.deepEqual(await admitRun(owner.identity, projectId, first, CONFIG), { ...admitted, replayed: true }); // recovery precedes the limiter
     await assert.rejects(admitRun(owner.identity, projectId, { ...first, prompt: "changed" }, CONFIG), refused("KEY_REUSED")); // and so does the key check
+  });
+});
+
+test("a same-key replay after the capture body expired returns the original manifest from the receipt", { skip: !canRun }, async () => {
+  await withAdmission(async ({ person, projectFor, database }) => {
+    const owner = await person(); const projectId = await projectFor(owner);
+    const [v1, v2] = await seedVersions(database, projectId, owner.profile, [4, 5]) as [string, string];
+    const input = await start(database, projectId, { sources: [{ sourceVersionId: v1, expectedCurrentVersionId: v2 }] });
+    const admitted = await admitRun(owner.identity, projectId, input, CONFIG);
+    assert.deepEqual(admitted.manifest.sourceVersionIds, [v1]);
+    // The run settles and ages past seven days (bodies go), while the 30 day receipt is still live.
+    await database.query("update app.ai_run set state = 'FAILED', failure_code = 'TEST', terminal_at = now() - interval '8 days' where id = $1", [admitted.runId]);
+    await database.query("select * from app.cleanup_transient(false, 100)");
+    const { rows: [stored] } = await database.query("select capture is null as purged from app.ai_run where id = $1", [admitted.runId]);
+    assert.equal(stored.purged, true);
+    const replay = await admitRun(owner.identity, projectId, input, CONFIG);
+    assert.equal(replay.replayed, true);
+    assert.deepEqual(replay.manifest, admitted.manifest);
+    assert.deepEqual([replay.runId, replay.aiRevision], [admitted.runId, admitted.aiRevision]);
+  });
+});
+
+test("a start receipt replays during an AI configuration pause without a new budget or event", { skip: !canRun }, async () => {
+  await withAdmission(async ({ person, projectFor, database }) => {
+    const owner = await person(); const projectId = await projectFor(owner);
+    const input = await start(database, projectId);
+    const admitted = await admitRun(owner.identity, projectId, input, CONFIG);
+    const before = await footprint(database, projectId, owner.profile);
+    const saved = { model: process.env.AI_MODEL, binding: process.env.AI_EXECUTION_BINDING };
+    try {
+      process.env.AI_MODEL = ""; process.env.AI_EXECUTION_BINDING = "";
+      assert.deepEqual(await admitRun(owner.identity, projectId, input), { ...admitted, replayed: true });
+      await assert.rejects(admitRun(owner.identity, projectId, { ...input, key: randomUUID() }), refused("UNAVAILABLE"));
+      assert.deepEqual(await footprint(database, projectId, owner.profile), before);
+    } finally {
+      if (saved.model === undefined) delete process.env.AI_MODEL; else process.env.AI_MODEL = saved.model;
+      if (saved.binding === undefined) delete process.env.AI_EXECUTION_BINDING; else process.env.AI_EXECUTION_BINDING = saved.binding;
+    }
   });
 });

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { emptyDraft } from "../../../src/features/drafts/contracts/scope-document.ts";
 import { parseStartRunInput } from "../../../src/features/proposals/contracts/tasks.ts";
-import { captureInput } from "../../../src/features/proposals/domain/capture.ts";
+import { canonicalJson, captureInput, sha256, type SavedSource } from "../../../src/features/proposals/domain/capture.ts";
 import { admissionSubject } from "../../../src/features/proposals/server/admit-run.ts";
 import { withFixture, type Fixture, type Identity } from "./fixture.ts";
 
@@ -34,6 +34,7 @@ export async function draftOf(db: Client, projectId: string) {
 
 export type SeedOptions = {
   projectId: string; owner: string; actor?: string; createdAt?: Date; prompt?: string; flowId?: string;
+  sources?: SavedSource[]; result?: object;
   /** Bulk history rows that must not move the owner/day counters (a day holds at most 30). */
   uncounted?: boolean;
   /** QUEUED (default, reserved), RUNNING with a claimed and unreported attempt (consumed), or a settled terminal FAILED run. */
@@ -47,8 +48,9 @@ export async function seedRun(db: Client, options: SeedOptions) {
   const shape = options.shape ?? "QUEUED";
   const draft = await draftOf(db, options.projectId);
   const prompt = options.prompt ?? "seeded instruction";
-  const input = parseStartRunInput({ taskType: "PROPOSE_FLOW", prompt, draftId: draft.id, expectedDocumentRevision: draft.revision, expectedParentSnapshotId: null, context: { selection: null, sources: [] } }, randomUUID());
-  const { capture, hash } = captureInput({ projectId: options.projectId, draftId: draft.id, documentRevision: draft.revision, parentSnapshotId: null, document: emptyDraft().document, sources: [], model: "seed-model" }, input);
+  const sources = options.sources ?? [];
+  const input = parseStartRunInput({ taskType: "PROPOSE_FLOW", prompt, draftId: draft.id, expectedDocumentRevision: draft.revision, expectedParentSnapshotId: null, context: { selection: null, sources: sources.map((source) => ({ sourceVersionId: source.sourceVersionId, expectedCurrentVersionId: source.currentVersionId })) } }, randomUUID());
+  const { capture, hash } = captureInput({ projectId: options.projectId, draftId: draft.id, documentRevision: draft.revision, parentSnapshotId: null, document: emptyDraft().document, sources, model: "seed-model" }, input);
   const stored = options.flowId ? { ...capture, taskType: "REFINE_FLOW_SELECTION", selection: { flowId: options.flowId, nodeIds: [randomUUID()] } } : capture;
   const versionId = randomUUID(); const sourceId = randomUUID();
   await db.query("begin");
@@ -74,8 +76,9 @@ export async function seedRun(db: Client, options: SeedOptions) {
   }
   if (shape === "FAILED") await db.query("update app.ai_run set state = 'FAILED', failure_code = 'TEST_FAILURE', terminal_at = $2, budget_state = 'CONSUMED' where id = $1", [runId, createdAt]);
   if (shape === "SUCCEEDED") {
+    const result = options.result ?? { schemaVersion: 1, kind: "clarification", message: "need more" };
     await db.query("update app.ai_run set state = 'RUNNING', budget_state = 'CONSUMED' where id = $1", [runId]);
-    await db.query("update app.ai_run set state = 'SUCCEEDED', disposition = 'AVAILABLE', result = $2::jsonb, result_hash = $3, terminal_at = $4 where id = $1", [runId, JSON.stringify({ schemaVersion: 1, kind: "clarification", message: "need more" }), "a".repeat(64), createdAt]);
+    await db.query("update app.ai_run set state = 'SUCCEEDED', disposition = 'AVAILABLE', result = $2::jsonb, result_hash = $3, terminal_at = $4 where id = $1", [runId, JSON.stringify(result), options.result ? sha256(canonicalJson(result)) : "a".repeat(64), createdAt]);
   }
   return runId;
 }
