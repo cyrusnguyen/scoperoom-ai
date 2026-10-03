@@ -9,6 +9,7 @@ import type { ArrangementPreview, ArrangeFlow, ArrangementRequest, PositionResul
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { ImportApplyResult } from "@/features/exchange/contracts/import";
 import { importBlocker, importStorageError, persistImport } from "@/features/exchange/ui/import-recovery";
+import { exportSaveBlocker } from "@/features/exports/ui/export-state";
 import { GraphError } from "@/features/drafts/domain/graph";
 import { projectErrors } from "@/features/projects/contracts/errors";
 import type { ProjectAccessRole } from "@/features/projects/contracts/project";
@@ -20,7 +21,7 @@ import {
   acknowledged, addDrop, discardOutbox, enqueue, keepTheirs as keepTheirsChange, optimistic, pendingCount, rebase, redo as redoChange, replay, startSave, undo as undoChange,
   wireBody, withEntries, type ConflictTarget, type Outbox, type Placement, type Sending,
 } from "./outbox";
-import { advanceOnRead, afterDraftRead, AUTOSAVE_MS, clearedRedo, covers, frozenBehind, requireDraftRevision, stranded, type SaveState, type StudioUi } from "./studio-ui";
+import { advanceOnRead, afterDraftRead, AUTOSAVE_MS, clearedRedo, covers, frozenBehind, requireDraftRevision, stranded, studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
 
 export type Outcome<T> =
   | { ok: true; result: T }
@@ -64,6 +65,8 @@ type Studio = {
   place: (command: ArrangeFlow, key?: string) => Promise<Outcome<PositionResult>>;
   preview: (request: ArrangementRequest) => Promise<Outcome<ArrangementPreview>>;
   importFlow: (previewId: string, input: { draftId: string; previewHash: string }, key: string) => Promise<Outcome<ImportApplyResult>>;
+  inspectSavedExport: (saveFirst: boolean) => Promise<Outcome<DraftView>>;
+  exportDirty: boolean;
   reload: (fence?: () => boolean) => Promise<DraftView | null>;
   /** The canvas reports a pointer drag in progress, so autosave never sends mid-drag. */
   dragActive: (active: boolean) => void;
@@ -120,6 +123,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   const mounted = useRef(true);
   const uiRef = useRef(ui);
   const dragging = useRef(false);
+  const [isDragging, setIsDragging] = useState(false);
   useLayoutEffect(() => { uiRef.current = ui; }, [ui]);
   useLayoutEffect(() => { latest.current = outbox; }, [outbox]);
   useLayoutEffect(() => { saved.current = savedDraft; }, [savedDraft]);
@@ -291,6 +295,28 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   const chain = useRef<Promise<boolean>>(Promise.resolve(true));
   const saveChanges = useCallback(() => (chain.current = chain.current.then(flush, flush)), [flush]);
 
+  /** Export reads through the shared saved-draft gate after synchronously checking all local work. */
+  const inspectSavedExport = useCallback(async (saveFirst: boolean): Promise<Outcome<DraftView>> => {
+    const invocation = fence(), current = () => mounted.current && invocation();
+    const refused = (message: string): Outcome<DraftView> => ({ ok: false, code: "EXPORT_BLOCKED", message, uncertain: false });
+    const guard = () => exportSaveBlocker({ ...uiRef.current, outbox: latest.current }, dragging.current);
+    if (saveFirst) {
+      const reason = guard();
+      if (reason) return refused(reason);
+      if (!await saveChanges()) return refused("Wait for saving to finish or resolve the unsaved changes in the Studio.");
+      if (!current()) return refused("The project or draft changed. Reopen Export.");
+      if (guard() || pendingCount(latest.current) || inFlight.current) return refused(guard() ?? "New edits are still waiting in the Studio.");
+    }
+    const { blocked, stillCurrent } = await admit(false, draftId);
+    if (!current()) return refused("The project or draft changed. Reopen Export.");
+    if (blocked) return refused(blocked.message);
+    const view = await reload(() => current() && stillCurrent());
+    if (!current() || !stillCurrent()) return refused("The project or draft changed. Reopen Export.");
+    if (!view || !covers(view, floorRef.current)) return refused("Could not inspect saved changes covering the acknowledged revisions. Retry after refresh.");
+    if (saveFirst && (guard() || pendingCount(latest.current) || inFlight.current)) return refused(guard() ?? "New edits are still waiting in the Studio.");
+    return { ok: true, result: view };
+  }, [admit, draftId, fence, reload, saveChanges]);
+
   /** Native append uses the Studio's write barrier and receipt floor, never a graph command or preview draft. */
   const importFlow = useCallback(async (previewId: string, input: { draftId: string; previewHash: string }, key: string): Promise<Outcome<ImportApplyResult>> => {
     const invocation = fence();
@@ -419,7 +445,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   // Autosave: one timer per open project (this provider is keyed by project, so unmount clears it). It runs while
   // changes wait, nothing is in flight and no save awaits the person's choice; a tick during a drag is skipped.
   // Hidden tabs keep it: the browser throttles the timer, and saving there still narrows what a closed tab could lose.
-  const dragActive = useCallback((active: boolean) => { dragging.current = active; }, []);
+  const dragActive = useCallback((active: boolean) => { dragging.current = active; setIsDragging(active); }, []);
   const autosave = useRef(saveChanges);
   useEffect(() => {
     autosave.current = saveChanges;
@@ -443,11 +469,12 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   useEffect(() => { setPresence(claimOf(shownFlowId, ui.selection)); }, [setPresence, shownFlowId, ui.selection]);
   const unsaved = pendingCount(outbox) > 0;
   const canUndo = editable && outbox.entries.length > 0, canRedo = editable && outbox.redo.length > 0;
+  const exportDirty = isDragging || studioDirtyCount(ui) > 0 || busy || refreshFailed;
   const value = useMemo<Studio>(() => ({
     projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, readFailures, frozen, redoCleared, dismissRedoCleared, run, moveSteps, saveChanges, unsaved,
-    applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, importFlow, reload, dragActive, inspect: onInspect,
+    applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, importFlow, inspectSavedExport, exportDirty, reload, dragActive, inspect: onInspect,
   }), [projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, readFailures, frozen, redoCleared, dismissRedoCleared, run, moveSteps, saveChanges, unsaved,
-    applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, importFlow, reload, dragActive, onInspect]);
+    applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, importFlow, inspectSavedExport, exportDirty, reload, dragActive, onInspect]);
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }
 

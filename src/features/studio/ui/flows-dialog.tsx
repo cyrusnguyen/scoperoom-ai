@@ -7,6 +7,7 @@ import { CLASSIFICATIONS, INCLUSIONS, LIMITS, type Classification, type Inclusio
 import { dependencyPlan } from "@/features/drafts/domain/graph";
 import Dialog from "@/features/shell/ui/dialog";
 import { Icon } from "@/features/shell/ui/icon";
+import { NativeExportDialog } from "@/features/exports/ui/flow-export";
 import { NativeImportDialog } from "@/features/exchange/ui/flow-exchange";
 import { CLASSIFICATION_LABELS, fieldErrors, INCLUSION_LABELS } from "./fields";
 import { currentFlow, flowsInOrder } from "./graph-view";
@@ -31,7 +32,7 @@ function FlowSwitcherControl({ title }: { title: string }) {
   </>;
 }
 
-type Mode = "list" | "create" | "delete" | "import";
+type Mode = "list" | "create" | "delete" | "import" | "export";
 type FlowValues = { title: string; classification: string; inclusion: string };
 
 /**
@@ -43,6 +44,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   const { draft, editable, ui, update, saveChanges } = useStudio();
   const submitCommand = useCommandSubmit();
   const [mode, setMode] = useState<Mode>(creating ? "create" : "list");
+  const [exportFlowId, setExportFlowId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"ALL" | Inclusion>("ALL");
   const [values, setValues] = useState<FlowValues>({ title: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" });
   const [titleError, setTitleError] = useState("");
@@ -111,6 +113,8 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     await send({ commandSchemaVersion: 1, command: "DELETE_FLOW", expectedDocumentRevision: draft.documentRevision, payload: { flowId: current.id, removeNodeIds: plan.nodeIds, removeEdgeIds: plan.edgeIds } });
   };
 
+  if (mode === "export" && exportFlowId) return <NativeExportDialog flowId={exportFlowId} onClose={onClose} />;
+
   if (mode === "import") return <NativeImportDialog onClose={onClose} />;
 
   if (editable && mode === "create") {
@@ -154,7 +158,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   }
 
   return <Dialog title="Flows" onClose={onClose} footer={<button type="button" className="button quiet" onClick={onClose}>Close</button>}>
-    <div className="view-actions"><button type="button" className="button small" onClick={() => setMode("import")}>Import flow</button></div>
+    <div className="view-actions"><button type="button" className="button small" onClick={() => setMode("import")}>Import flow</button>{current && <button type="button" className="button small" onClick={() => { setExportFlowId(current.id); setMode("export"); }}>Export flow</button>}</div>
     <div className="form-row">
       <label htmlFor="flow-filter">Show</label>
       <select id="flow-filter" value={filter} onChange={(event) => setFilter(event.target.value as "ALL" | Inclusion)}>

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { interceptRealtime } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
+import { parseChanges, parseChangesResult } from "../../src/features/drafts/contracts/changes.ts";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { appUrl, createProjectViaApi, e2eReady, emptyDraftView, headerSave, saveStudio, withStatus } from "./support";
 
@@ -27,10 +28,24 @@ async function command(page: Page, projectId: string, draftId: string, body: Rec
 
 
 async function createFlowInUi(page: Page, title: string) {
+  const projectId = new URL(page.url()).pathname.split("/").at(-1)!;
+  const draft = await draftOf(page, projectId);
+  const changesUrl = `${appUrl}/api/projects/${projectId}/drafts/${draft.id}/changes`;
   await page.getByRole("button", { name: "New flow" }).click();
   const form = modal(page, "New flow");
   await form.getByLabel("Title").fill(title);
+  const saved = page.waitForResponse((response) => {
+    if (response.url() !== changesUrl || response.request().method() !== "POST") return false;
+    return parseChanges(response.request().postDataJSON()).commands.some((change) =>
+      change.command.command === "CREATE_FLOW" && change.command.payload.title === title && change.proposedIds.length === 1);
+  });
   await form.getByRole("button", { name: "Create flow" }).click();
+  const response = await saved;
+  expect(await response.finished()).toBeNull();
+  expect(response.status()).toBe(200);
+  const { replayed, ...result } = await response.json();
+  expect(typeof replayed).toBe("boolean");
+  expect(parseChangesResult(result).draftId).toBe(draft.id);
   await expect(page.locator("#studio-flow-title")).toHaveText(title);
   await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
 }
@@ -55,6 +70,66 @@ test.describe("Studio on a real draft", () => {
     projectId = await createProjectViaApi(page, "Studio project");
     await page.goto(`/app/projects/${projectId}`);
     await expect(page.getByRole("heading", { level: 1, name: "Studio project" })).toBeVisible();
+  });
+
+  test("flow creation fixture waits for its exact successful save before checking the dialog closes", async ({ page }) => {
+    const before = await draftOf(page, projectId);
+    const title = "Held successful creation";
+    const changesUrl = `${appUrl}/api/projects/${projectId}/drafts/${before.id}/changes`;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let delivered!: (error?: unknown) => void;
+    const delivery = new Promise<unknown>((resolve) => { delivered = resolve; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let writes = 0;
+    let flowId = "";
+    let receipt: ReturnType<typeof parseChangesResult> | undefined;
+    await page.route(changesUrl, async (route) => {
+      if (route.request().method() !== "POST") { await route.fallback(); return; }
+      try {
+        const creation = parseChanges(route.request().postDataJSON()).commands.find((change) =>
+          change.command.command === "CREATE_FLOW" && change.command.payload.title === title);
+        if (!creation) { await route.fallback(); return; }
+        writes++;
+        expect(creation.proposedIds).toHaveLength(1);
+        flowId = creation.proposedIds[0]!;
+        const response = await route.fetch();
+        expect(response.status()).toBe(200);
+        const { replayed, ...result } = await response.json();
+        expect(replayed).toBe(false);
+        receipt = parseChangesResult(result);
+        expect(receipt.draftId).toBe(before.id);
+        // Deliberately hold a real successful receipt beyond the unchanged 10-second UI assertion window.
+        timer = setTimeout(release, 11_000);
+        await held;
+        await route.fulfill({ response });
+        delivered();
+      } catch (error) {
+        await route.abort().catch(() => {}); // The route may already be handled if fulfill failed late.
+        delivered(error);
+      }
+    });
+    try {
+      // Observe rejection now, but preserve the original assertion failure until the held response is released.
+      const creation = createFlowInUi(page, title).then(() => undefined, (error: unknown) => {
+        if (writes === 0) delivered(error);
+        return error;
+      });
+      const [creationError, deliveryError] = await Promise.all([creation, delivery]);
+      if (deliveryError) throw deliveryError;
+      if (creationError) throw creationError;
+      expect(writes).toBe(1);
+      const saved = await draftOf(page, projectId);
+      expect(saved.id).toBe(before.id);
+      expect(saved.documentRevision).toBeGreaterThanOrEqual(receipt!.documentRevision);
+      expect(saved.layoutRevision).toBeGreaterThanOrEqual(receipt!.layoutRevision);
+      expect(Object.keys(saved.document.flows)).toEqual([flowId]);
+      expect(saved.document.flows[flowId]!.title).toBe(title);
+    } finally {
+      clearTimeout(timer);
+      release();
+      await page.unroute(changesUrl);
+    }
   });
 
   test("an editor creates flows from the empty state and the Flows dialog, and filters them by scope", async ({ page }) => {
