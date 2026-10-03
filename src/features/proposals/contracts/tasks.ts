@@ -11,7 +11,10 @@ export type TaskKind = (typeof TASK_KINDS)[number];
 // Capture and result bounds are measured as PostgreSQL stores them (jsonbTextBytes), so an accepted body never fails its CHECK.
 export const AI_LIMITS = {
   promptCodePoints: 8_000, maxInputTokens: 16_000, maxOutputTokens: 6_000, maxGraphNodes: 20, maxGraphEdges: 40,
-  captureBytes: 256 * 1024, resultBytes: 128 * 1024,
+  startBodyBytes: 64 * 1024, captureBytes: 256 * 1024, resultBytes: 128 * 1024,
+  ownerConcurrentRuns: 2, ownerDailyRuns: 30, applicableResults: 10,
+  // Operational default, not a product promise: start attempts per actor per minute, counted by the keyed AI_ADMISSION bucket.
+  admissionAttemptsPerMinute: 30,
   operations: 100, dependsOn: 100, assumptions: 20, assumptionCodePoints: 2_000, citations: 100, excerptCodePoints: 2_000,
 } as const;
 
@@ -24,6 +27,15 @@ export type StartRunInput = {
   key: string; taskType: TaskKind; prompt: string; draftId: string; expectedDocumentRevision: number; expectedParentSnapshotId: string | null;
   context: { selection: { flowId: string; nodeIds: string[] } | null; sources: { sourceVersionId: string; expectedCurrentVersionId: string }[] };
 };
+
+/** The request body without its receipt key, in the fixed order every hash and size is computed over. */
+export const startBody = (input: StartRunInput) => ({
+  taskType: input.taskType, prompt: input.prompt, draftId: input.draftId, expectedDocumentRevision: input.expectedDocumentRevision,
+  expectedParentSnapshotId: input.expectedParentSnapshotId, context: input.context,
+});
+
+/** Bytes of the canonical request body. The bound applies before any database read; nothing is truncated to fit. */
+export const startBodyBytes = (input: StartRunInput): number => new TextEncoder().encode(JSON.stringify(startBody(input))).length;
 
 /** Strict POST body plus the server-validated receipt key. The prompt is validated again, once normalized, by captureInput. */
 export function parseStartRunInput(raw: unknown, key: string): StartRunInput {
@@ -48,10 +60,12 @@ export function parseStartRunInput(raw: unknown, key: string): StartRunInput {
     if (!selection.nodeIds.length) invalid();
   } else if (context.selection !== null) invalid();
   const prompt = text(body.prompt, AI_LIMITS.promptCodePoints * 2, true); // loose raw bound; captureInput applies the exact normalized bound
-  return {
+  const input: StartRunInput = {
     key, taskType, prompt, draftId: id(body.draftId), expectedDocumentRevision: version(body.expectedDocumentRevision),
     expectedParentSnapshotId: body.expectedParentSnapshotId === null ? null : id(body.expectedParentSnapshotId), context: { selection, sources },
   };
+  if (startBodyBytes(input) > AI_LIMITS.startBodyBytes) invalid();
+  return input;
 }
 
 export type CapturedFlow = Omit<FlowRecord, "confirmation" | "verificationMethod">;

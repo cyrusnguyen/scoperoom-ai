@@ -476,6 +476,19 @@ model AiRunAttempt {
   @@schema("app")
 }
 
+model RateLimitBucket {
+  subjectHash String   @map("subject_hash") @db.Text
+  action      String   @db.Text
+  windowStart DateTime @map("window_start") @db.Timestamptz(6)
+  count       Int
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz(6)
+
+  @@id([subjectHash, action, windowStart])
+  @@index([expiresAt], map: "rate_limit_bucket_expires_at_idx")
+  @@map("rate_limit_bucket")
+  @@schema("app")
+}
+
 model AuditEvent {
   id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   projectId     String       @map("project_id") @db.Uuid

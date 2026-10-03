@@ -193,3 +193,12 @@ test("capture and its hash do not depend on key order, and the stored-size measu
   assert.equal(sha(canonicalJson(reordered)), first.hash);
   assert.equal(jsonbTextBytes({ a: [1, "é"], b: {} }), Buffer.byteLength('{"a": [1, "é"], "b": {}}'));
 });
+
+test("the 64 KiB start body bound rejects too many sources before any lookup and never truncates", () => {
+  const entry = () => ({ sourceVersionId: randomUUID(), expectedCurrentVersionId: randomUUID() });
+  const body = (count: number) => ({ taskType: "PROPOSE_FLOW", prompt: "go", draftId: randomUUID(), expectedDocumentRevision: 1, expectedParentSnapshotId: null, context: { selection: null, sources: Array.from({ length: count }, entry) } });
+  assert.equal(parseStartRunInput(body(100), KEY).context.sources.length, 100);
+  rejects(() => parseStartRunInput(body(600), KEY), "INVALID_INPUT");
+  assert.equal(AI_LIMITS.startBodyBytes, 65_536);
+  assert.equal(AI_LIMITS.admissionAttemptsPerMinute, 30);
+});
