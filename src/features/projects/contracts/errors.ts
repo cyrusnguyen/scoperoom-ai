@@ -24,6 +24,7 @@ export const projectErrors = {
   IMPORT_EXPIRED: { status: 409, message: "This import preview expired. Create a new preview." },
   IMPORT_STALE: { status: 409, message: "This import target changed. Create a new preview." },
   IMPORT_PAYLOAD_MISMATCH: { status: 409, message: "This import does not match its preview." },
+  EXPORT_REVISION_CHANGED: { status: 409, message: "The saved flow changed. Refresh and prepare the export again." },
 } as const;
 
 export type ProjectErrorCode = keyof typeof projectErrors;

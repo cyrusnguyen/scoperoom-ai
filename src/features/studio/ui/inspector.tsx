@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type SubmitEvent } from "react";
+import { Icon } from "@/features/shell/ui/icon";
 import { COORDINATE_LIMIT } from "@/features/drafts/contracts/draft-layout";
 import type { EdgeRecord, NodeRecord } from "@/features/drafts/contracts/scope-document";
 import { graphWarnings, type GraphWarning } from "@/features/drafts/domain/warnings";
@@ -34,7 +35,7 @@ export default function Inspector({ onBack }: { onBack: () => void }) {
   const { draft, ui } = useStudio();
   const selection = ui.selection;
   if (!selection) return null;
-  const back = <button type="button" className="text-link inspector-back" onClick={onBack}>← Project</button>;
+  const back = <button type="button" className="button quiet small inspector-back" aria-label="Back to project" onClick={onBack}><Icon name="back" size={16} /><span>Project</span></button>;
   if (selection.kind === "NODES" && selection.ids.length > 1) return <>{back}<ManySteps ids={selection.ids} /></>;
   const kind: EntityKind = selection.kind === "NODES" ? "NODE" : selection.kind;
   const id = selection.kind === "NODES" ? selection.ids[0]! : selection.id;

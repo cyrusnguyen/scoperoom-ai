@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Route } from "@playwright/test";
 import { interceptRealtime } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
@@ -159,27 +159,47 @@ test.describe("Frozen view, redo history, typed text and refreshing", () => {
   test("below the acknowledged floor no comparison is shown: a refused save after a failed re-read lists no Saved value", async ({ page }) => {
     await open(page);
     let failing = true;
-    await page.route(`**/api/projects/${projectId}/drafts/*`, (route) => (failing && route.request().method() === "GET"
-      ? route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Read unavailable" } } }) : route.continue()));
-    await renameLocally(page, ids.startId, "Acknowledged");
-    await headerSave(page).click();
-    await expect(status(page)).toContainText("Refreshing saved changes");
-    await renameElsewhere(page, projectId, ids.startId, "Theirs");
-    await renameLocally(page, ids.startId, "Mine again");
-    await headerSave(page).click();
+    let holdLaterReads = true;
+    let failedReads = 0;
+    const heldReads: Route[] = [];
+    const draftReadPattern = `**/api/projects/${projectId}/drafts/*`;
+    const unavailableRead = { status: 503, json: { error: { code: "UNAVAILABLE", message: "Read unavailable" } } };
+    await page.route(draftReadPattern, (route) => {
+      if (!failing || route.request().method() !== "GET") return route.continue();
+      if (++failedReads > 1 && holdLaterReads) { heldReads.push(route); return; }
+      return route.fulfill(unavailableRead);
+    });
+    try {
+      await renameLocally(page, ids.startId, "Acknowledged");
+      await headerSave(page).click();
+      await expect(status(page)).toContainText("Refreshing saved changes");
+      // A hint or focus may start another saved read before this assertion can observe the first failure.
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect.poll(() => heldReads.length).toBeGreaterThan(0);
+      holdLaterReads = false;
+      for (const route of heldReads.splice(0)) await route.fulfill(unavailableRead);
+      await expect(status(page)).toContainText("Couldn't refresh saved changes");
+      await expect(status(page).getByRole("button", { name: "Retry", exact: true })).toBeEnabled();
+      await renameElsewhere(page, projectId, ids.startId, "Theirs");
+      await renameLocally(page, ids.startId, "Mine again");
+      await headerSave(page).click();
 
-    await expect(notice(page)).toContainText("Someone else changed this draft first");
-    // The saved draft shown is older than my own acknowledged save, so its "Saved value" would be my own earlier text.
-    await expect(notice(page)).not.toContainText("Saved value");
-    await expect(notice(page).getByRole("button", { name: "Keep theirs" })).toHaveCount(0);
-    await expect(notice(page).getByRole("button", { name: "Apply my changes again" })).toBeDisabled();
+      await expect(notice(page)).toContainText("Someone else changed this draft first");
+      // The saved draft shown is older than my own acknowledged save, so its "Saved value" would be my own earlier text.
+      await expect(notice(page)).not.toContainText("Saved value");
+      await expect(notice(page).getByRole("button", { name: "Keep theirs" })).toHaveCount(0);
+      await expect(notice(page).getByRole("button", { name: "Apply my changes again" })).toBeDisabled();
 
-    failing = false;
-    await status(page).getByRole("button", { name: "Retry", exact: true }).click();
-    await expect(notice(page)).toContainText("Saved value");
-    await expect(notice(page)).toContainText("Theirs");
-    await expect(notice(page).getByRole("button", { name: "Keep theirs" })).toBeEnabled();
-    await expect(notice(page).getByRole("button", { name: "Apply my changes again" })).toBeEnabled();
+      failing = false;
+      await status(page).getByRole("button", { name: "Retry", exact: true }).click();
+      await expect(notice(page)).toContainText("Saved value");
+      await expect(notice(page)).toContainText("Theirs");
+      await expect(notice(page).getByRole("button", { name: "Keep theirs" })).toBeEnabled();
+      await expect(notice(page).getByRole("button", { name: "Apply my changes again" })).toBeEnabled();
+    } finally {
+      await page.unroute(draftReadPattern);
+      for (const route of heldReads.splice(0)) await route.fulfill(unavailableRead).catch(() => undefined);
+    }
   });
 
   test("a remote change to another record is shown at once, with no notice", async ({ page }) => {

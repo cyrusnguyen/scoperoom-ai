@@ -41,7 +41,7 @@ test.describe("Studio review polish", () => {
 
     await page.locator(".flow-switch").click();
     await expect(flows.getByRole("button", { name: /^Duplicate/ })).toBeDisabled();
-    await expect(flows.getByText(/title cannot be duplicated because.*Copy of.*120-character limit/)).toBeVisible();
+    await expect(flows.getByText("Shorten this title before duplicating it. Copy of would exceed the 120-character limit.", { exact: true })).toBeVisible();
 
     await flows.getByRole("button", { name: "New flow" }).click();
     const form = modal(page, "New flow");

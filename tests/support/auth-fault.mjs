@@ -14,10 +14,15 @@ globalThis.fetch = async (input, init) => {
   if (mode && url.includes("/auth/v1/")) {
     if (mode === "down") throw new TypeError("fetch failed"); // a transport failure: the SDK reports it as retryable
     if (mode === "502") return new Response("<html>bad gateway</html>", { status: 502 });
-    if (mode === "503") return json(503, { msg: "upstream unavailable" });
+    if (["503", "504"].includes(mode)) return json(Number(mode), { msg: "upstream unavailable" });
     if (mode === "429") return json(429, { code: "over_request_rate_limit", msg: "Too many requests" });
     if (mode === "401") return json(401, { code: "bad_jwt", msg: "invalid JWT" });
     if (mode === "session-missing") return json(403, { code: "session_not_found", msg: "Session from session_id claim in JWT does not exist" });
   }
-  return real(input, init);
+  const response = await real(input, init);
+  if (["unconfirmed", "anonymous"].includes(mode) && new URL(url).pathname === "/auth/v1/user" && response.ok) {
+    const user = await response.json();
+    return json(200, { ...user, ...(mode === "unconfirmed" ? { email_confirmed_at: null } : { is_anonymous: true }) });
+  }
+  return response;
 };

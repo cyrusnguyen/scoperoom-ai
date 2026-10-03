@@ -74,22 +74,19 @@ test("a transient bootstrap failure in the background keeps the Studio mounted a
   });
   const archived = await page.request.post(`/api/projects/${projectId}/archive`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedProjectVersion: status.version, reason: "Finished" } });
   expect(archived.status()).toBe(200);
-  // Drive polling independently of whether the archive's hint or join arrives first. Short clock slices leave room to observe real responses.
-  await expect.poll(async () => {
-    await page.clock.runFor(1_000);
-    return failedReads;
-  }, { timeout: 5_000, intervals: [25] }).toBeGreaterThan(0);
+  // Drive one full 9-11 s polling window before observing the real response counter.
+  // Clock advancement has its own completion phase; it must not consume the counter assertion deadline.
+  await page.clock.runFor(11_000);
+  await expect.poll(() => failedReads, { timeout: 5_000, intervals: [25] }).toBeGreaterThan(0);
   await expect(toolbar).toBeVisible();
   await expect(page.locator("#studio-flow-title")).toHaveText("Transient");
   await expect(page.getByRole("heading", { level: 1, name: "Project unavailable" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Restore…" })).toHaveCount(0); // still the active view
   const beforeRecovery = recoveredReads;
   await page.unroute(`**/api/projects/${projectId}/bootstrap`, unavailable);
-  // Advance in short windows while the next scheduled read and its real recovery response settle.
-  await expect.poll(async () => {
-    await page.clock.runFor(1_000);
-    return recoveredReads;
-  }, { timeout: 5_000, intervals: [25] }).toBeGreaterThan(beforeRecovery);
+  // Advance the next full polling window, then observe its actual successful response.
+  await page.clock.runFor(11_000);
+  await expect.poll(() => recoveredReads, { timeout: 5_000, intervals: [25] }).toBeGreaterThan(beforeRecovery);
   await expect(page.getByRole("button", { name: "Restore…" })).toBeVisible();
   await expect(toolbar).toBeVisible();
 });

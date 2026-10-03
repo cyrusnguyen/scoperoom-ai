@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { interceptRealtime } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
+import { parseChanges, parseChangesResult } from "../../src/features/drafts/contracts/changes.ts";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { appUrl, createProjectViaApi, e2eReady, emptyDraftView, headerSave, saveStudio, withStatus } from "./support";
 
@@ -27,10 +28,24 @@ async function command(page: Page, projectId: string, draftId: string, body: Rec
 
 
 async function createFlowInUi(page: Page, title: string) {
+  const projectId = new URL(page.url()).pathname.split("/").at(-1)!;
+  const draft = await draftOf(page, projectId);
+  const changesUrl = `${appUrl}/api/projects/${projectId}/drafts/${draft.id}/changes`;
   await page.getByRole("button", { name: "New flow" }).click();
   const form = modal(page, "New flow");
   await form.getByLabel("Title").fill(title);
+  const saved = page.waitForResponse((response) => {
+    if (response.url() !== changesUrl || response.request().method() !== "POST") return false;
+    return parseChanges(response.request().postDataJSON()).commands.some((change) =>
+      change.command.command === "CREATE_FLOW" && change.command.payload.title === title && change.proposedIds.length === 1);
+  });
   await form.getByRole("button", { name: "Create flow" }).click();
+  const response = await saved;
+  expect(await response.finished()).toBeNull();
+  expect(response.status()).toBe(200);
+  const { replayed, ...result } = await response.json();
+  expect(typeof replayed).toBe("boolean");
+  expect(parseChangesResult(result).draftId).toBe(draft.id);
   await expect(page.locator("#studio-flow-title")).toHaveText(title);
   await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
 }
@@ -55,6 +70,66 @@ test.describe("Studio on a real draft", () => {
     projectId = await createProjectViaApi(page, "Studio project");
     await page.goto(`/app/projects/${projectId}`);
     await expect(page.getByRole("heading", { level: 1, name: "Studio project" })).toBeVisible();
+  });
+
+  test("flow creation fixture waits for its exact successful save before checking the dialog closes", async ({ page }) => {
+    const before = await draftOf(page, projectId);
+    const title = "Held successful creation";
+    const changesUrl = `${appUrl}/api/projects/${projectId}/drafts/${before.id}/changes`;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let delivered!: (error?: unknown) => void;
+    const delivery = new Promise<unknown>((resolve) => { delivered = resolve; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let writes = 0;
+    let flowId = "";
+    let receipt: ReturnType<typeof parseChangesResult> | undefined;
+    await page.route(changesUrl, async (route) => {
+      if (route.request().method() !== "POST") { await route.fallback(); return; }
+      try {
+        const creation = parseChanges(route.request().postDataJSON()).commands.find((change) =>
+          change.command.command === "CREATE_FLOW" && change.command.payload.title === title);
+        if (!creation) { await route.fallback(); return; }
+        writes++;
+        expect(creation.proposedIds).toHaveLength(1);
+        flowId = creation.proposedIds[0]!;
+        const response = await route.fetch();
+        expect(response.status()).toBe(200);
+        const { replayed, ...result } = await response.json();
+        expect(replayed).toBe(false);
+        receipt = parseChangesResult(result);
+        expect(receipt.draftId).toBe(before.id);
+        // Deliberately hold a real successful receipt beyond the unchanged 10-second UI assertion window.
+        timer = setTimeout(release, 11_000);
+        await held;
+        await route.fulfill({ response });
+        delivered();
+      } catch (error) {
+        await route.abort().catch(() => {}); // The route may already be handled if fulfill failed late.
+        delivered(error);
+      }
+    });
+    try {
+      // Observe rejection now, but preserve the original assertion failure until the held response is released.
+      const creation = createFlowInUi(page, title).then(() => undefined, (error: unknown) => {
+        if (writes === 0) delivered(error);
+        return error;
+      });
+      const [creationError, deliveryError] = await Promise.all([creation, delivery]);
+      if (deliveryError) throw deliveryError;
+      if (creationError) throw creationError;
+      expect(writes).toBe(1);
+      const saved = await draftOf(page, projectId);
+      expect(saved.id).toBe(before.id);
+      expect(saved.documentRevision).toBeGreaterThanOrEqual(receipt!.documentRevision);
+      expect(saved.layoutRevision).toBeGreaterThanOrEqual(receipt!.layoutRevision);
+      expect(Object.keys(saved.document.flows)).toEqual([flowId]);
+      expect(saved.document.flows[flowId]!.title).toBe(title);
+    } finally {
+      clearTimeout(timer);
+      release();
+      await page.unroute(changesUrl);
+    }
   });
 
   test("an editor creates flows from the empty state and the Flows dialog, and filters them by scope", async ({ page }) => {
@@ -456,9 +531,16 @@ test.describe("Studio on a real draft", () => {
     }
     // Connect opens with the last added step ("Refund issued") as the source.
     await press(toolbar(page).getByRole("button", { name: "Connect" }));
+    // Open each native picker and confirm the choice before tabbing to the next field.
+    await page.keyboard.press("Space");
     await page.keyboard.press("ArrowUp"); // From: Request return
+    await page.keyboard.press("Enter");
+    await expect(modal(page, "Connect steps").getByLabel("From").locator("option:checked")).toHaveText("Request return");
     await page.keyboard.press("Tab");
+    await page.keyboard.press("Space");
     await page.keyboard.press("ArrowDown"); // To: Refund issued
+    await page.keyboard.press("Enter");
+    await expect(modal(page, "Connect steps").getByLabel("To", { exact: true }).locator("option:checked")).toHaveText("Refund issued");
     await page.keyboard.press("Tab");
     await page.keyboard.press("Enter");
     await expect(modal(page, "Connect steps")).toBeHidden();
@@ -586,7 +668,7 @@ test.describe("Studio on a real draft", () => {
     await expect(note(page).getByRole("button", { name: "Retry" })).toBeVisible();
     await name.fill("Newer typing");
     if (leaveInspector) {
-      await panel(page).getByRole("button", { name: /Project$/ }).focus();
+      await panel(page).getByRole("button", { name: "Back to project", exact: true }).focus();
       await page.keyboard.press("Enter");
       await expect(panel(page).getByRole("tab", { name: "Details" })).toBeFocused();
     }
@@ -680,7 +762,11 @@ test.describe("Studio on a real draft", () => {
     await addStepInUi(page, "Received", "Start");
     await addStepInUi(page, "Reviewed");
     await addStepInUi(page, "Closed", "Outcome");
-    await toolbar(page).getByRole("button", { name: "Flow details" }).click();
+    await toolbar(page).getByRole("button", { name: "Canvas", exact: true }).click();
+    await page.locator(".react-flow__pane").click({ position: { x: 10, y: 10 } });
+    const inspect = page.getByRole("button", { name: "Inspect", exact: true });
+    if (await inspect.getAttribute("aria-pressed") === "true") await inspect.click();
+    await inspect.click();
     await panel(page).getByLabel("Title", { exact: true }).fill("Case triage");
     await panel(page).getByLabel("Purpose").fill("Review cases");
     await panel(page).getByLabel("Type", { exact: true }).selectOption("BUSINESS_PROCESS");
@@ -913,7 +999,7 @@ test.describe("Studio on a real draft", () => {
     await addStepInUi(page, "Before", "Start");
     await toolbar(page).getByRole("button", { name: "List" }).click();
     await page.getByRole("button", { name: "Inspect", exact: true }).click();
-    await panel(page).getByRole("button", { name: /Project$/ }).click();
+    await panel(page).getByRole("button", { name: "Back to project", exact: true }).click();
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
     let captured = false;
@@ -1026,7 +1112,7 @@ test.describe("Studio on a real draft", () => {
     await saveStudio(page);
     await page.getByRole("button", { name: "Inspect" }).click();
     await panel(page).getByLabel("Description").fill("Archive local text");
-    await panel(page).getByRole("button", { name: /Project$/ }).click();
+    await panel(page).getByRole("button", { name: "Back to project", exact: true }).click();
     await panel(page).getByLabel("Project name").fill("Unsaved metadata");
     await panel(page).getByRole("button", { name: /Archive project/ }).click();
     const archive = modal(page, "Archive Studio project?");
@@ -1303,7 +1389,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     const list = toolbar(page).getByRole("button", { name: "List", exact: true });
     await expect(list).toHaveAttribute("aria-pressed", "true");
     expect((await list.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-    expect((await toolbar(page).getByRole("button", { name: "Flow details" }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    expect((await toolbar(page).getByRole("button", { name: "Arrange", exact: true }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await toolbar(page).getByRole("button", { name: "Canvas", exact: true }).click();
     for (const name of ["Zoom In", "Zoom Out", "Fit View"]) {
       const box = await page.getByRole("button", { name, exact: true }).boundingBox();
@@ -1392,7 +1478,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await saveButton(page).click();
     await expect(note(page).getByRole("button", { name: "Retry" })).toBeVisible();
     await panel(page).getByLabel("Name").fill("My later text");
-    await panel(page).getByRole("button", { name: /Project$/ }).click();
+    await panel(page).getByRole("button", { name: "Back to project", exact: true }).click();
     await panel(page).getByLabel("Project name").fill("Refresh access");
     await saveButton(page).click();
     await expect(page.locator(change === "role" ? ".editor-header" : ".editor-banner")).toContainText(change === "role" ? "Viewer" : "Archived");

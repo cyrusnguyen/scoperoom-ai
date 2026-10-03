@@ -289,29 +289,42 @@ test.describe("two real users converge through status polling", () => {
 
   test("a tab that was hidden while access was removed sends nothing on return until status answers, then nothing at all", async ({ collaboration }) => {
     const { editorPage, removeEditor } = collaboration;
-    await openBoth(collaboration);
-    const writes = watchWrites(editorPage);
-    await renameLocally(editorPage, ids.startId, "Mine");
-    const setVisibility = (state: "hidden" | "visible") => editorPage.evaluate((value) => {
-      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
-      document.dispatchEvent(new Event("visibilitychange"));
-    }, state);
-    await setVisibility("hidden");
-    await removeEditor(); // while nobody was looking
+    const joinRoutes: Route[] = [];
     const statusReads: Route[] = [];
-    await editorPage.route(/\/status$/, (route) => { statusReads.push(route); });
-    await editorPage.clock.runFor(POLL_DEADLINE); // hidden: the poll is paused and autosave cannot beat the barrier
-    await quiet(editorPage);
-    expect(writes).toHaveLength(0);
-    await setVisibility("visible");
-    await expect.poll(() => statusReads.length).toBeGreaterThan(0);
-    await editorPage.keyboard.press("Control+s");
-    await quiet(editorPage);
-    expect(writes).toHaveLength(0); // the return's status read has not answered yet
-    for (const route of statusReads.splice(0)) await route.continue();
-    await expect(editorPage.getByRole("heading", { level: 1, name: "Project unavailable" })).toBeVisible();
-    await quiet(editorPage);
-    expect(writes).toHaveLength(0);
+    await editorPage.route(/\/realtime-token$/, (route) => { joinRoutes.push(route); });
+    try {
+      await openBoth(collaboration);
+      const writes = watchWrites(editorPage);
+      await renameLocally(editorPage, ids.startId, "Mine");
+      const setVisibility = (state: "hidden" | "visible") => editorPage.evaluate((value) => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
+        document.dispatchEvent(new Event("visibilitychange"));
+      }, state);
+      // Hold every authority read that starts after hiding, including a late initial Realtime join.
+      await editorPage.route(/\/status$/, (route) => { statusReads.push(route); });
+      await setVisibility("hidden");
+      await expect.poll(() => joinRoutes.length).toBeGreaterThan(0);
+      for (const route of joinRoutes.splice(0)) await route.continue();
+      await expect.poll(() => statusReads.length).toBeGreaterThan(0); // The post-hide join read is pending.
+      await removeEditor(); // while nobody was looking
+
+      await editorPage.clock.runFor(POLL_DEADLINE); // hidden: the poll is paused and autosave cannot beat the barrier
+      await quiet(editorPage);
+      expect(writes).toHaveLength(0);
+      await setVisibility("visible");
+      await expect.poll(() => statusReads.length).toBeGreaterThan(0);
+      await editorPage.keyboard.press("Control+s");
+      await quiet(editorPage);
+      expect(writes).toHaveLength(0); // the return's status read has not answered yet
+      for (const route of statusReads.splice(0)) await route.continue();
+      await expect(editorPage.getByRole("heading", { level: 1, name: "Project unavailable" })).toBeVisible();
+      await quiet(editorPage);
+      expect(writes).toHaveLength(0);
+    } finally {
+      await editorPage.unroute(/\/realtime-token$/);
+      await editorPage.unroute(/\/status$/);
+      for (const route of [...joinRoutes.splice(0), ...statusReads.splice(0)]) await route.continue().catch(() => undefined);
+    }
   });
 
   test("project switch A to B to A with a delayed A read: the stale response cannot regress the reopened A", async ({ collaboration }) => {

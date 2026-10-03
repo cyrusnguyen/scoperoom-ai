@@ -18,6 +18,7 @@ import { emptyOutbox, pendingCount } from "@/features/studio/ui/outbox";
 import { admits, afterDraftRead, type StudioUi } from "@/features/studio/ui/studio-ui";
 import Dialog, { CancelFocus } from "./dialog";
 import { resolveDock } from "./dock";
+import { Icon } from "./icon";
 import LifecycleDialog, { type LifecycleKind } from "./lifecycle-dialog";
 import NewProjectDialog from "./new-project-dialog";
 import ProjectEditor, { NoProjectOpen, ProjectUnavailable } from "./project-editor";
@@ -328,7 +329,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     </div>
     <footer className="app-footer">
       <span className={notice.error ? "footer-error" : undefined} role={notice.error ? "alert" : "status"} aria-live="polite">{notice.text}</span>
-      <form action={signOut} onSubmit={clearImportSessions}><button type="submit">Sign out</button></form>
+      <form action={signOut} onSubmit={clearImportSessions}><button type="submit" className="button quiet small sign-out-button"><Icon name="signOut" size={15} /><span>Sign out</span></button></form>
     </footer>
     {children}
     {dialog?.kind === "create" && <NewProjectDialog onClose={() => closeDialog()} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}

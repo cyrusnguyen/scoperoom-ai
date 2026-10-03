@@ -82,7 +82,7 @@ test("the status route separates a definitive 401 from an Auth outage, and never
     expect((await response.json() as { error: { code: string } }).error.code).toBe("UNAUTHENTICATED");
   } finally { await anonymous.close(); }
 
-  for (const mode of ["down", "502", "503", "429"]) {
+  for (const mode of ["down", "502", "503", "504", "429"]) {
     fault(mode);
     const response = await page.request.get(url);
     expect(response.status(), mode).toBe(503);
@@ -178,4 +178,110 @@ test("a definitive 401 clears the protected state before the page navigates to s
   expect(seen[0]).toContain("Your session ended");
   for (const gone of ["Auth outage project", "Unsaved changes", "Start", "Pay", "Ship"]) expect(seen[0], gone).not.toContain(gone);
   expect(writes).toHaveLength(0);
+});
+
+
+for (const mode of ["503", "504"]) {
+  for (const destination of ["project", "app"]) {
+    test(`initial ${mode} Auth outage at ${destination} keeps the route private and Retry recovers there`, async ({ page }) => {
+      const { projectId, payId } = await seed(page);
+      const url = `${origin}${destination === "project" ? `/app/projects/${projectId}` : "/app"}`;
+      const session = async () => JSON.stringify((await page.context().cookies(origin)).filter((cookie) => cookie.name.startsWith("sb-")).sort((a, b) => a.name.localeCompare(b.name)));
+      const cookiesBefore = await session();
+      const privateReads: string[] = [];
+      page.on("request", (request) => { if (new URL(request.url()).pathname.startsWith("/api/")) privateReads.push(request.url()); });
+      await page.addInitScript(() => {
+        const capture = () => {
+          if (document.querySelector(".app-shell, .react-flow__node")) (window as unknown as { privateShellMounted: boolean }).privateShellMounted = true;
+        };
+        new MutationObserver(capture).observe(document, { childList: true, subtree: true });
+      });
+      fault(mode);
+      await page.goto(url);
+      await expect(page.getByRole("heading", { name: "ScopeRoom is temporarily unavailable" })).toBeVisible();
+      expect(page.url() === url).toBe(true);
+      await expect(page.locator(".app-shell, .react-flow__node")).toHaveCount(0);
+      expect(await page.evaluate(() => Boolean((window as unknown as { privateShellMounted?: boolean }).privateShellMounted))).toBe(false);
+      expect(privateReads).toHaveLength(0);
+      expect(await session() === cookiesBefore).toBe(true);
+
+      fault("");
+      await page.getByRole("button", { name: "Retry", exact: true }).click();
+      expect(page.url().replace(/\?$/, "") === url).toBe(true);
+      if (destination === "project") await expect(nodeAt(page, payId)).toBeVisible();
+      else await expect(page.getByRole("heading", { name: "No project open" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "ScopeRoom is temporarily unavailable" })).toHaveCount(0);
+    });
+  }
+}
+
+test("an initial definitive Auth 401 still requires sign-in", async ({ page }) => {
+  const { projectId } = await seed(page);
+  fault("401");
+  await page.goto(`${origin}/app/projects/${projectId}`);
+  await expect(page).toHaveURL(`${origin}/login`);
+  await expect(page.getByRole("heading", { name: "Sign in to ScopeRoom" })).toBeVisible();
+  await expect(page.locator(".app-shell")).toHaveCount(0);
+});
+
+test("a protected page without a session still requires sign-in", async ({ page }) => {
+  await page.context().clearCookies();
+  await page.goto(`${origin}/app`);
+  await expect(page).toHaveURL(`${origin}/login`);
+  await expect(page.getByRole("heading", { name: "Sign in to ScopeRoom" })).toBeVisible();
+  await expect(page.locator(".app-shell")).toHaveCount(0);
+});
+
+for (const mode of ["unconfirmed", "anonymous"]) {
+  test(`a healthy ${mode} identity still requires email verification`, async ({ page }) => {
+    await page.context().addCookies([{ name: "scoperoom.pending-email", value: "page-gate@example.test", domain: "127.0.0.1", path: "/signup", httpOnly: true, sameSite: "Lax" }]);
+    fault(mode);
+    await page.goto(`${origin}/app`);
+    await expect(page).toHaveURL(`${origin}/signup/verify`);
+    await expect(page.getByRole("heading", { name: "Verify your email" })).toBeVisible();
+    await expect(page.locator(".app-shell")).toHaveCount(0);
+  });
+}
+
+test("healthy verified page switches preserve the shell and per-project view, selection and panel", async ({ page }) => {
+  const { projectId, payId } = await seed(page);
+  const otherId = await createProjectViaApi(page, "Other admitted project");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${origin}/app/projects/${projectId}`);
+  await expect(nodeAt(page, payId)).toBeVisible();
+  const shell = await page.locator(".app-shell").elementHandle();
+  await page.locator(".studio-toolbar").getByRole("button", { name: "List", exact: true }).click();
+  await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Pay/ }).click();
+  await page.getByRole("button", { name: "Inspect", exact: true }).click();
+  const panel = page.locator("#right-panel");
+  await expect(panel.getByLabel("Name", { exact: true })).toHaveValue("Pay");
+  await page.locator("#projects-nav").getByRole("button", { name: "Other admitted project", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Other admitted project" })).toBeVisible();
+  expect(await shell!.evaluate((element) => element === document.querySelector(".app-shell"))).toBe(true);
+  await expect(panel).toHaveCount(0);
+  await page.locator("#projects-nav").getByRole("button", { name: "Auth outage project", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Auth outage project" })).toBeVisible();
+  expect(await shell!.evaluate((element) => element === document.querySelector(".app-shell"))).toBe(true);
+  await expect(page.getByRole("list", { name: "Steps" })).toBeVisible();
+  await expect(panel.getByLabel("Name", { exact: true })).toHaveValue("Pay");
+  expect(page.url() === `${origin}/app/projects/${projectId}`).toBe(true);
+  expect(otherId !== projectId).toBe(true);
+});
+
+test("a committed page Auth outage removes the retained shell until same-route Retry", async ({ page }) => {
+  const { projectId, payId } = await seed(page);
+  const otherId = await createProjectViaApi(page, "Unavailable destination");
+  await page.goto(`${origin}/app/projects/${projectId}`);
+  await expect(nodeAt(page, payId)).toBeVisible();
+  const shell = await page.locator(".app-shell").elementHandle();
+  fault("503");
+  await page.locator("#projects-nav").getByRole("button", { name: "Unavailable destination", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "ScopeRoom is temporarily unavailable" })).toBeVisible();
+  expect(page.url() === `${origin}/app/projects/${otherId}`).toBe(true);
+  await expect(page.locator(".app-shell, .react-flow__node")).toHaveCount(0);
+  expect(await shell!.evaluate((element) => element.isConnected)).toBe(false);
+  fault("");
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Unavailable destination" })).toBeVisible();
+  expect(page.url().replace(/\?$/, "") === `${origin}/app/projects/${otherId}`).toBe(true);
 });

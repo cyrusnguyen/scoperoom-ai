@@ -580,14 +580,14 @@ test.describe("saved positions and arrangement", () => {
 
     await drag(page, middle!, 150, 0);
     await page.locator(".flow-switch").click();
-    await page.getByRole("dialog", { name: "Flows" }).locator(".item-row").filter({ hasText: "Second flow" }).click();
+    await page.getByRole("dialog", { name: "Flows" }).getByRole("list", { name: "Project flows" }).getByRole("button", { name: /^Second flow\b/ }).click();
     await expect(page.locator("#studio-flow-title")).toHaveText("Second flow");
     expect(saves).toHaveLength(1);
     expect(itemsOf(saves[0]!)).toEqual([middle!]);
     expect((await draftOf(page, projectId)).layout.positions[middle!]!.version).toBe(2);
 
     await page.locator(".flow-switch").click();
-    await page.getByRole("dialog", { name: "Flows" }).locator(".item-row").filter({ hasText: "Positions" }).click();
+    await page.getByRole("dialog", { name: "Flows" }).getByRole("list", { name: "Project flows" }).getByRole("button", { name: /^Positions\b/ }).click();
     await expect(nodeAt(page, end!)).toBeVisible();
     await drag(page, end!, -150, 0);
     await page.locator("#projects-nav").getByRole("button", { name: "Other project", exact: true }).click();

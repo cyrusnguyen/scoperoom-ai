@@ -25,7 +25,7 @@ function typing(event: KeyboardEvent<HTMLElement>) {
 
 /** The centre of the editor: the open flow, its toolbox and status. */
 export default function Studio() {
-  const { draft, editable, busy, narrow, ui, update, inspect, run, saveChanges } = useStudio();
+  const { draft, editable, busy, narrow, ui, update, run, saveChanges } = useStudio();
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<StudioDialog>(null);
   // Arrange stayed closed because a save is unresolved; its note goes once that save is resolved.
@@ -54,7 +54,6 @@ export default function Studio() {
     event.preventDefault();
     setDialog("delete");
   };
-  const showFlowDetails = () => { update(() => ({ selection: { kind: "FLOW", id: flow.id } })); inspect(); };
   // Arrange works from the saved draft, so unsaved changes are saved first; if they cannot be, it does not open.
   const arrange = async () => {
     const saved = await saveChanges();
@@ -77,7 +76,6 @@ export default function Studio() {
         <button type="button" className="button small" onClick={() => setDialog("connect")} disabled={!stepCount}><Icon name="link" size={14} />Connect</button>
         <button type="button" className="button quiet small" onClick={() => void arrange()} disabled={busy || !stepCount}><Icon name="grid" size={14} />Arrange</button>
       </>}
-      <button type="button" className="button quiet small" onClick={showFlowDetails}>Flow details</button>
     </div>
     <div className="studio-stage">
       {view === "canvas" ? <FlowCanvas flowId={flow.id} /> : <GraphList flowId={flow.id} onDeleteSelected={() => setDialog("delete")} />}

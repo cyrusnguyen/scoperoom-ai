@@ -5,7 +5,7 @@ import test from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { Client } from "pg";
 import { FLOW_IMPORT_PREVIEW_LIMITS } from "../../src/features/exchange/contracts/import.ts";
-import { previewFlowImport } from "../../src/features/exchange/server/import-flow.ts";
+import { applyFlowImport, previewFlowImport } from "../../src/features/exchange/server/import-flow.ts";
 import { getProjectBootstrap } from "../../src/features/projects/server/projects.ts";
 import { cleanupTransient } from "../../src/server/maintenance/cleanup-transient.ts";
 import { canRun, withFixture } from "./support/fixture.ts";
@@ -145,21 +145,38 @@ test("creation admission uses a strict one-hour window and project-wide history"
 });
 
 test("cleanup frees retained body capacity but never the identity quota", { skip: !canRun }, async () => {
-  await withFixture(async ({ user, project, profileId, database }) => {
+  await withFixture(async ({ user, project, database }) => {
     const owner = await user(); const projectId = await project(owner); const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
-    const actorId = await profileId(owner); const bytes = await validFile(); const ids = Array.from({ length: FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies }, randomUUID);
-    for (const id of ids) await database.query(`insert into app.flow_import_preview (id,project_id,draft_id,actor_id,expected_document_revision,state,payload,positions,fidelity_report,preview_hash,payload_hash,created_at,expires_at)
-      values ($1,$2,$3,$4,1,'DISCARDED','{}','[]',$5::jsonb,repeat('a',64),repeat('a',64),now()-interval '2 hours',now()+interval '1 day')`, [id, projectId, draftId, actorId, report]);
+    const bytes = await validFile();
+    const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), bytes);
+    await applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash });
+    const original = (await database.query("select to_jsonb(p) value from app.flow_import_preview p where id=$1", [preview.id])).rows[0].value;
+    const ids = [preview.id, ...Array.from({ length: FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies - 1 }, randomUUID)];
+    // Canonical APPLIED terminal bodies are retained for seven days; ordinary discard already releases its body.
+    for (const id of ids.slice(1)) await database.query("insert into app.flow_import_preview select * from jsonb_populate_record(null::app.flow_import_preview,$1::jsonb)", [{ ...original, id, applied_result: { ...original.applied_result, previewId: id } }]);
+    const retainedIdentity = async () => (await database.query("select id,project_id,draft_id,actor_id,preview_hash,payload_hash,result_flow_id,applied_mapping,applied_result from app.flow_import_preview where id=any($1::uuid[]) order by id", [ids])).rows;
+    const retained = await retainedIdentity();
+    assert.equal(retained.length, FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies);
+    // Reproduce a global sweep between setup and lock acquisition without making the fixture cleanup-eligible.
+    await cleanupTransient({ dryRun: false, batchSize: 100 });
+    assert.deepEqual(await retainedIdentity(), retained);
+    assert.equal((await database.query("select count(*)::int count from app.flow_import_preview where id=any($1::uuid[]) and state='APPLIED' and payload is not null and positions is not null and fidelity_report is not null", [ids])).rows[0].count, FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies);
     const holder = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL }); await holder.connect();
     try {
       await holder.query("begin"); await holder.query("select id from app.flow_import_preview where id=any($1::uuid[]) for update", [ids]);
+      // Trusted fixture connection only: age these exact immutable rows without changing global triggers or parent keys.
+      await holder.query("set local session_replication_role = replica");
+      await holder.query("update app.flow_import_preview set applied_at=clock_timestamp()-interval '8 days' where id=any($1::uuid[])", [ids]);
+      await holder.query("set local session_replication_role = origin");
+      assert.equal((await database.query("select count(*)::int count from app.flow_import_preview where id=any($1::uuid[]) and state='APPLIED' and payload is not null and positions is not null and fidelity_report is not null", [ids])).rows[0].count, FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies);
       const deniedId = randomUUID(); const deniedKey = randomUUID();
       await rejectWithoutEffects(database, previewFlowImport(owner, projectId, draftId, deniedId, deniedKey, bytes), projectId, deniedId, deniedKey);
       await holder.query("commit");
     } finally { await holder.query("rollback"); await holder.end(); }
     for (let sweep = 0; sweep < 20 && (await database.query("select 1 from app.flow_import_preview where id=any($1::uuid[]) and payload is not null", [ids])).rowCount; sweep += 1) await cleanupTransient({ dryRun: false, batchSize: 100 });
     assert.equal((await database.query("select count(*)::int count from app.flow_import_preview where id=any($1::uuid[])", [ids])).rows[0].count, FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies);
-    assert.equal((await database.query("select count(*)::int count from app.flow_import_preview where id=any($1::uuid[]) and payload is not null", [ids])).rows[0].count, 0);
+    assert.equal((await database.query("select count(*)::int count from app.flow_import_preview where id=any($1::uuid[]) and (payload is not null or positions is not null or fidelity_report is not null)", [ids])).rows[0].count, 0);
+    assert.deepEqual(await retainedIdentity(), retained);
     await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), bytes);
   });
 });

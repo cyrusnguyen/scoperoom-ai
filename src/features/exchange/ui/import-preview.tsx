@@ -21,7 +21,7 @@ const nodeTypes = { importStep: Step };
 export function ImportPreview({ preview, view }: { preview: ImportPreviewView; view: "canvas" | "list" }) {
   const file = preview.file;
   if (!file || !preview.positions) return <p>The preview body is no longer retained. Select the same file again for a new inspection.</p>;
-  if (view === "list") return <div aria-label="Import graph list">
+  if (view === "list") return <div className="import-graph-list" aria-label="Import graph list">
     <h3>{file.flow.title}</h3><p>{file.flow.purpose}</p>
     <ol>{file.nodes.map((node) => <li key={node.id}><strong>{node.label}</strong> · {KIND_LABELS[node.kind]}{node.actorLabel && <span> · {node.actorLabel}</span>}{node.description && <p>{node.description}</p>}{node.assumptionNotes.map((text, index) => <p key={index}>{text}</p>)}</li>)}</ol>
     <h4>Connections</h4><ul>{file.edges.map((edge) => <li key={edge.id}>{file.nodes.find((node) => node.id === edge.fromId)?.label} → {file.nodes.find((node) => node.id === edge.toId)?.label}{edge.condition && <span> · {edge.condition}</span>}</li>)}</ul>
@@ -30,7 +30,7 @@ export function ImportPreview({ preview, view }: { preview: ImportPreviewView; v
   const nodes: PreviewNode[] = file.nodes.map((node) => ({ id: node.id, type: "importStep", data: node, position: positions.get(node.id)!, ...STEP_SIZE[node.kind] }));
   const edges = file.edges.map((edge) => {
     const sides = file.edgeSides?.find((sides) => sides.edgeId === edge.id);
-    return { id: edge.id, source: edge.fromId, target: edge.toId, sourceHandle: sides?.from ?? (file.flow.direction === "LR" ? "right" : "bottom"), targetHandle: sides?.to ?? (file.flow.direction === "LR" ? "left" : "top"), label: edge.condition ?? "", type: "smoothstep", markerEnd: { type: MarkerType.ArrowClosed } };
+    return { id: edge.id, source: edge.fromId, target: edge.toId, sourceHandle: sides?.from ?? (file.flow.direction === "LR" ? "right" : "bottom"), targetHandle: sides?.to ?? (file.flow.direction === "LR" ? "left" : "top"), label: edge.condition ?? "", labelStyle: { fill: "var(--foreground)", fontSize: 12 }, labelBgStyle: { fill: "var(--surface-raised)" }, type: "smoothstep", markerEnd: { type: MarkerType.ArrowClosed } };
   });
   return <div className="arrange-preview" aria-label="Read-only import graph"><ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} fitView nodesDraggable={false} nodesConnectable={false} edgesReconnectable={false} elementsSelectable={false} deleteKeyCode={null} proOptions={{ hideAttribution: true }} /></div>;
 }

@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
  * Native modal: showModal() traps focus and turns Esc into onClose; closing returns focus to the opener. A layout effect
  * closes it before React removes the node (a removed modal no longer restores focus) and opens it before child effects run.
  */
-export default function Dialog({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer: ReactNode }) {
+export default function Dialog({ title, description, className = "", onClose, children, footer }: { title: string; description?: string; className?: string; onClose: () => void; children: ReactNode; footer: ReactNode }) {
   const ref = useRef<HTMLDialogElement>(null);
   useLayoutEffect(() => {
     const dialog = ref.current;
@@ -16,8 +16,8 @@ export default function Dialog({ title, onClose, children, footer }: { title: st
   // Chrome closes a modal on a repeated Esc even when `cancel` is prevented. This dialog is open for as long as it is
   // mounted, so a native close its owner didn't ask for (e.g. Esc while a request is in flight) reopens it.
   const reopen = () => { const dialog = ref.current; if (dialog?.isConnected && !dialog.open) dialog.showModal(); };
-  return <dialog ref={ref} className="modal" aria-labelledby="dialog-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={reopen}>
-    <header className="modal-header"><h2 id="dialog-title">{title}</h2></header>
+  return <dialog ref={ref} className={`modal ${className}`} aria-labelledby="dialog-title" aria-describedby={description ? "dialog-description" : undefined} onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={reopen}>
+    <header className="modal-header"><h2 id="dialog-title">{title}</h2>{description && <p id="dialog-description" className="dialog-description">{description}</p>}</header>
     <div className="modal-body">{children}</div>
     <footer className="modal-footer">{footer}</footer>
   </dialog>;
