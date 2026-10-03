@@ -30,6 +30,35 @@ async function replacementReady(page: Page, previousId: string) {
   await expect(dialog(page).getByRole("button", { name: "Inspect again", exact: true })).toBeEnabled();
   await expect(dialog(page).getByText("Ready", { exact: true })).toBeVisible();
 }
+type ImportUploadCapture = { url: string; key: string | null; bytes: number[] | null; error: boolean };
+async function captureImportUploads(page: Page) {
+  const install = () => {
+    const browser = window as typeof window & { importUploadCaptureInstalled?: boolean; importUploadCaptures?: ImportUploadCapture[] };
+    if (browser.importUploadCaptureInstalled) return;
+    browser.importUploadCaptureInstalled = true;
+    const captures: ImportUploadCapture[] = browser.importUploadCaptures = [];
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      try {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
+        if (url.origin === location.origin && /^\/api\/projects\/[^/]+\/flow-imports\/preview$/.test(url.pathname) && init?.method?.toUpperCase() === "POST" && init.body instanceof File) {
+          const capture: ImportUploadCapture = { url: url.href, key: new Headers(init.headers).get("Idempotency-Key"), bytes: null, error: false };
+          captures.push(capture);
+          // Chromium's request protocol can omit File bodies. Read the immutable object without delaying its fetch.
+          void init.body.arrayBuffer().then((buffer) => { capture.bytes = [...new Uint8Array(buffer)]; }, () => { capture.error = true; });
+        }
+      } catch { captures.push({ url: "", key: null, bytes: null, error: true }); }
+      return original(input, init);
+    };
+  };
+  await page.addInitScript(install); await page.evaluate(install);
+}
+async function capturedImportUploads(page: Page, count: number) {
+  const captured = () => page.evaluate(() => (window as typeof window & { importUploadCaptures?: ImportUploadCapture[] }).importUploadCaptures ?? []);
+  await expect.poll(async () => (await captured()).length).toBe(count);
+  await expect.poll(async () => (await captured()).every((capture) => capture.bytes !== null || capture.error)).toBe(true);
+  const result = await captured(); expect(result.every((capture) => !capture.error && capture.bytes !== null)).toBe(true); return result;
+}
 const nodeAt = (page: Page, id: string) => page.locator(`.react-flow__node[data-id="${id}"]`);
 const writes = (page: Page, suffix = "/apply") => {
   const list: Request[] = [];
@@ -171,6 +200,149 @@ test("unknown upload after reload retains its identity until the original file c
   await dialog(page).getByRole("button", { name: "Start new inspection", exact: true }).click(); await replacementReady(page, original.previewId);
   expect(uploads).toHaveLength(3); expect(uploads[1]!.headers()["idempotency-key"]).toBe(original.createKey); expect(discards).toHaveLength(1); expect(discards[0]!.headers()["idempotency-key"]).toBe(original.discardKey);
   expect((await records(page))[0].previewId).not.toBe(original.previewId); expect(await draftOf(page, id)).toEqual(before);
+});
+
+for (const action of ["Discard preview", "Start new inspection"] as const) test(`${action} releases an uncommitted upload after real draft replacement across reload`, async ({ page, workerAccount }) => {
+  const { id } = await setup(page, true); const file = await nativeFile();
+  const uploads = writes(page, "/preview"), discards = writes(page, "/discard");
+  await captureImportUploads(page);
+  await page.route(`**/api/projects/${id}/flow-imports/preview?**`, (route) => route.abort("failed"), { times: 1 });
+  await openImport(page);
+  await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "original.json", mimeType: "application/json", buffer: file });
+  await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click();
+  await expect(dialog(page).getByRole("alert")).toContainText("Upload not confirmed");
+  const [original] = await records(page);
+  expect(original.previewHash).toBeUndefined(); expect(original.attempt).toBeUndefined(); expect(uploads).toHaveLength(1);
+  const [initialCapture] = await capturedImportUploads(page, 1);
+  expect(initialCapture!.url).toBe(uploads[0]!.url()); expect(initialCapture!.key).toBe(original.createKey); expect(Buffer.from(initialCapture!.bytes!)).toEqual(file);
+  const noOriginalCommit = async () => {
+    expect((await workerAccount.database.query("select id from app.flow_import_preview where id=$1", [original.previewId])).rows).toHaveLength(0);
+    expect((await workerAccount.database.query("select id from app.mutation_receipt where scope_id=$1 and key=$2", [id, original.createKey])).rows).toHaveLength(0);
+  };
+  await noOriginalCommit();
+
+  // Use the real reset shape: archive the old target and atomically install an editable replacement.
+  const replacementId = randomUUID();
+  await workerAccount.database.query("begin");
+  try {
+    await workerAccount.database.query("select id from app.project where id=$1 for update", [id]);
+    await workerAccount.database.query("update app.scope_draft set status='ARCHIVED' where id=$1 and project_id=$2", [original.draftId, id]);
+    await workerAccount.database.query("insert into app.scope_draft (id,project_id,created_by,document_json,layout_json) select $2,project_id,created_by,document_json,layout_json from app.scope_draft where id=$1 and project_id=$3", [original.draftId, replacementId, id]);
+    await workerAccount.database.query("update app.project set current_draft_id=$2 where id=$1", [id, replacementId]);
+    await workerAccount.database.query("commit");
+  } catch (error) { await workerAccount.database.query("rollback"); throw error; }
+  const savedDrafts = async () => (await workerAccount.database.query("select id,status::text status,document_revision,layout_revision,document_json,layout_json from app.scope_draft where project_id=$1 order by id", [id])).rows;
+  const before = await savedDrafts(); expect(before).toHaveLength(2);
+  expect(before.find((draft) => draft.id === original.draftId)?.status).toBe("ARCHIVED");
+  expect(before.find((draft) => draft.id === replacementId)?.status).toBe("EDITABLE");
+  await page.reload(); expect((await draftOf(page, id)).id).toBe(replacementId);
+  await openImport(page); await expect(dialog(page).getByRole("alert")).toContainText("Upload not confirmed");
+  expect(await records(page)).toEqual([original]);
+  await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "same.json", mimeType: "application/json", buffer: file });
+  const oldUrl = uploads[0]!.url();
+  const oldResponse = () => page.waitForResponse((response) => response.request().method() === "POST" && response.url() === oldUrl && response.request().headers()["idempotency-key"] === original.createKey);
+
+  // Even this error code cannot retire an identity when the HTTP outcome is uncertain.
+  await page.route(oldUrl, (route) => route.fulfill({ status: 503, json: { error: { code: "DRAFT_REPLACED", message: "Replacement outcome is not confirmed." } } }), { times: 1 });
+  const uncertainResponse = oldResponse();
+  await dialog(page).getByRole("button", { name: action, exact: true }).click();
+  const uncertain = await uncertainResponse; expect(await uncertain.finished()).toBeNull(); expect(uncertain.status()).toBe(503);
+  expect((await uncertain.json()).error.code).toBe("DRAFT_REPLACED");
+  await expect(dialog(page).getByRole("alert")).toContainText("Replacement outcome is not confirmed");
+  await expect(dialog(page).getByRole("button", { name: action, exact: true })).toBeEnabled();
+  expect(await records(page)).toEqual([original]); expect(uploads).toHaveLength(2); expect(discards).toHaveLength(0);
+  await noOriginalCommit(); expect(await savedDrafts()).toEqual(before);
+
+  const refusedResponse = oldResponse();
+  await dialog(page).getByRole("button", { name: action, exact: true }).click();
+  const refused = await refusedResponse; expect(await refused.finished()).toBeNull(); expect(refused.status()).toBe(409);
+  expect((await refused.json()).error.code).toBe("DRAFT_REPLACED");
+  expect(uploads.slice(0, 3)).toHaveLength(3); expect(discards).toHaveLength(0);
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { importUploadCaptures?: ImportUploadCapture[] }).importUploadCaptures?.slice(0, 2).filter((capture) => capture.bytes !== null || capture.error).length ?? 0)).toBe(2);
+  const retryCaptures = await page.evaluate(() => (window as typeof window & { importUploadCaptures?: ImportUploadCapture[] }).importUploadCaptures!.slice(0, 2));
+  expect(retryCaptures.every((capture) => !capture.error && capture.bytes !== null)).toBe(true);
+  const oldCaptures = [initialCapture!, ...retryCaptures]; expect(oldCaptures).toHaveLength(3);
+  for (const capture of oldCaptures) { expect(capture.url).toBe(oldUrl); expect(capture.key).toBe(original.createKey); expect(Buffer.from(capture.bytes!)).toEqual(file); }
+  for (const request of uploads.slice(0, 3)) {
+    expect(request.url()).toBe(oldUrl); expect(request.headers()["idempotency-key"]).toBe(original.createKey);
+  }
+  await noOriginalCommit(); expect(await savedDrafts()).toEqual(before);
+  // The definitive response comes from the real server, after its replay lookup and locked target check.
+  if (action === "Discard preview") {
+    await expect(dialog(page)).toBeHidden(); expect(await records(page)).toHaveLength(0); expect(uploads).toHaveLength(3);
+    await page.reload(); await openImport(page); expect(await records(page)).toHaveLength(0);
+    await inspect(page, Promise.resolve(file));
+  } else await replacementReady(page, original.previewId);
+
+  expect(uploads).toHaveLength(4); expect(discards).toHaveLength(0);
+  const [fresh] = await records(page); expect(fresh.previewId).not.toBe(original.previewId); expect(fresh.createKey).not.toBe(original.createKey);
+  expect(fresh.draftId).toBe(replacementId); expect(fresh.previewHash).toMatch(/^[0-9a-f]{64}$/);
+  const freshUrl = new URL(uploads[3]!.url());
+  expect(freshUrl.searchParams.get("draftId")).toBe(replacementId); expect(freshUrl.searchParams.get("previewId")).toBe(fresh.previewId);
+  expect(uploads[3]!.headers()["idempotency-key"]).toBe(fresh.createKey);
+  const freshCapture = (await capturedImportUploads(page, action === "Discard preview" ? 1 : 3)).at(-1)!;
+  expect(freshCapture.url).toBe(uploads[3]!.url()); expect(freshCapture.key).toBe(fresh.createKey); expect(Buffer.from(freshCapture.bytes!)).toEqual(file);
+  await noOriginalCommit();
+  expect((await workerAccount.database.query("select id,draft_id,state::text state from app.flow_import_preview where project_id=$1", [id])).rows).toEqual([{ id: fresh.previewId, draft_id: replacementId, state: "READY" }]);
+  expect((await workerAccount.database.query("select key from app.mutation_receipt where scope_id=$1 and operation='FLOW_IMPORT_PREVIEW_V1'", [id])).rows).toEqual([{ key: fresh.createKey }]);
+  expect(await savedDrafts()).toEqual(before);
+  await page.reload(); await openImport(page); await expect(dialog(page).getByText("Ready", { exact: true })).toBeVisible();
+  expect(await records(page)).toEqual([fresh]); expect(await savedDrafts()).toEqual(before); expect(uploads).toHaveLength(4);
+});
+
+test("committed lost upload replays and retires its original preview after real draft replacement", async ({ page, workerAccount }) => {
+  const { id, first } = await setup(page, true); const file = await nativeFile();
+  const uploads = writes(page, "/preview"), discards = writes(page, "/discard");
+  await captureImportUploads(page);
+  let committed: ImportPreviewView | undefined;
+  await page.route(`**/api/projects/${id}/flow-imports/preview?**`, async (route) => {
+    const response = await route.fetch(); expect(response.status()).toBe(200); committed = await response.json(); await route.abort("failed");
+  }, { times: 1 });
+  await openImport(page); await dialog(page).evaluate((element) => element.setAttribute("data-retained-modal", "true"));
+  await dialog(page).getByLabel("Native flow file").setInputFiles({ name: "original.json", mimeType: "application/json", buffer: file });
+  await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click();
+  await expect(dialog(page).getByRole("alert")).toContainText("Upload not confirmed");
+  const [original] = await records(page); expect(original.previewHash).toBeUndefined();
+  expect(committed).toMatchObject({ id: original.previewId, draftId: original.draftId, state: "READY" });
+  expect((await workerAccount.database.query("select id from app.flow_import_preview where id=$1 and state='READY'", [original.previewId])).rows).toEqual([{ id: original.previewId }]);
+
+  const replacementId = randomUUID();
+  await workerAccount.database.query("begin");
+  try {
+    await workerAccount.database.query("select id from app.project where id=$1 for update", [id]);
+    await workerAccount.database.query("update app.scope_draft set status='ARCHIVED' where id=$1 and project_id=$2", [original.draftId, id]);
+    // A literal marker in only the copied draft proves that the real bootstrap was adopted before retirement starts.
+    await workerAccount.database.query("insert into app.scope_draft (id,project_id,created_by,document_json,layout_json) select $2,project_id,created_by,jsonb_set(document_json,ARRAY['nodes',$4,'label'],to_jsonb('Replacement draft marker'::text)),layout_json from app.scope_draft where id=$1 and project_id=$3", [original.draftId, replacementId, id, first]);
+    await workerAccount.database.query("update app.project set current_draft_id=$2 where id=$1", [id, replacementId]);
+    await workerAccount.database.query("commit");
+  } catch (error) { await workerAccount.database.query("rollback"); throw error; }
+  const savedDrafts = async () => (await workerAccount.database.query("select id,status::text status,document_revision,layout_revision,document_json,layout_json from app.scope_draft where project_id=$1 order by id", [id])).rows;
+  const before = await savedDrafts(); expect(before).toHaveLength(2);
+  const bootstrapResponse = page.waitForResponse((response) => response.request().method() === "GET" && new URL(response.url()).pathname === `/api/projects/${id}/bootstrap`);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const bootstrap = await bootstrapResponse; expect(await bootstrap.finished()).toBeNull(); expect(bootstrap.status()).toBe(200); expect((await bootstrap.json()).draft.id).toBe(replacementId);
+  await expect(nodeAt(page, first).locator(".step-label")).toHaveText("Replacement draft marker");
+  await expect(dialog(page)).toHaveAttribute("data-retained-modal", "true"); expect(await records(page)).toEqual([original]);
+
+  const replayResponse = page.waitForResponse((response) => response.request().method() === "POST" && response.url() === uploads[0]!.url() && response.request().headers()["idempotency-key"] === original.createKey);
+  await dialog(page).getByRole("button", { name: "Start new inspection", exact: true }).click();
+  const replay = await replayResponse; expect(await replay.finished()).toBeNull(); expect(replay.status()).toBe(200);
+  expect(await replay.json()).toMatchObject({ id: original.previewId, draftId: original.draftId, previewHash: committed!.previewHash, state: "READY" });
+  await replacementReady(page, original.previewId); expect(uploads).toHaveLength(3); expect(discards).toHaveLength(1);
+  expect(uploads[1]!.url()).toBe(uploads[0]!.url()); expect(uploads[1]!.headers()["idempotency-key"]).toBe(original.createKey);
+  const captured = await capturedImportUploads(page, 3);
+  for (let index = 0; index < captured.length; index++) {
+    expect(captured[index]!.url).toBe(uploads[index]!.url()); expect(captured[index]!.key).toBe(uploads[index]!.headers()["idempotency-key"]); expect(Buffer.from(captured[index]!.bytes!)).toEqual(file);
+  }
+  expect(discards[0]!.url()).toContain(`/flow-imports/${original.previewId}/discard`); expect(discards[0]!.headers()["idempotency-key"]).toBe(original.discardKey);
+  const retired: ImportPreviewView = await (await page.request.get(`/api/projects/${id}/flow-imports/${original.previewId}`)).json();
+  expect(retired).toMatchObject({ id: original.previewId, draftId: original.draftId, previewHash: committed!.previewHash, state: "DISCARDED", file: null, positions: null, fidelityReport: null });
+  const [fresh] = await records(page); expect(fresh.draftId).toBe(replacementId);
+  const previews = (await workerAccount.database.query("select id,draft_id,state::text state from app.flow_import_preview where project_id=$1", [id])).rows;
+  expect(previews).toHaveLength(2); expect(previews.find((preview) => preview.id === fresh.previewId)).toEqual({ id: fresh.previewId, draft_id: replacementId, state: "READY" });
+  expect(await savedDrafts()).toEqual(before);
+  await page.reload(); await openImport(page); await expect(dialog(page).getByText("Ready", { exact: true })).toBeVisible();
+  expect(await records(page)).toEqual([fresh]); expect(await savedDrafts()).toEqual(before); expect(uploads).toHaveLength(3);
 });
 
 for (const failure of ["invalid", "unsupported", "storage"] as const) test(`${failure} initial inspection can be replaced after a definite rejection or no POST`, async ({ page }) => {

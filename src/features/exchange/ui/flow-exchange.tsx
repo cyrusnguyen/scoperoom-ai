@@ -80,7 +80,8 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
       const uploaded = await inspectUpload(original.record, originalFile);
       if (!canAdopt(current) || sessionEnded(uploaded)) return false;
       if (!uploaded.ok) {
-        if (!uploaded.uncertain && ["INVALID_INPUT", "UNSUPPORTED_FLOW_FORMAT"].includes(uploaded.code)) return true;
+        // Existing previews replay before target checks; a definite replaced-target refusal created no preview.
+        if (!uploaded.uncertain && ["INVALID_INPUT", "UNSUPPORTED_FLOW_FORMAT", "DRAFT_REPLACED"].includes(uploaded.code)) return true;
         if (denied.has(uploaded.code) || uploaded.code === "FORBIDDEN") lost("Access lost. This protected preview has been cleared.");
         else setMessage(uploaded.message);
         return false;
