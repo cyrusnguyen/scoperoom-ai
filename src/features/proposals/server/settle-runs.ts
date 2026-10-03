@@ -1,6 +1,6 @@
 import { uuid, keyPattern, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import {
-  checkReceipt, findReceipt, lockActor, lockProject, profileFor, recordEvent, requestHash, requireActive, requireMember, saveReceipt, withDatabase, type Transaction,
+  checkReceipt, findReceipt, lockActor, lockProject, profileFor, recordEvent, requestHash, requireActive, requireMember, saveReceipt, withDatabase, type ProjectRow, type Transaction,
 } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 
@@ -17,6 +17,25 @@ export async function settleOverdueRuns(db: Pick<Transaction, "$queryRaw">, prof
     WHERE project.id = ${projectId}::uuid AND project.status IN ('ACTIVE'::app.project_status, 'ARCHIVED'::app.project_status)
       AND (project.owner_id = ${profileId}::uuid OR EXISTS (SELECT 1 FROM app.project_membership WHERE project_id = project.id AND profile_id = ${profileId}::uuid AND active))`;
   return rows[0]?.settled ?? 0;
+}
+
+/** One cancel-intent event: the audit event, the project's `ai_revision` and the run's cursor all take the new sequence. Never terminal. */
+async function markCancelRequested(tx: Transaction, project: Pick<ProjectRow, "id" | "eventSequence">, actorId: string, runId: string) {
+  const sequence = await recordEvent(tx, project, actorId, "AI_RUN_CANCEL_REQUESTED", [{ kind: "AI_RUN", id: runId }], {});
+  await tx.$executeRaw`UPDATE app.project SET ai_revision = ${sequence}::bigint WHERE id = ${project.id}::uuid`;
+  await tx.$executeRaw`UPDATE app.ai_run SET cancel_requested_at = clock_timestamp(), last_event_sequence = ${sequence}::bigint WHERE id = ${runId}::uuid`;
+  return sequence;
+}
+
+/**
+ * Archive cancels the project's nonterminal run: intent only, so the slot is held until the worker reports a terminal outcome or the
+ * deadline settles it. Call under the project lock; `project.eventSequence` must be current (after the archive's own event).
+ */
+export async function requestProjectRunCancel(tx: Transaction, project: Pick<ProjectRow, "id" | "eventSequence">, actorId: string) {
+  const runs = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM app.ai_run WHERE project_id = ${project.id}::uuid AND state IN ('QUEUED', 'RUNNING', 'VALIDATING') AND cancel_requested_at IS NULL FOR UPDATE`;
+  let current = project;
+  for (const run of runs) current = { id: project.id, eventSequence: await markCancelRequested(tx, current, actorId, run.id) };
 }
 
 export type CancelResult = { runId: string; cancelRequested: boolean; aiRevision: number; replayed: boolean };
@@ -58,12 +77,7 @@ export async function cancelRun(identity: ProjectIdentity, projectId: string, ru
       if (!run) throw new ProjectError("NOT_FOUND");
       if (role !== "OWNER" && !(role === "EDITOR" && run.actor_id === profile.id)) throw new ProjectError("FORBIDDEN");
       let aiRevision = project.aiRevision;
-      if (!run.terminal && !run.cancel_requested) {
-        const sequence = await recordEvent(tx, project, profile.id, "AI_RUN_CANCEL_REQUESTED", [{ kind: "AI_RUN", id: runId }], {});
-        await tx.$executeRaw`UPDATE app.project SET ai_revision = ${sequence}::bigint WHERE id = ${project.id}::uuid`;
-        await tx.$executeRaw`UPDATE app.ai_run SET cancel_requested_at = clock_timestamp(), last_event_sequence = ${sequence}::bigint WHERE id = ${runId}::uuid`;
-        aiRevision = Number(sequence);
-      }
+      if (!run.terminal && !run.cancel_requested) aiRevision = Number(await markCancelRequested(tx, project, profile.id, runId));
       const result = { runId, cancelRequested: run.cancel_requested || !run.terminal, aiRevision };
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, CANCEL_OPERATION, hash, result);
       return { ...result, replayed: false };

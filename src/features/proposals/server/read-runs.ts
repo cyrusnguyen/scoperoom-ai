@@ -47,11 +47,17 @@ function applicabilityOf(row: DetailRow, project: ProjectRow): RunApplicability 
   return project.currentDraftId !== row.draft_id || row.current_revision !== row.expected_document_revision || project.approvedSnapshotId !== row.parent_snapshot_id ? "STALE" : "APPLICABLE";
 }
 
+/** Round trip, so an impossible date (2026-02-30) is refused here instead of failing the PostgreSQL cast. */
+function realInstant(time: string) {
+  const milliseconds = Date.parse(`${time.slice(0, 23)}Z`);
+  return !Number.isNaN(milliseconds) && new Date(milliseconds).toISOString() === `${time.slice(0, 23)}Z`;
+}
+
 function decodeCursor(cursor: string): [string, string] {
   try {
     if (!/^[A-Za-z0-9_-]{1,200}$/.test(cursor)) throw new Error();
     const [time, id, ...rest] = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown[];
-    if (typeof time !== "string" || typeof id !== "string" || rest.length || !CURSOR_TIME.test(time) || Number.isNaN(Date.parse(`${time.slice(0, 23)}Z`)) || !uuid.test(id)) throw new Error();
+    if (typeof time !== "string" || typeof id !== "string" || rest.length || !CURSOR_TIME.test(time) || !realInstant(time) || !uuid.test(id)) throw new Error();
     return [time, id.toLowerCase()];
   } catch {
     throw new ProjectError("INVALID_INPUT");

@@ -6,6 +6,7 @@ import { parseStartRunInput } from "../../src/features/proposals/contracts/tasks
 import { admitRun, startRun } from "../../src/features/proposals/server/admit-run.ts";
 import { listRuns, readRun } from "../../src/features/proposals/server/read-runs.ts";
 import { cancelRun } from "../../src/features/proposals/server/settle-runs.ts";
+import { archiveProject } from "../../src/features/projects/server/management.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { readSourceVersion } from "../../src/features/sources/server/source-versions.ts";
 import { canRun } from "./support/fixture.ts";
@@ -103,7 +104,8 @@ test("run history pages stably through equal timestamps, at most 50 per page, wi
     assert.deepEqual(Object.keys(first.runs[0]!).sort(), ["actorId", "cancelRequestedAt", "createdAt", "deadlineAt", "disposition", "failureCode", "flowId", "id", "lastEventSequence", "state", "taskType", "terminalAt", "usage"]);
     assert.deepEqual((await listRuns(owner.identity, p, { flowId })).runs.map((entry) => entry.id), [ids.at(-1)]);
     assert.deepEqual((await listRuns(owner.identity, p, { flowId: randomUUID() })).runs, []);
-    for (const cursor of ["", "!!", Buffer.from("nope").toString("base64url"), Buffer.from(JSON.stringify(["2026-01-01T00:00:00.000000Z", "not-a-uuid"])).toString("base64url"), Buffer.from(JSON.stringify(["x", randomUUID()])).toString("base64url")]) {
+    for (const cursor of ["", "!!", Buffer.from("nope").toString("base64url"), Buffer.from(JSON.stringify(["2026-01-01T00:00:00.000000Z", "not-a-uuid"])).toString("base64url"), Buffer.from(JSON.stringify(["x", randomUUID()])).toString("base64url"),
+      Buffer.from(JSON.stringify(["2026-02-30T00:00:00.000000Z", randomUUID()])).toString("base64url"), Buffer.from(JSON.stringify(["2026-13-01T00:00:00.000000Z", randomUUID()])).toString("base64url")]) {
       await assert.rejects(listRuns(owner.identity, p, { cursor }), refused("INVALID_INPUT"), cursor);
     }
     await assert.rejects(listRuns(owner.identity, p, { flowId: "nope" }), refused("INVALID_INPUT"));
@@ -307,5 +309,45 @@ test("the start entry maps the parser's size refusal to LIMIT_EXCEEDED on START_
     await assert.rejects(startRun(owner.identity, p, { ...body, taskType: "CHAT", key: randomUUID() }), refused("INVALID_INPUT"));
     await assert.rejects(startRun(owner.identity, p, { ...body }), refused("INVALID_INPUT")); // no key
     assert.equal((await database.query("select count(*)::int n from app.ai_run where project_id = $1", [p])).rows[0].n, 0);
+  });
+});
+
+test("a non-member status read settles nothing; a member read settles the overdue run", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const stranger = await person(); const p = await projectFor(owner);
+    const run = await seedRun(database, { projectId: p, owner: owner.profile, createdAt: ago(10 * MINUTES) });
+    const before = await cursors(database, p);
+    await assert.rejects(getProjectStatus(stranger.identity, p), refused("NOT_FOUND"));
+    await assert.rejects(getProjectBootstrap(stranger.identity, p), refused("NOT_FOUND"));
+    await assert.rejects(readRun(stranger.identity, p, run), refused("NOT_FOUND"));
+    assert.equal((await runRow(database, run)).state, "QUEUED");
+    assert.deepEqual(await cursors(database, p), before);
+    assert.deepEqual(await budgetOf(database, owner.profile), [{ reserved_runs: 1, consumed_runs: 0 }]);
+    await getProjectStatus(owner.identity, p);
+    assert.equal((await runRow(database, run)).state, "TIMED_OUT");
+  });
+});
+
+test("archiving records cancel intent on the nonterminal run without settling it, and Apply is off in the run view", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, join, database }) => {
+    const owner = await person(); const editor = await person(); const p = await projectFor(owner);
+    await join(owner.identity, p, editor.identity);
+    const run = await admitted(database, editor.identity, p);
+    const finished = await seedRun(database, { projectId: await projectFor(owner), owner: owner.profile, shape: "FAILED" }); // another project's run is never touched
+    const before = await readRun(owner.identity, p, run.runId);
+    assert.equal(before.cancelRequestedAt, null);
+    const status = await getProjectStatus(owner.identity, p);
+    await archiveProject(owner.identity, p, { expectedProjectVersion: status.version, reason: "Done", key: randomUUID() });
+    const row = await runRow(database, run.runId);
+    assert.deepEqual([row.state, row.budget_state, row.terminal_at], ["QUEUED", "RESERVED", null]);
+    assert.notEqual(row.cancel_requested_at, null);
+    const after = await cursors(database, p);
+    assert.equal(after.ai, after.es); assert.equal(Number(after.es) - run.aiRevision, 2, "the archive event and the cancel event");
+    assert.equal(row.lseq, after.ai);
+    assert.equal(await eventCount(database, p, "AI_RUN_CANCEL_REQUESTED"), 1); assert.equal(await eventCount(database, p, "PROJECT_ARCHIVED"), 1);
+    const view = await readRun(editor.identity, p, run.runId);
+    assert.deepEqual([view.state, view.applicability, view.lastEventSequence], ["QUEUED", "UNAVAILABLE", Number(after.ai)]); assert.notEqual(view.cancelRequestedAt, null);
+    assert.deepEqual(await budgetOf(database, owner.profile), [{ reserved_runs: 1, consumed_runs: 1 }]);
+    assert.equal((await database.query("select count(*)::int n from app.ai_run where id = $1 and cancel_requested_at is not null", [finished])).rows[0].n, 0);
   });
 });

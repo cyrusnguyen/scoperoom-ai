@@ -143,6 +143,11 @@ test("one key admits once: one run, prompt evidence, reservation, audit event an
     assert.equal(first.runId, second.runId);
     assert.deepEqual([first.replayed, second.replayed].sort(), [false, true]);
     assert.equal(first.state, "QUEUED");
+    // The manifest is built from the stored run, so the first response and the replay match, and it never carries the prompt.
+    assert.deepEqual(first.manifest, second.manifest);
+    const { rows: [stored] } = await database.query("select draft_id, capture_hash from app.ai_run where id = $1", [first.runId]);
+    assert.deepEqual(first.manifest, { taskType: "PROPOSE_FLOW", draftId: stored.draft_id, documentRevision: 1, parentSnapshotId: null, sourceVersionIds: [], captureHash: stored.capture_hash });
+    assert.ok(!JSON.stringify(first).includes("Outline the checkout flow"));
     const after = await footprint(database, projectId, owner.profile);
     assert.deepEqual([after.runs, after.documents, after.versions, after.audits - baseline.audits, after.receipts, after.reserved], [1, 1, 1, 1, 1, 1]);
     assert.equal(after.cursors, `${first.aiRevision}/${first.aiRevision}`);
@@ -346,6 +351,7 @@ test("explicit source references: historical versions are captured as chosen, a 
     const admitted = await admitRun(owner.identity, projectId, await start(database, projectId, { sources: [{ sourceVersionId: v1, expectedCurrentVersionId: v2 }] }), CONFIG);
     const { rows: [run] } = await database.query("select capture from app.ai_run where id = $1", [admitted.runId]);
     assert.deepEqual(run.capture.sources.map((source: { sourceVersionId: string; text: string; expectedCurrentVersionId: string }) => [source.sourceVersionId, source.text, source.expectedCurrentVersionId]), [[v1, "aaaa", v2]]);
+    assert.deepEqual(admitted.manifest.sourceVersionIds, [v1]);
   });
 });
 

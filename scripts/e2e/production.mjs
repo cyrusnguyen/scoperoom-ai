@@ -26,6 +26,9 @@ const env = {
   SCOPEROOM_E2E: "1",
   SCOPEROOM_E2E_SERVER: "production",
   NEXT_PUBLIC_APP_URL: origin,
+  // Admission only needs a model name and an opaque binding (no provider call is made); real values are never required for the gate.
+  AI_MODEL: process.env.AI_MODEL?.trim() || "e2e-model",
+  AI_EXECUTION_BINDING: process.env.AI_EXECUTION_BINDING?.trim() || "e2e-binding",
 };
 if (process.platform === "win32") {
   // Playwright stops its managed webServer with taskkill, which lives in System32.

@@ -6,8 +6,7 @@ import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, entit
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
 // Stage 06.1 Task 3: the HTTP contract of the AI run and source-version routes through the real server (202 only after commit, no-store,
-// Origin, body limit, 401/403/404 and cancel authority). Admission needs AI_MODEL and AI_EXECUTION_BINDING in the server's environment.
-const configured = Boolean(process.env.AI_MODEL && process.env.AI_EXECUTION_BINDING);
+// Origin, body limit, 401/403/404 and cancel authority). The production runner gives the server its AI_MODEL and AI_EXECUTION_BINDING.
 const errorOf = async (response: { json: () => Promise<unknown> }) => (await response.json() as { error: { code: string; retryable: boolean; details?: Record<string, unknown> } }).error;
 const mutation = (key = randomUUID(), origin = appUrl) => ({ Origin: origin, "Idempotency-Key": key });
 // Same keyed subject as admissionSubject (HMAC over the environment id); copied so the spec never loads the server module graph.
@@ -39,25 +38,7 @@ test("the AI routes refuse anonymous callers and a foreign origin, and never cac
   }
 });
 
-test("an unconfigured server refuses admission as unavailable and creates nothing", async ({ page }) => {
-  test.skip(configured, "Covers the unconfigured server only");
-  const admin = adminClient(); const database = await openDatabase(); const users: string[] = [];
-  try {
-    const { authUserId } = await signIn(page, admin, users, "AI unconfigured owner");
-    await entitle(database, authUserId);
-    const projectId = await createProjectViaApi(page, "AI unconfigured");
-    const draft = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string } }).draft;
-    const response = await page.request.post(`/api/projects/${projectId}/ai-runs`, { headers: mutation(), data: { taskType: "PROPOSE_FLOW", prompt: "Outline checkout", draftId: draft.id, expectedDocumentRevision: 1, expectedParentSnapshotId: null, context: { selection: null, sources: [] } } });
-    expect(response.status()).toBe(503); expect((await errorOf(response)).code).toBe("UNAVAILABLE");
-    expect((await database.query("select count(*)::int n from app.ai_run where project_id = $1", [projectId])).rows[0].n).toBe(0);
-  } finally {
-    await cleanupUsers(database, admin, users, page);
-    await database.end();
-  }
-});
-
 test("start is 202 only after commit, replays by key, enforces limits and authority, and cancel keeps the slot", async ({ page, browser }) => {
-  test.skip(!configured, "Requires AI_MODEL and AI_EXECUTION_BINDING for the server under test");
   test.setTimeout(120_000);
   const admin = adminClient(); const database = await openDatabase(); const users: string[] = []; const editorContext = await browser.newContext(); const strangerContext = await browser.newContext();
   let ownerProfile: string | null = null;
@@ -82,15 +63,18 @@ test("start is 202 only after commit, replays by key, enforces limits and author
     const streamed = await chunkedPost(base, cookie, Buffer.from(JSON.stringify({ ...body, prompt: "x".repeat(70_000) })));
     expect(streamed.status).toBe(413); expect(streamed.body.error).toMatchObject({ code: "LIMIT_EXCEEDED", details: { limit: "START_BODY_BYTES" } }); expect(streamed.cache).toContain("no-store");
     const unknownDraft = await page.request.post(base, { headers: mutation(), data: { ...body, draftId: randomUUID() } });
-    expect(unknownDraft.status()).toBeGreaterThanOrEqual(409);
+    expect(unknownDraft.status()).toBe(409); expect((await errorOf(unknownDraft)).code).toBe("DRAFT_REPLACED");
     expect((await database.query("select count(*)::int n from app.ai_run where project_id = $1", [projectId])).rows[0].n).toBe(0);
 
     // Start: 202 carries a durable identity that already exists when the response is read.
     const key = randomUUID();
     const started = await page.request.post(base, { headers: mutation(key), data: body });
     expect(started.status()).toBe(202); expect(started.headers()["cache-control"]).toContain("no-store");
-    const run = await started.json() as { runId: string; state: string; aiRevision: number; replayed: boolean };
+    const run = await started.json() as { runId: string; state: string; aiRevision: number; replayed: boolean; manifest: Record<string, unknown> };
     expect(run).toMatchObject({ state: "QUEUED", replayed: false });
+    // The minimal captured manifest: identity of the exact input, no prompt or source text.
+    expect(run.manifest).toEqual({ taskType: "PROPOSE_FLOW", draftId: draft.id, documentRevision: 1, parentSnapshotId: null, sourceVersionIds: [], captureHash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(JSON.stringify(run)).not.toContain("Outline the checkout flow");
     expect((await database.query("select state::text, actor_id from app.ai_run where id = $1", [run.runId])).rows[0]).toMatchObject({ state: "QUEUED", actor_id: ownerProfile });
     const replay = await page.request.post(base, { headers: mutation(key), data: body });
     expect(replay.status()).toBe(200); expect(await replay.json()).toEqual({ ...run, replayed: true });

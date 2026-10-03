@@ -9,6 +9,7 @@ import {
   assertOwnerCapacity, checkReceipt, findReceipt, lockActor, lockOwnerCapacity, lockProject, profileFor, readProject, recordEvent,
   requestHash, requireActive, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow, type Transaction,
 } from "./access.ts";
+import { requestProjectRunCancel } from "../../proposals/server/settle-runs.ts";
 import { ProjectError } from "./errors.ts";
 import type { InvitationIdentity } from "./invitations.ts";
 
@@ -221,7 +222,8 @@ async function changeLifecycle(identity: ProjectIdentity, projectId: string, inp
       else await tx.$executeRaw`UPDATE app.invitation SET revoked_at = CURRENT_TIMESTAMP, version = version + 1 WHERE project_id = ${project.id}::uuid AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP`;
       const next: ProjectRow = { ...project, status: restoring ? "ACTIVE" : "ARCHIVED", version: project.version + 1 };
       await tx.$executeRaw`UPDATE app.project SET status = ${next.status}::app.project_status, version = ${next.version}, realtime_epoch = gen_random_uuid(), updated_at = CURRENT_TIMESTAMP WHERE id = ${project.id}::uuid`;
-      await recordEvent(tx, project, profile.id, restoring ? "PROJECT_RESTORED" : "PROJECT_ARCHIVED", [{ kind: "PROJECT", id: project.id }], restoring ? {} : { reason: validated.reason! });
+      const sequence = await recordEvent(tx, project, profile.id, restoring ? "PROJECT_RESTORED" : "PROJECT_ARCHIVED", [{ kind: "PROJECT", id: project.id }], restoring ? {} : { reason: validated.reason! });
+      if (!restoring) await requestProjectRunCancel(tx, { id: project.id, eventSequence: sequence }, profile.id); // intent only: the run keeps its slot until terminal or its deadline
       const value = result(next);
       await saveReceipt(tx, profile.id, "PROJECT", project.id, validated.key, operation, hash, value);
       return { ...value, replayed: false };

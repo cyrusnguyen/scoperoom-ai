@@ -8,7 +8,7 @@ import {
 } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { assertSourceCapacity, insertPromptEvidence } from "../../sources/server/source-versions.ts";
-import { AI_LIMITS, parseStartRunInput, startBody, startBodyBytes, type StartRunInput } from "../contracts/tasks.ts";
+import { AI_LIMITS, parseStartRunInput, startBody, startBodyBytes, type StartRunInput, type TaskKind } from "../contracts/tasks.ts";
 import { evidenceStats } from "../domain/capture.ts";
 import { captureSaved } from "./capture.ts";
 import { settleOverdueRuns } from "./settle-runs.ts";
@@ -16,7 +16,9 @@ import { settleOverdueRuns } from "./settle-runs.ts";
 const START_OPERATION = "AI_RUN_START_V1";
 const RATE_ACTION = "AI_ADMISSION";
 
-export type AdmitResult = { runId: string; state: "QUEUED"; aiRevision: number; replayed: boolean };
+/** What the run captured, without any prompt or source text: enough to recover the durable identity of the exact input. */
+export type RunManifest = { taskType: TaskKind; draftId: string; documentRevision: number; parentSnapshotId: string | null; sourceVersionIds: string[]; captureHash: string };
+export type AdmitResult = { runId: string; state: "QUEUED"; aiRevision: number; replayed: boolean; manifest: RunManifest };
 /** Content-independent execution configuration, resolved before any lock. The binding is opaque and carries no credential. */
 export type AiConfiguration = { model: string; executionBinding: string };
 
@@ -47,7 +49,16 @@ async function countAttempt(tx: Transaction, profileId: string) {
       SELECT subject_hash, action, window_start FROM app.rate_limit_bucket WHERE expires_at <= clock_timestamp() ORDER BY expires_at LIMIT 20 FOR UPDATE SKIP LOCKED)`;
 }
 
-function replayOf(result: Prisma.JsonValue): Omit<AdmitResult, "replayed"> {
+/** Built from the stored run for both the first response and a replay, so the two always agree. */
+async function manifestOf(tx: Transaction, projectId: string, runId: string): Promise<RunManifest> {
+  const [row] = await tx.$queryRaw<Array<{ task_type: TaskKind; draft_id: string; expected_document_revision: number; parent_snapshot_id: string | null; capture_hash: string; source_ids: string[] | null }>>`
+    SELECT task_type::text AS task_type, draft_id, expected_document_revision, parent_snapshot_id, capture_hash, jsonb_path_query_array(capture, '$.sources[*].sourceVersionId') AS source_ids
+    FROM app.ai_run WHERE id = ${runId}::uuid AND project_id = ${projectId}::uuid`;
+  if (!row) throw new ProjectError("UNAVAILABLE");
+  return { taskType: row.task_type, draftId: row.draft_id, documentRevision: row.expected_document_revision, parentSnapshotId: row.parent_snapshot_id, sourceVersionIds: row.source_ids ?? [], captureHash: row.capture_hash };
+}
+
+function replayOf(result: Prisma.JsonValue): Pick<AdmitResult, "runId" | "state" | "aiRevision"> {
   const record = result && typeof result === "object" && !Array.isArray(result) ? result : null;
   if (!record || typeof record.runId !== "string" || record.state !== "QUEUED" || typeof record.aiRevision !== "number") throw new ProjectError("UNAVAILABLE");
   return { runId: record.runId, state: "QUEUED", aiRevision: record.aiRevision };
@@ -101,7 +112,7 @@ async function admitLocked(tx: Transaction, project: ProjectRow, actorId: string
   await tx.$executeRaw`UPDATE app.ai_run SET last_event_sequence = ${sequence}::bigint WHERE id = ${runId}::uuid`;
   const result = { runId, state: "QUEUED" as const, aiRevision: Number(sequence) };
   await saveReceipt(tx, actorId, "PROJECT", project.id, input.key, START_OPERATION, hash, result);
-  return { ...result, replayed: false };
+  return { ...result, replayed: false, manifest: await manifestOf(tx, project.id, runId) };
 }
 
 /**
@@ -123,7 +134,8 @@ export async function admitRun(identity: ProjectIdentity, projectId: string, inp
       const receipt = await findReceipt(tx, profile.id, "PROJECT", project.id, input.key);
       if (receipt) {
         checkReceipt(receipt, START_OPERATION, hash);
-        return { result: { ...replayOf(receipt.result), replayed: true } };
+        const replayed = replayOf(receipt.result);
+        return { result: { ...replayed, replayed: true, manifest: await manifestOf(tx, project.id, replayed.runId) } };
       }
       if (role !== "OWNER" && role !== "EDITOR") throw new ProjectError("FORBIDDEN");
       requireActive(project);
