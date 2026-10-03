@@ -10,11 +10,19 @@ const present = (value: string | undefined): value is string => Boolean(value?.t
  * absent. Without a Trigger key there is no dispatcher, so runs stay PENDING (and time out with a refund); without a Google key the
  * worker cannot call a model. The e2e and CI servers get neither key. The environment is a parameter so tests inject their own.
  */
+let dispatcher: { key: string; value: JobDispatcher } | undefined;
+let gateway: { key: string; value: ModelGateway } | undefined;
+
 export function jobDispatcher(env: Env = process.env): JobDispatcher | undefined {
-  return present(env.TRIGGER_SECRET_KEY) ? createJobDispatcher(triggerApi(env.TRIGGER_SECRET_KEY)) : undefined;
+  const key = env.TRIGGER_SECRET_KEY;
+  if (!present(key)) return undefined;
+  if (dispatcher?.key !== key) dispatcher = { key, value: createJobDispatcher(triggerApi(key)) };
+  return dispatcher.value;
 }
 
 export function modelGateway(env: Env = process.env): ModelGateway {
-  if (!present(env.GOOGLE_GENERATIVE_AI_API_KEY)) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY is required to call a model.");
-  return createModelGateway({ apiKey: env.GOOGLE_GENERATIVE_AI_API_KEY });
+  const key = env.GOOGLE_GENERATIVE_AI_API_KEY;
+  if (!present(key)) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY is required to call a model.");
+  if (gateway?.key !== key) gateway = { key, value: createModelGateway({ apiKey: key }) };
+  return gateway.value;
 }

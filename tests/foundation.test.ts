@@ -158,3 +158,44 @@ test("Node startup validation rejects missing production origin before serving",
   const local = run("development");
   assert.equal(local.status, 0, local.stderr);
 });
+test("boundary checker keeps worker services off Next and web modules, providers off the browser and provider SDKs inside their adapters", async () => {
+  const { checkBoundaries } = await import("../scripts/check-boundaries.mjs");
+  const root = await mkdtemp(join(tmpdir(), "scoperoom-boundaries-"));
+  const put = (path: string, text: string) => writeFile(join(root, path), text);
+  try {
+    for (const path of ["src/server/web", "src/client", "src/trigger", "src/features/proposals/server/adapters", "src/features/proposals/domain"]) await mkdir(join(root, path), { recursive: true });
+    await put("tsconfig.json", JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["./src/*"] } } }));
+    await put("src/server/web/session.ts", "export const cookies = true;");
+    await put("src/features/proposals/domain/pure.ts", "export const pure = 1;");
+    await put("src/features/proposals/server/adapters/model.ts", "import { generateText } from 'ai'; import { createGoogleGenerativeAI } from '@ai-sdk/google'; export const x = [generateText, createGoogleGenerativeAI];");
+    await put("src/features/proposals/server/adapters/trigger.ts", "import { TriggerClient } from '@trigger.dev/sdk'; export const x = TriggerClient;");
+    await put("src/features/proposals/server/providers.ts", "import './adapters/model.ts'; import './adapters/trigger.ts'; export const providers = 1;");
+    await put("src/features/proposals/server/run-ai.ts", "import { pure } from '../domain/pure.ts'; import { createHash } from 'node:crypto'; export const run = [pure, createHash];");
+    await put("src/trigger/run-ai.ts", "import { task } from '@trigger.dev/sdk'; import { run } from '../features/proposals/server/run-ai.ts'; export const t = [task, run];");
+    assert.deepEqual(checkBoundaries(root), []);
+
+    await put("src/features/proposals/server/run-ai.ts", "export { cookies } from '@/server/web/session';"); // a worker service, reached or not by an entrypoint
+    assert.match(checkBoundaries(root).join("\n"), /worker import reaches Next module/);
+    await put("src/trigger/run-ai.ts", "export const t = 1;"); // no entrypoint reaches it any more: it is still a worker root
+    assert.match(checkBoundaries(root).join("\n"), /run-ai\.ts worker import reaches Next module/);
+    await put("src/features/proposals/server/run-ai.ts", "import { next } from 'next/headers'; export const run = next;");
+    assert.match(checkBoundaries(root).join("\n"), /worker import reaches Next module next\/headers/);
+    await put("src/features/proposals/server/run-ai.ts", "export const run = 1;");
+    assert.deepEqual(checkBoundaries(root), []);
+
+    await put("src/client/panel.tsx", "'use client'; import { providers } from '../features/proposals/server/providers.ts'; export const x = providers;");
+    assert.match(checkBoundaries(root).join("\n"), /client import reaches trusted module src\/features\/proposals\/server\/providers\.ts/);
+    await put("src/client/panel.tsx", "'use client'; import { generateText } from 'ai'; export const x = generateText;");
+    assert.match(checkBoundaries(root).join("\n"), /client import reaches server-only ai/);
+    await put("src/client/panel.tsx", "'use client'; import { TriggerClient } from '@trigger.dev/sdk'; export const x = TriggerClient;");
+    assert.match(checkBoundaries(root).join("\n"), /client import reaches server-only @trigger\.dev\/sdk/);
+    await put("src/client/panel.tsx", "export const x = 1;");
+
+    await put("src/features/proposals/server/other.ts", "import { generateText } from 'ai'; export const x = generateText;");
+    assert.match(checkBoundaries(root).join("\n"), /other\.ts imports provider SDK ai outside its adapter/);
+    await put("src/features/proposals/server/other.ts", "import { google } from '@ai-sdk/google'; export const x = google;");
+    assert.match(checkBoundaries(root).join("\n"), /imports provider SDK @ai-sdk\/google outside its adapter/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -164,6 +164,6 @@ test("the composition module treats blank keys as absent and the test environmen
   });
   for (const file of suites) {
     if (file === "tests/ai-adapters.test.ts") continue;
-    assert.doesNotMatch(readFileSync(file, "utf8"), /server\/providers|adapters\/(model|trigger)/, `${file} must use injected fakes`);
+    assert.doesNotMatch(readFileSync(file, "utf8"), /^\s*(?:import|export)[^\n]*from\s+["'][^"']*(?:server\/providers|adapters\/(?:model|trigger))(?:\.ts)?["']/m, `${file} must use injected fakes`);
   }
 });

@@ -6,6 +6,11 @@ import ts from "typescript";
 const sourceExtensions = new Set([".ts", ".tsx", ".mts", ".cts"]);
 const trustedPaths = ["src/server/", "src/trigger/", "src/app/api/", "scripts/", "prisma/", "supabase/"];
 const nextPaths = ["src/app/", "src/server/web/"];
+// Provider SDKs are server-only and may be imported only by their adapters and the Trigger entrypoints.
+const sdkPattern = /^(?:ai|@ai-sdk\/[^/]+|@trigger\.dev\/sdk)(?:\/|$)/;
+const sdkOwners = ["src/features/proposals/server/adapters/model.ts", "src/features/proposals/server/adapters/trigger.ts", "src/trigger/"];
+// Worker services run inside Trigger, so they are checked as workers whether or not an entrypoint reaches them yet.
+const workerRoots = ["src/trigger/", "src/features/proposals/server/run-ai.ts", "src/features/proposals/server/dispatch-ai.ts", "src/features/proposals/server/repair-runs.ts", "src/features/proposals/server/providers.ts", "src/features/proposals/server/adapters/"];
 
 function filesAt(directory) {
   if (!existsSync(directory)) return [];
@@ -50,7 +55,7 @@ export function checkBoundaries(root = process.cwd()) {
     const { imports, computedDynamicImport } = importsAt(absoluteFile);
     if (computedDynamicImport) findings.push(`${relative(absoluteRoot, absoluteFile)} uses a computed dynamic import.`);
     for (const specifier of imports) {
-      if (mode === "client" && (specifier === "@dagrejs/dagre" || specifier.startsWith("@dagrejs/dagre/"))) { // Dagre is server-only: arranging runs in the save transaction
+      if (mode === "client" && (specifier === "@dagrejs/dagre" || specifier.startsWith("@dagrejs/dagre/") || sdkPattern.test(specifier))) { // Dagre is server-only: arranging runs in the save transaction
         findings.push(`${relative(absoluteRoot, absoluteFile)} client import reaches server-only ${specifier}.`);
         continue;
       }
@@ -58,6 +63,7 @@ export function checkBoundaries(root = process.cwd()) {
         findings.push(`${relative(absoluteRoot, absoluteFile)} worker import reaches Next module ${specifier}.`);
         continue;
       }
+      if (specifier.startsWith("node:") || sdkPattern.test(specifier)) continue; // built-ins and provider SDKs are packages, not source to follow
       const target = resolveImport(specifier, absoluteFile);
       if (!target) { findings.push(`${relative(absoluteRoot, absoluteFile)} cannot resolve ${specifier}.`); continue; }
       const targetPath = relative(absoluteRoot, target).replaceAll("\\", "/");
@@ -75,7 +81,8 @@ export function checkBoundaries(root = process.cwd()) {
   for (const file of filesAt(join(absoluteRoot, "src"))) {
     const path = relative(absoluteRoot, file).replaceAll("\\", "/");
     if (importsAt(file).client) visit(file, "client");
-    if (inside(path, "src/trigger/")) visit(file, "worker");
+    if (workerRoots.some(root => inside(path, root) || path === root)) visit(file, "worker");
+    if (!sdkOwners.some(owner => inside(path, owner) || path === owner)) for (const specifier of importsAt(file).imports) if (sdkPattern.test(specifier)) findings.push(`${path} imports provider SDK ${specifier} outside its adapter.`);
   }
   return findings;
 }

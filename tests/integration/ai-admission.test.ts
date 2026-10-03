@@ -304,8 +304,15 @@ test("the web runtime cannot forge worker results or touch immutable evidence; t
       "update app.project set ai_revision = 0, event_sequence = 0", "insert into app.source_version (project_id, source_id, sequence, title, text, code_point_count, utf8_byte_count, content_hash, created_by) values (gen_random_uuid(), gen_random_uuid(), 1, 't', 'a', 1, 1, 'x', gen_random_uuid())",
       "insert into app.audit_event (project_id, sequence, service_action, action, entity_refs, metadata) values (gen_random_uuid(), 1, 'x', 'x', '{}', '{}')",
     ]) await assert.rejects(worker.query(statement), code(DENIED), statement);
-    await worker.query("update app.ai_run set dispatch_state = 'DISPATCHED', task_id = 'task-1', dispatch_lease_until = null where id = $1", [s.runId]); // allowed: dispatch acknowledgement
-    await assert.rejects(admin.query("update app.ai_run set task_id = 'task-2' where id = $1", [s.runId]), code(CHECK)); // and final
+    for (const statement of ["update app.ai_run set dispatch_state = 'DISPATCHED', task_id = 'x' where id = $1", "update app.ai_run set dispatch_lease_until = now() where id = $1", "update app.ai_run set next_dispatch_at = now() where id = $1"]) {
+      await assert.rejects(worker.query(statement, [s.runId]), code(DENIED), statement); // dispatch columns are written only through the lease/ack functions
+      await assert.rejects(web.query(statement, [s.runId]), code(DENIED), statement);
+    }
+    assert.equal((await worker.query("select count(*)::int as n from app.lease_ai_dispatches($1, 1, 30)", [s.runId])).rows[0].n, 0); // this run holds cancel intent: never leased
+    const fresh = await seed();
+    const { rows: [lease] } = await worker.query<{ out_dispatch_id: string; out_lease: string }>("select out_dispatch_id, out_lease from app.lease_ai_dispatches($1, 1, 30)", [fresh.runId]);
+    assert.equal((await worker.query("select app.ack_ai_dispatch($1, $2, $3, 'task-1') as ok", [fresh.runId, lease!.out_dispatch_id, lease!.out_lease])).rows[0].ok, true); // allowed: the acknowledgement for the held lease
+    await assert.rejects(admin.query("update app.ai_run set task_id = 'task-2' where id = $1", [fresh.runId]), code(CHECK)); // and final
     // Even after RESET ROLE the runtime login holds nothing of its own.
     await worker.query("begin"); await worker.query("reset role");
     await assert.rejects(worker.query("update app.ai_run set state = 'RUNNING' where id = $1", [s.runId]), code(DENIED));
