@@ -119,11 +119,11 @@ test("foreign, cross-flow and stale references reject", () => {
   rejects(() => captureInput(saved, improve([ids.a], { context: { selection: { flowId: randomUUID(), nodeIds: [ids.a] }, sources: [] } })), "INVALID_INPUT");
   rejects(() => captureInput(saved, improve([ids.a], { draftId: randomUUID() })), "DRAFT_REPLACED");
   rejects(() => captureInput(saved, improve([ids.a], { expectedDocumentRevision: 6 })), "STALE_DOCUMENT_REVISION");
-  rejects(() => captureInput(saved, generate({ expectedParentSnapshotId: randomUUID() })), "CONFLICT");
+  rejects(() => captureInput(saved, generate({ expectedParentSnapshotId: randomUUID() })), "BASELINE_CHANGED");
   const ref = { sourceVersionId: source.sourceVersionId, expectedCurrentVersionId: source.currentVersionId };
-  rejects(() => captureInput(saved, generate({ context: { selection: null, sources: [ref] } })), "INVALID_INPUT"); // never loaded: not explicitly selected
-  rejects(() => captureInput({ ...saved, sources: [{ ...source, projectId: randomUUID() }] }, generate({ context: { selection: null, sources: [ref] } })), "INVALID_INPUT");
-  rejects(() => captureInput({ ...saved, sources: [source] }, generate()), "INVALID_INPUT"); // loaded but not selected
+  rejects(() => captureInput(saved, generate({ context: { selection: null, sources: [ref] } })), "INVALID_SOURCE_REFERENCE"); // never loaded: not explicitly selected
+  rejects(() => captureInput({ ...saved, sources: [{ ...source, projectId: randomUUID() }] }, generate({ context: { selection: null, sources: [ref] } })), "INVALID_SOURCE_REFERENCE");
+  rejects(() => captureInput({ ...saved, sources: [source] }, generate()), "INVALID_SOURCE_REFERENCE"); // loaded but not selected
   void flowId; void otherFlowId; void projectId;
 });
 
@@ -138,7 +138,7 @@ test("source heads, hashes and text are captured exactly and a changed head reje
   }]);
   const moved = { ...source, currentVersionId: randomUUID() };
   rejects(() => captureInput({ ...saved, sources: [moved] }, input), "CONFLICT");
-  rejects(() => captureInput({ ...saved, sources: [{ ...source, contentHash: sha("other") }] }, input), "INVALID_INPUT");
+  rejects(() => captureInput({ ...saved, sources: [{ ...source, contentHash: sha("other") }] }, input), "INVALID_SOURCE_REFERENCE");
   const historical = { ...source, currentVersionId: randomUUID() };
   const explicitHistory = generate({ context: { selection: null, sources: [{ ...ref, expectedCurrentVersionId: historical.currentVersionId }] } });
   assert.equal(captureInput({ ...saved, sources: [historical] }, explicitHistory).capture.sources[0]!.sourceVersionId, source.sourceVersionId, "an older exact version is allowed when its head expectation holds");
@@ -198,7 +198,8 @@ test("the 64 KiB start body bound rejects too many sources before any lookup and
   const entry = () => ({ sourceVersionId: randomUUID(), expectedCurrentVersionId: randomUUID() });
   const body = (count: number) => ({ taskType: "PROPOSE_FLOW", prompt: "go", draftId: randomUUID(), expectedDocumentRevision: 1, expectedParentSnapshotId: null, context: { selection: null, sources: Array.from({ length: count }, entry) } });
   assert.equal(parseStartRunInput(body(100), KEY).context.sources.length, 100);
-  rejects(() => parseStartRunInput(body(600), KEY), "INVALID_INPUT");
+  rejects(() => parseStartRunInput(body(600), KEY), "LIMIT_EXCEEDED");
+  assert.throws(() => parseStartRunInput(body(600), KEY), (error) => error instanceof Error && error.cause === "START_BODY_BYTES");
   assert.equal(AI_LIMITS.startBodyBytes, 65_536);
   assert.equal(AI_LIMITS.admissionAttemptsPerMinute, 30);
 });

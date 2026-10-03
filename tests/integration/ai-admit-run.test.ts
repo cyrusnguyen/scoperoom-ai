@@ -100,14 +100,36 @@ async function seedRun(db: Client, p: { projectId: string; owner: string; actor?
   return run!.id;
 }
 
-async function blockedBy(db: Client, blockerPid: number) {
-  const deadline = Date.now() + 4_000;
+/** Waits until at least `expected` backends wait on the holder, directly or through another waiter. */
+async function blockedBy(db: Client, blockerPid: number, expected = 1) {
+  const deadline = Date.now() + 5_000;
+  let waiting = 0;
   while (Date.now() < deadline) {
-    const { rows } = await db.query("select 1 from pg_stat_activity where $1 = any(pg_blocking_pids(pid)) and state = 'active'", [blockerPid]);
-    if (rows.length) return;
+    const { rows: [row] } = await db.query<{ waiting: number }>(`
+      with recursive chain(pid) as (
+        select pid from pg_stat_activity where $1 = any(pg_blocking_pids(pid))
+        union select a.pid from pg_stat_activity a join chain c on c.pid = any(pg_blocking_pids(a.pid)))
+      select count(*)::int as waiting from chain`, [blockerPid]);
+    waiting = row!.waiting;
+    if (waiting >= expected) return;
     await setImmediate();
   }
-  throw new Error("The admission did not reach the held lock.");
+  throw new Error(`Only ${waiting} of ${expected} admissions reached the held lock.`);
+}
+
+/** Holds one row lock on its own connection, starts every admission, waits until all are queued behind it, then releases them together. */
+async function raceBehind<T>(db: Client, lockSql: string, lockId: string, expected: number, launch: () => Promise<T>[]) {
+  const holder = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query(lockSql, [lockId]);
+    const { rows: [pid] } = await holder.query<{ pid: number }>("select pg_backend_pid() pid");
+    const settled = Promise.allSettled(launch()); // started only once the row is held
+    await blockedBy(db, pid!.pid, expected);
+    await holder.query("commit");
+    return await settled;
+  } finally { await holder.end(); }
 }
 
 const refused = (code: string) => ({ code });
@@ -191,9 +213,10 @@ test("distinct same-project requests admit exactly one", { skip: !canRun }, asyn
   await withAdmission(async ({ person, projectFor, join, database }) => {
     const owner = await person(); const editor = await person(); const projectId = await projectFor(owner);
     await join(owner.identity, projectId, editor.identity);
-    const settled = await Promise.allSettled([
-      admitRun(owner.identity, projectId, await start(database, projectId), CONFIG), admitRun(editor.identity, projectId, await start(database, projectId), CONFIG),
-      admitRun(owner.identity, projectId, await start(database, projectId), CONFIG),
+    const inputs = [await start(database, projectId), await start(database, projectId), await start(database, projectId)];
+    // The project row is held, so all three queue (one behind another's actor lock) and are released at once.
+    const settled = await raceBehind(database, "select id from app.project where id = $1 for update", projectId, 3, () => [
+      admitRun(owner.identity, projectId, inputs[0]!, CONFIG), admitRun(editor.identity, projectId, inputs[1]!, CONFIG), admitRun(owner.identity, projectId, inputs[2]!, CONFIG),
     ]);
     assert.equal(settled.filter((entry) => entry.status === "fulfilled").length, 1);
     for (const entry of settled) if (entry.status === "rejected") assert.equal(entry.reason.code, "AI_BUSY");
@@ -207,8 +230,11 @@ test("three projects sharing an owner admit at most two, whoever starts them", {
     const owner = await person(); const e1 = await person(); const e2 = await person();
     const p1 = await projectFor(owner); const p2 = await projectFor(owner); const p3 = await projectFor(owner);
     await join(owner.identity, p2, e1.identity); await join(owner.identity, p3, e2.identity);
-    const settled = await Promise.allSettled([
-      admitRun(owner.identity, p1, await start(database, p1), CONFIG), admitRun(e1.identity, p2, await start(database, p2), CONFIG), admitRun(e2.identity, p3, await start(database, p3), CONFIG),
+    const [i1, i2, i3] = [await start(database, p1), await start(database, p2), await start(database, p3)];
+    await database.query("insert into app.ai_owner_allowance (owner_id) values ($1)", [owner.profile]);
+    // The allowance row is the only cross-project guard: all three admissions hold their own project lock and queue on it together.
+    const settled = await raceBehind(database, "select owner_id from app.ai_owner_allowance where owner_id = $1 for update", owner.profile, 3, () => [
+      admitRun(owner.identity, p1, i1, CONFIG), admitRun(e1.identity, p2, i2, CONFIG), admitRun(e2.identity, p3, i3, CONFIG),
     ]);
     assert.equal(settled.filter((entry) => entry.status === "fulfilled").length, 2);
     for (const entry of settled) if (entry.status === "rejected") assert.equal(entry.reason.code, "AI_BUSY");
@@ -238,7 +264,7 @@ test("the 31st owner/day reservation fails for any model or collaborator; midnig
     const owner = await person(); const [p1, p2, p3] = [await projectFor(owner), await projectFor(owner), await projectFor(owner)] as [string, string, string];
     const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
     await seedRun(database, { projectId: p1, owner: owner.profile, createdAt: twoDaysAgo }); await seedRun(database, { projectId: p2, owner: owner.profile, createdAt: twoDaysAgo });
-    await assert.rejects(admitRun(owner.identity, p3, await start(database, p3), CONFIG), refused("AI_BUSY")); // old-day runs still hold the owner's two slots
+    await assert.rejects(admitRun(owner.identity, p3, await start(database, p3), CONFIG), refused("AI_BUSY")); // pre-settlement behaviour: overdue runs are not yet settled on admission (Task 3 settles them and updates this assertion)
     await database.query("update app.ai_run set state = 'FAILED', failure_code = 'TEST', terminal_at = now() where project_id = $1", [p1]);
     await admitRun(owner.identity, p3, await start(database, p3), CONFIG); // today's budget is separate from the old day's
     const { rows } = await database.query("select day::text from app.ai_budget_day where owner_id = $1 order by day", [owner.profile]);
@@ -307,14 +333,14 @@ test("capacity refusals roll back every write: applicable results, retained vers
   });
 });
 
-test("explicit source references: historical versions are captured as chosen, a moved head conflicts and another project's version is invalid", { skip: !canRun }, async () => {
+test("explicit source references: historical versions are captured as chosen, a moved head conflicts and another project's version is an invalid reference", { skip: !canRun }, async () => {
   await withAdmission(async ({ person, projectFor, database }) => {
     const owner = await person(); const projectId = await projectFor(owner); const foreign = await projectFor(owner);
     const [v1, v2] = await seedVersions(database, projectId, owner.profile, [4, 5]) as [string, string];
     const [other] = await seedVersions(database, foreign, owner.profile, [3]) as [string];
     const before = await footprint(database, projectId, owner.profile);
     await assert.rejects(admitRun(owner.identity, projectId, await start(database, projectId, { sources: [{ sourceVersionId: v1, expectedCurrentVersionId: v1 }] }), CONFIG), refused("CONFLICT"));
-    await assert.rejects(admitRun(owner.identity, projectId, await start(database, projectId, { sources: [{ sourceVersionId: other, expectedCurrentVersionId: other }] }), CONFIG), refused("INVALID_INPUT"));
+    await assert.rejects(admitRun(owner.identity, projectId, await start(database, projectId, { sources: [{ sourceVersionId: other, expectedCurrentVersionId: other }] }), CONFIG), refused("INVALID_SOURCE_REFERENCE"));
     assert.deepEqual(await footprint(database, projectId, owner.profile), before);
     const admitted = await admitRun(owner.identity, projectId, await start(database, projectId, { sources: [{ sourceVersionId: v1, expectedCurrentVersionId: v2 }] }), CONFIG);
     const { rows: [run] } = await database.query("select capture from app.ai_run where id = $1", [admitted.runId]);
@@ -335,28 +361,28 @@ test("stale revisions, replaced drafts and viewers are refused with no writes", 
 });
 
 test("the AI_ADMISSION bucket limits new attempts across connections, counts refusals, spares receipt recovery and holds no identity", { skip: !canRun }, async () => {
-  if (new Date().getUTCSeconds() > 45) await new Promise((resolve) => setTimeout(resolve, (62 - new Date().getUTCSeconds()) * 1000)); // keep the burst inside one fixed window
   await withAdmission(async ({ person, projectFor, database }) => {
     const owner = await person(); const projectId = await projectFor(owner);
+    const { rows: [second] } = await database.query<{ sec: number }>("select extract(second from now())::int as sec");
+    if (second!.sec >= 55) await new Promise((resolve) => setTimeout(resolve, (61 - second!.sec) * 1000)); // never straddle the database's minute boundary
     const first = await start(database, projectId);
-    const admitted = await admitRun(owner.identity, projectId, first, CONFIG);
-    const stale = await start(database, projectId, { revision: 99 });
-    for (let batch = 0; batch < 29 / 5; batch += 1) {
-      const size = Math.min(5, 29 - batch * 5);
-      const results = await Promise.allSettled(Array.from({ length: size }, () => admitRun(owner.identity, projectId, { ...stale, key: randomUUID() }, CONFIG)));
-      for (const result of results) assert.equal(result.status === "rejected" && result.reason.code, "STALE_DOCUMENT_REVISION");
-    }
+    const admitted = await admitRun(owner.identity, projectId, first, CONFIG); // attempt 1 of the database's current window
     const subject = admissionSubject(owner.profile);
+    await database.query("update app.rate_limit_bucket set count = $2 where subject_hash = $1", [subject, AI_LIMITS.admissionAttemptsPerMinute - 2]); // two attempts left
+    const stale = await start(database, projectId, { revision: 99 });
+    const before = await footprint(database, projectId, owner.profile);
+    const results = await Promise.allSettled(Array.from({ length: 5 }, () => admitRun(owner.identity, projectId, { ...stale, key: randomUUID() }, CONFIG)));
+    const codes = results.map((result) => (result.status === "rejected" ? result.reason.code : "ADMITTED"));
+    assert.equal(codes.filter((code) => code === "STALE_DOCUMENT_REVISION").length, 2); // the last two attempts count even though they are refused
+    assert.equal(codes.filter((code) => code === "RATE_LIMITED").length, 3);
+    assert.deepEqual(await footprint(database, projectId, owner.profile), before);
     const { rows: [bucket] } = await database.query("select count, action, window_start, expires_at, subject_hash from app.rate_limit_bucket where subject_hash = $1", [subject]);
-    assert.equal(bucket.count, AI_LIMITS.admissionAttemptsPerMinute); // the success and 29 refused attempts all counted
+    assert.equal(bucket.count, AI_LIMITS.admissionAttemptsPerMinute); // a full bucket refuses without incrementing
     assert.equal(bucket.action, "AI_ADMISSION");
     assert.match(bucket.subject_hash, /^[0-9a-f]{64}$/);
     for (const part of [owner.profile, owner.identity.authUserId, owner.identity.verifiedEmail]) assert.ok(!bucket.subject_hash.includes(part));
     assert.notEqual(bucket.subject_hash, sha256(owner.profile)); // keyed server-side, not a bare hash of the profile id
     assert.ok(bucket.expires_at > bucket.window_start);
-    const before = await footprint(database, projectId, owner.profile);
-    await assert.rejects(admitRun(owner.identity, projectId, { ...stale, key: randomUUID() }, CONFIG), refused("RATE_LIMITED"));
-    assert.deepEqual(await footprint(database, projectId, owner.profile), before);
     assert.deepEqual(await admitRun(owner.identity, projectId, first, CONFIG), { ...admitted, replayed: true }); // recovery precedes the limiter
     await assert.rejects(admitRun(owner.identity, projectId, { ...first, prompt: "changed" }, CONFIG), refused("KEY_REUSED")); // and so does the key check
   });

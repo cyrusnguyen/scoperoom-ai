@@ -1,11 +1,10 @@
-import type { Prisma } from "../../../../prisma/generated/client.ts";
-import { storedDraft } from "../../drafts/server/execute-command.ts";
+import { lockDraft } from "../../drafts/server/execute-command.ts";
 import type { ProjectRow, Transaction } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { AI_LIMITS, type StartRunInput } from "../contracts/tasks.ts";
 import { captureInput, type SavedSource } from "../domain/capture.ts";
 
-const CAPTURE_FAILURES = new Set(["INVALID_INPUT", "DRAFT_REPLACED", "STALE_DOCUMENT_REVISION", "CONFLICT", "LIMIT_EXCEEDED"]);
+const CAPTURE_FAILURES = new Set(["INVALID_INPUT", "INVALID_SOURCE_REFERENCE", "DRAFT_REPLACED", "STALE_DOCUMENT_REVISION", "BASELINE_CHANGED", "CONFLICT", "LIMIT_EXCEEDED"]);
 
 /** Explicit same-project versions with their documents share-locked (children after the draft). Sizes are checked before any text loads. */
 async function savedSources(tx: Transaction, projectId: string, input: StartRunInput): Promise<SavedSource[]> {
@@ -31,16 +30,13 @@ async function savedSources(tx: Transaction, projectId: string, input: StartRunI
 /** Locks the current draft and reads exactly the saved revision, baseline and cited sources the request names, then builds the immutable capture. */
 export async function captureSaved(tx: Transaction, project: ProjectRow, input: StartRunInput, model: string) {
   if (input.draftId !== project.currentDraftId) throw new ProjectError("DRAFT_REPLACED");
-  const [draft] = await tx.$queryRaw<Array<{ status: string; document_revision: number; layout_revision: number; document_json: Prisma.JsonValue; layout_json: Prisma.JsonValue }>>`
-    SELECT status::text AS status, document_revision, layout_revision, document_json, layout_json
-    FROM app.scope_draft WHERE id = ${input.draftId}::uuid AND project_id = ${project.id}::uuid FOR UPDATE`;
-  if (!draft || draft.status !== "EDITABLE") throw new ProjectError("DRAFT_REPLACED");
+  const draft = await lockDraft(tx, project, input.draftId);
   const [baseline] = await tx.$queryRaw<Array<{ snapshot_id: string | null }>>`SELECT approved_snapshot_id::text AS snapshot_id FROM app.project WHERE id = ${project.id}::uuid`;
   const sources = await savedSources(tx, project.id, input);
   try {
     return captureInput({
-      projectId: project.id, draftId: input.draftId, documentRevision: draft.document_revision, parentSnapshotId: baseline?.snapshot_id ?? null,
-      document: storedDraft(draft.document_json, draft.layout_json).document, sources, model,
+      projectId: project.id, draftId: input.draftId, documentRevision: draft.documentRevision, parentSnapshotId: baseline?.snapshot_id ?? null,
+      document: draft.draft.document, sources, model,
     }, input);
   } catch (error) {
     if (error instanceof Error && CAPTURE_FAILURES.has(error.message)) throw new ProjectError(error.message as ConstructorParameters<typeof ProjectError>[0]);

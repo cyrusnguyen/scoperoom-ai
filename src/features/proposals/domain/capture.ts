@@ -42,17 +42,17 @@ export type SavedContext = {
   document: ScopeDocument; sources: SavedSource[]; model: string;
 };
 
-const fail = (code: "INVALID_INPUT" | "DRAFT_REPLACED" | "STALE_DOCUMENT_REVISION" | "CONFLICT" | "LIMIT_EXCEEDED"): never => { throw new Error(code); };
+const fail = (code: "INVALID_INPUT" | "INVALID_SOURCE_REFERENCE" | "DRAFT_REPLACED" | "STALE_DOCUMENT_REVISION" | "BASELINE_CHANGED" | "CONFLICT" | "LIMIT_EXCEEDED"): never => { throw new Error(code); };
 
 function captureSources(saved: SavedContext, input: StartRunInput): CapturedSource[] {
   const loaded = new Map(saved.sources.map((source) => [source.sourceVersionId, source]));
-  if (loaded.size !== saved.sources.length || loaded.size !== input.context.sources.length) fail("INVALID_INPUT");
+  if (loaded.size !== saved.sources.length || loaded.size !== input.context.sources.length) fail("INVALID_SOURCE_REFERENCE");
   return input.context.sources.map((reference) => {
     const source = loaded.get(reference.sourceVersionId);
-    if (!source || source.projectId !== saved.projectId) return fail("INVALID_INPUT");
+    if (!source || source.projectId !== saved.projectId) return fail("INVALID_SOURCE_REFERENCE");
     if (source.currentVersionId !== reference.expectedCurrentVersionId) return fail("CONFLICT"); // the head moved since the caller looked
     const stats = evidenceStats(source.text);
-    if (stats.text !== source.text || stats.contentHash !== source.contentHash || stats.codePointCount > SOURCE_LIMITS.submissionCodePoints) return fail("INVALID_INPUT");
+    if (stats.text !== source.text || stats.contentHash !== source.contentHash || stats.codePointCount > SOURCE_LIMITS.submissionCodePoints) return fail("INVALID_SOURCE_REFERENCE");
     return {
       sourceVersionId: source.sourceVersionId, sourceId: source.sourceId, title: source.title, text: stats.text, contentHash: stats.contentHash,
       codePointCount: stats.codePointCount, utf8ByteCount: stats.utf8ByteCount, expectedCurrentVersionId: reference.expectedCurrentVersionId,
@@ -107,7 +107,7 @@ function captureGraph(saved: SavedContext, input: StartRunInput): { selection: C
 export function captureInput(saved: SavedContext, input: StartRunInput): { capture: CapturedInput; serialized: string; hash: string } {
   if (input.draftId !== saved.draftId) fail("DRAFT_REPLACED");
   if (input.expectedDocumentRevision !== saved.documentRevision) fail("STALE_DOCUMENT_REVISION");
-  if (input.expectedParentSnapshotId !== saved.parentSnapshotId) fail("CONFLICT");
+  if (input.expectedParentSnapshotId !== saved.parentSnapshotId) fail("BASELINE_CHANGED");
   const prompt = normalizeEvidence(input.prompt);
   if (!prompt.trim() || Array.from(prompt).length > AI_LIMITS.promptCodePoints) fail("INVALID_INPUT");
   const sources = captureSources(saved, input);

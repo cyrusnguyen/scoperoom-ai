@@ -50,7 +50,7 @@ async function requireReadableDraft(tx: Transaction, projectId: string, draftId:
 }
 
 /** Lock order 4 (after actor and project): the route's draft, which must be the project's current editable draft. */
-async function lockDraft(tx: Transaction, project: ProjectRow, draftId: string): Promise<LockedDraft> {
+export async function lockDraft(tx: Transaction, project: ProjectRow, draftId: string): Promise<LockedDraft> {
   const [row] = await tx.$queryRaw<Array<{ id: string; status: string; document_revision: number; layout_revision: number; document_json: unknown; layout_json: unknown }>>`
     SELECT id, status::text AS status, document_revision, layout_revision, document_json, layout_json
     FROM app.scope_draft WHERE id = ${draftId}::uuid AND project_id = ${project.id}::uuid FOR UPDATE`;

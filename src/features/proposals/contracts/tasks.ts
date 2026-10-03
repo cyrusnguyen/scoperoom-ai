@@ -64,7 +64,7 @@ export function parseStartRunInput(raw: unknown, key: string): StartRunInput {
     key, taskType, prompt, draftId: id(body.draftId), expectedDocumentRevision: version(body.expectedDocumentRevision),
     expectedParentSnapshotId: body.expectedParentSnapshotId === null ? null : id(body.expectedParentSnapshotId), context: { selection, sources },
   };
-  if (startBodyBytes(input) > AI_LIMITS.startBodyBytes) invalid();
+  if (startBodyBytes(input) > AI_LIMITS.startBodyBytes) throw new Error("LIMIT_EXCEEDED", { cause: "START_BODY_BYTES" });
   return input;
 }
 
