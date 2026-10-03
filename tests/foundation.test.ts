@@ -20,6 +20,15 @@ test("foundation modules are available to plain Node", async () => {
   assert.equal(await moduleLoads("../src/server/logger.ts"), true);
 });
 
+test("AI contracts, capture and the two provider ports load in plain Node without provider packages", async () => {
+  for (const path of ["contracts/tasks.ts", "domain/capture.ts", "server/ports.ts"]) assert.equal(await moduleLoads(`../src/features/proposals/${path}`), true, path);
+  const { readFile } = await import("node:fs/promises");
+  for (const path of ["contracts/tasks.ts", "domain/capture.ts", "server/ports.ts"]) {
+    const source = await readFile(new URL(`../src/features/proposals/${path}`, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /from "(?!node:|\.\.?\/)/, `${path} imports only relative modules and node built-ins`);
+  }
+});
+
 test("generated Prisma client loads in plain Node", async () => {
   const generated = await import("../prisma/generated/client.ts");
   assert.equal(typeof generated.PrismaClient, "function");
