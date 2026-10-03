@@ -755,7 +755,11 @@ test.describe("Studio on a real draft", () => {
     await addStepInUi(page, "Received", "Start");
     await addStepInUi(page, "Reviewed");
     await addStepInUi(page, "Closed", "Outcome");
-    await toolbar(page).getByRole("button", { name: "Flow details" }).click();
+    await toolbar(page).getByRole("button", { name: "Canvas", exact: true }).click();
+    await page.locator(".react-flow__pane").click({ position: { x: 10, y: 10 } });
+    const inspect = page.getByRole("button", { name: "Inspect", exact: true });
+    if (await inspect.getAttribute("aria-pressed") === "true") await inspect.click();
+    await inspect.click();
     await panel(page).getByLabel("Title", { exact: true }).fill("Case triage");
     await panel(page).getByLabel("Purpose").fill("Review cases");
     await panel(page).getByLabel("Type", { exact: true }).selectOption("BUSINESS_PROCESS");
@@ -1378,7 +1382,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     const list = toolbar(page).getByRole("button", { name: "List", exact: true });
     await expect(list).toHaveAttribute("aria-pressed", "true");
     expect((await list.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-    expect((await toolbar(page).getByRole("button", { name: "Flow details" }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    expect((await toolbar(page).getByRole("button", { name: "Arrange", exact: true }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await toolbar(page).getByRole("button", { name: "Canvas", exact: true }).click();
     for (const name of ["Zoom In", "Zoom Out", "Fit View"]) {
       const box = await page.getByRole("button", { name, exact: true }).boundingBox();

@@ -1,4 +1,4 @@
-﻿import { randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { expect, type Page, type Download, type Request } from "@playwright/test";
 import { test } from "./studio-fixtures";
@@ -25,7 +25,7 @@ async function openExport(page: Page) {
 }
 async function bytesOf(download: Download) { const path = await download.path(); expect(path).not.toBeNull(); return readFile(path!); }
 async function download(page: Page) {
-  const pending = page.waitForEvent("download"); await dialog(page).getByRole("button", { name: "Export saved state", exact: true }).click();
+  const pending = page.waitForEvent("download"); await dialog(page).getByRole("button", { name: "Download JSON", exact: true }).click();
   const result = await pending; return { download: result, file: parseFlowFile(await bytesOf(result)) };
 }
 function exportsSent(page: Page) { const list: Request[] = []; page.on("request", req => { if (req.method() === "POST" && req.url().endsWith("/export")) list.push(req); }); return list; }
@@ -47,7 +47,7 @@ test("unsubmitted inspector text is excluded and Save cannot claim it saved", as
   const { id, nodeId } = await setup(page), before = await draftOf(page, id), sent = exportsSent(page);
   await page.locator(`.react-flow__node[data-id="${nodeId}"]`).click(); await page.getByRole("button", { name: "Inspect", exact: true }).click();
   await page.locator("#inspect-label").fill("Unsubmitted private text"); await openExport(page);
-  await expect(dialog(page)).toContainText("unsaved"); await dialog(page).getByRole("button", { name: "Save and inspect saved state", exact: true }).click();
+  await expect(dialog(page)).toContainText("Unsaved changes are excluded"); await dialog(page).getByRole("button", { name: "Save and inspect saved state", exact: true }).click();
   await expect(dialog(page).getByRole("alert")).toContainText("Submit or discard"); expect(sent).toHaveLength(0);
   const result = await download(page); expect(result.file.nodes[0]!.label).toBe("Saved step"); expect(await draftOf(page, id)).toEqual(before);
   await page.keyboard.press("Escape"); await expect(page.locator("#inspect-label")).toHaveValue("Unsubmitted private text");
@@ -72,7 +72,7 @@ test("post-preparation status outage gives an actionable refusal and exact retry
   page.on("download", () => downloaded++);
   await page.route("**/export", async route => { const result = await route.fetch(); failed = true; await route.fulfill({ response: result }); });
   await page.route(`**/api/projects/${id}/status`, route => failed ? route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Status temporarily unavailable" } } }) : route.continue());
-  await openExport(page); await dialog(page).getByRole("button", { name: "Export saved state", exact: true }).click();
+  await openExport(page); await dialog(page).getByRole("button", { name: "Download JSON", exact: true }).click();
   await expect(dialog(page).getByRole("alert")).toContainText("confirm your current access"); expect(downloaded).toBe(0);
   await page.unroute("**/export"); failed = false; const { file } = await download(page); expect(file.nodes[0]!.label).toBe("Saved step");
 });
@@ -84,7 +84,7 @@ test("stale saved pair refreshes disclosure and requires an explicit second requ
     const moved = await page.request.post(`/api/projects/${id}/drafts/${before.id}/positions`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { mode: "MOVE_NODES", flowId, items: [{ nodeId, expectedPositionVersion: before.layout.positions[nodeId]!.version, x: 742, y: 351 }] } });
     expect(moved.status()).toBe(200); await route.continue();
   }, { times: 1 });
-  await dialog(page).getByRole("button", { name: "Export saved state", exact: true }).click();
+  await dialog(page).getByRole("button", { name: "Download JSON", exact: true }).click();
   await expect(dialog(page).getByRole("alert")).toContainText("explicitly retry"); expect(sent).toHaveLength(1);
   await expect(dialog(page)).toContainText(`layout revision ${before.layoutRevision + 1}`);
   const { file } = await download(page); expect(sent).toHaveLength(2); expect(file.positions).toEqual([{ nodeId: "n1", x: 742, y: 351 }]);
@@ -95,7 +95,7 @@ test("a pending local move is excluded until Save and inspect acknowledges it", 
   const box = (await page.locator(`.react-flow__node[data-id="${nodeId}"]`).boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 + 90, box.y + box.height / 2 + 65, { steps: 8 }); await page.mouse.up();
-  await openExport(page); await expect(dialog(page)).toContainText("pending movement");
+  await openExport(page); await expect(dialog(page)).toContainText("Unsaved changes are excluded");
   const first = await download(page); expect(first.file.positions).toEqual([{ nodeId: "n1", x: before.layout.positions[nodeId]!.x, y: before.layout.positions[nodeId]!.y }]);
   await dialog(page).getByRole("button", { name: "Save and inspect saved state", exact: true }).click();
   await expect(dialog(page)).toContainText(`layout revision ${before.layoutRevision + 1}`);
@@ -107,7 +107,7 @@ for (const status of [200, 401]) test(`late export ${status} after project repla
   let release!: () => void, downloaded = 0; const held = new Promise<void>(resolve => release = resolve); let started = false;
   page.on("download", () => downloaded++);
   await page.route("**/export", async route => { const response = await route.fetch(); started = true; await held; if (status === 200) await route.fulfill({ response }); else await route.fulfill({ status: 401, json: { error: { code: "UNAUTHENTICATED", message: "Session ended" } } }); });
-  await openExport(page); await dialog(page).getByRole("button", { name: "Export saved state", exact: true }).click();
+  await openExport(page); await dialog(page).getByRole("button", { name: "Download JSON", exact: true }).click();
   await expect.poll(() => started).toBe(true);
   await page.getByRole("button", { name: "Destination", exact: true, includeHidden: true }).dispatchEvent("click");
   await expect(page).toHaveURL(new RegExp(`/app/projects/${destination}$`));
@@ -122,7 +122,7 @@ test("narrow keyboard export keeps Cancel focus and restores the flow opener", a
   await page.getByRole("dialog", { name: "Flows", exact: true }).getByRole("button", { name: "Export flow", exact: true }).focus(); await page.keyboard.press("Enter");
   await expect(dialog(page).getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
   expect(await dialog(page).evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.keyboard.press("Tab"); await expect(dialog(page).getByRole("button", { name: "Save and inspect saved state" })).toBeFocused();
+  await page.keyboard.press("Tab"); await expect(dialog(page).getByRole("button", { name: "Download JSON" })).toBeFocused();
   await page.keyboard.press("Escape"); await expect(dialog(page)).toBeHidden(); await expect(page.locator(".flow-switch")).toBeFocused();
 });
 
@@ -168,9 +168,9 @@ test("peer deleting the selected flow never retargets export to a fallback flow"
   const current = await draftOf(page, id);
   const removed = await page.request.post(`/api/projects/${id}/drafts/${before.id}/changes`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { commands: [{ commandSchemaVersion: 1, command: "DELETE_FLOW", expectedDocumentRevision: current.documentRevision, payload: { flowId, removeNodeIds: [], removeEdgeIds: [] } }], moves: [] } });
   expect(removed.status()).toBe(200);
-  await dialog(page).getByRole("button", { name: "Inspect current saved state", exact: true }).click();
+  await dialog(page).getByRole("button", { name: "Refresh saved state", exact: true }).click();
   await expect(dialog(page)).toContainText("unavailable"); await expect(dialog(page)).not.toContainText("Fallback flow");
-  await expect(dialog(page).getByRole("button", { name: "Export saved state", exact: true })).toBeDisabled();
+  await expect(dialog(page).getByRole("button", { name: "Download JSON", exact: true })).toBeDisabled();
 });
 
 test("live export HTTP is keyless no-store authenticated and refuses client replacement data", async ({ page, browser }) => {
@@ -192,7 +192,7 @@ test("Cancel during held preparation prevents a late private download", async ({
   await setup(page); let release!: () => void, started = false, downloaded = 0; const held = new Promise<void>(resolve => release = resolve);
   page.on("download", () => downloaded++);
   await page.route("**/export", async route => { const response = await route.fetch(); started = true; await held; await route.fulfill({ response }); });
-  await openExport(page); await dialog(page).getByRole("button", { name: "Export saved state", exact: true }).click(); await expect.poll(() => started).toBe(true);
+  await openExport(page); await dialog(page).getByRole("button", { name: "Download JSON", exact: true }).click(); await expect.poll(() => started).toBe(true);
   await dialog(page).getByRole("button", { name: "Cancel", exact: true }).click();
   const finished = page.waitForResponse(response => response.url().endsWith("/export")); release(); await (await finished).finished();
   await expect(dialog(page)).toBeHidden(); expect(downloaded).toBe(0); await expect(page.locator(".flow-switch")).toBeFocused();
@@ -217,7 +217,7 @@ for (const change of ["removed", "account"] as const) collaborationTest(`${chang
   await seedShared(ownerPage, projectId); await editorPage.goto(`/app/projects/${projectId}`); let release!: () => void, started = false, downloaded = 0;
   const held = new Promise<void>(resolve => release = resolve); editorPage.on("download", () => downloaded++);
   await editorPage.route("**/export", async route => { const response = await route.fetch(); expect(response.status()).toBe(200); started = true; await held; await route.fulfill({ response }); });
-  await openExport(editorPage); await dialog(editorPage).getByRole("button", { name: "Export saved state", exact: true }).click(); await expect.poll(() => started).toBe(true);
+  await openExport(editorPage); await dialog(editorPage).getByRole("button", { name: "Download JSON", exact: true }).click(); await expect.poll(() => started).toBe(true);
   if (change === "removed") await removeEditor();
   else { await editorPage.context().clearCookies(); await editorPage.context().addCookies(await ownerPage.context().cookies()); }
   const finished = editorPage.waitForResponse(response => response.url().endsWith("/export")); release(); await (await finished).finished();
@@ -244,12 +244,12 @@ test("replacement draft generation fences a held native preparation", async ({ p
   const { id } = await setup(page); const replacement = randomUUID(); let replacementRead = false; let release!: () => void, started = false, downloaded = 0; const held = new Promise<void>(resolve => release = resolve);
   page.on("download", () => downloaded++);
   await page.route("**/export", async route => { const response = await route.fetch(); started = true; await held; await route.fulfill({ response }); });
-  await openExport(page); await dialog(page).getByRole("button", { name: "Export saved state", exact: true }).click(); await expect.poll(() => started).toBe(true);
+  await openExport(page); await dialog(page).getByRole("button", { name: "Download JSON", exact: true }).click(); await expect.poll(() => started).toBe(true);
   await page.route(`**/api/projects/${id}/status`, async route => { const response = await route.fetch(), body = await response.json(); body.currentDraftId = replacement; await route.fulfill({ response, json: body }); });
   await page.route(`**/api/projects/${id}/bootstrap`, async route => { const response = await route.fetch(), body = await response.json(); body.status.currentDraftId = replacement; body.draft.id = replacement; replacementRead = true; await route.fulfill({ response, json: body }); });
   const status = page.waitForResponse(response => response.url().endsWith("/status")); await page.evaluate(() => window.dispatchEvent(new Event("focus"))); await status; await expect.poll(() => replacementRead).toBe(true);
   const finished = page.waitForResponse(response => response.url().endsWith("/export")); release(); await (await finished).finished();
-  await expect(dialog(page).getByRole("button", { name: "Export saved state", exact: true })).toBeEnabled(); expect(downloaded).toBe(0);
+  await expect(dialog(page).getByRole("button", { name: "Download JSON", exact: true })).toBeEnabled(); expect(downloaded).toBe(0);
 });
 
 test("acknowledged save with under-floor saved reads blocks export until a covering inspection", async ({ page }) => {
@@ -258,8 +258,8 @@ test("acknowledged save with under-floor saved reads blocks export until a cover
   await page.route(`**/api/projects/${id}/drafts/${before.id}`, route => stale ? route.fulfill({ json: before }) : route.continue());
   await openExport(page); await dialog(page).getByRole("button", { name: "Save and inspect saved state", exact: true }).click();
   await expect(dialog(page).getByRole("alert")).toContainText("acknowledged revisions");
-  await expect(dialog(page).getByRole("button", { name: "Export saved state", exact: true })).toBeDisabled(); expect(sent).toHaveLength(0);
-  stale = false; await dialog(page).getByRole("button", { name: "Inspect current saved state", exact: true }).click();
+  await expect(dialog(page).getByRole("button", { name: "Download JSON", exact: true })).toBeDisabled(); expect(sent).toHaveLength(0);
+  stale = false; await dialog(page).getByRole("button", { name: "Refresh saved state", exact: true }).click();
   await expect(dialog(page)).toContainText(`Document revision ${before.documentRevision + 1}`);
   const { file } = await download(page); expect(file.nodes[0]!.label).toBe("Receipt acknowledged label");
 });

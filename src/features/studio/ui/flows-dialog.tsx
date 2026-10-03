@@ -157,30 +157,35 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     </Dialog>;
   }
 
-  return <Dialog title="Flows" onClose={onClose} footer={<button type="button" className="button quiet" onClick={onClose}>Close</button>}>
-    <div className="view-actions"><button type="button" className="button small" onClick={() => setMode("import")}>Import flow</button>{current && <button type="button" className="button small" onClick={() => { setExportFlowId(current.id); setMode("export"); }}>Export flow</button>}</div>
-    <div className="form-row">
-      <label htmlFor="flow-filter">Show</label>
-      <select id="flow-filter" value={filter} onChange={(event) => setFilter(event.target.value as "ALL" | Inclusion)}>
+  return <Dialog title="Flows" description="Choose a flow or bring one into this project." className="flow-dialog" onClose={onClose} footer={<>
+    <span className="dialog-footer-note">{flows.length} of {LIMITS.flows} flows</span>
+    <button type="button" className="button quiet" onClick={onClose}>Close</button>
+  </>}>
+    <div className="flow-list-toolbar">
+      {editable && <button type="button" className="button primary" onClick={() => setMode("create")} disabled={full || saving}><Icon name="plus" size={15} />New flow</button>}
+      <div className="flow-filter"><label htmlFor="flow-filter">Show</label><select id="flow-filter" value={filter} onChange={(event) => setFilter(event.target.value as "ALL" | Inclusion)}>
         <option value="ALL">All flows</option>
         {INCLUSIONS.map((value) => <option key={value} value={value}>{INCLUSION_LABELS[value]}</option>)}
-      </select>
+      </select></div>
     </div>
-    <p className="muted">{flows.length} of {LIMITS.flows} flows{filter === "ALL" ? "" : ` · showing ${shown.length}`}</p>
-    <ul className="item-list">{shown.map((flow) => <li key={flow.id}>
-      <button type="button" className="item-row" aria-current={flow.id === current?.id ? "true" : undefined} onClick={() => void open(flow.id)} disabled={saving}>
-        <span><strong>{flow.title}</strong><small>{counts(flow.id)} {counts(flow.id) === 1 ? "step" : "steps"} · {INCLUSION_LABELS[flow.inclusion]}</small></span>
-        {flow.id === current?.id && <Icon name="check" size={14} />}
+    <ul className="flow-list" aria-label="Project flows">{shown.map((flow) => <li key={flow.id}>
+      <button type="button" className="flow-list-row" aria-current={flow.id === current?.id ? "true" : undefined} onClick={() => void open(flow.id)} disabled={saving}>
+        <Icon name="flow" size={18} />
+        <span className="flow-list-copy"><strong>{flow.title}</strong><small>{counts(flow.id)} {counts(flow.id) === 1 ? "step" : "steps"} · {INCLUSION_LABELS[flow.inclusion]}</small></span>
+        {flow.id === current?.id && <span className="flow-current"><Icon name="check" size={14} />Open</span>}
       </button>
     </li>)}</ul>
-    {editable && <>
-      <div className="view-actions">
-        <button type="button" className="button small" onClick={() => setMode("create")} disabled={full}>New flow</button>
-        {current && <button type="button" className="button small" onClick={() => void duplicate()} disabled={full || duplicateTooLong || saving}>Duplicate {current.title}</button>}
-        {current && <button type="button" className="button danger small" onClick={() => setMode("delete")}>Delete {current.title}…</button>}
-      </div>
-      <p className="muted">A duplicate gets new identities, keeps its steps, connections and positions, and starts unconfirmed.{full ? ` A project can have up to ${LIMITS.flows} flows.` : duplicateTooLong ? ` This flow title cannot be duplicated because "Copy of " would exceed the ${LIMITS.title}-character limit.` : ""}</p>
-    </>}
+    {!shown.length && <div className="dialog-empty"><p>{flows.length ? "No flows match this filter." : "No flows yet."}</p>{flows.length > 0 && <button type="button" className="button quiet small" onClick={() => setFilter("ALL")}>Show all flows</button>}</div>}
+    {editable && current && <div className="flow-management">
+      <span className="dialog-caption">Current flow</span>
+      <button type="button" className="button quiet small" aria-label={"Duplicate " + current.title} onClick={() => void duplicate()} disabled={full || duplicateTooLong || saving}><Icon name="copy" size={14} />Duplicate</button>
+      <button type="button" className="button quiet small destructive" aria-label={"Delete " + current.title + "…"} onClick={() => setMode("delete")} disabled={saving}><Icon name="trash" size={14} />Delete</button>
+    </div>}
+    {editable && (full || duplicateTooLong) && <p className="dialog-caption">{full ? "A project can have up to " + LIMITS.flows + " flows." : "Shorten this title before duplicating it. Copy of would exceed the " + LIMITS.title + "-character limit."}</p>}
+    <div className="flow-transfer-actions" aria-label="Import and export">
+      <button type="button" className="flow-transfer" aria-label="Import flow" disabled={saving} onClick={() => setMode("import")}><Icon name="importFlow" size={20} /><span><strong>Import flow</strong><small>Add from a native file</small></span></button>
+      <button type="button" className="flow-transfer" aria-label="Export flow" disabled={saving || !current} onClick={() => { if (!current) return; setExportFlowId(current.id); setMode("export"); }}><Icon name="exportFlow" size={20} /><span><strong>Export flow</strong><small>{current ? "Download the current flow" : "Create or import a flow first"}</small></span></button>
+    </div>
     {message && <p className="error-message" role="alert">{message}</p>}
   </Dialog>;
 }

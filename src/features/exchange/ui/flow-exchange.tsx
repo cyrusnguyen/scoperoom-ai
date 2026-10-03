@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { apiMutate, apiRead, sessionEnded, type ApiResult } from "@/client/api";
 import { useSync } from "@/features/collaboration/ui/sync-context";
 import Dialog from "@/features/shell/ui/dialog";
+import { Icon } from "@/features/shell/ui/icon";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import { covers, requireDraftRevision } from "@/features/studio/ui/studio-ui";
 import type { ImportPreviewView } from "../contracts/import";
@@ -226,36 +227,36 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
     update(() => ({ flowId: result.flowId, selection: null, nativeImport: null }));
     onClose(); requestAnimationFrame(() => document.getElementById("studio-flow-title")?.focus());
   }, [available, working, result, local, update, onClose]);
-  return <Dialog title="Import flow" onClose={blocked ? () => {} : onClose} footer={<>
+  return <Dialog title="Import flow" description="Review a native file before adding it to this project." className={local?.preview?.fidelityReport ? "flow-dialog flow-import-dialog" : "flow-dialog"} onClose={blocked ? () => {} : onClose} footer={<>
     <button type="button" className="button quiet" disabled={blocked} onClick={onClose}>Cancel</button>
     {local?.state === "Applied" ? <>
-      <button type="button" className="button" disabled={working} onClick={() => void recover()}>Refresh saved changes</button>
+      <button type="button" className="button primary" disabled={working} onClick={() => void recover()}>Refresh saved changes</button>
       {(!sameDraft || covering && !available) && <button type="button" className="button quiet" disabled={working} onClick={() => { clearImport(local.record); latest.current = null; update(() => ({ nativeImport: null })); setSelected(null); setMessage(""); const input = document.getElementById("native-import-file") as HTMLInputElement; input.value = ""; }}>Start another import</button>}
-    </> : <>
-      <button type="button" className="button" disabled={blocked || !editable || !selected && !local?.file} onClick={() => void upload(Boolean(local?.record.previewHash))}>{local?.record.previewHash ? "Inspect again" : "Inspect file"}</button>
-      {local && !local.record.previewHash && <button type="button" className="button quiet" disabled={blocked || !editable || !selected && !local.file} onClick={() => void upload(true)}>Start new inspection</button>}
-      {local && <button type="button" className="button quiet" disabled={working || busy} onClick={() => void recover()}>Recover import status</button>}
-      {local && <button type="button" className="button quiet" disabled={blocked} onClick={() => void discard()}>Discard preview</button>}
-      {local?.record.previewHash && <button type="button" className="button primary" disabled={working || busy || !locked && (!editable || local.state !== "Ready" || local.record.draftId !== savedDraft.id)} onClick={() => void apply()}>{working || busy ? "Applying…" : locked ? "Retry import" : "Create unapproved copy"}</button>}
-    </>}
+    </> : local?.record.previewHash ? <button type="button" className="button primary" disabled={working || busy || !locked && (!editable || local.state !== "Ready" || local.record.draftId !== savedDraft.id)} onClick={() => void apply()}><Icon name="plus" size={15} />{working || busy ? "Applying…" : locked ? "Retry import" : "Create unapproved copy"}</button>
+      : <button type="button" className="button primary" disabled={blocked || !editable || !selected && !local?.file} onClick={() => void upload(false)}>Inspect file</button>}
   </>}>
-    <div className="field"><label htmlFor="native-import-file">Native flow file</label><input id="native-import-file" type="file" accept=".json,.scoperoom-flow.json" disabled={blocked || !editable} onChange={(event) => { setSelected(event.target.files?.[0] ?? null); setMessage(""); }} /></div>
-    <p>Inspect a version 1 .scoperoom-flow.json file before creating an independent copy. File contents stay in memory; reload recovers only the original preview identity.</p>
-    {!editable && <p>This project is read-only. You can recover an existing applied import; new copies are disabled.</p>}
-    <p role="status">{message.startsWith("Access lost") ? "Access lost" : message.startsWith("Invalid:") ? "Invalid" : local?.state ?? "Select a file"}</p>
-    {local && <p className="muted">Target draft: {local.record.draftId}{local.preview?.expiresAt && <> · Expires: <time dateTime={local.preview.expiresAt}>{new Date(local.preview.expiresAt).toLocaleString()}</time></>}</p>}
+    <div className="import-file-picker" data-inspected={Boolean(local?.preview?.fidelityReport)}><Icon name="importFlow" size={26} /><div className="field"><label htmlFor="native-import-file">Native flow file</label><input id="native-import-file" type="file" accept=".json,.scoperoom-flow.json" aria-describedby="import-file-help" disabled={blocked || !editable} onChange={(event) => { setSelected(event.target.files?.[0] ?? null); setMessage(""); }} /><small id="import-file-help" className="dialog-caption">.scoperoom-flow.json · up to 1 MB</small></div></div>
+    {!local && <p className="dialog-caption">Choose a ScopeRoom file to preview its steps and connections. Your existing flows stay as they are.</p>}
+    {!editable && <p className="dialog-note">This project is read-only. You can recover an existing applied import; new copies are disabled.</p>}
+    {local && <div className="import-status-line"><span className="import-status" data-state={local.state} role="status">{local.state === "Ready" && <Icon name="check" size={14} />}{message.startsWith("Access lost") ? "Access lost" : message.startsWith("Invalid:") ? "Invalid" : local.state}</span><div className="import-recovery-actions" role="group" aria-label="Import recovery">
+      {local.state !== "Applied" && <>
+        {local.record.previewHash && <button type="button" className="button quiet small" disabled={blocked || !editable || !selected && !local.file} onClick={() => void upload(true)}>Inspect again</button>}
+        {!local.record.previewHash && <button type="button" className="button quiet small" disabled={blocked || !editable || !selected && !local.file} onClick={() => void upload(true)}>Start new inspection</button>}
+        <button type="button" className="button quiet small" disabled={working || busy} onClick={() => void recover()}>Recover import status</button>
+        <button type="button" className="button quiet small destructive" disabled={blocked} onClick={() => void discard()}>Discard preview</button>
+      </>}
+    </div></div>}
+    {!local && <span className="import-status" role="status">{message.startsWith("Access lost") ? "Access lost" : message.startsWith("Invalid:") ? "Invalid" : "Select a file"}</span>}
     {local?.preview?.fidelityReport && <>
-      <p>{local.preview.fidelityReport.nodeCount} steps · {local.preview.fidelityReport.edgeCount} connections</p>
-      <p>{local.preview.fidelityReport.geometry === "SUPPLIED" ? "Supplied geometry is preserved with new identities." : "Geometry was omitted. A deterministic automatic layout will be used."}</p>
-      <p>Trust reset: inclusion UNDECIDED (exploratory), origin IMPORTED, no confirmation. Approvals, memberships, evidence and live requirement links are not imported.</p>
-      {local.preview.file?.origin.kind === "SNAPSHOT" && <p>Snapshot provenance is informational. Its inclusion or approval does not authorize this copy.</p>}
-      {local.preview.fidelityReport.omittedLinkHintCount > 0 && <p>{local.preview.fidelityReport.omittedLinkHintCount} link hints ignored; no live relationships are created.</p>}
-      <div className="segmented" role="group" aria-label="Import preview view"><button type="button" aria-pressed={view === "canvas"} onClick={() => setView("canvas")}>Graph preview</button><button type="button" aria-pressed={view === "list"} onClick={() => setView("list")}>List alternative</button></div>
-      <ImportPreview preview={local.preview} view={view} />
+      <div className="exchange-heading"><span className="exchange-icon"><Icon name="flow" size={22} /></span><div><h3>{local.preview.file?.flow.title ?? "Flow preview"}</h3><p className="dialog-caption">{local.preview.fidelityReport.nodeCount} steps · {local.preview.fidelityReport.edgeCount} connections</p></div><span className="format-badge">JSON</span></div>
+      <div className="import-preview-section"><div className="segmented" role="group" aria-label="Import preview view"><button type="button" aria-pressed={view === "canvas"} onClick={() => setView("canvas")}>Graph preview</button><button type="button" aria-pressed={view === "list"} onClick={() => setView("list")}>List alternative</button></div><ImportPreview preview={local.preview} view={view} /></div>
+      <div className="exchange-description"><p>A new exploratory, unconfirmed copy will be created. Approvals, memberships, evidence and live requirement links are not imported.</p><p className="dialog-caption">{local.preview.fidelityReport.geometry === "SUPPLIED" ? "Supplied geometry is preserved with new identities." : "Geometry was omitted. A deterministic automatic layout will be used."}</p></div>
+      {local.preview.fidelityReport.omittedLinkHintCount > 0 && <p className="dialog-caption">{local.preview.fidelityReport.omittedLinkHintCount} link hints ignored; no live relationships are created.</p>}
     </>}
-    {local?.state === "Applied" && <p role="status">{!sameDraft ? "This import was saved to the original draft. Its historical flow is unavailable in the current draft." : !covering ? "Import saved. Refreshing saved changes…" : !available ? "Import saved. The created flow has since been deleted and is unavailable." : "Import saved."}</p>}
-    {local?.state === "Stale" && <p>Inspect again explicitly to target the current draft. If file contents were cleared, select the same file again.</p>}
-    {local?.state === "Expired" && <p>This preview expired. Select the same file again if needed, then inspect again explicitly.</p>}
+    {local && <details className="exchange-details"><summary>Import details</summary><p>Target draft: {local.record.draftId}</p>{local.preview?.expiresAt && <p>Expires: <time dateTime={local.preview.expiresAt}>{new Date(local.preview.expiresAt).toLocaleString()}</time></p>}<p>File contents stay in memory; reload recovers only the original preview identity.</p>{local.preview?.fidelityReport && <p>Trust reset: inclusion UNDECIDED (exploratory), origin IMPORTED, no confirmation.</p>}{local.preview?.file?.origin.kind === "SNAPSHOT" && <p>Snapshot provenance is informational. Its inclusion or approval does not authorize this copy.</p>}</details>}
+    {local?.state === "Applied" && <p className="dialog-note" role="status">{!sameDraft ? "This import was saved to the original draft. Its historical flow is unavailable in the current draft." : !covering ? "Import saved. Refreshing saved changes…" : !available ? "Import saved. The created flow has since been deleted and is unavailable." : "Import saved."}</p>}
+    {local?.state === "Stale" && <p className="dialog-note">Inspect again explicitly to target the current draft. If file contents were cleared, select the same file again.</p>}
+    {local?.state === "Expired" && <p className="dialog-note">This preview expired. Select the same file again if needed, then inspect again explicitly.</p>}
     {(local?.message || message) && <p className="error-message" role="alert">{message || local?.message}</p>}
   </Dialog>;
 }

@@ -13,6 +13,11 @@ const paths = {
   grid: ["M3 3h7v7H3V3Zm11 0h7v7h-7V3ZM3 14h7v7H3v-7Zm11 0h7v7h-7v-7Z"],
   undo: ["M3 10h11a6 6 0 0 1 0 12M3 10l5-5m-5 5 5 5"],
   redo: ["M21 10H10a6 6 0 0 0 0 12M21 10l-5-5m5 5-5 5"],
+  exportFlow: ["M12 16V3m-5 5 5-5 5 5M4 15v6h16v-6"],
+  importFlow: ["M12 3v13m-5-5 5 5 5-5M4 17v4h16v-4"],
+  download: ["M12 3v13m-5-5 5 5 5-5M4 17v4h16v-4"],
+  copy: ["M9 9h12v12H9V9ZM5 15H3V3h12v2"],
+  trash: ["M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"],
   minus: ["M5 12h14"],
   fit: ["M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"],
 } as const;

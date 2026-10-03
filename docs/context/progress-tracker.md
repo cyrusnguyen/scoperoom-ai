@@ -1,5 +1,13 @@
 # Progress tracker
 
+## Stage 05 UI refresh (2026-10-03)
+
+The user requested and approved this UI commit on feat/stage-5.3-export-flows. Flows, Import and Export now share compact dark/gold dialog styling, clear primary actions, responsive layouts and secondary recovery controls. Flow details is removed; Inspect opens the current flow when no item is selected and retains access to project settings. Export remains visible but disabled when no flow exists; zero-step flows remain exportable. Import and Export arrows point into and out of the tray respectively. Import/export request, revision, authority and recovery gates are preserved.
+
+Fresh checks of the UI-only commit candidate passed: 345/345 unit tests, boundaries, full ESLint, TypeScript, a production Webpack build and 10/10 focused Chromium checks covering import Apply/recovery, native export round trip, keyboard navigation, flow inspection and filtering. Earlier reviewed UI runs also passed all 63 existing Import cases, 23 Export/Flows cases and two Studio inspector/narrow-control cases. Independent scoped review found no remaining defect. The isolated preview remains on port 3109. This is local focused UI verification; no full-suite, hosted or CI claim is made for this commit.
+
+Separate Arrange recovery changes and the other task's import-retirement tests/tracker edits are intentionally outside this commit and remain in the worktree. No push is requested.
+
 ## Stage 05.3 - saved native export locally complete, PR preparation (2026-10-03)
 
 Stage 05.3 delivers exact saved native format 1 export with a server-owned envelope, filename and file. Preparation pins both document/layout revisions, checks read authority and reads the coherent saved pair in RepeatableRead. Supported file-local text, topology, all node kinds, assumptions, coordinates, flow direction and remembered connection sides survive; DRAFT provenance carries the saved revision pair. The file is bounded to 1 MiB and excludes trust, private IDs and viewport. Preparation writes no saved data, audit or receipts. The NFC-safe filename stem keeps at most 50 Unicode code points.

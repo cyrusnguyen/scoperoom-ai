@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import type { ProjectBootstrap, ProjectCapacity } from "@/features/projects/contracts/project";
 import { roleLabel } from "@/features/projects/ui/format";
 import { FlowSwitcher } from "@/features/studio/ui/flows-dialog";
+import { currentFlow } from "@/features/studio/ui/graph-view";
 import Studio from "@/features/studio/ui/studio";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import { Icon } from "./icon";
@@ -30,6 +31,14 @@ export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onS
   restoreNote?: string; onRestore: () => void;
 }) {
   const { project } = bootstrap;
+  const { draft, ui, update } = useStudio();
+  const toggleInspector = () => {
+    if (!panelOpen && !ui.selection) {
+      const flow = currentFlow(draft.document, ui.flowId);
+      if (flow) update(() => ({ selection: { kind: "FLOW", id: flow.id } }));
+    }
+    onTogglePanel();
+  };
   const titleRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => { if (autoFocus) titleRef.current?.focus(); }, [autoFocus]);
   const archived = project.status === "ARCHIVED";
@@ -41,7 +50,7 @@ export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onS
       <FlowSwitcher />
       <span className="editor-spacer" />
       <SaveChanges />
-      <button type="button" className="button small editor-toggle" aria-pressed={panelOpen} aria-controls="right-panel" onClick={onTogglePanel}><Icon name="details" size={14} /><span>Inspect</span></button>
+      <button type="button" className="button small editor-toggle" aria-pressed={panelOpen} aria-controls="right-panel" onClick={toggleInspector}><Icon name="details" size={14} /><span>Inspect</span></button>
     </header>
     {archived && <div className="editor-banner">
       <span><Icon name="lock" size={14} />Archived · read-only</span>

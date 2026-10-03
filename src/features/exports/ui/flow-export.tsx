@@ -5,6 +5,7 @@ import { apiMutate, sessionEnded } from "@/client/api";
 import { useSync } from "@/features/collaboration/ui/sync-context";
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import { serializeFlowFile } from "@/features/exchange/domain/flow-file";
+import { Icon } from "@/features/shell/ui/icon";
 import Dialog, { CancelFocus } from "@/features/shell/ui/dialog";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import { covers } from "@/features/studio/ui/studio-ui";
@@ -27,7 +28,7 @@ export function NativeExportDialog({ flowId, onClose }: { flowId: string; onClos
     try {
       const result = await inspectSavedExport(saveFirst);
       if (!mounted.current) return;
-      if (result.ok) { setShown(result.result); setMessage("Review this saved state, then choose Export saved state."); }
+      if (result.ok) { setShown(result.result); setMessage("Review this saved state, then choose Download JSON."); }
       else setMessage(result.message);
     } finally { working.current = false; if (mounted.current) setLoading(false); }
   };
@@ -53,7 +54,7 @@ export function NativeExportDialog({ flowId, onClose }: { flowId: string; onClos
           const fresh = await inspectSavedExport(false);
           if (!current() || !admitted()) return;
           if (fresh.ok) setShown(fresh.result);
-          setMessage(fresh.ok ? "The saved revisions changed. Review the newly inspected saved state, then explicitly retry Export saved state." : fresh.message);
+          setMessage(fresh.ok ? "The saved revisions changed. Review the newly inspected saved state, then explicitly retry Download JSON." : fresh.message);
         } else {
           if (result.uncertain) invalidate();
           if (["FORBIDDEN", "NOT_FOUND", "DRAFT_REPLACED"].includes(result.code)) { setShown(null); await revalidate("manual"); }
@@ -66,7 +67,7 @@ export function NativeExportDialog({ flowId, onClose }: { flowId: string; onClos
       if (!current() || !admitted()) return;
       if (checked.kind !== "current") {
         if (checked.kind === "denied") setShown(null);
-        setMessage("We could not confirm your current access. Retry Export saved state after access is checked."); return;
+        setMessage("We could not confirm your current access. Retry Download JSON after access is checked."); return;
       }
       if (checked.status.currentDraftId !== shown.id) { setShown(null); setMessage("The draft changed. Reopen Export for the current saved state."); return; }
       const bytes = serializeFlowFile(result.data.file);
@@ -77,23 +78,23 @@ export function NativeExportDialog({ flowId, onClose }: { flowId: string; onClos
         document.body.append(link); link.click(); link.remove();
       } finally { window.setTimeout(() => URL.revokeObjectURL(url), 0); }
       setMessage("Native file downloaded from the disclosed saved revisions.");
-    } catch { if (current()) setMessage("The download could not be prepared. Retry Export saved state."); }
+    } catch { if (current()) setMessage("The download could not be prepared. Retry Download JSON."); }
     finally { working.current = false; if (mounted.current) setLoading(false); }
   };
-  return <Dialog title="Export flow" onClose={close} footer={<>
+  return <Dialog title="Export flow" description="Download a portable copy of your saved flow." className="flow-dialog" onClose={close} footer={<>
     <CancelFocus label="Cancel" onClick={close} />
-    <button type="button" className="button" disabled={loading} onClick={() => void inspect(true)}>Save and inspect saved state</button>
-    <button type="button" className="button primary" disabled={loading || !flow || !shown || !covers(shown, ui.acknowledgedRevisions[shown.id])} onClick={() => void prepare()}>Export saved state</button>
+    <button type="button" className="button primary" disabled={loading || !flow || !shown || !covers(shown, ui.acknowledgedRevisions[shown.id])} onClick={() => void prepare()}><Icon name="download" size={15} />Download JSON</button>
   </>}>
-    {flow && shown ? <>
-      <p><strong>{flow.title}</strong></p>
-      <p>Saved draft. Document revision {shown.documentRevision}, layout revision {shown.layoutRevision}.</p>
-      <p>{Object.values(shown.document.nodes).filter(node => node.flowId === flowId).length} saved steps. Native JSON preserves supported graph text, positions, direction and connection sides.</p>
-    </> : <p>This flow is unavailable in the inspected saved draft. Save a new flow first, or reopen Export from a saved flow.</p>}
-    {exportDirty && <p role="status">You have unsaved text, pending movement, queued or unconfirmed changes. Export saved state excludes them. Save and inspect waits for completed queued edits; unsubmitted fields must be submitted or discarded in the Studio.</p>}
-    <p>Labels and descriptions may contain confidential information. This file excludes evidence and excerpts, messages, tokens, memberships, approval objects, private links and internal properties. Importing it creates a new unapproved copy with fresh identities.</p>
-    <button type="button" className="button quiet small" disabled={loading} onClick={() => void inspect(false)}>Inspect current saved state</button>
-    <span role="status">{loading ? "Preparing saved state…" : ""}</span>
-    {message && <p role="alert">{message}</p>}
+    {flow && shown ? <section className="exchange-summary" aria-label="Saved flow summary">
+      <div className="exchange-heading"><span className="exchange-icon"><Icon name="flow" size={22} /></span><div><span className="dialog-caption">Saved draft</span><h3>{flow.title}</h3></div><span className="format-badge">JSON</span></div>
+      <dl className="exchange-facts"><div><dt>Steps</dt><dd>{Object.values(shown.document.nodes).filter(node => node.flowId === flowId).length}</dd></div><div><dt>Connections</dt><dd>{Object.values(shown.document.edges).filter(edge => edge.flowId === flowId).length}</dd></div><div><dt>Format</dt><dd>ScopeRoom v1</dd></div></dl>
+      <p className="dialog-caption">Document revision {shown.documentRevision}, layout revision {shown.layoutRevision}.</p>
+    </section> : <p className="dialog-note">This flow is unavailable in the inspected saved draft. Save a new flow first, or reopen Export from a saved flow.</p>}
+    {exportDirty && <div className="dialog-note warning" role="status"><strong>Unsaved changes are excluded</strong><p>Save and inspect includes completed edits. Submit or discard unfinished fields in the Studio first.</p></div>}
+    <div className="exchange-refresh"><button type="button" className="button" disabled={loading} onClick={() => void inspect(true)}>Save and inspect saved state</button><button type="button" className="button quiet" disabled={loading} onClick={() => void inspect(false)}>Refresh saved state</button></div>
+    <div className="exchange-description"><p>Includes the flow’s text, steps, connections and layout. Importing creates a new unapproved copy.</p><p className="dialog-caption">Labels and descriptions may contain confidential information.</p></div>
+    <details className="exchange-details"><summary>What’s excluded</summary><p>Evidence and excerpts, messages, tokens, memberships, approvals, private links and internal properties are excluded.</p></details>
+    <span className="dialog-caption" role="status">{loading ? "Preparing saved state…" : ""}</span>
+    {message && <p className="dialog-note" role="alert">{message}</p>}
   </Dialog>;
 }
