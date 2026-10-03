@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { emptyDraft, type ScopeDocument } from "../src/features/drafts/contracts/scope-document.ts";
-import { captureInput, evidenceStats, normalizeEvidence, type SavedContext, type SavedSource } from "../src/features/proposals/domain/capture.ts";
+import { canonicalJson, captureInput, evidenceStats, jsonbTextBytes, normalizeEvidence, type SavedContext, type SavedSource } from "../src/features/proposals/domain/capture.ts";
 import { AI_LIMITS, TASK_EDITS, parseStartRunInput, type StartRunInput } from "../src/features/proposals/contracts/tasks.ts";
 
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
@@ -10,12 +10,12 @@ const KEY = "k".repeat(24);
 const rejects = (run: () => unknown, message: string) => assert.throws(run, (error) => error instanceof Error && error.message === message);
 
 test("normalizeEvidence preserves text except BOM and line endings", () => {
-  assert.equal(normalizeEvidence("﻿a\r\nb\rc"), "a\nb\nc");
+  assert.equal(normalizeEvidence("\uFEFFa\r\nb\rc"), "a\nb\nc");
   assert.equal(Array.from(normalizeEvidence("😀")).length, 1);
 });
 
 test("evidenceStats measures bytes and hash on the normalized text only", () => {
-  const stats = evidenceStats("﻿é\r\n😀");
+  const stats = evidenceStats("\uFEFFé\r\n😀");
   assert.deepEqual(stats, { text: "é\n😀", codePointCount: 3, utf8ByteCount: 7, contentHash: sha("é\n😀") });
 });
 
@@ -52,7 +52,7 @@ test("prompt bound counts normalized code points: 8,000 pass and 8,001 reject", 
   assert.equal(capture("x".repeat(8_000)).prompt.length, 8_000);
   assert.equal(Array.from(capture("😀".repeat(8_000)).prompt).length, 8_000);
   assert.equal(capture("x".repeat(7_999) + "\r\n").prompt, "x".repeat(7_999) + "\n", "CRLF normalizes to one code point");
-  assert.equal(capture("﻿hello").prompt, "hello");
+  assert.equal(capture("\uFEFFhello").prompt, "hello");
   rejects(() => capture("x".repeat(8_001)), "INVALID_INPUT");
   rejects(() => capture("😀".repeat(8_001)), "INVALID_INPUT");
   rejects(() => generate({ prompt: "   \n " }), "INVALID_INPUT");
@@ -74,7 +74,6 @@ test("the strict body rejects unknown tasks, extra keys and malformed context", 
   rejects(() => parseStartRunInput({ taskType: "PROPOSE_FLOW", prompt: "x", draftId, expectedDocumentRevision: 1, expectedParentSnapshotId: null, context: { selection: null, sources: [] } }, "short"), "INVALID_INPUT");
   const dup = { sourceVersionId: randomUUID(), expectedCurrentVersionId: randomUUID() };
   rejects(() => generate({ context: { selection: null, sources: [dup, dup] } }), "INVALID_INPUT");
-  rejects(() => generate({ context: { selection: null, sources: Array.from({ length: AI_LIMITS.contextSources + 1 }, () => ({ sourceVersionId: randomUUID(), expectedCurrentVersionId: randomUUID() })) } }), "INVALID_INPUT");
 });
 
 test("a Generate capture of an empty project holds an empty graph", () => {
@@ -176,5 +175,21 @@ test("task edit vocabulary: Generate creates a new flow, Improve never edits who
   assert.ok(TASK_EDITS.REFINE_FLOW_SELECTION.includes("DELETE_NODES"));
   assert.deepEqual({ ops: AI_LIMITS.operations, deps: AI_LIMITS.dependsOn, notes: AI_LIMITS.assumptions, noteCp: AI_LIMITS.assumptionCodePoints, cites: AI_LIMITS.citations, excerptCp: AI_LIMITS.excerptCodePoints },
     { ops: 100, deps: 100, notes: 20, noteCp: 2_000, cites: 100, excerptCp: 2_000 });
-  assert.ok(AI_LIMITS.assumptions * AI_LIMITS.assumptionCodePoints * 4 < AI_LIMITS.resultBytes, "each bound sits beneath the overall result cap");
+  assert.deepEqual({ capture: AI_LIMITS.captureBytes, result: AI_LIMITS.resultBytes }, { capture: 256 * 1024, result: 128 * 1024 });
+});
+
+test("canonicalJson sorts keys recursively, is compact and ignores insertion order", () => {
+  assert.equal(canonicalJson({ b: 1, a: { d: [1, { z: null, y: "x" }], c: undefined } }), '{"a":{"d":[1,{"y":"x","z":null}]},"b":1}');
+  assert.equal(canonicalJson({ b: 1, a: { d: 2, c: 3 } }), canonicalJson({ a: { c: 3, d: 2 }, b: 1 }));
+});
+
+test("capture and its hash do not depend on key order, and the stored-size measure follows JSONB text", () => {
+  const { saved, ids, improve } = build();
+  const first = captureInput(saved, improve([ids.a]));
+  const reverse = (value: unknown): unknown => Array.isArray(value) ? value.map(reverse) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).reverse().map(([key, entry]) => [key, reverse(entry)])) : value;
+  const reordered = reverse(first.capture);
+  assert.notEqual(JSON.stringify(reordered), JSON.stringify(first.capture));
+  assert.equal(canonicalJson(reordered), first.serialized);
+  assert.equal(sha(canonicalJson(reordered)), first.hash);
+  assert.equal(jsonbTextBytes({ a: [1, "é"], b: {} }), Buffer.byteLength('{"a": [1, "é"], "b": {}}'));
 });

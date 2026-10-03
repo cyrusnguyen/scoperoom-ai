@@ -1,15 +1,33 @@
 import { createHash } from "node:crypto";
 import { LIMITS, type ScopeDocument } from "../../drafts/contracts/scope-document.ts";
 import { byId } from "../../drafts/domain/graph.ts";
+import { SOURCE_LIMITS } from "../../sources/contracts/source-version.ts";
 import {
   AI_LIMITS, CAPTURE_SCHEMA_VERSION, PROMPT_VERSION, RESULT_SCHEMA_VERSION,
   type CapturedEdge, type CapturedFlow, type CapturedInput, type CapturedNode, type CapturedSource, type StartRunInput,
 } from "../contracts/tasks.ts";
 
 /** Evidence is UTF-8 normalized once: drop a leading BOM and turn CRLF/CR into LF. Everything else is preserved. */
-export const normalizeEvidence = (text: string): string => text.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+export const normalizeEvidence = (text: string): string => text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
 
-const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+export const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+
+function emit(value: unknown, spaced: boolean): string {
+  const join = spaced ? ", " : ",";
+  if (Array.isArray(value)) return `[${value.map((entry) => emit(entry, spaced)).join(join)}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}${spaced ? ": " : ":"}${emit(record[key], spaced)}`).join(join)}}`;
+  }
+  return JSON.stringify(value);
+}
+/**
+ * The one canonical JSON form (recursively sorted keys, compact) that capture and result hashes are computed over. Bodies are stored
+ * as JSONB, which reorders keys, so a reader recomputes a hash by canonicalizing the stored value, never the original text.
+ */
+export const canonicalJson = (value: unknown): string => emit(value, false);
+/** Bytes of the value as PostgreSQL renders it (`octet_length(jsonb::text)`), the measure the database size CHECKs apply. */
+export const jsonbTextBytes = (value: unknown): number => Buffer.byteLength(emit(value, true), "utf8");
 
 /** Counts, bytes and hash are computed on the normalized text, never the submitted bytes. */
 export function evidenceStats(raw: string) {
@@ -34,7 +52,7 @@ function captureSources(saved: SavedContext, input: StartRunInput): CapturedSour
     if (!source || source.projectId !== saved.projectId) return fail("INVALID_INPUT");
     if (source.currentVersionId !== reference.expectedCurrentVersionId) return fail("CONFLICT"); // the head moved since the caller looked
     const stats = evidenceStats(source.text);
-    if (stats.text !== source.text || stats.contentHash !== source.contentHash || stats.codePointCount > 50_000) return fail("INVALID_INPUT");
+    if (stats.text !== source.text || stats.contentHash !== source.contentHash || stats.codePointCount > SOURCE_LIMITS.submissionCodePoints) return fail("INVALID_INPUT");
     return {
       sourceVersionId: source.sourceVersionId, sourceId: source.sourceId, title: source.title, text: stats.text, contentHash: stats.contentHash,
       codePointCount: stats.codePointCount, utf8ByteCount: stats.utf8ByteCount, expectedCurrentVersionId: reference.expectedCurrentVersionId,
@@ -97,14 +115,14 @@ export function captureInput(saved: SavedContext, input: StartRunInput): { captu
   const capture: CapturedInput = {
     schemaVersion: CAPTURE_SCHEMA_VERSION, taskType: input.taskType, prompt, promptHash: sha256(prompt),
     draftId: saved.draftId, documentRevision: saved.documentRevision, parentSnapshotId: saved.parentSnapshotId,
-    selection, graph, graphHash: sha256(JSON.stringify(graph)), sources,
+    selection, graph, graphHash: sha256(canonicalJson(graph)), sources,
     versions: { prompt: PROMPT_VERSION, resultSchema: RESULT_SCHEMA_VERSION, model: saved.model },
     limits: {
       maxInputTokens: AI_LIMITS.maxInputTokens, maxOutputTokens: AI_LIMITS.maxOutputTokens, maxGraphNodes: AI_LIMITS.maxGraphNodes,
       maxGraphEdges: AI_LIMITS.maxGraphEdges, operations: AI_LIMITS.operations, resultBytes: AI_LIMITS.resultBytes,
     },
   };
-  const serialized = JSON.stringify(capture);
-  if (Buffer.byteLength(serialized, "utf8") > AI_LIMITS.captureBytes) fail("LIMIT_EXCEEDED");
+  if (jsonbTextBytes(capture) > AI_LIMITS.captureBytes) fail("LIMIT_EXCEEDED");
+  const serialized = canonicalJson(capture);
   return { capture, serialized, hash: sha256(serialized) };
 }

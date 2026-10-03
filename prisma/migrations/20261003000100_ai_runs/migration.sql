@@ -132,7 +132,7 @@ CREATE TABLE "app"."ai_run" (
   CONSTRAINT "ai_run_baseline_pending_snapshots" CHECK ("parent_snapshot_id" IS NULL),
   CONSTRAINT "ai_run_hashes" CHECK ("capture_hash" ~ '^[0-9a-f]{64}$' AND ("result_hash" IS NULL OR "result_hash" ~ '^[0-9a-f]{64}$')),
   CONSTRAINT "ai_run_capture_size" CHECK ("capture" IS NULL OR octet_length("capture"::text) <= 262144),
-  CONSTRAINT "ai_run_result_size" CHECK ("result" IS NULL OR octet_length("result"::text) <= 262144),
+  CONSTRAINT "ai_run_result_size" CHECK ("result" IS NULL OR octet_length("result"::text) <= 131072),
   CONSTRAINT "ai_run_diff_size" CHECK ("diff" IS NULL OR octet_length("diff"::text) <= 262144),
   CONSTRAINT "ai_run_deadline" CHECK ("deadline_at" > "created_at" AND "deadline_at" <= "created_at" + INTERVAL '300 seconds'),
   CONSTRAINT "ai_run_terminal_at" CHECK (("state" IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')) = ("terminal_at" IS NOT NULL)),
@@ -227,6 +227,12 @@ CREATE FUNCTION "app"."enforce_ai_run_insert"() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
+  -- The runtime roles never choose the admission clock: time, UTC day and the 300 second deadline come from this transaction.
+  IF current_user IN ('app_web', 'app_worker') THEN
+    NEW.created_at := transaction_timestamp();
+    NEW.admission_day := (NEW.created_at AT TIME ZONE 'UTC')::date;
+    NEW.deadline_at := NEW.created_at + INTERVAL '300 seconds';
+  END IF;
   IF NEW.state <> 'QUEUED' OR NEW.disposition IS NOT NULL OR NEW.result IS NOT NULL OR NEW.result_hash IS NOT NULL OR NEW.diff IS NOT NULL
     OR NEW.failure_code IS NOT NULL OR NEW.dispatch_state <> 'PENDING' OR NEW.task_id IS NOT NULL OR NEW.dispatch_lease_until IS NOT NULL
     OR NEW.current_attempt_id IS NOT NULL OR NEW.budget_state <> 'RESERVED' OR NEW.cancel_requested_at IS NOT NULL OR NEW.terminal_at IS NOT NULL
@@ -445,8 +451,9 @@ BEGIN
 END;
 $$;
 
--- Terminal non-success settlement. Each state keeps its own guard: CANCELLED needs recorded intent, TIMED_OUT needs the passed deadline,
--- FAILED needs a safe code and no unreported attempt. A reservation that never reached a provider claim is released here, once.
+-- Terminal non-success settlement. Each state keeps its own guard: CANCELLED needs recorded intent and no attempt still inside its call
+-- window (cancellation holds the slot until the call is reported or its window closes; an unreported attempt whose window closed is
+-- UNKNOWN, never CANCELLED), TIMED_OUT needs the passed deadline, FAILED needs a safe code and no unreported attempt. A reservation that never reached a provider claim is released here, once.
 CREATE FUNCTION "app"."finish_ai_run"(p_run_id uuid, p_state "app"."ai_run_state", p_failure_code text) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
 AS $$
@@ -460,12 +467,13 @@ BEGIN
   PERFORM 1 FROM app.project WHERE id = run.project_id FOR NO KEY UPDATE;
   SELECT * INTO run FROM app.ai_run WHERE id = p_run_id FOR UPDATE;
   IF run.terminal_at IS NOT NULL THEN RETURN 'TERMINAL'; END IF;
-  IF (p_state = 'CANCELLED' AND run.cancel_requested_at IS NULL) OR (p_state = 'TIMED_OUT' AND clock_now < run.deadline_at)
+  IF (p_state = 'CANCELLED' AND (run.cancel_requested_at IS NULL OR EXISTS (SELECT 1 FROM app.ai_run_attempt WHERE run_id = run.id AND outcome IS NULL AND deadline_at > clock_now)))
+    OR (p_state = 'TIMED_OUT' AND clock_now < run.deadline_at)
     OR (p_state = 'FAILED' AND (p_failure_code IS NULL OR EXISTS (SELECT 1 FROM app.ai_run_attempt WHERE id = run.current_attempt_id AND outcome IS NULL))) THEN
     RETURN 'REFUSED';
   END IF;
   IF p_state <> 'FAILED' THEN
-    UPDATE app.ai_run_attempt SET outcome = CASE p_state WHEN 'CANCELLED' THEN 'CANCELLED'::app.ai_attempt_outcome ELSE 'TIMED_OUT'::app.ai_attempt_outcome END, settled_at = clock_now
+    UPDATE app.ai_run_attempt SET outcome = CASE p_state WHEN 'CANCELLED' THEN 'UNKNOWN'::app.ai_attempt_outcome ELSE 'TIMED_OUT'::app.ai_attempt_outcome END, settled_at = clock_now
     WHERE run_id = run.id AND outcome IS NULL;
   END IF;
   IF run.budget_state = 'RESERVED' THEN
@@ -553,4 +561,4 @@ GRANT UPDATE ("ai_revision") ON "app"."project" TO app_web;
 GRANT SELECT ON "app"."source_document", "app"."source_version", "app"."ai_owner_allowance", "app"."ai_budget_day", "app"."ai_run", "app"."ai_run_attempt" TO app_worker;
 GRANT UPDATE ("dispatch_state", "task_id", "dispatch_lease_until", "next_dispatch_at") ON "app"."ai_run" TO app_worker;
 GRANT EXECUTE ON FUNCTION "app"."claim_ai_attempt"(uuid), "app"."settle_ai_attempt"(uuid, uuid, uuid, "app"."ai_attempt_outcome", jsonb, text, integer, integer, text),
-  "app"."finish_ai_run"(uuid, "app"."ai_run_state", text), "app"."expire_ai_run_bodies"(boolean, integer) TO app_worker;
+  "app"."finish_ai_run"(uuid, "app"."ai_run_state", text) TO app_worker;

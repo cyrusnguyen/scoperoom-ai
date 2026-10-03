@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { Client } from "pg";
 import { emptyDraft } from "../../src/features/drafts/contracts/scope-document.ts";
-import { captureInput } from "../../src/features/proposals/domain/capture.ts";
+import { canonicalJson, captureInput, jsonbTextBytes, sha256 } from "../../src/features/proposals/domain/capture.ts";
 import { parseStartRunInput } from "../../src/features/proposals/contracts/tasks.ts";
 import { requireEnv } from "../support/env.ts";
 import { insertProfile, insertProject, removeSchemaRows } from "./support/schema-fixture.ts";
@@ -121,7 +121,7 @@ test("source versions are immutable and carry exact, normalized, counted evidenc
     await assert.rejects(insert("a", 2, 1, await hashOf("a")), code(CHECK)); // code points
     await assert.rejects(insert("a", 1, 2, await hashOf("a")), code(CHECK)); // bytes
     await assert.rejects(insert("a\r\nb", 4, 4, await hashOf("a\r\nb")), code(CHECK)); // CR survives normalization
-    await assert.rejects(insert("﻿a", 2, 4, await hashOf("﻿a")), code(CHECK)); // BOM survives normalization
+    await assert.rejects(insert("\uFEFFa", 2, 4, await hashOf("\uFEFFa")), code(CHECK)); // BOM survives normalization
     await assert.rejects(insert("a".repeat(50_001), 50_001, 50_001, await hashOf("a".repeat(50_001))), code(CHECK));
     await assert.rejects(insert("a", 1, 1, await hashOf("a"), 1), code(UNIQUE)); // sequence
     await insert("😀é", 2, 6, await hashOf("😀é")); // counts are code points and UTF-8 bytes
@@ -237,6 +237,10 @@ test("cancellation, lost access and the deadline fence claims and late output", 
     const attempt = await claim(worker, midCall.runId);
     await web.query("update app.ai_run set cancel_requested_at = now() where id = $1", [midCall.runId]);
     await assert.rejects(web.query("update app.ai_run set cancel_requested_at = null where id = $1", [midCall.runId]), code(CHECK));
+    // Cancel intent alone never frees the slot while the call may still be in flight: finish refuses until it is reported.
+    assert.equal(await finish(worker, midCall.runId, "CANCELLED"), "REFUSED");
+    assert.equal((await run(admin, midCall.runId)).state, "RUNNING");
+    await assert.rejects(admin.query("insert into app.ai_run (project_id, draft_id, actor_id, owner_id, admission_day, prompt_source_version_id, task_type, model, execution_binding, capture, capture_hash, expected_document_revision, deadline_at) select project_id, draft_id, actor_id, owner_id, admission_day, prompt_source_version_id, task_type, model, execution_binding, capture, capture_hash, expected_document_revision, deadline_at from app.ai_run where id = $1", [midCall.runId]), code(UNIQUE)); // the project slot is still held
     assert.equal(await settle(worker, midCall.runId, attempt, "COMPLETED", RESULT, HASH), "FENCED");
     assert.deepEqual([(await run(admin, midCall.runId)).state, (await run(admin, midCall.runId)).result], ["RUNNING", null]);
     assert.equal(await finish(worker, midCall.runId, "CANCELLED"), "SETTLED");
@@ -328,10 +332,10 @@ test("body expiry is bounded, spares applied evidence and marks only unused resu
     const ids = [unused, discarded, applied, recent, failed, live].map((s) => s.runId);
     const owned = (rows: { id: string }[]) => rows.filter((row) => ids.includes(row.id));
     const before = (await admin.query("select ai_revision::int ai from app.project where id = $1", [unused.projectId])).rows[0].ai;
-    const { rows: [dry] } = await worker.query("select * from app.expire_ai_run_bodies(true, 100)");
+    const { rows: [dry] } = await admin.query("select * from app.expire_ai_run_bodies(true, 100)");
     assert.ok(dry.expiredResults >= 1 && dry.clearedBodies >= 2);
     assert.equal((await admin.query("select count(*)::int c from app.ai_run where id = $1 and result is not null", [unused.runId])).rows[0].c, 1, "a dry run changes nothing");
-    await worker.query("select * from app.expire_ai_run_bodies(false, 100)");
+    await admin.query("select * from app.expire_ai_run_bodies(false, 100)");
     const rows = (await admin.query("select id, disposition::text d, result is null no_result, capture is null no_capture, result_hash, capture_hash from app.ai_run where id = any($1::uuid[])", [ids])).rows;
     const by = (s: Seed) => rows.find((row) => row.id === s.runId)!;
     assert.deepEqual([by(unused).d, by(unused).no_result, by(unused).no_capture], ["EXPIRED", true, true]);
@@ -343,6 +347,68 @@ test("body expiry is bounded, spares applied evidence and marks only unused resu
     assert.equal(by(unused).result_hash, HASH); assert.match(by(unused).capture_hash, /^[0-9a-f]{64}$/); // identity survives
     assert.equal(owned(rows).length, 6);
     assert.ok((await admin.query("select ai_revision::int ai from app.project where id = $1", [unused.projectId])).rows[0].ai > before, "expiry advances the AI cursor");
-    await assert.rejects(web.query("select * from app.expire_ai_run_bodies(false, 100)"), code(DENIED));
+    for (const runtime of [web, worker]) await assert.rejects(runtime.query("select * from app.expire_ai_run_bodies(false, 100)"), code(DENIED)); // no runtime role is the scheduler yet
+  });
+});
+
+test("cancellation with an unreported attempt whose window closed settles it UNKNOWN, never CANCELLED", { skip: !canRun }, async () => {
+  await withContext(async ({ admin, worker, seed }) => {
+    const s = await seed();
+    // An attempt claimed three minutes ago whose process died: owner-side setup, since the window cannot be waited out.
+    await admin.query("update app.ai_run set state = 'RUNNING', budget_state = 'CONSUMED' where id = $1", [s.runId]);
+    await admin.query("update app.ai_budget_day set reserved_runs = 0, consumed_runs = 1 where owner_id = $1", [s.owner]);
+    const { rows: [attempt] } = await admin.query<{ id: string }>("insert into app.ai_run_attempt (run_id, attempt_number, started_at, deadline_at, call_may_have_started) values ($1, 1, now() - interval '3 minutes', now() - interval '1 minute', true) returning id", [s.runId]);
+    await admin.query("update app.ai_run set current_attempt_id = $2, cancel_requested_at = now() where id = $1", [s.runId, attempt!.id]);
+    assert.equal(await finish(worker, s.runId, "CANCELLED"), "SETTLED");
+    assert.equal((await admin.query("select outcome::text o from app.ai_run_attempt where id = $1", [attempt!.id])).rows[0].o, "UNKNOWN");
+    assert.deepEqual(await budget(admin, s.owner), [{ reserved_runs: 0, consumed_runs: 1 }]); // the possibly started call stays consumed
+  });
+});
+
+test("capture and result hashes recompute from the stored JSONB; sizes are measured as PostgreSQL stores them", { skip: !canRun }, async () => {
+  await withContext(async ({ admin, seed }) => {
+    const s = await seed();
+    const { rows: [row] } = await admin.query<{ capture: unknown; capture_hash: string; bytes: number }>("select capture, capture_hash, octet_length(capture::text) bytes from app.ai_run where id = $1", [s.runId]);
+    assert.equal(sha256(canonicalJson(row!.capture)), row!.capture_hash, "a reader recomputes the hash from the JSONB round-trip");
+    assert.equal(jsonbTextBytes(row!.capture), row!.bytes);
+    const sample = { b: [1, "é😀", { z: null, a: "\u0001\"\\" }], a: {}, c: [], d: true };
+    assert.equal(jsonbTextBytes(sample), (await admin.query<{ n: number }>("select octet_length($1::jsonb::text) n", [JSON.stringify(sample)])).rows[0]!.n);
+    // The result cap is 128 KiB of stored JSONB text: exactly at the cap succeeds, one byte over is a CHECK violation.
+    const fill = (extra: number) => ({ schemaVersion: 1, kind: "clarification", message: "x".repeat(131_072 - jsonbTextBytes({ schemaVersion: 1, kind: "clarification", message: "" }) + extra) });
+    assert.equal(jsonbTextBytes(fill(0)), 131_072);
+    await admin.query("update app.ai_run set state = 'RUNNING' where id = $1", [s.runId]);
+    await assert.rejects(admin.query("update app.ai_run set state = 'SUCCEEDED', disposition = 'AVAILABLE', result = $2::jsonb, result_hash = $3, terminal_at = now() where id = $1", [s.runId, JSON.stringify(fill(1)), HASH]), code(CHECK));
+    await admin.query("update app.ai_run set state = 'SUCCEEDED', disposition = 'AVAILABLE', result = $2::jsonb, result_hash = $3, terminal_at = now() where id = $1", [s.runId, JSON.stringify(fill(0)), HASH]);
+    const { rows: [stored] } = await admin.query<{ result: unknown }>("select result from app.ai_run where id = $1", [s.runId]);
+    assert.equal(canonicalJson(stored!.result), canonicalJson(fill(0)));
+  });
+});
+
+test("the web runtime cannot forward-date an admission: time, UTC day and the 300 second deadline are pinned", { skip: !canRun }, async () => {
+  await withContext(async ({ admin, web, project }) => {
+    const { owner, projectId } = await project();
+    const { rows: [draft] } = await admin.query<{ current_draft_id: string }>("select current_draft_id from app.project where id = $1", [projectId]);
+    const input = parseStartRunInput({ taskType: "PROPOSE_FLOW", prompt: "make a flow", draftId: draft!.current_draft_id, expectedDocumentRevision: 1, expectedParentSnapshotId: null, context: { selection: null, sources: [] } }, "k".repeat(20));
+    const { capture, hash } = captureInput({ projectId, draftId: draft!.current_draft_id, documentRevision: 1, parentSnapshotId: null, document: emptyDraft().document, sources: [], model: "test-model" }, input);
+    await web.query("begin");
+    try {
+      await web.query("insert into app.ai_owner_allowance (owner_id) values ($1)", [owner]);
+      await web.query("insert into app.ai_budget_day (owner_id, day, reserved_runs) values ($1, (now() at time zone 'UTC')::date, 1)", [owner]);
+      const { rows: [source] } = await web.query<{ id: string }>("insert into app.source_document (project_id, kind, created_by) values ($1, 'AI_PROMPT', $2) returning id", [projectId, owner]);
+      const { rows: [version] } = await web.query<{ id: string }>(
+        `insert into app.source_version (project_id, source_id, sequence, title, text, code_point_count, utf8_byte_count, content_hash, created_by)
+         select $1, $2, 1, 'Instruction', t, char_length(t), octet_length(t), encode(sha256(convert_to(t, 'UTF8')), 'hex'), $4 from (values ($3::text)) as v(t) returning id`, [projectId, source!.id, capture.prompt, owner]);
+      await web.query("update app.source_document set current_version_id = $1 where id = $2", [version!.id, source!.id]);
+      const forged = new Date(Date.now() + 36 * 60 * 60_000);
+      const { rows: [inserted] } = await web.query<{ id: string; skew: number; window: number; same_day: boolean }>(
+        `insert into app.ai_run (project_id, draft_id, actor_id, owner_id, admission_day, prompt_source_version_id, task_type, model, execution_binding, capture, capture_hash, expected_document_revision, deadline_at, created_at)
+         values ($1, $2, $3, $3, $5::date, $4, 'PROPOSE_FLOW', 'test-model', 'binding-1', $6::jsonb, $7, 1, $8::timestamptz + interval '300 seconds', $8)
+         returning id, extract(epoch from created_at - now())::int skew, extract(epoch from deadline_at - now())::int as window, admission_day = (now() at time zone 'UTC')::date same_day`,
+        [projectId, draft!.current_draft_id, owner, version!.id, forged, JSON.stringify(capture), hash, forged]);
+      assert.ok(Math.abs(inserted!.skew) <= 1, "created_at is this transaction's time, not the forged one");
+      assert.ok(inserted!.window <= 300 && inserted!.window >= 298);
+      assert.equal(inserted!.same_day, true);
+      await web.query("commit");
+    } catch (error) { await web.query("rollback"); throw error; }
   });
 });

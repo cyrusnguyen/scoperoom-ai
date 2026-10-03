@@ -1,4 +1,5 @@
-import { LIMITS, type Classification, type EdgeRecord, type FlowRecord, type Inclusion, type NodeKind, type NodeRecord } from "../../drafts/contracts/scope-document.ts";
+import type { FlowFields, NodeFields } from "../../drafts/contracts/commands.ts";
+import { LIMITS, type EdgeRecord, type FlowRecord, type NodeRecord } from "../../drafts/contracts/scope-document.ts";
 import { id, idList, invalid, keys, object, oneOf, text, version } from "../../drafts/contracts/strict.ts";
 import { keyPattern } from "../../projects/contracts/project.ts";
 
@@ -7,13 +8,11 @@ import { keyPattern } from "../../projects/contracts/project.ts";
 export const TASK_KINDS = ["PROPOSE_FLOW", "REFINE_FLOW_SELECTION"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 
+// Capture and result bounds are measured as PostgreSQL stores them (jsonbTextBytes), so an accepted body never fails its CHECK.
 export const AI_LIMITS = {
-  promptCodePoints: 8_000, contextSources: 10,
-  maxInputTokens: 16_000, maxOutputTokens: 6_000, maxGraphNodes: 20, maxGraphEdges: 40,
-  captureBytes: 256 * 1024, resultBytes: 256 * 1024,
-  operations: 100, dependsOn: 100, assumptions: 20, assumptionCodePoints: 2_000, citations: 100, excerptCodePoints: 2_000, clarificationCodePoints: 2_000,
-  localRef: 32, maxAttempts: 2, attemptMs: 120_000, runMs: 300_000, ownerNonterminal: 2, ownerDailyRuns: 30, applicablePerProject: 10,
-  pageSize: 50, bodyRetentionDays: 7,
+  promptCodePoints: 8_000, maxInputTokens: 16_000, maxOutputTokens: 6_000, maxGraphNodes: 20, maxGraphEdges: 40,
+  captureBytes: 256 * 1024, resultBytes: 128 * 1024,
+  operations: 100, dependsOn: 100, assumptions: 20, assumptionCodePoints: 2_000, citations: 100, excerptCodePoints: 2_000,
 } as const;
 
 export const CAPTURE_SCHEMA_VERSION = 1;
@@ -34,7 +33,7 @@ export function parseStartRunInput(raw: unknown, key: string): StartRunInput {
   const taskType = oneOf(body.taskType, TASK_KINDS);
   const context = object(body.context);
   keys(context, ["selection", "sources"]);
-  if (!Array.isArray(context.sources) || context.sources.length > AI_LIMITS.contextSources) invalid();
+  if (!Array.isArray(context.sources)) invalid();
   const sources = context.sources.map((entry) => {
     const source = object(entry);
     keys(source, ["sourceVersionId", "expectedCurrentVersionId"]);
@@ -85,11 +84,10 @@ export const TASK_EDITS = {
 export const LOCAL_REF = /^[a-z][a-z0-9_-]{0,31}$/;
 
 export type EntityId = string;
-type NodeText = { kind: NodeKind; label: string; description: string; actorLabel: string };
 export type ProposalEdit =
-  | { command: "CREATE_FLOW"; payload: { ref: string; title: string; purpose: string; classification: Classification; inclusion: Inclusion } }
-  | { command: "ADD_NODE"; payload: { ref: string; flowId: EntityId } & NodeText }
-  | { command: "UPDATE_NODE"; payload: { nodeId: EntityId } & Partial<NodeText & { assumptionNotes: string[] }> }
+  | { command: "CREATE_FLOW"; payload: { ref: string } & FlowFields }
+  | { command: "ADD_NODE"; payload: { ref: string; flowId: EntityId } & Omit<NodeFields, "assumptionNotes"> }
+  | { command: "UPDATE_NODE"; payload: { nodeId: EntityId } & Partial<NodeFields> }
   | { command: "DELETE_NODES"; payload: { flowId: EntityId; nodeIds: EntityId[]; removeEdgeIds: EntityId[] } }
   | { command: "ADD_EDGE"; payload: { flowId: EntityId; fromId: EntityId; toId: EntityId; condition: string } }
   | { command: "UPDATE_EDGE"; payload: { edgeId: EntityId; condition: string } }
