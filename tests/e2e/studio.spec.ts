@@ -668,7 +668,7 @@ test.describe("Studio on a real draft", () => {
     await expect(note(page).getByRole("button", { name: "Retry" })).toBeVisible();
     await name.fill("Newer typing");
     if (leaveInspector) {
-      await panel(page).getByRole("button", { name: /Project$/ }).focus();
+      await panel(page).getByRole("button", { name: "Back to project", exact: true }).focus();
       await page.keyboard.press("Enter");
       await expect(panel(page).getByRole("tab", { name: "Details" })).toBeFocused();
     }
@@ -999,7 +999,7 @@ test.describe("Studio on a real draft", () => {
     await addStepInUi(page, "Before", "Start");
     await toolbar(page).getByRole("button", { name: "List" }).click();
     await page.getByRole("button", { name: "Inspect", exact: true }).click();
-    await panel(page).getByRole("button", { name: /Project$/ }).click();
+    await panel(page).getByRole("button", { name: "Back to project", exact: true }).click();
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
     let captured = false;
@@ -1112,7 +1112,7 @@ test.describe("Studio on a real draft", () => {
     await saveStudio(page);
     await page.getByRole("button", { name: "Inspect" }).click();
     await panel(page).getByLabel("Description").fill("Archive local text");
-    await panel(page).getByRole("button", { name: /Project$/ }).click();
+    await panel(page).getByRole("button", { name: "Back to project", exact: true }).click();
     await panel(page).getByLabel("Project name").fill("Unsaved metadata");
     await panel(page).getByRole("button", { name: /Archive project/ }).click();
     const archive = modal(page, "Archive Studio project?");
@@ -1478,7 +1478,7 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await saveButton(page).click();
     await expect(note(page).getByRole("button", { name: "Retry" })).toBeVisible();
     await panel(page).getByLabel("Name").fill("My later text");
-    await panel(page).getByRole("button", { name: /Project$/ }).click();
+    await panel(page).getByRole("button", { name: "Back to project", exact: true }).click();
     await panel(page).getByLabel("Project name").fill("Refresh access");
     await saveButton(page).click();
     await expect(page.locator(change === "role" ? ".editor-header" : ".editor-banner")).toContainText(change === "role" ? "Viewer" : "Archived");

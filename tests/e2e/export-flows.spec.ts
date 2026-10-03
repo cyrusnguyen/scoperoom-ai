@@ -170,12 +170,12 @@ test("real downloaded export imports and reexports with graph geometry and fresh
 });
 
 test("peer deleting the selected flow never retargets export to a fallback flow", async ({ page }) => {
-  const { id, flowId } = await setup(page, true), before = await draftOf(page, id), fallback = randomUUID();
+  const { id, flowId, nodeId } = await setup(page), before = await draftOf(page, id), fallback = randomUUID();
   await seedStudioChanges(page, id, [{ command: "CREATE_FLOW", payload: { title: "Fallback flow", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" }, proposedIds: [fallback] }]);
   await page.reload(); await page.locator(".flow-switch").click(); await page.getByRole("dialog", { name: "Flows", exact: true }).getByRole("button", { name: /Saved journey/ }).click(); await openExport(page);
   await expect(dialog(page)).toContainText("Saved journey");
   const current = await draftOf(page, id);
-  const removed = await page.request.post(`/api/projects/${id}/drafts/${before.id}/changes`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { commands: [{ commandSchemaVersion: 1, command: "DELETE_FLOW", expectedDocumentRevision: current.documentRevision, payload: { flowId, removeNodeIds: [], removeEdgeIds: [] } }], moves: [] } });
+  const removed = await page.request.post(`/api/projects/${id}/drafts/${before.id}/changes`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { commands: [{ commandSchemaVersion: 1, command: "DELETE_FLOW", expectedDocumentRevision: current.documentRevision, payload: { flowId, removeNodeIds: [nodeId], removeEdgeIds: [] } }], moves: [] } });
   expect(removed.status()).toBe(200);
   await dialog(page).getByRole("button", { name: "Refresh saved state", exact: true }).click();
   await expect(dialog(page)).toContainText("unavailable"); await expect(dialog(page)).not.toContainText("Fallback flow");

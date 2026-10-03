@@ -109,7 +109,7 @@ test.describe("Shape panel (real draft)", () => {
     const flowsDialog = page.getByRole("dialog", { name: "Flows" });
     // Land on Flow A regardless of which flow bootstrap opened by default.
     await page.locator(".flow-switch").click();
-    await flowsDialog.locator(".item-row").filter({ hasText: "Flow A" }).click();
+    await flowsDialog.getByRole("button", { name: /^Flow A\b/ }).click();
     await expect(page.locator("#studio-flow-title")).toHaveText("Flow A");
     await expect(nodeAt(page, flowA.startId)).toBeVisible();
 
@@ -132,7 +132,7 @@ test.describe("Shape panel (real draft)", () => {
     await page.keyboard.press("Enter");
     expect(writes).toHaveLength(0);
     await page.locator(".flow-switch").click();
-    await flowsDialog.locator(".item-row").filter({ hasText: "Flow B" }).click();
+    await flowsDialog.getByRole("button", { name: /^Flow B\b/ }).click();
     await expect(page.locator("#studio-flow-title")).toHaveText("Flow B");
     expect(writes).toHaveLength(1);
     expect((writes[0]!.postDataJSON() as Batch).moves.map((group) => group.flowId)).toEqual([flowA.flowId]);

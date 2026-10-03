@@ -97,6 +97,7 @@ test.describe("project details", () => {
     await page.goto(`/app/projects/${project.id}`);
     await page.getByRole("button", { name: "Inspect" }).click();
     const panel = page.locator("#right-panel");
+    await panel.getByRole("button", { name: "Back to project", exact: true }).click();
     await expect(panel.getByText("1 flow · revision 1")).toBeVisible();
     await expect(panel.getByText("Casey Collaborator", { exact: true })).toBeVisible();
     await expect(panel.getByText("2 of 10")).toBeVisible();
@@ -169,6 +170,7 @@ test.describe("project details", () => {
     await expect(page.locator("#editor-main").getByText("Viewer", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Inspect" }).click();
     const panel = page.locator("#right-panel");
+    await panel.getByRole("button", { name: "Back to project", exact: true }).click();
     await expect(panel.getByText("Management Owner", { exact: true }).first()).toBeVisible();
     await expect(panel.getByText(project.name, { exact: true })).toBeVisible();
     await expect(panel.getByLabel("Project name")).toHaveCount(0);
@@ -196,6 +198,7 @@ test.describe("project details", () => {
     await page.goto(`/app/projects/${other.id}`);
     await nav.getByRole("button", { name: project.name, exact: true }).click();
     await page.getByRole("button", { name: "Inspect" }).click();
+    await panel.getByRole("button", { name: "Back to project", exact: true }).click();
     expect(await warnsBeforeUnload(page)).toBe(false);
     await nameField.fill("Renamed once");
     expect(await warnsBeforeUnload(page)).toBe(true);
@@ -210,6 +213,7 @@ test.describe("project details", () => {
     await nav.getByRole("tab", { name: "Shared with me" }).click();
     await nav.getByRole("tab", { name: "Owned projects" }).click();
     await page.getByRole("button", { name: "Inspect" }).click();
+    await panel.getByRole("button", { name: "Back to project", exact: true }).click();
     await expect(nameField).toHaveValue("Renamed project");
 
     // History navigation bypasses the sidebar guard, so the value must survive it instead.
@@ -258,6 +262,7 @@ test.describe("project details", () => {
 
     await page.goto(`/app/projects/${project.id}`);
     await page.getByRole("button", { name: "Inspect" }).click();
+    await panel.getByRole("button", { name: "Back to project", exact: true }).click();
     await nameField.fill("First attempt");
     await panel.getByRole("button", { name: "Save", exact: true }).click();
     await expect(panel.getByRole("alert")).toHaveText("We could not confirm that change. Retry uses the same request.");
@@ -307,6 +312,7 @@ test.describe("project details", () => {
 
     await page.goto(`/app/projects/${project.id}`);
     await page.getByRole("button", { name: "Inspect" }).click();
+    await panel.getByRole("button", { name: "Back to project", exact: true }).click();
     await panel.getByLabel("Project name").fill("Renamed while typing");
     await panel.getByRole("button", { name: "Save", exact: true }).click();
     await email.click();
@@ -333,6 +339,7 @@ test.describe("project details", () => {
 
     await page.goto(`/app/projects/${project.id}`);
     await page.getByRole("button", { name: "Inspect" }).click();
+    await panel.getByRole("button", { name: "Back to project", exact: true }).click();
     await panel.getByLabel("Project name").fill("Renamed before archive");
     expect(await warnsBeforeUnload(page)).toBe(true);
 

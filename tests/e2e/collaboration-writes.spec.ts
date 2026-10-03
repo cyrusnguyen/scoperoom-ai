@@ -139,6 +139,7 @@ test.describe("writes wait for the status controller (real draft)", () => {
     await open(page);
     await page.getByRole("button", { name: "Inspect", exact: true }).click();
     const panel = page.locator("#right-panel");
+    await panel.getByRole("button", { name: "Back to project", exact: true }).click();
     await expect(panel.getByText("Loading details…")).toBeHidden(); // its own status read has finished, so the focus below starts a new one
     await panel.getByLabel("Project name").fill("Renamed while denied");
     const settings: string[] = [];
