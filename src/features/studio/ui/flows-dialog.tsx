@@ -58,6 +58,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
   const full = flows.length >= LIMITS.flows;
   const duplicateTooLong = Boolean(current && [...`Copy of ${current.title}`].length > LIMITS.title);
   const counts = (flowId: string) => Object.values(document.nodes).filter((node) => node.flowId === flowId).length;
+  const canExport = Boolean(current && counts(current.id) > 0);
   const open = async (flowId: string | null, created = false) => {
     // Unsaved changes are saved before another flow opens; if they cannot be, this flow stays open with them. After a
     // deleted flow (null) the view falls back to another flow of the same draft. A flow just created or duplicated here
@@ -184,7 +185,7 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
     {editable && (full || duplicateTooLong) && <p className="dialog-caption">{full ? "A project can have up to " + LIMITS.flows + " flows." : "Shorten this title before duplicating it. Copy of would exceed the " + LIMITS.title + "-character limit."}</p>}
     <div className="flow-transfer-actions" aria-label="Import and export">
       <button type="button" className="flow-transfer" aria-label="Import flow" disabled={saving} onClick={() => setMode("import")}><Icon name="importFlow" size={20} /><span><strong>Import flow</strong><small>Add from a native file</small></span></button>
-      <button type="button" className="flow-transfer" aria-label="Export flow" disabled={saving || !current} onClick={() => { if (!current) return; setExportFlowId(current.id); setMode("export"); }}><Icon name="exportFlow" size={20} /><span><strong>Export flow</strong><small>{current ? "Download the current flow" : "Create or import a flow first"}</small></span></button>
+      <button type="button" className="flow-transfer" aria-label="Export flow" disabled={saving || !canExport} onClick={() => { if (!current || !canExport) return; setExportFlowId(current.id); setMode("export"); }}><Icon name="exportFlow" size={20} /><span><strong>Export flow</strong><small>{!current ? "Create or import a flow first" : canExport ? "Download the current flow" : "Add a step to export"}</small></span></button>
     </div>
     {message && <p className="error-message" role="alert">{message}</p>}
   </Dialog>;

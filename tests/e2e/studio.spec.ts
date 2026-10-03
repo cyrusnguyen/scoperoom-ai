@@ -531,9 +531,16 @@ test.describe("Studio on a real draft", () => {
     }
     // Connect opens with the last added step ("Refund issued") as the source.
     await press(toolbar(page).getByRole("button", { name: "Connect" }));
+    // Open each native picker and confirm the choice before tabbing to the next field.
+    await page.keyboard.press("Space");
     await page.keyboard.press("ArrowUp"); // From: Request return
+    await page.keyboard.press("Enter");
+    await expect(modal(page, "Connect steps").getByLabel("From").locator("option:checked")).toHaveText("Request return");
     await page.keyboard.press("Tab");
+    await page.keyboard.press("Space");
     await page.keyboard.press("ArrowDown"); // To: Refund issued
+    await page.keyboard.press("Enter");
+    await expect(modal(page, "Connect steps").getByLabel("To", { exact: true }).locator("option:checked")).toHaveText("Refund issued");
     await page.keyboard.press("Tab");
     await page.keyboard.press("Enter");
     await expect(modal(page, "Connect steps")).toBeHidden();

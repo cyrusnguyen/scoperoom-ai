@@ -24,7 +24,7 @@ test("Inspect opens the current flow and keeps project details reachable without
   const panel = page.locator("#right-panel");
   await expect(panel.getByLabel("Title", { exact: true })).toHaveValue("Checkout");
   await expect(panel.getByLabel("Purpose")).toHaveValue("Complete an order");
-  await panel.getByRole("button", { name: "← Project", exact: true }).click();
+  await panel.getByRole("button", { name: "Back to project", exact: true }).click();
   await expect(panel.getByLabel("Project name", { exact: true })).toBeVisible();
 });
 

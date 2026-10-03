@@ -113,8 +113,10 @@
 .app-footer { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-shrink: 0; min-height: 30px; padding: 5px var(--space-4); border-top: var(--panel-border); background: var(--surface-muted); color: var(--foreground-muted); font-size: var(--font-label); }
 .app-footer > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-footer > .footer-error { color: var(--danger-foreground); white-space: normal; }
-.app-footer button { min-height: 24px; padding: 2px 0; border: 0; color: var(--foreground-muted); text-decoration: underline; text-underline-offset: 3px; }
-.app-footer button:hover { color: var(--foreground); }
+.app-footer form { flex-shrink: 0; }
+.app-footer .sign-out-button { gap: var(--space-2); padding: 6px 10px; border: var(--panel-border); color: var(--foreground-muted); font-weight: 500; }
+.app-footer .sign-out-button:hover:not(:disabled) { border-color: var(--foreground-subtle); background: var(--surface-raised); color: var(--foreground); }
+.app-footer .sign-out-button svg { color: var(--foreground-subtle); }
 
 @media (max-width: 639px) {
   .projects-nav-header, .editor-header, .right-panel-header { min-height: 44px; }
@@ -169,3 +171,24 @@
 .inline-note .view-actions { margin-top: var(--space-2); }
 .invite-link { margin-top: var(--space-3); }
 .invite-link small { color: var(--foreground-muted); }
+
+/* Shared native dropdowns: app tokens for the control and, where supported, its picker. */
+:where(.app-shell) select { color: var(--foreground); background-color: var(--surface-muted); border-color: var(--border); accent-color: var(--accent); }
+:where(.app-shell) select:hover:not(:disabled) { border-color: var(--foreground-subtle); }
+:where(.app-shell) select:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+@supports (appearance: base-select) {
+  :where(.app-shell) select:not([multiple]):not([size]),
+  :where(.app-shell) select:not([multiple]):not([size])::picker(select) { appearance: base-select; }
+  :where(.app-shell) select:not([multiple]):not([size]) { align-items: center; gap: var(--space-3); padding: 8px 10px; }
+  :where(.app-shell) select::picker-icon { color: var(--foreground-subtle); transition: rotate var(--duration) var(--ease); }
+  :where(.app-shell) select:open { border-color: var(--accent-border); }
+  :where(.app-shell) select:open::picker-icon { rotate: 180deg; color: var(--accent-hover); }
+  :where(.app-shell) select::picker(select) { padding: var(--space-1); border: var(--panel-border); border-radius: var(--radius-overlay); background: var(--surface); color: var(--foreground); box-shadow: var(--shadow-overlay); max-height: min(360px, calc(100dvh - 32px)); overflow-y: auto; }
+  :where(.app-shell) select option { display: flex; align-items: center; gap: var(--space-2); min-height: 36px; padding: 8px 10px; border-radius: var(--radius-control); background: transparent; color: var(--foreground); }
+  :where(.app-shell) select option:checked { background: var(--accent-soft); color: var(--accent-hover); }
+  :where(.app-shell) select option:is(:hover, :focus) { background: var(--selection); color: var(--foreground); }
+  :where(.app-shell) select option:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: -2px; }
+  :where(.app-shell) select option::checkmark { color: var(--accent-hover); }
+  :where(.app-shell) select option:disabled { color: var(--foreground-subtle); opacity: .65; }
+  @media (max-width: 639px) { :where(.app-shell) select option { min-height: 44px; } }
+}

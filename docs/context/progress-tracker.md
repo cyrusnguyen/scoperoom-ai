@@ -1,5 +1,15 @@
 # Progress tracker
 
+## Stage 05 UI follow-up fixes (2026-10-03)
+
+Sign out was also restyled as a compact outlined icon button. Its existing action and import-recovery cleanup are unchanged. The real-account sign-in/sign-out browser case passed, and desktop/mobile captures confirmed the 44px mobile target. The final Sign out build, affected lint, boundaries, TypeScript and all three style-token tests passed.
+
+The user clarified that an existing flow with zero steps must disable Export. The Flows action now remains visible with Add a step to export guidance and enables after the first step is added. The server/native file contract is unchanged. The inspector's Project back action now uses a compact icon button with an accessible name. Shared dropdowns use the app palette, including styled native pickers where appearance: base-select is supported, with the browser's native fallback elsewhere. The fresh-project box was an empty save-status strip retaining its border, background and minimum height; the empty-state override removes that decoration while keeping status/recovery content mounted.
+
+Verification: the updated zero-step regression failed on the old UI and then passed, including adding the first step and exporting it. Nine focused Chromium cases passed for export, inspector navigation, creation/filtering, unconfirmed-create recovery and keyboard-only connection editing. The latter now explicitly opens, selects and confirms native picker choices and asserts both selected endpoints before submitting. Boundaries, full ESLint, TypeScript, three stylesheet-token tests and the production Webpack build passed. Desktop/mobile screenshots, native keyboard filtering, disabled Export, project navigation and a zero-height transparent empty status strip were checked in Chromium. No mobile horizontal overflow was observed. Preview remains on port 3109. No full-suite, CI or non-Chromium claim is made.
+
+The recovery chat released its branch/index hold for these UI fixes. Its exchange.spec.ts additions and tracker section, the unapplied retirement correction, and the earlier Arrange work remain outside this commit. No push.
+
 ## Stage 05 UI refresh (2026-10-03)
 
 The user requested and approved this UI commit on feat/stage-5.3-export-flows. Flows, Import and Export now share compact dark/gold dialog styling, clear primary actions, responsive layouts and secondary recovery controls. Flow details is removed; Inspect opens the current flow when no item is selected and retains access to project settings. Export remains visible but disabled when no flow exists; zero-step flows remain exportable. Import and Export arrows point into and out of the tray respectively. Import/export request, revision, authority and recovery gates are preserved.

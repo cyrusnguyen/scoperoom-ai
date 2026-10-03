@@ -62,9 +62,18 @@ test("Save and inspect drains completed local edits then requires an explicit do
   const result = await download(page); expect(result.file.nodes[0]!.label).toBe("Completed new label");
 });
 
-test("empty saved flow exports an explicit empty graph", async ({ page }) => {
-  await setup(page, true); await openExport(page); const { file } = await download(page);
-  expect(file.nodes).toEqual([]); expect(file.edges).toEqual([]); expect(file.positions).toEqual([]);
+test("empty flow keeps Export disabled until a step is added", async ({ page }) => {
+  const { id, flowId } = await setup(page, true);
+  await page.locator(".flow-switch").click();
+  const flows = page.getByRole("dialog", { name: "Flows", exact: true });
+  const exporter = flows.getByRole("button", { name: "Export flow", exact: true });
+  await expect(exporter).toBeVisible();
+  await expect(exporter).toBeDisabled();
+  await expect(exporter).toContainText("Add a step to export");
+  await flows.getByRole("button", { name: "Close", exact: true }).click();
+  await seedStudioChanges(page, id, [{ command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "First step", actorLabel: "", description: "" }, proposedIds: [randomUUID()] }]);
+  await page.reload(); await openExport(page);
+  const { file } = await download(page); expect(file.nodes).toMatchObject([{ label: "First step" }]);
 });
 
 test("post-preparation status outage gives an actionable refusal and exact retry", async ({ page }) => {
