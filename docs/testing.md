@@ -69,7 +69,7 @@ This follows [Playwright's worker-account pattern](https://playwright.dev/docs/a
 
 ## Browser runner
 
-The existing `corepack pnpm test:e2e:chromium` command remains useful for focused development runs. On Windows it expects a separately started test server. Use `SCOPEROOM_E2E=1` and the matching `NEXT_PUBLIC_APP_URL` when starting that server; the normal developer app remains on port 3100.
+The existing `corepack pnpm test:e2e:chromium` command remains useful for focused development runs. On Windows it expects a separately started test server. Use `SCOPEROOM_E2E=1` and the matching `NEXT_PUBLIC_APP_URL` when starting that server (`SCOPEROOM_E2E` also disables AI dispatch, so a key Next loads from `.env.local` is never used by it); the normal developer app remains on port 3100.
 
 `corepack pnpm test:e2e:production` builds the isolated `.next-e2e` output, runs Chromium against a managed production server and records both build and test time. Production runs default to two workers; development/external-server runs retain one. Override either with `PLAYWRIGHT_WORKERS=1` or `2`. Files run in parallel; tests inside each file remain sequential. Local settings are read from ignored `.env.local`. CI provides its own isolated database/Auth settings.
 

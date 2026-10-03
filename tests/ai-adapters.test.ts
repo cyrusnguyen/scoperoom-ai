@@ -63,9 +63,13 @@ test("429 and 5xx are unavailable with the server's retry hint, and SDK inferenc
   const broken = gateway(() => respond({ error: { message: "boom" } }, 503));
   assert.equal((await broken.gateway.generate(request(), signal())).kind, "unavailable");
   assert.equal(broken.calls.length, 1);
-  const bad = gateway(() => respond({ error: { message: "key" } }, 401));
-  assert.equal((await bad.gateway.generate(request(), signal())).kind, "unknown");
-  assert.equal(bad.calls.length, 1);
+  // A definite client error repeats identically, so it is non-retryable (refused), never a reason to spend the second call.
+  for (const status of [400, 401, 403, 404]) {
+    const definite = gateway(() => respond({ error: { message: "nope" } }, status));
+    assert.equal((await definite.gateway.generate(request(), signal())).kind, "refused", String(status));
+    assert.equal(definite.calls.length, 1);
+  }
+  assert.equal((await gateway(() => respond({ error: { message: "odd" } }, 409)).gateway.generate(request(), signal())).kind, "unknown"); // anything else may have run
 });
 
 test("a timeout, an abort and a network failure are unknown, and the reply never carries the error text", async () => {
@@ -155,6 +159,8 @@ test("the composition module treats blank keys as absent and the test environmen
   assert.deepEqual(PROVIDER_SECRET_NAMES.map((name) => blanked[name]), ["", "", ""]);
   assert.equal(blanked.KEEP, "1");
   assert.equal(jobDispatcher(blanked), undefined);
+  assert.equal(jobDispatcher({ TRIGGER_SECRET_KEY: "would-be-real", SCOPEROOM_E2E: "1" }), undefined); // the hand-started dev e2e server is safe too
+  assert.ok(jobDispatcher({ TRIGGER_SECRET_KEY: "fake-key-for-construction-only" }), "a configured production process gets its dispatcher (constructed, never called)");
   // The servers and suites that must stay network-free blank the keys; Next would otherwise load them from .env.local itself.
   assert.match(readFileSync("scripts/e2e/production.mjs", "utf8"), /withoutProviderSecrets\(\{/);
   assert.match(readFileSync("playwright.config.ts", "utf8"), /env: withoutProviderSecrets\(/);

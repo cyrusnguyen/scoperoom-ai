@@ -89,11 +89,11 @@ test("AI storage grants are column- and function-exact for the web and worker ru
     const { rows: functions } = await admin.query<{ role: string; fn: string }>(`
       select r.role, p.proname::text as fn from unnest($1::text[]) as r(role) join pg_proc p on p.pronamespace = 'app'::regnamespace
       where p.proname = any($2::text[]) and has_function_privilege(r.role, p.oid, 'EXECUTE') order by 1, 2`,
-      [roles, ["claim_ai_attempt", "settle_ai_attempt", "finish_ai_run", "expire_ai_run_bodies", "record_ai_event", "ai_actor_may_run", "settle_overdue_ai_runs", "lease_ai_dispatches", "ack_ai_dispatch", "begin_ai_validation"]]);
+      [roles, ["claim_ai_attempt", "settle_ai_attempt", "finish_ai_run", "expire_ai_run_bodies", "record_ai_event", "ai_actor_may_run", "settle_overdue_ai_runs", "lease_ai_dispatches", "lease_ai_dispatch", "ack_ai_dispatch", "begin_ai_validation"]]);
     const callable = (role: string) => functions.filter((row) => row.role === role).map((row) => row.fn);
     for (const role of ["app_web_runtime", "app_worker_runtime"]) assert.deepEqual(callable(role), [], role);
-    assert.deepEqual(callable("app_web"), ["ack_ai_dispatch", "lease_ai_dispatches", "settle_overdue_ai_runs"]); // web settles only overdue runs and delivers the first dispatch; it never claims, settles attempts or finishes
-    assert.deepEqual(callable("app_worker"), ["ack_ai_dispatch", "begin_ai_validation", "claim_ai_attempt", "finish_ai_run", "lease_ai_dispatches", "settle_ai_attempt"]); // body expiry is granted to its scheduler identity later
+    assert.deepEqual(callable("app_web"), ["ack_ai_dispatch", "lease_ai_dispatch", "settle_overdue_ai_runs"]); // web settles only overdue runs and delivers the first dispatch; it never claims, settles attempts or finishes
+    assert.deepEqual(callable("app_worker"), ["ack_ai_dispatch", "begin_ai_validation", "claim_ai_attempt", "finish_ai_run", "lease_ai_dispatch", "lease_ai_dispatches", "settle_ai_attempt"]); // body expiry is granted to its scheduler identity later
     const { rows: [project] } = await admin.query<{ web: boolean; worker: boolean }>("select has_column_privilege('app_web', 'app.project', 'ai_revision', 'UPDATE') as web, has_column_privilege('app_worker', 'app.project', 'ai_revision', 'UPDATE') as worker");
     assert.deepEqual(project, { web: true, worker: false });
   } finally {

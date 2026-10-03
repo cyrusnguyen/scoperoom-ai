@@ -315,21 +315,22 @@ test("attempts 1 and 2 racing settlement: the old token and pointer change zero 
 
 test("cancel, authority loss, archive and the deadline during a provider call fence the late output", { skip: !canRun }, async () => {
   await withWorld(async ({ admin, seed, row, attempts, budget }) => {
-    const late = async (label: string, mutate: (ids: { runId: string; projectId: string; owner: string; actor: string }) => Promise<unknown>, expected: { state: string; code: string | null }, options: { createdAt?: Date; sleepMs?: number } = {}) => {
+    const late = async (label: string, mutate: (ids: { runId: string; projectId: string; owner: string; actor: string }) => Promise<unknown>, expected: { state: string; code: string | null; outcome: string }, options: { createdAt?: Date; sleepMs?: number } = {}) => {
       const ids = await seed({ createdAt: options.createdAt ?? ago(5) });
       const { gateway, requests } = fakeGateway(async () => { await mutate(ids); await sleep(options.sleepMs ?? 0); return completed(); });
       await runAi(ids.runId, gateway);
       const stored = await row(ids.runId);
       assert.deepEqual([stored.state, stored.failure_code, stored.result, stored.result_hash, stored.disposition], [expected.state, expected.code, null, null, null], label);
       assert.equal(requests.length, 1, label);
-      assert.equal((await attempts(ids.runId)).length, 1, label);
+      const recorded = await attempts(ids.runId);
+      assert.deepEqual(recorded.map((attempt) => [attempt.outcome, attempt.call_may_have_started]), [[expected.outcome, true]], `${label}: the attempt records the actual cause`);
       assert.deepEqual(await budget(ids.owner), { reserved_runs: 0, consumed_runs: 1 }, `${label}: the consumed call is not refunded`);
       return ids;
     };
-    await late("cancel", ({ runId }) => admin.query("update app.ai_run set cancel_requested_at = clock_timestamp() where id = $1", [runId]), { state: "CANCELLED", code: null });
-    await late("owner entitlement revoked", ({ owner }) => admin.query("update app.pilot_entitlement set active = false, revoked_at = clock_timestamp() where profile_id = $1", [owner]), { state: "FAILED", code: "RESULT_FENCED" });
-    await late("archived project", ({ projectId }) => admin.query("update app.project set status = 'ARCHIVED' where id = $1", [projectId]), { state: "FAILED", code: "RESULT_FENCED" });
-    await late("deadline", async () => undefined, { state: "TIMED_OUT", code: null }, { createdAt: ago(294), sleepMs: 6_500 });
+    await late("cancel", ({ runId }) => admin.query("update app.ai_run set cancel_requested_at = clock_timestamp() where id = $1", [runId]), { state: "CANCELLED", code: null, outcome: "CANCELLED" });
+    await late("owner entitlement revoked", ({ owner }) => admin.query("update app.pilot_entitlement set active = false, revoked_at = clock_timestamp() where profile_id = $1", [owner]), { state: "FAILED", code: "RESULT_FENCED", outcome: "UNKNOWN" });
+    await late("archived project", ({ projectId }) => admin.query("update app.project set status = 'ARCHIVED' where id = $1", [projectId]), { state: "FAILED", code: "RESULT_FENCED", outcome: "UNKNOWN" });
+    await late("deadline", async () => undefined, { state: "TIMED_OUT", code: null, outcome: "TIMED_OUT" }, { createdAt: ago(294), sleepMs: 6_500 });
   });
 });
 

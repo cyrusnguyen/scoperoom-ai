@@ -35,6 +35,18 @@ test("an empty Improve proposal is a no-change clarification, but an empty Gener
   refuses(generate, proposal([]), "EMPTY_PROPOSAL");
 });
 
+test("an empty Improve result still has its whole envelope validated: assumptions and citations cannot hide behind no-change", () => {
+  const empty = (extra: Record<string, unknown>) => proposal([], extra);
+  assert.deepEqual(validateResult(improve, empty({ assumptions: ["fine"], citations: [{ sourceVersionId: f.sourceVersionId, startLine: 1, endLine: 1, excerpt: "line one" }] })), NO_CHANGE);
+  refuses(improve, empty({ citations: "garbage" }), "CITATIONS");
+  refuses(improve, empty({ citations: [{ sourceVersionId: randomUUID(), startLine: 1, endLine: 1, excerpt: "line one" }] }), "CITATION_SOURCE");
+  refuses(improve, empty({ citations: [{ sourceVersionId: f.sourceVersionId, startLine: 1, endLine: 1, excerpt: "wrong" }] }), "CITATION_EXCERPT");
+  refuses(improve, empty({ assumptions: "garbage" }), "ASSUMPTIONS");
+  refuses(improve, empty({ assumptions: [" "] }), "SHAPE");
+  refuses(improve, { schemaVersion: 1, kind: "proposal", operations: [], assumptions: [] }, "SHAPE"); // missing citations
+  refuses(improve, { ...empty({}), extra: 1 }, "SHAPE");
+});
+
 test("operations are a closed union restricted to the task's edits", () => {
   refuses(generate, proposal([update("op1", f.ids.b)]), "SHAPE"); // Generate cannot edit existing steps
   refuses(improve, proposal([flowOp()]), "SHAPE"); // Improve never creates or edits whole flows

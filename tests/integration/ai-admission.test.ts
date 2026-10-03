@@ -310,6 +310,12 @@ test("the web runtime cannot forge worker results or touch immutable evidence; t
     }
     assert.equal((await worker.query("select count(*)::int as n from app.lease_ai_dispatches($1, 1, 30)", [s.runId])).rows[0].n, 0); // this run holds cancel intent: never leased
     const fresh = await seed();
+    // Web may lease one named run, never the backlog: the batch form is the worker's, and NULL through the wrapper leases nothing.
+    await assert.rejects(web.query("select * from app.lease_ai_dispatches(NULL, 100, 120)"), code(DENIED));
+    assert.equal((await web.query("select count(*)::int as n from app.lease_ai_dispatch(NULL, 120)")).rows[0].n, 0);
+    assert.equal((await admin.query("select count(*)::int as n from app.ai_run where dispatch_lease_until is not null and id = $1", [fresh.runId])).rows[0].n, 0);
+    assert.equal((await web.query("select count(*)::int as n from app.lease_ai_dispatch($1, 120)", [fresh.runId])).rows[0].n, 1);
+    await admin.query("update app.ai_run set dispatch_lease_until = null where id = $1", [fresh.runId]);
     const { rows: [lease] } = await worker.query<{ out_dispatch_id: string; out_lease: string }>("select out_dispatch_id, out_lease from app.lease_ai_dispatches($1, 1, 30)", [fresh.runId]);
     assert.equal((await worker.query("select app.ack_ai_dispatch($1, $2, $3, 'task-1') as ok", [fresh.runId, lease!.out_dispatch_id, lease!.out_lease])).rows[0].ok, true); // allowed: the acknowledgement for the held lease
     await assert.rejects(admin.query("update app.ai_run set task_id = 'task-2' where id = $1", [fresh.runId]), code(CHECK)); // and final

@@ -15,7 +15,8 @@ let gateway: { key: string; value: ModelGateway } | undefined;
 
 export function jobDispatcher(env: Env = process.env): JobDispatcher | undefined {
   const key = env.TRIGGER_SECRET_KEY;
-  if (!present(key)) return undefined;
+  // A test server (SCOPEROOM_E2E, as the docs require for a hand-started one) never dispatches, even if Next loaded a real key from .env.local.
+  if (!present(key) || present(env.SCOPEROOM_E2E)) return undefined;
   if (dispatcher?.key !== key) dispatcher = { key, value: createJobDispatcher(triggerApi(key)) };
   return dispatcher.value;
 }

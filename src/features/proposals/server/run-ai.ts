@@ -27,6 +27,13 @@ async function closeOut(db: Sql, runId: string, code: string) {
   else await finishRun(db, runId, "FAILED", code);
 }
 
+/** A reply refused by the fence is recorded by its actual cause: cancellation, a closed attempt window, or lost authority (UNKNOWN: the call ran, its output is discarded). */
+async function fencedOutcome(db: Sql, runId: string, windowEnd: Date): Promise<Outcome> {
+  const [row] = await db.$queryRaw<Array<{ cancelled: boolean; closed: boolean }>>`
+    SELECT cancel_requested_at IS NOT NULL AS cancelled, clock_timestamp() >= ${windowEnd}::timestamptz AS closed FROM app.ai_run WHERE id = ${runId}::uuid`;
+  return row?.cancelled ? "CANCELLED" : row?.closed ? "TIMED_OUT" : "UNKNOWN";
+}
+
 type Attempt = { runId: string; id: string; token: string };
 async function settle(db: Sql, attempt: Attempt, outcome: Outcome, result: ValidatedProposal | null, reply: ModelReply | null): Promise<string | undefined> {
   const usage = reply?.kind === "completed" ? reply.usage : { inputTokens: null, outputTokens: null };
@@ -81,7 +88,7 @@ export async function runAi(runId: string, gateway: ModelGateway, db?: Sql): Pro
       if (begun === "STALE") return;
       let result: ValidatedProposal | null = null;
       if (begun === "VALIDATING") { try { result = validateResult(run.capture, reply.output); } catch { result = null; } }
-      const status = await settle(sql, attempt, result ? "COMPLETED" : begun === "FENCED" ? "CANCELLED" : "INCOMPLETE", result, reply);
+      const status = await settle(sql, attempt, result ? "COMPLETED" : begun === "FENCED" ? await fencedOutcome(sql, runId, claim.out_attempt_deadline_at) : "INCOMPLETE", result, reply);
       if (status === "SUCCEEDED" || status === "STALE") return;
       await closeOut(sql, runId, begun === "FENCED" || status === "FENCED" ? "RESULT_FENCED" : "RESULT_INVALID");
       return;

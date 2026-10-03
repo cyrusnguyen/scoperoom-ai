@@ -210,11 +210,12 @@ function validate(capture: CapturedInput, output: unknown): ValidatedProposal {
   if (root.kind !== "proposal") return bad("KIND");
   keys(root, ["schemaVersion", "kind", "operations", "assumptions", "citations"]);
   const operations = parseOperations(capture, root.operations);
-  if (!operations.length) return capture.taskType === "REFINE_FLOW_SELECTION" ? NO_CHANGE : bad("EMPTY_PROPOSAL"); // Improve with nothing to change is a no-change clarification
-  checkScope(capture, operations);
+  if (operations.length) checkScope(capture, operations);
   if (!Array.isArray(root.assumptions) || root.assumptions.length > AI_LIMITS.assumptions) bad("ASSUMPTIONS");
   const assumptions = (root.assumptions as unknown[]).map((note) => text(note, AI_LIMITS.assumptionCodePoints, true));
   const citations = parseCitations(capture, root.citations);
+  // Only after the whole closed envelope validated: Improve with nothing to change is a no-change clarification.
+  if (!operations.length) return capture.taskType === "REFINE_FLOW_SELECTION" ? NO_CHANGE : bad("EMPTY_PROPOSAL");
   return { schemaVersion: 1, kind: "proposal", operations, assumptions, citations };
 }
 

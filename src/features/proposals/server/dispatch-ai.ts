@@ -10,9 +10,11 @@ export type Leased = { runId: string; dispatchId: string; executionBinding: stri
 
 /** SQL dispatch lease: due PENDING runs get an expiring lease inside one short statement; delivery happens afterwards, outside any lock. */
 export async function leaseDispatches(db: Sql, runId: string | null, batch: number): Promise<Leased[]> {
-  const rows = await db.$queryRaw<Array<{ out_run_id: string; out_dispatch_id: string; out_execution_binding: string; out_deadline_at: Date; out_lease: string }>>`
-    SELECT out_run_id, out_dispatch_id, out_execution_binding, out_deadline_at, out_lease
-    FROM app.lease_ai_dispatches(${runId}::uuid, ${batch}::integer, ${LEASE_SECONDS}::integer)`;
+  type Row = { out_run_id: string; out_dispatch_id: string; out_execution_binding: string; out_deadline_at: Date; out_lease: string };
+  // One named run uses the single-run form (all web may call); the batch form belongs to the worker's repair sweep.
+  const rows = runId
+    ? await db.$queryRaw<Row[]>`SELECT * FROM app.lease_ai_dispatch(${runId}::uuid, ${LEASE_SECONDS}::integer)`
+    : await db.$queryRaw<Row[]>`SELECT * FROM app.lease_ai_dispatches(NULL::uuid, ${batch}::integer, ${LEASE_SECONDS}::integer)`;
   return rows.map((row) => ({ runId: row.out_run_id, dispatchId: row.out_dispatch_id, executionBinding: row.out_execution_binding, deadlineAt: row.out_deadline_at, lease: row.out_lease }));
 }
 

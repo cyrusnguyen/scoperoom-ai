@@ -49,6 +49,7 @@ function normalize(error: unknown): ModelReply {
   if (APICallError.isInstance(error)) {
     const status = error.statusCode;
     if (status === 429 || status === 408 || (status !== undefined && status >= 500)) return { kind: "unavailable", retryAfterMs: retryAfter(error) };
+    if (status === 400 || status === 401 || status === 403 || status === 404) return { kind: "refused" }; // a definite, repeatable client error is never worth the second call
   }
   return { kind: "unknown" }; // timeout, abort, network failure, other 4xx or anything unrecognized: the call may have run
 }
