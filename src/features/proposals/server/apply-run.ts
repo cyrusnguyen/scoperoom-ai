@@ -53,6 +53,8 @@ export async function applyRun(identity: ProjectIdentity, projectId: string, run
       if (error instanceof Error && error.message === "DEPENDENCY_CONFLICT") throw new ProjectError("DEPENDENCY_CONFLICT");
       graphFailure(error);
     }
+    const sourceIds = [...new Set([run.prompt_source_version_id, ...capture.sources.flatMap(source => [source.sourceVersionId, source.expectedCurrentVersionId])])].sort();
+    if (sourceIds.length > 201) throw new ProjectError("LIMIT_EXCEEDED");
     const documentRevision = applied!.documentChanged ? nextRevision(saved.documentRevision) : saved.documentRevision;
     const layoutRevision = applied!.layoutChanged ? nextRevision(saved.layoutRevision) : saved.layoutRevision;
     await requireStoredSize(tx, applied!.document, applied!.layout);
@@ -64,7 +66,6 @@ export async function applyRun(identity: ProjectIdentity, projectId: string, run
       const record = document.flows[id] ?? document.nodes[id] ?? document.edges[id]; return record ? [record] : [];
     });
     const selected = run.result!.kind === "proposal" ? run.result!.operations.filter(operation => input.selectedOperationIds.includes(operation.id)) : [];
-    const sourceIds = [...new Set([run.prompt_source_version_id, ...capture.sources.flatMap(source => [source.sourceVersionId, source.expectedCurrentVersionId])])].sort();
     const evidence = { changedIds: applied!.changedIds, before: records(saved.draft.document), after: records(applied!.document), assumptions: run.result!.kind === "proposal" ? run.result!.assumptions : [], citations: run.result!.kind === "proposal" ? run.result!.citations : [] };
     const [bounded] = await tx.$queryRaw<Array<{ allowed: boolean }>>`SELECT
       octet_length(${JSON.stringify(selected)}::jsonb::text) <= 131072 AND octet_length(${JSON.stringify(applied!.actualCommands)}::jsonb::text) <= 262144

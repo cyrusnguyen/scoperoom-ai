@@ -491,3 +491,17 @@ test("a guarded synthetic baseline-head change refuses Apply and restores the pe
     }
   });
 });
+
+test("permanent source-manifest capacity refuses safely with no graph or receipt effect", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner); const draft = await draftOf(database, p);
+    const sources = [];
+    // These small sources fit capture and model-input bounds, but their prompt adds the 202nd permanent reference.
+    for (let i = 0; i < 201; i++) sources.push(await sourceOf(database, p, owner.profile, "Go"));
+    const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: proposal, sources });
+    const input = inputOf(draft); const before = await stateOf(database, p, run);
+    await assert.rejects(applyRun(owner.identity, p, run, input), { code: "LIMIT_EXCEEDED" });
+    assert.deepEqual(await stateOf(database, p, run), before);
+    assert.equal((await database.query("select count(*)::int n from app.mutation_receipt where scope_id = $1 and key = $2", [p, input.key])).rows[0].n, 0);
+  });
+});

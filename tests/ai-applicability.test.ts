@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { emptyDraft } from "../src/features/drafts/contracts/scope-document.ts";
 import { captureInput, canonicalJson, sha256 } from "../src/features/proposals/domain/capture.ts";
+import { resultFixture } from "./support/ai-results.ts";
 import { inspectRun, type ApplicabilityRow } from "../src/features/proposals/server/applicability.ts";
 
 const draftId = randomUUID();
@@ -21,6 +22,31 @@ test("hash-consistent malformed historical capture arrays and exact limits shape
     const stored = { ...malformed, graphHash: sha256(canonicalJson(malformed.graph)) };
     const view = inspectRun({ ...base, capture: stored as typeof capture, capture_hash: sha256(canonicalJson(stored)) }, project);
     assert.equal(view.capture, null); assert.equal(view.result, null); assert.equal(view.diff, null);
+    assert.equal(view.applicability, "UNAVAILABLE"); assert.deepEqual(view.applicabilityReasons, ["INVALID_CAPTURE"]);
+  }
+});
+
+test("stored source identities and text stay strict even when their capture hash matches", () => {
+  const captured = resultFixture().generate();
+  // An explicit older version and an untrimmed historical title remain exact captured evidence.
+  captured.sources[0]!.expectedCurrentVersionId = randomUUID();
+  captured.sources[0]!.title = "  Historical notes  ";
+  const row: ApplicabilityRow = { ...base, draft_id: captured.draftId, expected_document_revision: captured.documentRevision,
+    current_revision: captured.documentRevision, capture: captured, capture_hash: sha256(canonicalJson(captured)) };
+  const context = { ...project, currentDraftId: captured.draftId };
+  assert.equal(inspectRun(row, context).applicability, "APPLICABLE");
+  assert.deepEqual(inspectRun(row, context).capture, captured);
+  for (const change of [
+    { sourceId: "not-a-uuid" }, { sourceVersionId: "not-a-uuid" }, { expectedCurrentVersionId: "not-a-uuid" },
+    { title: { unexpected: "value" } }, { title: "" }, { title: "x".repeat(121) }, { text: "" },
+  ]) {
+    const malformed = structuredClone(captured);
+    Object.assign(malformed.sources[0]!, change);
+    // Preserve all derived source statistics as well as the outer hash, so shape alone must refuse it.
+    const source = malformed.sources[0]!;
+    source.contentHash = sha256(source.text); source.codePointCount = [...source.text].length; source.utf8ByteCount = Buffer.byteLength(source.text);
+    const view = inspectRun({ ...row, capture: malformed, capture_hash: sha256(canonicalJson(malformed)) }, context);
+    assert.equal(view.capture, null, JSON.stringify(change)); assert.equal(view.result, null); assert.equal(view.diff, null);
     assert.equal(view.applicability, "UNAVAILABLE"); assert.deepEqual(view.applicabilityReasons, ["INVALID_CAPTURE"]);
   }
 });

@@ -1,5 +1,7 @@
 import { Prisma } from "../../../../prisma/generated/client.ts";
 import { LIMITS, emptyDraft, parseDocument } from "../../drafts/contracts/scope-document.ts";
+import { id, text } from "../../drafts/contracts/strict.ts";
+import { SOURCE_LIMITS } from "../../sources/contracts/source-version.ts";
 import type { ProjectRow, Transaction } from "../../projects/server/access.ts";
 import { AI_LIMITS, CAPTURE_SCHEMA_VERSION, type CapturedInput, type ProposalDiff, type RunApplicability, type RunApplicabilityReason, type RunDisposition, type RunState, type TaskKind, type ValidatedProposal } from "../contracts/tasks.ts";
 import { canonicalJson, captureInput, jsonbTextBytes, sha256 } from "../domain/capture.ts";
@@ -36,6 +38,11 @@ export function validatedCapture(row: CaptureRow): CapturedInput | null {
         || capture.graph.flows.length > LIMITS.flows || capture.graph.nodes.length > LIMITS.nodes || capture.graph.edges.length > LIMITS.edges
         || !Array.isArray(capture.sources) || !Array.isArray(capture.graph.boundaryNodeIds)
         || typeof capture.versions.model !== "string" || typeof capture.versions.prompt !== "string") throw new Error();
+      // The builder expects SQL-typed source records; validate stored primitives before reusing that trusted-input path.
+      for (const source of capture.sources) {
+        id(source.sourceId); id(source.sourceVersionId); id(source.expectedCurrentVersionId);
+        if (!text(source.title, 120).length || !text(source.text, SOURCE_LIMITS.submissionCodePoints).length) throw new Error();
+      }
       // Reuse the document parser and capture builder to verify exact stored structure/scope, including read-only boundary flags.
       const document = parseDocument({ ...emptyDraft().document,
         flows: Object.fromEntries(capture.graph.flows.map(flow => [flow.id, { ...flow, confirmation: null, verificationMethod: null }])),
