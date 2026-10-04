@@ -333,7 +333,11 @@ test.describe("two real users converge through status polling", () => {
     await openBoth(collaboration);
     const reads = await holdDraftReads(editorPage, projectId);
     await rename(ownerPage, projectId, ids.startId, "Theirs 1");
-    await poll(editorPage);
+    // A status read may already be waiting on this held D read, with no next poll scheduled until it lands.
+    for (let waited = 0; !reads.held.length && waited < POLL_DEADLINE; waited += 250) {
+      await editorPage.clock.runFor(250);
+      await new Promise((resolve) => setTimeout(resolve, 25)); // let the intercepted read reach this process
+    }
     await expect.poll(() => reads.held.length).toBe(1); // D read of A at "Theirs 1", delivered late
     await rename(ownerPage, projectId, ids.startId, "Theirs 2");
 
