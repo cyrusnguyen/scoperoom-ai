@@ -973,7 +973,9 @@ test.describe("Studio on a real draft", () => {
         await note(page).getByRole("button", { name: "Retry" }).click();
       }
       if (failedRead) {
-        await expect(page.locator(".studio-status")).toContainText("Changes saved. Refreshing saved changes…");
+        // Multiple remounted readers can fail at once; verify the persistent recovery state.
+        await expect(page.locator(".studio-status")).toContainText("Changes saved. Couldn't refresh saved changes", { timeout: 25_000 });
+        await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
         await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
         await page.goBack();
         await expect(page.getByRole("heading", { level: 1, name: "History project" })).toBeVisible();
