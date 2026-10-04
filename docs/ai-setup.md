@@ -10,7 +10,7 @@ Stage 06.1 implements durable AI admission, execution and inspection. The web ap
 | `AI_EXECUTION_BINDING` | Web admission | Opaque Trigger external deployment id, at most 128 printable characters. Set it to the checked SHA used by the deploy workflow. Not a secret. |
 | `TRIGGER_SECRET_KEY` | Web dispatch; worker repair and cancel | Environment-scoped runtime credential. Without a dispatcher, runs remain `PENDING` until their SQL deadline; never-claimed reservations refund once. `SCOPEROOM_E2E` disables web dispatch. |
 | `TRIGGER_PROJECT_REF` | Worker build and deploy (`trigger.config.ts`) | Nonsecret project reference. The config throws if it is missing. Store it as the GitHub environment variable for deployment. |
-| `TRIGGER_ACCESS_TOKEN` | Trusted deploy workflow | CLI deployment credential held as a GitHub environment secret. Never an application or PR secret. |
+| `TRIGGER_ACCESS_TOKEN` | Trusted deploy workflow; explicitly authorized local dev CLI | CLI personal access token held as a GitHub environment secret for deploys or loaded locally for an authorized dev worker. Excluded from task runtime; never an application or PR secret. |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Worker; explicitly authorized direct probe | Model credential. Configure it in the intended Trigger environment, never the browser, Vercel web build or PR jobs. |
 | `WORKER_DATABASE_URL` | Worker | Restricted `app_worker_runtime` login. Never a bootstrap or migrator credential. |
 | `SCOPEROOM_ENVIRONMENT_ID` | Web and worker | Must equal the database environment identity. Worker cleanup also checks it inside SQL. |
@@ -66,6 +66,10 @@ SQL validates the environment identity and batch bound for worker cleanup. The w
 
 Retention applies from the first persisted run: unneeded terminal capture/result bodies expire after seven days, with applied evidence preserved; unused `AVAILABLE` results become `EXPIRED`. Run identity, hashes, attribution, usage, prompt and cited source versions survive. Receipts, including the start manifest, live 30 days. Late output cannot restore purged bodies. PR 2 owns permanent application evidence and its first consumer.
 
+If a worker exits during result validation, its current attempt remains busy until settled or its attempt window expires. Recovery marks an abandoned attempt `UNKNOWN` and requires a fresh second token/pointer within the original deadline; late output from the first attempt stays fenced. A run that used both attempts settles without a third model call. The recovery migration preserves the original owner/day charge.
+
+A Trigger retry that encounters a busy attempt keeps its delivery alive with `wait.until` at the SQL attempt deadline, capped by the original run deadline. It then re-enters the same claim service. Validation and recovery state changes advance `aiRevision` atomically; duplicate deliveries do not add a state event. Run reads derive seven-day applicability expiry from the SQL snapshot clock even when cleanup has not removed the body yet.
+
 ## Direct model probe
 
 `scripts/ai/probe.mts` sends only fixed synthetic inputs through the production ModelGateway. It is excluded from CI and refuses without `--live`. `--only` accepts unique names from `generate`, `improve`, `unsupported-schema`, `calibrate-ascii-40k` and `calibrate-cjk-10k`; unknown, duplicate or empty selections fail before any call.
@@ -84,7 +88,7 @@ Output is restricted to model/package identifiers, normalized outcome and usage,
 
 ### Inherited probe evidence (2026-10-03)
 
-Four existing safe summaries record 16 calls using `gemini-3.8-flash`, `ai` 7.0.127 and `@ai-sdk/google` 4.0.87. That exceeded the requested approximately six-call session budget. No further live calls were made while completing this change.
+Four existing safe summaries record 16 calls using `gemini-3.8-flash`, `ai` 7.0.127 and `@ai-sdk/google` 4.0.87. That exceeded the requested approximately six-call session budget. This was the inherited checkpoint before the separately authorized renewed session below.
 
 - Improve completed once and passed `validateResult`: 1,497 input tokens, 954 output tokens, 6,253 ms. Its local estimate was 1,694 tokens for 5,081 bytes, about 13 percent above the reported count.
 - Both unsupported-schema entries normalized to `refused`. The summaries contain no HTTP status or cause, so a provider schema-specific rejection is not proved.
@@ -96,9 +100,9 @@ The historical probe had no failing exit for unverified expectations; its proces
 
 ## Unverified hosted qualifications
 
-Trigger live dispatch, external-id binding, duplicate/delayed delivery, schedule cadence and jitter are **NOT RUN**. The inherited review identified a development key, but no already-running development worker was established; the permitted probe did not authorize login, project/account changes or deploy. No Trigger account setup or deploy workflow execution is claimed.
+Trigger dev dispatch and duplicate delivery completed in the renewed session below. Production external-id binding, delayed delivery, schedule cadence and jitter are **NOT RUN**. Dev completion with the binding option present does not establish deployment pinning. No deployment, login or account change occurred.
 
-Auto-deploy ownership, GitHub environment protection, intended project/runtime configuration and schedule eligibility need operator qualification. Real Generate schema acceptance, unsupported-schema failure attribution and large-input token calibration remain unverified. These limitations must stay separate from passing deterministic/local gates.
+Auto-deploy ownership, GitHub environment protection, intended project/runtime configuration and schedule eligibility need operator qualification. The top-up session below measured large-input token usage and accepted model requests. A whole-valid Generate proposal and a nonempty Improve edit proposal remain unqualified. The renewed invalid-schema case established an HTTP 400 schema rejection. These limitations must stay separate from passing deterministic/local gates.
 
 Deletion accounting and lock safety: deleting a run releases its original owner/day reservation only when no dispatch or call could have started. A leased or acknowledged dispatch remains charged conservatively; already consumed usage is retained. Repeat deletion and late task delivery cannot recreate the run or refund twice. Background body cleanup skips locked projects and rows, leaving them for a later tick. Worker cleanup arms a five-second SQL statement timeout before the sweep starts; the transaction-local setting does not leak to the pool.
 
@@ -108,4 +112,23 @@ A further bounded synthetic session authenticated both existing provider credent
 
 A 40,000-character synthetic ASCII Generate request estimated 15,409 input tokens and passed the configured 16,000-token local guard. Google listed `gemini-2.5-flash`, but its generation endpoint returned HTTP 404. That call does not qualify the model or calibrate the estimate. No new completed Generate or large-input usage evidence is claimed.
 
-Trigger's dev metadata endpoint returned HTTP 200. Project discovery returned HTTP 401 with the development environment key. `TRIGGER_PROJECT_REF` is unset locally, and the pinned CLI's dev startup requires `TRIGGER_ACCESS_TOKEN` or an existing CLI profile; neither was available. No worker, login, deployment or account change occurred in this session. The development environment key authenticates runtime requests, while the CLI personal access token authenticates worker setup. Complete dev qualification once the existing project reference and an authorized worker startup path are available.
+Trigger's dev metadata endpoint returned HTTP 200. Initial project discovery returned HTTP 401 with the development environment key; the pinned CLI needed the existing project reference and a personal access token. Once the user supplied those locally, the project identity authenticated with HTTP 200 and the provided runtime key was confirmed to belong to the same dev environment. An isolated local worker started through the pinned public CLI without login, deployment or account changes. Only unique synthetic probe task IDs were registered; production AI and maintenance tasks were excluded.
+
+Two control runs completed, both without and with `externalDeploymentId` set. Repeating each dispatch with its original idempotency key returned the same provider run ID. The Windows dev CLI could not create a dependency directory symlink (`EPERM`); a junction inside the ignored probe directory enabled indexing. No repository dependency or production config change was needed.
+
+The sixth and final authorized model call used `gemini-3.8-flash` through the production dispatcher, ModelGateway and `runAi`, with the task ID mapped to a unique probe ID for isolation. The worker used only `app_worker` on the guarded loopback database and validated its environment identity. The synthetic source contained 40,000 ASCII characters, estimated at 14,776 input tokens against the 16,000 ceiling. Google returned HTTP 503, normalized to `unavailable`, in a 2,480 ms worker run; no result or usage was returned. The session guard blocked a second HTTP request after the sixth call, so the retry attempt settled as `UNKNOWN` and the run ended `FAILED` with `MODEL_UNKNOWN`. This qualifies failure settlement under the probe budget, not an unrestricted two-call provider retry.
+
+A forced second delivery with a new provider idempotency key completed with zero gateway invocations and zero model HTTP requests. SQL inspection confirmed `DISPATCHED`, two settled attempts, no stored result, zero reserved runs and one consumed run charged to the original owner/day. The isolated worker was stopped and only its recorded local fixtures were removed.
+
+All six renewed calls are consumed. A preceding small schema control returned HTTP 429, confirming a quota or rate rejection at that time; the later HTTP 503 does not identify a quota bucket or establish its cause. At that checkpoint no additional model call was authorized, and Generate completion, new Improve completion and large-input usage calibration were unverified. The separately authorized top-up session below adds later evidence; the input estimate remains unchanged. Production binding and scheduled cadence/jitter still require separate deployment qualification.
+
+### Top-up qualification evidence (2026-10-04)
+
+After the user topped up Google quota, a separate session allowed exactly two synthetic model HTTP requests, one per case. The original six-call ledger remains unchanged. The per-case guard blocked automatic repeat requests and all provider SDK retries remained disabled.
+
+- Generate used a fresh 40,000-character ASCII fixture through the production dispatcher, ModelGateway and `runAi` on the restricted local worker. Google returned HTTP 200 with 8,009 input tokens and 1,116 output tokens. The estimated input was 14,798 tokens for 44,394 request bytes, 1.85 times reported usage; both counts were below 16,000. The reply failed whole-result validation, so SQL settled one `INCOMPLETE` attempt, ended the run `FAILED` with `RESULT_INVALID`, stored no result and charged one original owner/day reservation. The harness retained no raw reply or exact validation reason, so this is successful provider transport and usage measurement, not a validated Generate proposal.
+- Improve used 10,000 synthetic CJK code points through the production ModelGateway and whole-result validator. Google returned HTTP 200 with 7,268 input tokens and 2,891 output tokens. The result was a valid clarification. The estimate was 11,706 tokens for 35,116 request bytes, 1.61 times reported input usage; both counts were below 16,000. This qualifies the Improve clarification path, not a nonempty edit proposal.
+
+The measured cases support retaining the conservative three-bytes-per-token estimate: both accepted inputs passed its 16,000-token guard and their reported usage stayed below the ceiling. They do not prove tokenizer accuracy for every source or model, so no broader ceiling guarantee or unmeasured calibration claim is made.
+
+Trigger dispatch completed, repeating the original key returned the same provider run ID, and a forced duplicate made zero gateway or model HTTP calls. SQL confirmed `DISPATCHED`, no stored invalid content and zero reserved/one consumed run. The isolated worker was stopped and only its recorded fixture was cleaned. The new ledger is exhausted at two of two. No deployment, login or account change occurred.
