@@ -1082,9 +1082,17 @@ test.describe("Studio on a real draft", () => {
     await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
       payload: { flowId: Object.keys(draft.document.flows)[0]!, fromId: nodes.Start, toId: nodes.Original, condition: "" } });
     // Withhold Realtime hints (the page would otherwise read the other change first, which the collaboration specs cover) so only the save finds out.
-    (await interceptRealtime(page)).dropEvents = true;
+    const wire = await interceptRealtime(page);
+    wire.dropEvents = true;
+    // Subscribing also revalidates independently of hints. Finish that startup read before the remote change.
+    const initialStatus = page.waitForResponse((response) => response.url() === `${appUrl}/api/projects/${projectId}/status`
+      && response.request().method() === "GET" && wire.joined >= 2);
     await page.reload();
     await expect(page.locator(".react-flow__edgeupdater-target")).toHaveCount(1);
+    await expect.poll(() => wire.joined).toBeGreaterThanOrEqual(2);
+    const subscribed = await initialStatus;
+    expect(subscribed.status()).toBe(200);
+    expect(await subscribed.finished()).toBeNull();
     draft = await draftOf(page, projectId);
     const edge = Object.values(draft.document.edges)[0]!;
     await command(page, projectId, draft.id, { command: "RECONNECT_EDGE", expectedDocumentRevision: draft.documentRevision,
