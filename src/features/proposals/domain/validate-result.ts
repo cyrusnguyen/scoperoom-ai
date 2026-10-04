@@ -194,7 +194,7 @@ function parseCitations(capture: CapturedInput, raw: unknown): SourceRef[] {
     const lines = source.text.split("\n");
     if (!Number.isSafeInteger(startLine) || !Number.isSafeInteger(endLine) || (startLine as number) < 1 || (endLine as number) < (startLine as number) || (endLine as number) > lines.length) return bad("CITATION_RANGE");
     const excerpt = text(citation.excerpt, AI_LIMITS.excerptCodePoints, true);
-    if (lines.slice((startLine as number) - 1, endLine as number).join("\n") !== excerpt) return bad("CITATION_EXCERPT");
+    if (!lines.slice((startLine as number) - 1, endLine as number).join("\n").includes(excerpt)) return bad("CITATION_EXCERPT");
     return { sourceVersionId: source.sourceVersionId, startLine: startLine as number, endLine: endLine as number, excerpt };
   });
 }

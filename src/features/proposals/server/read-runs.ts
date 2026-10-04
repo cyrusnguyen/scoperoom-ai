@@ -15,7 +15,7 @@ type RunRow = {
 };
 type DetailRow = RunRow & {
   draft_id: string; expected_document_revision: number; parent_snapshot_id: string | null; model: string; capture: CapturedInput | null; result: ValidatedProposal | null;
-  result_hash: string | null; current_revision: number | null;
+  result_hash: string | null; current_revision: number | null; body_expired: boolean;
 };
 
 /** Summary columns only (no capture, result or prompt), plus the attempt token totals. Tokens, leases and provider ids are never selected. */
@@ -44,6 +44,7 @@ function summaryOf(row: RunRow): RunSummary {
 /** Derived, never a competing state: nothing to apply, or the captured draft, revision or baseline has moved on. */
 function applicabilityOf(row: DetailRow, project: ProjectRow): RunApplicability {
   if (row.state !== "SUCCEEDED" || row.disposition !== "AVAILABLE" || row.cancel_requested_at || row.result?.kind !== "proposal" || project.status !== "ACTIVE") return "UNAVAILABLE";
+  if (!row.terminal_at || row.body_expired) return "UNAVAILABLE";
   return project.currentDraftId !== row.draft_id || row.current_revision !== row.expected_document_revision || project.approvedSnapshotId !== row.parent_snapshot_id ? "STALE" : "APPLICABLE";
 }
 
@@ -69,7 +70,8 @@ export async function readRun(identity: ProjectIdentity, projectId: string, runI
   if (!uuid.test(runId)) throw new ProjectError("NOT_FOUND");
   return readAsMember(identity, projectId, async (tx, project) => {
     const [row] = await tx.$queryRaw<DetailRow[]>`
-      SELECT ${summaryColumns}, run.draft_id, run.expected_document_revision, run.parent_snapshot_id, run.model, run.capture, run.result, run.result_hash, draft.document_revision AS current_revision
+      SELECT ${summaryColumns}, run.draft_id, run.expected_document_revision, run.parent_snapshot_id, run.model, run.capture, run.result, run.result_hash, draft.document_revision AS current_revision,
+        COALESCE(run.terminal_at + INTERVAL '7 days' <= transaction_timestamp(), false) AS body_expired
       FROM app.ai_run run ${usageJoin} LEFT JOIN app.scope_draft draft ON draft.id = run.draft_id AND draft.project_id = run.project_id
       WHERE run.id = ${runId}::uuid AND run.project_id = ${project.id}::uuid`;
     if (!row) throw new ProjectError("NOT_FOUND");

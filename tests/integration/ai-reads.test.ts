@@ -82,6 +82,51 @@ test("a run view exposes safe state, the captured manifest, the result, applicab
   });
 });
 
+test("a retained result past terminal plus seven days is unavailable before cleanup", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner);
+    const proposal = { schemaVersion: 1, kind: "proposal", operations: [], assumptions: [], citations: [] };
+    const current = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: proposal });
+    assert.equal((await readRun(owner.identity, p, current)).applicability, "APPLICABLE");
+    const terminalAt = ago(8 * 24 * 60 * MINUTES);
+    const run = await seedRun(database, {
+      projectId: p, owner: owner.profile, shape: "SUCCEEDED", createdAt: terminalAt,
+      result: proposal,
+    });
+    const view = await readRun(owner.identity, p, run);
+    assert.equal(view.disposition, "AVAILABLE");
+    assert.equal(view.expiresAt, new Date(terminalAt.getTime() + 7 * 24 * 60 * MINUTES).toISOString());
+    assert.equal(view.applicability, "UNAVAILABLE");
+  });
+});
+
+test("validation and expired validation recovery each advance the AI cursor once", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner); const q = await projectFor(owner);
+    const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "RUNNING" });
+    const { rows: [attempt] } = await database.query<{ id: string; token: string }>("select id, token from app.ai_run_attempt where run_id = $1", [run]);
+    const beforeValidation = await cursors(database, p);
+    assert.equal((await database.query("select app.begin_ai_validation($1, $2, $3) as status", [run, attempt!.id, attempt!.token])).rows[0]!.status, "VALIDATING");
+    const afterValidation = await cursors(database, p);
+    assert.deepEqual([Number(afterValidation.es) - Number(beforeValidation.es), afterValidation.ai, (await runRow(database, run)).lseq], [1, afterValidation.es, afterValidation.es]);
+    assert.equal(await eventCount(database, p, "AI_RUN_VALIDATING"), 1);
+    assert.equal((await database.query("select app.begin_ai_validation($1, $2, $3) as status", [run, attempt!.id, attempt!.token])).rows[0]!.status, "STALE");
+    assert.deepEqual(await cursors(database, p), afterValidation);
+
+    const recoverable = await seedRun(database, { projectId: q, owner: owner.profile, shape: "RUNNING", createdAt: ago(3 * MINUTES), uncounted: true });
+    await database.query("update app.ai_run set state = 'VALIDATING' where id = $1", [recoverable]);
+    const beforeRecovery = await cursors(database, q);
+    const recovery = (await database.query("select * from app.claim_ai_attempt($1)", [recoverable])).rows[0]!;
+    assert.equal(recovery.out_status, "CLAIMED");
+    const afterRecovery = await cursors(database, q);
+    assert.deepEqual([Number(afterRecovery.es) - Number(beforeRecovery.es), afterRecovery.ai, (await runRow(database, recoverable)).lseq], [1, afterRecovery.es, afterRecovery.es]);
+    assert.equal(await eventCount(database, q, "AI_RUN_STARTED"), 1);
+    assert.equal((await database.query("select * from app.claim_ai_attempt($1)", [recoverable])).rows[0]!.out_status, "BUSY");
+    assert.deepEqual(await cursors(database, q), afterRecovery);
+    assert.equal(await eventCount(database, q, "AI_RUN_STARTED"), 1);
+  });
+});
+
 test("run history pages stably through equal timestamps, at most 50 per page, with no prompt bodies and a validated opaque cursor", { skip: !canRun }, async () => {
   await withAi(async ({ person, projectFor, database }) => {
     const owner = await person(); const p = await projectFor(owner);

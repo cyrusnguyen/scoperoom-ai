@@ -154,9 +154,13 @@ test("the byte cap uses the PostgreSQL JSONB rendering, not the wire length", ()
   assert.equal(validateResult(generate, many).kind, "proposal");
 });
 
-test("citations name a captured source and an exact line range with its exact text", () => {
+test("citations quote a literal substring within the captured source's line range", () => {
   const cite = (over: Record<string, unknown>) => goodWith({ citations: [{ sourceVersionId: f.sourceVersionId, startLine: 1, endLine: 1, excerpt: "line one", ...over }] });
   assert.equal(validateResult(generate, cite({})).kind, "proposal");
+  assert.equal(validateResult(generate, cite({ excerpt: "one" })).kind, "proposal");
+  assert.equal(validateResult(generate, cite({ endLine: 2, excerpt: "one\nline" })).kind, "proposal");
+  const longLine = { ...generate, sources: generate.sources.map((source) => ({ ...source, text: `${"x".repeat(2100)} exact quote` })) };
+  assert.equal(validateResult(longLine, cite({ excerpt: "exact quote" })).kind, "proposal");
   assert.equal(validateResult(generate, cite({ startLine: 1, endLine: 3, excerpt: "line one\nline two\nline three" })).kind, "proposal");
   refuses(generate, cite({ sourceVersionId: randomUUID() }), "CITATION_SOURCE"); // not a captured (same-project) source
   refuses(generate, cite({ excerpt: "line two" }), "CITATION_EXCERPT");

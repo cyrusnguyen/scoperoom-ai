@@ -53,7 +53,7 @@ const GIVE_UP = { refused: "MODEL_REFUSED", incomplete: "MODEL_INCOMPLETE", unav
  * never repeated (a lost process leaves it consumed; a retry waits for its window and then needs a new claim). The provider runs
  * outside every lock; the reply is validated before the only writer of a result, which itself requires the current attempt token.
  */
-export async function runAi(runId: string, gateway: ModelGateway, db?: Sql): Promise<void> {
+export async function runAi(runId: string, gateway: ModelGateway, db?: Sql): Promise<Date | void> {
   const sql = db ?? await getWorkerDatabase();
   for (let call = 1; call <= 2; call += 1) {
     const [run] = await sql.$queryRaw<Array<{ model: string; capture: CapturedInput | null; terminal: boolean }>>`
@@ -69,7 +69,16 @@ export async function runAi(runId: string, gateway: ModelGateway, db?: Sql): Pro
     if (claim?.out_status === "DEADLINE") { await finishRun(sql, runId, "TIMED_OUT", null); return; }
     if (claim?.out_status === "DENIED") { await finishRun(sql, runId, "FAILED", "ACCESS_REVOKED"); return; }
     if (claim?.out_status === "CEILING") { await finishRun(sql, runId, "FAILED", "ATTEMPTS_EXHAUSTED"); return; }
-    if (claim?.out_status !== "CLAIMED" || !claim.out_attempt_id || !claim.out_attempt_token || !claim.out_attempt_deadline_at) return; // BUSY, TERMINAL, MISSING
+    if (claim?.out_status === "BUSY") {
+      // A retry can arrive before its crashed predecessor's call window closes. Keep the delivery alive: the Trigger handler waits
+      // durably until this SQL-owned window ends, then re-enters for a fresh claim. Returning success here would abandon the run.
+      const [window] = await sql.$queryRaw<Array<{ retry_at: Date }>>`
+        SELECT LEAST(COALESCE(attempt.deadline_at, run.deadline_at), run.deadline_at) AS retry_at
+        FROM app.ai_run run LEFT JOIN app.ai_run_attempt attempt ON attempt.id = run.current_attempt_id
+        WHERE run.id = ${runId}::uuid AND run.terminal_at IS NULL`;
+      return window ? new Date(window.retry_at.getTime() + 1) : undefined;
+    }
+    if (claim?.out_status !== "CLAIMED" || !claim.out_attempt_id || !claim.out_attempt_token || !claim.out_attempt_deadline_at) return; // TERMINAL, MISSING
     const attempt: Attempt = { runId, id: claim.out_attempt_id, token: claim.out_attempt_token };
 
     // min(120 s, time left in the attempt window, which the claim already capped at the 300 s run deadline); never call without time.
