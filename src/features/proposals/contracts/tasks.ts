@@ -140,3 +140,31 @@ export type ProposalDiff = {
   updatedIds: string[];
   retiredIds: string[];
 };
+
+export type ApplyRunInput = {
+  key: string; draftId: string; expectedDocumentRevision: number; expectedParentSnapshotId: string | null;
+  resultHash: string; selectedOperationIds: string[];
+};
+export type AppliedRun = {
+  applicationId: string; runId: string; draftId: string; documentRevision: number; layoutRevision: number;
+  eventSequence: number; aiRevision: number; replayed: boolean;
+};
+export type DiscardRunInput = { key: string; expectedResultHash: string };
+export type DiscardedRun = { runId: string; disposition: "DISCARDED"; aiRevision: number; replayed: boolean };
+
+const resultHash = (raw: unknown): string => typeof raw === "string" && /^[0-9a-f]{64}$/.test(raw) ? raw : invalid();
+export function parseApplyRunInput(raw: unknown, key: string): ApplyRunInput {
+  if (!keyPattern.test(key)) invalid();
+  const body = object(raw);
+  keys(body, ["draftId", "expectedDocumentRevision", "expectedParentSnapshotId", "resultHash", "selectedOperationIds"]);
+  if (!Array.isArray(body.selectedOperationIds) || !body.selectedOperationIds.length || body.selectedOperationIds.length > AI_LIMITS.operations) invalid();
+  const selectedOperationIds = body.selectedOperationIds.map(value => typeof value === "string" && LOCAL_REF.test(value) ? value : invalid());
+  if (new Set(selectedOperationIds).size !== selectedOperationIds.length) invalid();
+  return { key, draftId: id(body.draftId), expectedDocumentRevision: version(body.expectedDocumentRevision),
+    expectedParentSnapshotId: body.expectedParentSnapshotId === null ? null : id(body.expectedParentSnapshotId), resultHash: resultHash(body.resultHash), selectedOperationIds };
+}
+export function parseDiscardRunInput(raw: unknown, key: string): DiscardRunInput {
+  if (!keyPattern.test(key)) invalid();
+  const body = object(raw); keys(body, ["expectedResultHash"]);
+  return { key, expectedResultHash: resultHash(body.expectedResultHash) };
+}

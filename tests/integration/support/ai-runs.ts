@@ -35,6 +35,8 @@ export async function draftOf(db: Client, projectId: string) {
 export type SeedOptions = {
   projectId: string; owner: string; actor?: string; createdAt?: Date; prompt?: string; flowId?: string;
   sources?: SavedSource[]; result?: object;
+  /** A real Improve capture built from the current saved graph, for reviewed application tests. */
+  selection?: { flowId: string; nodeIds: string[] };
   /** Bulk history rows that must not move the owner/day counters (a day holds at most 30). */
   uncounted?: boolean;
   /** QUEUED (default, reserved), RUNNING with a claimed and unreported attempt (consumed), or a settled terminal FAILED run. */
@@ -49,8 +51,12 @@ export async function seedRun(db: Client, options: SeedOptions) {
   const draft = await draftOf(db, options.projectId);
   const prompt = options.prompt ?? "seeded instruction";
   const sources = options.sources ?? [];
-  const input = parseStartRunInput({ taskType: "PROPOSE_FLOW", prompt, draftId: draft.id, expectedDocumentRevision: draft.revision, expectedParentSnapshotId: null, context: { selection: null, sources: sources.map((source) => ({ sourceVersionId: source.sourceVersionId, expectedCurrentVersionId: source.currentVersionId })) } }, randomUUID());
-  const { capture, hash } = captureInput({ projectId: options.projectId, draftId: draft.id, documentRevision: draft.revision, parentSnapshotId: null, document: emptyDraft().document, sources, model: "seed-model" }, input);
+  const { rows: [saved] } = await db.query("select d.document_json, p.approved_snapshot_id from app.scope_draft d join app.project p on p.id = d.project_id where d.id = $1", [draft.id]);
+  const parentSnapshotId = saved.approved_snapshot_id;
+  const input = parseStartRunInput({ taskType: options.selection ? "REFINE_FLOW_SELECTION" : "PROPOSE_FLOW", prompt, draftId: draft.id, expectedDocumentRevision: draft.revision, expectedParentSnapshotId: parentSnapshotId, context: { selection: options.selection ?? null, sources: sources.map((source) => ({ sourceVersionId: source.sourceVersionId, expectedCurrentVersionId: source.currentVersionId })) } }, randomUUID());
+  // Schema-only fixtures intentionally store {}; feature fixtures have a complete saved document.
+  const document = saved.document_json.schemaVersion === 3 ? saved.document_json : emptyDraft().document;
+  const { capture, hash } = captureInput({ projectId: options.projectId, draftId: draft.id, documentRevision: draft.revision, parentSnapshotId, document, sources, model: "seed-model" }, input);
   const stored = options.flowId ? { ...capture, taskType: "REFINE_FLOW_SELECTION", selection: { flowId: options.flowId, nodeIds: [randomUUID()] } } : capture;
   const versionId = randomUUID(); const sourceId = randomUUID();
   await db.query("begin");
@@ -65,9 +71,9 @@ export async function seedRun(db: Client, options: SeedOptions) {
     `insert into app.ai_budget_day (owner_id, day, reserved_runs, consumed_runs) values ($1, ($2::timestamptz at time zone 'UTC')::date, $3, $4)
      on conflict (owner_id, day) do update set reserved_runs = ai_budget_day.reserved_runs + $3, consumed_runs = ai_budget_day.consumed_runs + $4`, [options.owner, createdAt, reserved, consumed]);
   const { rows: [run] } = await db.query<{ id: string }>(
-    `insert into app.ai_run (project_id, draft_id, actor_id, owner_id, admission_day, prompt_source_version_id, task_type, model, execution_binding, capture, capture_hash, expected_document_revision, deadline_at, created_at)
-     values ($1, $2, $3, $4, ($5::timestamptz at time zone 'UTC')::date, $6, $9::text::app.ai_task_kind, 'seed-model', 'seed-binding', $7::jsonb, $8, $10, $5::timestamptz + interval '300 seconds', $5) returning id`,
-    [options.projectId, draft.id, actor, options.owner, createdAt, versionId, JSON.stringify(stored), hash, stored.taskType, draft.revision]);
+    `insert into app.ai_run (project_id, draft_id, actor_id, owner_id, admission_day, prompt_source_version_id, task_type, model, execution_binding, capture, capture_hash, expected_document_revision, parent_snapshot_id, deadline_at, created_at)
+     values ($1, $2, $3, $4, ($5::timestamptz at time zone 'UTC')::date, $6, $9::text::app.ai_task_kind, 'seed-model', 'seed-binding', $7::jsonb, $8, $10, $11, $5::timestamptz + interval '300 seconds', $5) returning id`,
+    [options.projectId, draft.id, actor, options.owner, createdAt, versionId, JSON.stringify(stored), hash, stored.taskType, draft.revision, parentSnapshotId]);
   const runId = run!.id;
   if (shape === "RUNNING") {
     const { rows: [attempt] } = await db.query<{ id: string }>(

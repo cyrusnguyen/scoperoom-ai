@@ -336,7 +336,12 @@ test("body expiry is bounded, spares applied evidence and marks only unused resu
       if (state === "SUCCEEDED") {
         await admin.query("update app.ai_run set state = 'RUNNING' where id = $1", [s.runId]);
         await admin.query(`update app.ai_run set state = 'SUCCEEDED', disposition = 'AVAILABLE', result = $2::jsonb, result_hash = $3, terminal_at = ${age(days)} where id = $1`, [s.runId, JSON.stringify(RESULT), HASH]);
-        if (disposition) await admin.query("update app.ai_run set disposition = $2::text::app.ai_result_disposition where id = $1", [s.runId, disposition]);
+        if (disposition) {
+          // Explicit historical rows from before application evidence existed. New transitions use the guarded service.
+          await admin.query("alter table app.ai_run disable trigger enforce_ai_application_disposition");
+          try { await admin.query("update app.ai_run set disposition = $2::text::app.ai_result_disposition where id = $1", [s.runId, disposition]); }
+          finally { await admin.query("alter table app.ai_run enable trigger enforce_ai_application_disposition"); }
+        }
       } else await admin.query(`update app.ai_run set state = 'FAILED', failure_code = 'TEST', terminal_at = ${age(days)} where id = $1`, [s.runId]);
     };
     const unused = await seed(); await terminal(unused, "SUCCEEDED", 8);

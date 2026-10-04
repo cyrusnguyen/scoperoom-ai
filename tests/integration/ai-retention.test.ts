@@ -109,15 +109,19 @@ test("bodies leave only seven days after a run is terminal, and identity, hashes
   });
 });
 
-test("an applied run keeps its capture and result through any number of sweeps", { skip: !canRun }, async () => {
+test("legacy applied bodies without permanent application evidence remain protected from cleanup", { skip: !canRun }, async () => {
   await withWorld(async ({ admin, owner, seed, row, sweep }) => {
     const applied = await seed(await owner(), { hours: 30 * 24, shape: "SUCCEEDED", uncounted: true });
-    await admin.query("update app.ai_run set disposition = 'APPLIED' where id = $1", [applied.runId]); // PR 2 owns the application row; the disposition is what exists now
+    await assert.rejects(admin.query("update app.ai_run set disposition = 'APPLIED' where id = $1", [applied.runId]), { code: "23514" });
+    // An explicit pre-application-schema fixture: new writes cannot create this state.
+    await admin.query("alter table app.ai_run disable trigger enforce_ai_application_disposition");
+    try { await admin.query("update app.ai_run set disposition = 'APPLIED' where id = $1", [applied.runId]); }
+    finally { await admin.query("alter table app.ai_run enable trigger enforce_ai_application_disposition"); }
     const before = await row(applied.runId);
     await sweep(); await sweep();
     assert.deepEqual(await row(applied.runId), before);
     assert.deepEqual([before.no_capture, before.no_result, before.disposition], [false, false, "APPLIED"]);
-    await assert.rejects(admin.query("update app.ai_run set capture = null where id = $1", [applied.runId]), { code: "23514" }, "even the owner connection cannot drop an applied body");
+    await assert.rejects(admin.query("update app.ai_run set capture = null where id = $1", [applied.runId]), { code: "23514" });
   });
 });
 
