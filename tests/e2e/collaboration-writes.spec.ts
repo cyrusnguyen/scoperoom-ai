@@ -349,9 +349,10 @@ test.describe("writes wait for the status controller (real draft)", () => {
 
   /** 101 alternating renames of two steps: no coalescing, so the save is a real split (100 commands, then 1). */
   async function splitEdits(page: Page) {
+    // Studio's timers must be created and canceled by the same clock.
+    await page.clock.install();
     await open(page);
     // Autosave (10 s) must not save part of the edits while the loop runs, which is slower under load: freeze timers.
-    await page.clock.install();
     await page.clock.pauseAt(new Date(Date.now() + 5_000));
     for (let index = 0; index < 101; index++) {
       const id = index % 2 ? ids.shipId : ids.payId;
