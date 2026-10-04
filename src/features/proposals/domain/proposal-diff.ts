@@ -88,13 +88,13 @@ export function proposalDiff(capture: CapturedInput, proposal: ValidatedProposal
   const applied = applyProposal(before, capture, proposal, selectedIds, temporaryId);
   const result = validateResult(capture, proposal);
   if (result.kind !== "proposal") throw new ResultError("NO_PROPOSAL");
-  const boundary = new Set(capture.graph.boundaryNodeIds);
+  const capturedScope = new Map(capture.graph.nodes.map(node => [node.id, node.readOnly]));
   return {
     selectedOperationIds: selectOperations(result.operations, selectedIds).map(operation => operation.id),
     before: structuredClone(capture.graph),
     after: {
       flows: Object.values(applied.document.flows).sort(byId).map(({ confirmation, verificationMethod, ...flow }) => { void confirmation; void verificationMethod; return flow; }),
-      nodes: Object.values(applied.document.nodes).sort(byId).map(({ origin, sourceRefs, ...node }) => { void origin; void sourceRefs; return { ...node, readOnly: boundary.has(node.id) }; }),
+      nodes: Object.values(applied.document.nodes).sort(byId).map(({ origin, sourceRefs, ...node }) => { void origin; void sourceRefs; return { ...node, readOnly: capturedScope.get(node.id) ?? false }; }),
       edges: Object.values(applied.document.edges).sort(byId).map(({ origin, sourceRefs, ...edge }) => { void origin; void sourceRefs; return edge; }),
       boundaryNodeIds: [...capture.graph.boundaryNodeIds],
     },

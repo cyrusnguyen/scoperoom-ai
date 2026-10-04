@@ -187,3 +187,19 @@ test("operation and local reference identity namespaces may overlap without losi
   assert.ok(applied.document.nodes[applied.idMap.n1!]);
   assert.ok(applied.document.edges[applied.createdIdMap.n1!]);
 });
+
+test("proposal diff preserves captured node review scope for Generate and Improve", () => {
+  const generate = f.generate();
+  const generated = proposalDiff(generate, validateResult(generate, goodGenerate(f.sourceVersionId)), ["op1", "op2", "op3", "op4"]);
+  for (const node of generate.graph.nodes) assert.deepEqual(generated.after.nodes.find(after => after.id === node.id), node);
+  for (const node of generated.after.nodes.filter(node => generated.createdIds.includes(node.id))) assert.equal(node.readOnly, false);
+
+  const improve = f.improve();
+  const output = proposal([{ id: "update", dependsOn: [], edit: { command: "UPDATE_NODE", payload: { nodeId: f.ids.b, label: "Updated" } } }]);
+  const refined = proposalDiff(improve, validateResult(improve, output), ["update"]);
+  for (const node of improve.graph.nodes) {
+    const after = refined.after.nodes.find(after => after.id === node.id)!;
+    assert.equal(after.readOnly, node.readOnly);
+    if (node.readOnly) assert.deepEqual(after, node);
+  }
+});
