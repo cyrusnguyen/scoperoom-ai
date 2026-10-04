@@ -451,3 +451,27 @@ test("an oversized capture fails before any claim and refunds its reservation", 
     assert.deepEqual(await budget(owner), { reserved_runs: 0, consumed_runs: 0 });
   });
 });
+
+for (const fence of ["cancel", "deadline", "authority", "cancel-and-deadline"] as const) {
+  test(`an oversized capture honors the committed ${fence} fence before input failure`, { skip: !canRun }, async () => {
+    await withWorld(async ({ admin, seed, row, attempts, budget }) => {
+      const { runId, owner } = await seed({ createdAt: ago(fence.includes("deadline") ? 301 : 5) });
+      await admin.query("alter table app.ai_run disable trigger enforce_ai_run");
+      try { await admin.query("update app.ai_run set capture = jsonb_set(capture, '{limits,maxInputTokens}', '10') where id = $1", [runId]); }
+      finally { await admin.query("alter table app.ai_run enable trigger enforce_ai_run"); }
+      if (fence.includes("cancel")) await admin.query("update app.ai_run set cancel_requested_at = clock_timestamp() where id = $1", [runId]);
+      if (fence === "authority") await admin.query("update app.pilot_entitlement set active = false, revoked_at = clock_timestamp() where profile_id = $1", [owner]);
+      const { gateway, requests } = fakeGateway(() => completed());
+      await runAi(runId, gateway);
+      const expected = fence.includes("cancel") ? ["CANCELLED", null] : fence === "deadline" ? ["TIMED_OUT", null] : ["FAILED", "ACCESS_REVOKED"];
+      const stored = await row(runId);
+      assert.deepEqual([stored.state, stored.failure_code], expected);
+      assert.equal(requests.length, 0);
+      assert.equal((await attempts(runId)).length, 0);
+      assert.deepEqual(await budget(owner), { reserved_runs: 0, consumed_runs: 0 });
+      await runAi(runId, gateway);
+      assert.equal(requests.length, 0);
+      assert.deepEqual(await budget(owner), { reserved_runs: 0, consumed_runs: 0 });
+    });
+  });
+}

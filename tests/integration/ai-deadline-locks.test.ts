@@ -112,3 +112,21 @@ test("timeout settlement observes the deadline after waiting on the project lock
     assert.deepEqual(await budget(), { reserved_runs: 0, consumed_runs: 0 }, "repeated settlement cannot refund twice");
   });
 });
+
+for (const lock of ["project", "allowance", "day"] as const) {
+  test(`input rejection observes the deadline after waiting on the ${lock} lock`, { skip: !canRun }, async () => {
+    await withRun(async ({ worker, owner, projectId, runId, row, budget, crossDeadline }) => {
+      const finish = async () => (await worker.query("select app.finish_ai_run($1, 'FAILED', 'INPUT_TOO_LARGE') as status", [runId])).rows[0].status;
+      const lockSql = lock === "project" ? "select 1 from app.project where id = $1 for no key update"
+        : lock === "allowance" ? "select 1 from app.ai_owner_allowance where owner_id = $1 for update"
+          : "select 1 from app.ai_budget_day where owner_id = $1 for update";
+      assert.equal(await crossDeadline(lockSql, [lock === "project" ? projectId : owner], finish), "SETTLED");
+      const saved = await row();
+      assert.equal(saved.state, "TIMED_OUT");
+      assert.ok(saved.terminal_at >= saved.deadline_at);
+      assert.deepEqual(await budget(), { reserved_runs: 0, consumed_runs: 0 });
+      assert.equal(await finish(), "TERMINAL");
+      assert.deepEqual(await budget(), { reserved_runs: 0, consumed_runs: 0 });
+    });
+  });
+}

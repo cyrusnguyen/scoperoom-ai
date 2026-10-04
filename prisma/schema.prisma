@@ -414,6 +414,7 @@ model AiRun {
   admissionDay             DateTime             @map("admission_day") @db.Date
   promptSourceVersionId    String               @map("prompt_source_version_id") @db.Uuid
   taskType                 AiTaskKind           @map("task_type")
+  flowId                   String?              @map("flow_id") @db.Uuid
   model                    String               @db.Text
   executionBinding         String               @map("execution_binding") @db.Text
   capture                  Json?

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { Client } from "pg";
+import { executeGraphCommand } from "../../src/features/drafts/server/execute-command.ts";
 import { parseStartRunInput } from "../../src/features/proposals/contracts/tasks.ts";
 import { admitRun, startRun } from "../../src/features/proposals/server/admit-run.ts";
 import { listRuns, readRun } from "../../src/features/proposals/server/read-runs.ts";
@@ -11,8 +12,10 @@ import { getProjectBootstrap, getProjectStatus } from "../../src/features/projec
 import { readSourceVersion } from "../../src/features/sources/server/source-versions.ts";
 import { canRun } from "./support/fixture.ts";
 import { draftOf, seedRun, withAi } from "./support/ai-runs.ts";
+import { serializeSweeps } from "./support/sweep-lock.ts";
 
 // Authorized run/source reads, cancellation and overdue settlement (Stage 06.1 Task 3) through the real services on the web runtime role.
+serializeSweeps(); // Aged history/body fixtures must not be expired by another file's global sweep.
 const CONFIG = { model: "test-model", executionBinding: "binding-1" };
 const refused = (code: string) => ({ code });
 const MINUTES = 60_000;
@@ -154,6 +157,51 @@ test("run history pages stably through equal timestamps, at most 50 per page, wi
       await assert.rejects(listRuns(owner.identity, p, { cursor }), refused("INVALID_INPUT"), cursor);
     }
     await assert.rejects(listRuns(owner.identity, p, { flowId: "nope" }), refused("INVALID_INPUT"));
+  });
+});
+
+test("flow history retains its originating identity after capture expiry and live flow deletion", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner);
+    const draft = await draftOf(database, p);
+    const created = await executeGraphCommand(owner.identity, p, draft.id, { key: randomUUID(), commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision: draft.revision,
+      payload: { title: "Historical flow", purpose: "", classification: "USER_JOURNEY", inclusion: "INCLUDED" } });
+    const flowId = created.createdIds[0]!;
+    const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "FAILED", createdAt: ago(8 * 24 * 60 * MINUTES), flowId });
+    assert.equal((await readRun(owner.identity, p, run)).flowId, flowId);
+    assert.deepEqual((await listRuns(owner.identity, p, { flowId })).runs.map((entry) => entry.id), [run]);
+    await executeGraphCommand(owner.identity, p, draft.id, { key: randomUUID(), commandSchemaVersion: 1, command: "DELETE_FLOW", expectedDocumentRevision: created.documentRevision,
+      payload: { flowId, removeNodeIds: [], removeEdgeIds: [] } });
+    // Exercise the retention write guard on only this fixture; the actual bounded sweep is covered in ai-retention.
+    await database.query("update app.ai_run set capture = null where id = $1", [run]);
+    const expired = await readRun(owner.identity, p, run);
+    assert.equal(expired.capture, null);
+    assert.equal(expired.flowId, flowId);
+    assert.equal((await listRuns(owner.identity, p, {})).runs[0]!.flowId, flowId);
+    assert.deepEqual((await listRuns(owner.identity, p, { flowId })).runs.map((entry) => entry.id), [run]);
+    assert.deepEqual((await listRuns(owner.identity, p, { flowId: randomUUID() })).runs, []);
+    for (const replacement of [randomUUID(), null]) {
+      await assert.rejects(database.query("update app.ai_run set flow_id = $2 where id = $1", [run, replacement]), { code: "23514" }, "historical attribution is immutable even after its capture expired");
+    }
+  });
+});
+
+test("real admission pins Improve flow identity while Generate has no originating flow", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner); const q = await projectFor(owner);
+    const draft = await draftOf(database, p);
+    const flow = await executeGraphCommand(owner.identity, p, draft.id, { key: randomUUID(), commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision: draft.revision,
+      payload: { title: "Improve target", purpose: "", classification: "USER_JOURNEY", inclusion: "INCLUDED" } });
+    const flowId = flow.createdIds[0]!;
+    const node = await executeGraphCommand(owner.identity, p, draft.id, { key: randomUUID(), commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision: flow.documentRevision,
+      payload: { flowId, kind: "ACTION", label: "Review order", description: "", actorLabel: "" } });
+    const input = parseStartRunInput({ taskType: "REFINE_FLOW_SELECTION", prompt: "Make this step clearer", draftId: draft.id, expectedDocumentRevision: node.documentRevision,
+      expectedParentSnapshotId: null, context: { selection: { flowId, nodeIds: node.createdIds }, sources: [] } }, randomUUID());
+    const improve = await admitRun(owner.identity, p, input, CONFIG);
+    assert.equal((await readRun(owner.identity, p, improve.runId)).flowId, flowId);
+    assert.deepEqual((await listRuns(owner.identity, p, { flowId })).runs.map((entry) => entry.id), [improve.runId]);
+    const generate = await admitted(database, owner.identity, q);
+    assert.equal((await readRun(owner.identity, q, generate.runId)).flowId, null);
   });
 });
 

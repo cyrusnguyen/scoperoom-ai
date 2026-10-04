@@ -24,7 +24,7 @@ const RESULT = { schemaVersion: 1, kind: "clarification", message: "need more" }
 const SWEEP = "select * from app.cleanup_transient(false, 100)";
 /** The permanent columns of a run row, without the retained-body flags. */
 const identity = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).filter(([key]) => !["no_capture", "no_result", "no_diff", "disposition"].includes(key)));
-const IDENTITY = "project_id, draft_id, actor_id, owner_id, admission_day, prompt_source_version_id, task_type, model, execution_binding, capture_hash, result_hash, state::text, budget_state::text, terminal_at, failure_code, created_at, deadline_at, dispatch_id";
+const IDENTITY = "project_id, draft_id, actor_id, owner_id, admission_day, prompt_source_version_id, task_type, flow_id, model, execution_binding, capture_hash, result_hash, state::text, budget_state::text, terminal_at, failure_code, created_at, deadline_at, dispatch_id";
 
 async function withWorld(run: (context: Awaited<ReturnType<typeof world>>) => Promise<void>) {
   const admin = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
@@ -42,9 +42,9 @@ async function world(admin: Client, worker: Client, profiles: string[]) {
     await admin.query("insert into app.pilot_entitlement (profile_id, granted_by_operator) values ($1, gen_random_uuid())", [id]);
     return id;
   };
-  const seed = async (ownerId: string, options: { hours?: number; shape?: "QUEUED" | "RUNNING" | "FAILED" | "SUCCEEDED"; projectId?: string; uncounted?: boolean; sources?: SavedSource[]; result?: object } = {}) => {
+  const seed = async (ownerId: string, options: { hours?: number; shape?: "QUEUED" | "RUNNING" | "FAILED" | "SUCCEEDED"; projectId?: string; uncounted?: boolean; sources?: SavedSource[]; result?: object; flowId?: string } = {}) => {
     const projectId = options.projectId ?? await insertProject(admin, ownerId);
-    const runId = await seedRun(admin, { projectId, owner: ownerId, shape: options.shape, createdAt: options.hours === undefined ? undefined : ago(options.hours), uncounted: options.uncounted, sources: options.sources, result: options.result });
+    const runId = await seedRun(admin, { projectId, owner: ownerId, shape: options.shape, createdAt: options.hours === undefined ? undefined : ago(options.hours), uncounted: options.uncounted, sources: options.sources, result: options.result, flowId: options.flowId });
     return { projectId, runId };
   };
   const row = async (runId: string) => (await admin.query(`select ${IDENTITY}, capture is null no_capture, result is null no_result, diff is null no_diff, disposition::text disposition from app.ai_run where id = $1`, [runId])).rows[0];
@@ -75,7 +75,8 @@ test("bodies leave only seven days after a run is terminal, and identity, hashes
     if (proposal.kind !== "proposal") throw new Error("the seeded result must cite a captured source");
     assert.deepEqual(proposal.citations, [{ sourceVersionId, startLine: 2, endLine: 3, excerpt: "line two\nline three" }]);
     const justUnder = await seed(person, { hours: 7 * 24 - 1, shape: "SUCCEEDED", uncounted: true });
-    const failed = await seed(person, { hours: 7 * 24 + 1, shape: "FAILED", uncounted: true });
+    const flowId = randomUUID();
+    const failed = await seed(person, { hours: 7 * 24 + 1, shape: "FAILED", uncounted: true, flowId });
     const live = await seed(person, { hours: 8 * 24, shape: "QUEUED" }); // never terminal: seven days from the terminal time, not from creation
     await admin.query("insert into app.ai_run_attempt (run_id, attempt_number, started_at, deadline_at, call_may_have_started, outcome, settled_at, input_tokens, output_tokens, provider_request_id) values ($1, 1, $2, $2::timestamptz + interval '60 seconds', true, 'COMPLETED', $2::timestamptz + interval '30 seconds', 120, 45, 'req-old')", [old.runId, ago(7 * 24 + 1)]);
     const evidence = async () => (await admin.query("select id, text, content_hash from app.source_version where project_id = $1 order by id", [old.projectId])).rows;
@@ -84,6 +85,7 @@ test("bodies leave only seven days after a run is terminal, and identity, hashes
     assert.deepEqual(evidenceBefore.find((entry) => entry.id === sourceVersionId), { id: sourceVersionId, text: SOURCE_TEXT, content_hash: stats.contentHash });
     const before = { old: await row(old.runId), justUnder: await row(justUnder.runId), failed: await row(failed.runId), live: await row(live.runId) };
     assert.equal(before.old.no_capture, false);
+    assert.equal(before.failed.flow_id, flowId);
     const promptEvidence = evidenceBefore.find((entry) => entry.id === before.old.prompt_source_version_id);
     assert.ok(promptEvidence);
     assert.equal(promptEvidence.text, retained.capture.prompt);
@@ -98,6 +100,7 @@ test("bodies leave only seven days after a run is terminal, and identity, hashes
     const after = { old: await row(old.runId), justUnder: await row(justUnder.runId), failed: await row(failed.runId), live: await row(live.runId) };
     assert.deepEqual([after.old.no_capture, after.old.no_result, after.old.no_diff, after.old.disposition], [true, true, true, "EXPIRED"]);
     assert.deepEqual([after.failed.no_capture, after.failed.disposition], [true, null]);
+    assert.equal(after.failed.flow_id, flowId, "Improve attribution survives the actual bounded cleanup");
     assert.deepEqual([after.justUnder.no_capture, after.justUnder.no_result, after.justUnder.disposition], [false, false, "AVAILABLE"], "six days and 23 hours is still inside the window");
     assert.deepEqual([after.live.no_capture, after.live.state], [false, "QUEUED"]);
     for (const key of ["old", "justUnder", "failed", "live"] as const) assert.deepEqual(identity(after[key]), identity(before[key]), `${key}: permanent run identity, hashes and attribution survive`);

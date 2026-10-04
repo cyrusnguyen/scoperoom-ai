@@ -20,7 +20,7 @@ type DetailRow = RunRow & {
 
 /** Summary columns only (no capture, result or prompt), plus the attempt token totals. Tokens, leases and provider ids are never selected. */
 const summaryColumns = Prisma.sql`
-  run.id, run.task_type::text AS task_type, run.state::text AS state, run.disposition::text AS disposition, run.actor_id, run.capture #>> '{selection,flowId}' AS flow_id,
+  run.id, run.task_type::text AS task_type, run.state::text AS state, run.disposition::text AS disposition, run.actor_id, run.flow_id,
   run.created_at, to_char(run.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_cursor, run.deadline_at, run.terminal_at, run.cancel_requested_at,
   run.failure_code, run.last_event_sequence, usage.attempts, usage.input_known, usage.input_tokens, usage.output_known, usage.output_tokens`;
 const usageJoin = Prisma.sql`
@@ -100,7 +100,7 @@ export async function listRuns(identity: ProjectIdentity, projectId: string, opt
     const rows = await tx.$queryRaw<RunRow[]>`
       SELECT ${summaryColumns} FROM app.ai_run run ${usageJoin}
       WHERE run.project_id = ${project.id}::uuid
-        ${options.flowId ? Prisma.sql`AND run.capture #>> '{selection,flowId}' = ${options.flowId.toLowerCase()}` : Prisma.empty}
+        ${options.flowId ? Prisma.sql`AND run.flow_id = ${options.flowId.toLowerCase()}::uuid` : Prisma.empty}
         ${position ? Prisma.sql`AND (run.created_at, run.id) < (${position[0]}::timestamptz, ${position[1]}::uuid)` : Prisma.empty}
       ORDER BY run.created_at DESC, run.id DESC LIMIT ${AI_LIMITS.runPageSize + 1}`;
     const page = rows.slice(0, AI_LIMITS.runPageSize);
