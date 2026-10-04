@@ -2,7 +2,7 @@ import { LAYOUT_BYTE_LIMIT, parseLayout, type DraftLayout } from "./draft-layout
 import { id, invalid, keys, object, oneOf, records, text, utf8Bytes, version } from "./strict.ts";
 
 // ScopeDocument storage schema v3 (Data02). Stage 03 activates flows, nodes and edges only: the other collections
-// must stay empty, and confirmation, verification and source references stay unset, until the stages whose
+// must stay empty, and confirmation and verification stay unset until the stages whose
 // validators own them (07–09) widen this parser.
 export const NODE_KINDS = ["START", "ACTION", "DECISION", "OUTCOME", "DATA_STORE"] as const;
 export const CLASSIFICATIONS = ["USER_JOURNEY", "BUSINESS_PROCESS"] as const;
@@ -24,9 +24,9 @@ export type FlowRecord = {
 };
 export type NodeRecord = {
   id: string; flowId: string; version: number; behaviourVersion: number; kind: NodeKind; label: string; description: string;
-  actorLabel: string; origin: Origin; sourceRefs: []; assumptionNotes: string[];
+  actorLabel: string; origin: Origin; sourceRefs: SourceRef[]; assumptionNotes: string[];
 };
-export type EdgeRecord = { id: string; flowId: string; version: number; fromId: string; toId: string; condition: string; origin: Origin; sourceRefs: [] };
+export type EdgeRecord = { id: string; flowId: string; version: number; fromId: string; toId: string; condition: string; origin: Origin; sourceRefs: SourceRef[] };
 
 const LATER = ["requirements", "traceLinks", "scenarios", "questions", "decisions", "dependencies", "waivers"] as const;
 export type ScopeDocument = {
@@ -38,9 +38,20 @@ export type ScopeDocument = {
 /** A coherent saved revision pair, as `GET D` and the project bootstrap return it. */
 export type DraftView = { id: string; status: "EDITABLE" | "ARCHIVED"; documentRevision: number; layoutRevision: number; document: ScopeDocument; layout: DraftLayout };
 
-function none(value: unknown): [] {
-  if (!Array.isArray(value) || value.length) invalid();
-  return [];
+export type SourceRef = { sourceVersionId: string; startLine: number; endLine: number; excerpt: string };
+export const SOURCE_REF_LIMITS = { count: 100, excerpt: 2_000 } as const;
+
+/** Structure only: project/source ownership and exact excerpt matching are checked against captured SQL evidence. */
+export function parseSourceRefs(value: unknown): SourceRef[] {
+  if (!Array.isArray(value) || value.length > SOURCE_REF_LIMITS.count) invalid();
+  const refs = value.map(entry => {
+    const ref = object(entry);
+    keys(ref, ["sourceVersionId", "startLine", "endLine", "excerpt"]);
+    if (!Number.isSafeInteger(ref.startLine) || !Number.isSafeInteger(ref.endLine) || (ref.startLine as number) < 1 || (ref.endLine as number) < (ref.startLine as number)) invalid();
+    return { sourceVersionId: id(ref.sourceVersionId), startLine: ref.startLine as number, endLine: ref.endLine as number, excerpt: text(ref.excerpt, SOURCE_REF_LIMITS.excerpt, true) };
+  });
+  if (new Set(refs.map(ref => JSON.stringify(ref))).size !== refs.length) invalid();
+  return refs;
 }
 
 function parseFlow(entry: unknown): FlowRecord {
@@ -61,7 +72,7 @@ function parseNode(entry: unknown): NodeRecord {
   return {
     id: id(node.id), flowId: id(node.flowId), version: version(node.version), behaviourVersion: version(node.behaviourVersion), kind: oneOf(node.kind, NODE_KINDS),
     label: text(node.label, LIMITS.label, true), description: text(node.description, LIMITS.longText), actorLabel: text(node.actorLabel, LIMITS.actorLabel),
-    origin: oneOf(node.origin, ORIGINS), sourceRefs: none(node.sourceRefs), assumptionNotes: node.assumptionNotes.map((note) => text(note, LIMITS.note, true)),
+    origin: oneOf(node.origin, ORIGINS), sourceRefs: parseSourceRefs(node.sourceRefs), assumptionNotes: node.assumptionNotes.map((note) => text(note, LIMITS.note, true)),
   };
 }
 
@@ -70,7 +81,7 @@ function parseEdge(entry: unknown): EdgeRecord {
   keys(edge, ["id", "flowId", "version", "fromId", "toId", "condition", "origin", "sourceRefs"]);
   return {
     id: id(edge.id), flowId: id(edge.flowId), version: version(edge.version), fromId: id(edge.fromId), toId: id(edge.toId),
-    condition: text(edge.condition, LIMITS.condition), origin: oneOf(edge.origin, ORIGINS), sourceRefs: none(edge.sourceRefs),
+    condition: text(edge.condition, LIMITS.condition), origin: oneOf(edge.origin, ORIGINS), sourceRefs: parseSourceRefs(edge.sourceRefs),
   };
 }
 

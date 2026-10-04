@@ -1,6 +1,6 @@
 import type { GraphCommand } from "../contracts/commands.ts";
 import { COORDINATE_LIMIT, type DraftLayout, type SavedPosition } from "../contracts/draft-layout.ts";
-import { LIMITS, parseDraftPair, type ScopeDocument } from "../contracts/scope-document.ts";
+import { LIMITS, parseDraftPair, type ScopeDocument, type SourceRef } from "../contracts/scope-document.ts";
 import { MAX_VERSION, utf8Bytes } from "../contracts/strict.ts";
 
 // Pure graph transforms (Data02 version matrix, Data03 command families). The server applies them to its locked
@@ -109,17 +109,18 @@ export function checkDraft({ document, layout }: Draft) {
  * `inPlace` is for a batch: `saved` is the caller's private working copy, changed in place and not checked here, and
  * the caller runs checkDraft once on the final draft. A refusal can leave the copy half-changed, so any error discards it.
  */
-export function applyGraphCommand(
+function transformGraphCommand(
   saved: Draft,
   documentRevision: number,
   command: GraphCommand,
   newId: () => string,
-  { inPlace = false } = {},
+  { inPlace = false, deferVersions = false } = {},
 ): Applied {
   if ("expectedDocumentRevision" in command && command.expectedDocumentRevision !== documentRevision) {
     fail("STALE_DOCUMENT_REVISION", { documentRevision });
   }
 
+  const increment = deferVersions ? (value: number) => value : bump;
   const document = inPlace ? saved.document : structuredClone(saved.document);
   const layout = inPlace ? saved.layout : structuredClone(saved.layout);
   const used = new Set([
@@ -145,8 +146,8 @@ export function applyGraphCommand(
     const flow = document.flows[flowId]!;
     document.flows[flowId] = {
       ...flow,
-      version: bump(flow.version),
-      behaviourVersion: bump(flow.behaviourVersion),
+      version: increment(flow.version),
+      behaviourVersion: increment(flow.behaviourVersion),
     };
     versions[flowId] = document.flows[flowId].version;
   };
@@ -192,8 +193,8 @@ export function applyGraphCommand(
       document.flows[flowId] = {
         ...flow,
         ...fields,
-        version: bump(flow.version),
-        behaviourVersion: bump(flow.behaviourVersion),
+        version: increment(flow.version),
+        behaviourVersion: increment(flow.behaviourVersion),
       };
       versions[flowId] = document.flows[flowId].version;
       break;
@@ -296,8 +297,8 @@ export function applyGraphCommand(
       document.nodes[nodeId] = {
         ...node,
         ...fields,
-        version: bump(node.version),
-        behaviourVersion: bump(node.behaviourVersion),
+        version: increment(node.version),
+        behaviourVersion: increment(node.behaviourVersion),
       };
       versions[nodeId] = document.nodes[nodeId].version;
       touchFlow(node.flowId);
@@ -346,7 +347,7 @@ export function applyGraphCommand(
     case "UPDATE_EDGE": {
       const edge = current(document.edges[command.payload.edgeId], command.payload.edgeId, command.expectedEntityVersion);
       if (edge.condition === command.payload.condition) return noChange();
-      document.edges[edge.id] = { ...edge, condition: command.payload.condition, version: bump(edge.version) };
+      document.edges[edge.id] = { ...edge, condition: command.payload.condition, version: increment(edge.version) };
       versions[edge.id] = document.edges[edge.id]!.version;
       touchFlow(edge.flowId);
       break;
@@ -374,7 +375,7 @@ export function applyGraphCommand(
       else delete layout.edgeSides[edgeId];
       layoutChanged = sidesChanged;
       if (!endpointsChanged) return layoutOnly(); // sides only: no document revision, no behaviour version
-      document.edges[edgeId] = { ...edge, fromId, toId, version: bump(edge.version) };
+      document.edges[edgeId] = { ...edge, fromId, toId, version: increment(edge.version) };
       versions[edgeId] = document.edges[edgeId].version;
       touchFlow(edge.flowId);
       break;
@@ -391,4 +392,53 @@ export function applyGraphCommand(
 
   if (!inPlace) checkDraft({ document, layout });
   return { document, layout, documentChanged: true, layoutChanged, createdIds, versions, retiredIds };
+}
+
+/** Manual commands and batches retain their per-command counters. */
+export function applyGraphCommand(saved: Draft, documentRevision: number, command: GraphCommand, newId: () => string, options: { inPlace?: boolean } = {}): Applied {
+  return transformGraphCommand(saved, documentRevision, command, newId, options);
+}
+
+/** Reviewed atomic group: transform semantics first, then assign counters once from final effects, including evidence. */
+export function applyGraphGroup(
+  saved: Draft, documentRevision: number, commands: readonly GraphCommand[], newId: () => string,
+  createdEvidence?: { sourceRefs: SourceRef[]; assumptionNotes: string[] },
+): Applied {
+  const working = structuredClone(saved);
+  const createdIds: string[] = [], retiredIds: string[] = [];
+  for (const command of commands) {
+    const result = transformGraphCommand(working, documentRevision, command, newId, { inPlace: true, deferVersions: true });
+    createdIds.push(...result.createdIds);
+    retiredIds.push(...result.retiredIds);
+    if (createdEvidence) for (const id of result.createdIds) {
+      const node = working.document.nodes[id], edge = working.document.edges[id];
+      if (node) { node.origin = "AI_SUGGESTED"; node.sourceRefs = structuredClone(createdEvidence.sourceRefs); node.assumptionNotes = [...createdEvidence.assumptionNotes]; }
+      if (edge) { edge.origin = "AI_SUGGESTED"; edge.sourceRefs = structuredClone(createdEvidence.sourceRefs); }
+    }
+  }
+  const versions: Record<string, number> = {};
+  const affectedFlows = new Set<string>();
+  for (const collection of ["nodes", "edges"] as const) {
+    const before = saved.document[collection], after = working.document[collection];
+    for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (JSON.stringify(before[id]) === JSON.stringify(after[id])) continue;
+      affectedFlows.add((after[id] ?? before[id])!.flowId);
+      const record = after[id], original = before[id];
+      if (record && original) {
+        record.version = bump(original.version);
+        if ("behaviourVersion" in record && "behaviourVersion" in original) record.behaviourVersion = bump(original.behaviourVersion);
+        versions[id] = record.version;
+      }
+    }
+  }
+  for (const [id, flow] of Object.entries(working.document.flows)) {
+    const original = saved.document.flows[id];
+    if (original && (affectedFlows.has(id) || JSON.stringify(flow) !== JSON.stringify(original))) {
+      flow.version = bump(original.version);
+      flow.behaviourVersion = bump(original.behaviourVersion);
+      versions[id] = flow.version;
+    }
+  }
+  checkDraft(working);
+  return { ...working, documentChanged: JSON.stringify(saved.document) !== JSON.stringify(working.document), layoutChanged: JSON.stringify(saved.layout) !== JSON.stringify(working.layout), createdIds, versions, retiredIds };
 }

@@ -3,6 +3,7 @@ import { getWorkerDatabase } from "../../../server/db.ts";
 import type { CapturedInput, ValidatedProposal } from "../contracts/tasks.ts";
 import { canonicalJson, sha256 } from "../domain/capture.ts";
 import { buildModelRequest, estimateInputTokens } from "../domain/model-request.ts";
+import { proposalDiff } from "../domain/proposal-diff.ts";
 import { validateResult } from "../domain/validate-result.ts";
 import type { Sql } from "./dispatch-ai.ts";
 import type { ModelGateway, ModelReply } from "./ports.ts";
@@ -96,7 +97,12 @@ export async function runAi(runId: string, gateway: ModelGateway, db?: Sql): Pro
         SELECT app.begin_ai_validation(${attempt.runId}::uuid, ${attempt.id}::uuid, ${attempt.token}::uuid) AS status`)[0]?.status;
       if (begun === "STALE") return;
       let result: ValidatedProposal | null = null;
-      if (begun === "VALIDATING") { try { result = validateResult(run.capture, reply.output); } catch { result = null; } }
+      if (begun === "VALIDATING") {
+        try {
+          result = validateResult(run.capture, reply.output);
+          if (result.kind === "proposal") proposalDiff(run.capture, result, result.operations.map(operation => operation.id));
+        } catch { result = null; }
+      }
       const status = await settle(sql, attempt, result ? "COMPLETED" : begun === "FENCED" ? await fencedOutcome(sql, runId, claim.out_attempt_deadline_at) : "INCOMPLETE", result, reply);
       if (status === "SUCCEEDED" || status === "STALE") return;
       await closeOut(sql, runId, begun === "FENCED" || status === "FENCED" ? "RESULT_FENCED" : "RESULT_INVALID");

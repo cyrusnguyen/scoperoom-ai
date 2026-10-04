@@ -1,5 +1,5 @@
 import type { FlowFields, NodeFields } from "../../drafts/contracts/commands.ts";
-import { LIMITS, type EdgeRecord, type FlowRecord, type NodeRecord } from "../../drafts/contracts/scope-document.ts";
+import { LIMITS, type EdgeRecord, type FlowRecord, type NodeRecord, type SourceRef } from "../../drafts/contracts/scope-document.ts";
 import { id, idList, invalid, keys, object, oneOf, text, version } from "../../drafts/contracts/strict.ts";
 import { keyPattern } from "../../projects/contracts/project.ts";
 
@@ -22,7 +22,7 @@ export const CAPTURE_SCHEMA_VERSION = 1;
 export const RESULT_SCHEMA_VERSION = 1;
 export const PROMPT_VERSION = "2026-10-03.1";
 
-export type SourceRef = { sourceVersionId: string; startLine: number; endLine: number; excerpt: string };
+export type { SourceRef } from "../../drafts/contracts/scope-document.ts";
 export type StartRunInput = {
   key: string; taskType: TaskKind; prompt: string; draftId: string; expectedDocumentRevision: number; expectedParentSnapshotId: string | null;
   context: { selection: { flowId: string; nodeIds: string[] } | null; sources: { sourceVersionId: string; expectedCurrentVersionId: string }[] };
@@ -130,3 +130,13 @@ export type RunView = RunSummary & {
   applicability: RunApplicability; expiresAt: string | null;
 };
 export type RunPage = { runs: RunSummary[]; nextCursor: string | null };
+
+/** Capture projection only: positions, origin and trust absent from the capture are never invented as diff facts. */
+export type ProposalDiff = {
+  selectedOperationIds: string[];
+  before: CapturedInput["graph"];
+  after: CapturedInput["graph"];
+  createdIds: string[];
+  updatedIds: string[];
+  retiredIds: string[];
+};
