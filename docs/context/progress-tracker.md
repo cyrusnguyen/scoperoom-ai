@@ -1,5 +1,21 @@
 # Progress tracker
 
+## Stage 06.2 - delegated implementation ready for integrated review (2026-10-04)
+
+The user authorized Stage 06.2 on a new managed worktree from fetched origin/main `e92f421` (merged Stage 06.1, PR #24), branch `feat/stage-6.2-previewed-proposals`. The lead remains reviewer/integrator; subagents implement bounded tasks. No push, PR or later-stage progression is authorized before the user's final approval.
+
+Task 1 is implemented in `d598adb` and corrected in `37dec3a`. One strict subset validator and one application adapter/deterministic diff reuse the existing graph transforms. Reviewed groups defer counters until final effects, preserving manual per-command increments and peer layout. The worker checks semantic feasibility before success; capture/result schema 1 identities remain unchanged. Independent spec/quality and scoped readOnly correction reviews are clean.
+
+Task 2 is implemented in `97883fb` and independently approved. Apply/Discard retain current-access receipt recovery, atomic saved changes/audit/cursors and permanent scoped application/source evidence. Its focused SQL/worker evidence is 43/43. The new unpublished migration's installed checksum differs from the final file only by the disclosed comment/whitespace corrections; all 23 published baseline migrations remain unchanged. Exact final-file fresh/upgrade replay is still pending.
+
+Task 3 adds strict same-origin no-store Apply/Discard POST routes with Idempotency-Key, a 16 KiB bound and existing safe envelopes. Authorized run reads return validated immutable bodies, one deterministic captured diff, explicit unavailable/stale reasons and permanent application evidence after cleanup. Shared applicability excludes clarifications, expired/invalid bodies and moved draft/document/baseline/source heads from admission capacity, using bounded ten-row candidate pages. Layout-only changes stay applicable. Historical source text/title and captured scope remain exact.
+
+Actual Task 3 focused evidence on pinned Node 24.21.0: 93/93 real SQL/worker cases, 49/49 proposal units, full lint/boundaries and TypeScript exit 0. The managed production AI API suite passed 5/5 distinct cases and attempts, zero failures/skips/retries/flakes/global errors, configured two workers (the one spec used slot 0). Build/test exits were 0; build 22.456 s, tests 34.007 s, total 56.463 s. Covers lost-response Apply/same-key replay, different-key consumption, hostile values, dependency/hash/stale refusals, 401/403/404, declared/streamed body bounds, quota and Discard replay after downgrade/archive with revoked-access refusal. RED logs and exact production manifests/timing are retained separately in ignored evidence.
+
+The guarded baseline-capacity SQL fixture proves a baseline-only change stales reads and releases applicable capacity with unchanged revisions. It is not publication or fresh nonnull-baseline admission: the existing pending-snapshot CHECKs and insert trigger intentionally fence that Stage 09 path. Both exact original CHECKs are restored/validated, all ten run/application/source triggers are enabled and no nonnull project baseline remains. Visible AI controls belong to Stage 06.3. The isolated loopback runtime preserves the earlier Stage 5 stack, and provider/task secrets are blank.
+
+Next: independent Task 3 and final change reviews, then stable full static/unit/integration/worker, Realtime-alone, pinned build, full production Chromium and exact fresh/upgrade migration gates. Focused task evidence is not full-stage completion. Hosted/provider/manual, deployment and GitHub CI are unrun. Ask for final user approval only after the authorized implementation and local gates are complete.
+
 ## Stage 05 UI follow-up fixes (2026-10-03)
 
 Sign out was also restyled as a compact outlined icon button. Its existing action and import-recovery cleanup are unchanged. The real-account sign-in/sign-out browser case passed, and desktop/mobile captures confirmed the 44px mobile target. The final Sign out build, affected lint, boundaries, TypeScript and all three style-token tests passed.

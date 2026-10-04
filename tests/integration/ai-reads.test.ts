@@ -3,12 +3,18 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { Client } from "pg";
 import { executeGraphCommand } from "../../src/features/drafts/server/execute-command.ts";
+import { canonicalJson, sha256 } from "../../src/features/proposals/domain/capture.ts";
+import { applyRun } from "../../src/features/proposals/server/apply-run.ts";
+import { discardRun } from "../../src/features/proposals/server/discard-run.ts";
+import { workerCleanup } from "../../src/server/maintenance/worker-cleanup.ts";
 import { parseStartRunInput } from "../../src/features/proposals/contracts/tasks.ts";
 import { admitRun, startRun } from "../../src/features/proposals/server/admit-run.ts";
 import { listRuns, readRun } from "../../src/features/proposals/server/read-runs.ts";
 import { cancelRun } from "../../src/features/proposals/server/settle-runs.ts";
 import { archiveProject } from "../../src/features/projects/server/management.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
+import { readAsMember } from "../../src/features/projects/server/access.ts";
+import { applicableCapacityFull } from "../../src/features/proposals/server/applicability.ts";
 import { readSourceVersion } from "../../src/features/sources/server/source-versions.ts";
 import { canRun } from "./support/fixture.ts";
 import { draftOf, seedRun, withAi } from "./support/ai-runs.ts";
@@ -69,7 +75,7 @@ test("a run view exposes safe state, the captured manifest, the result, applicab
     assert.equal(view.state, "SUCCEEDED"); assert.equal(view.disposition, "AVAILABLE"); assert.equal(view.actorId, owner.profile);
     assert.equal(view.capture?.prompt, "Outline the checkout flow"); assert.equal(view.capture?.draftId, view.draftId);
     assert.deepEqual(view.result, { schemaVersion: 1, kind: "clarification", message: "need more" });
-    assert.equal(view.resultHash, "a".repeat(64));
+    assert.equal(view.resultHash, sha256(canonicalJson(view.result)));
     assert.deepEqual(view.usage, { inputTokens: 11, outputTokens: 7 });
     assert.deepEqual(view.attempts.map((attempt) => [attempt.number, attempt.outcome, attempt.callMayHaveStarted]), [[1, "COMPLETED", true]]);
     const { rows: [row] } = await database.query<{ terminal_at: Date }>("select terminal_at from app.ai_run where id = $1", [run]);
@@ -88,7 +94,7 @@ test("a run view exposes safe state, the captured manifest, the result, applicab
 test("a retained result past terminal plus seven days is unavailable before cleanup", { skip: !canRun }, async () => {
   await withAi(async ({ person, projectFor, database }) => {
     const owner = await person(); const p = await projectFor(owner);
-    const proposal = { schemaVersion: 1, kind: "proposal", operations: [], assumptions: [], citations: [] };
+    const proposal = generatedProposal;
     const current = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: proposal });
     assert.equal((await readRun(owner.identity, p, current)).applicability, "APPLICABLE");
     const terminalAt = ago(8 * 24 * 60 * MINUTES);
@@ -442,5 +448,154 @@ test("archiving records cancel intent on the nonterminal run without settling it
     assert.deepEqual([view.state, view.applicability, view.lastEventSequence], ["QUEUED", "UNAVAILABLE", Number(after.ai)]); assert.notEqual(view.cancelRequestedAt, null);
     assert.deepEqual(await budgetOf(database, owner.profile), [{ reserved_runs: 1, consumed_runs: 1 }]);
     assert.equal((await database.query("select count(*)::int n from app.ai_run where id = $1 and cancel_requested_at is not null", [finished])).rows[0].n, 0);
+  });
+});
+
+const generatedProposal = { schemaVersion: 1, kind: "proposal", operations: [
+  { id: "flow", dependsOn: [], edit: { command: "CREATE_FLOW", payload: { ref: "flow", title: "Checkout", purpose: "", classification: "USER_JOURNEY", inclusion: "INCLUDED" } } },
+  { id: "step", dependsOn: ["flow"], edit: { command: "ADD_NODE", payload: { ref: "step", flowId: "flow", kind: "ACTION", label: "Pay", description: "", actorLabel: "" } } },
+], assumptions: [], citations: [] };
+
+test("run reads expose deterministic captured diff, keep layout applicable and explain semantic staleness", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner);
+    const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: generatedProposal });
+    const view = await readRun(owner.identity, p, run);
+    assert.equal(view.applicability, "APPLICABLE"); assert.deepEqual(view.applicabilityReasons, []);
+    assert.deepEqual(view.diff?.selectedOperationIds, ["flow", "step"]);
+    assert.equal(view.diff?.before.nodes.length, 0); assert.equal(view.diff?.after.nodes[0]?.label, "Pay");
+    assert.equal(view.diff?.after.nodes[0]?.readOnly, false);
+    await database.query("update app.scope_draft set layout_revision = layout_revision + 1 where project_id = $1", [p]);
+    assert.deepEqual((await readRun(owner.identity, p, run)).diff, view.diff);
+    assert.equal((await readRun(owner.identity, p, run)).applicability, "APPLICABLE");
+    await database.query("update app.scope_draft set document_revision = document_revision + 1 where project_id = $1", [p]);
+    const stale = await readRun(owner.identity, p, run);
+    assert.equal(stale.applicability, "STALE"); assert.deepEqual(stale.applicabilityReasons, ["DOCUMENT_CHANGED"]);
+    assert.deepEqual(stale.diff, view.diff); assert.deepEqual(stale.capture, view.capture); assert.deepEqual(stale.result, view.result);
+  });
+});
+
+test("clarifications, expired results and stale history free admission while ten valid current proposals refuse", { skip: !canRun }, async () => {
+  for (const shape of ["clarification", "expired", "stale", "invalid", "applicable"] as const) {
+    await withAi(async ({ person, projectFor, database }) => {
+      const owner = await person(); const p = await projectFor(owner);
+      for (let n = 0; n < 10; n++) await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: shape === "clarification" ? { schemaVersion: 1, kind: "clarification", message: "More information" } : shape === "invalid" ? { schemaVersion: 1, kind: "proposal", operations: [], assumptions: [], citations: [] } : generatedProposal, ...(shape === "expired" ? { createdAt: ago(8 * 24 * 60 * MINUTES) } : {}) });
+      if (shape === "stale") await database.query("update app.scope_draft set document_revision = document_revision + 1 where project_id = $1", [p]);
+      if (shape === "applicable") await assert.rejects(admitted(database, owner.identity, p), { code: "LIMIT_EXCEEDED", details: { limit: "APPLICABLE_PROPOSALS" } });
+      else assert.equal((await admitted(database, owner.identity, p)).state, "QUEUED", shape);
+    });
+  }
+});
+
+test("invalid historical proposal bodies fail closed with no diff or Apply authority", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner);
+    const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: { schemaVersion: 1, kind: "proposal", operations: [], assumptions: [], citations: [] } });
+    const view = await readRun(owner.identity, p, run);
+    assert.equal(view.applicability, "UNAVAILABLE"); assert.deepEqual(view.applicabilityReasons, ["INVALID_RESULT"]);
+    assert.equal(view.result, null); assert.equal(view.diff, null); assert.equal(view.application, null);
+    assert.equal(view.resultHash, sha256(canonicalJson({ schemaVersion: 1, kind: "proposal", operations: [], assumptions: [], citations: [] })));
+    await assert.rejects(applyRun(owner.identity, p, run, { key: randomUUID(), draftId: view.draftId, expectedDocumentRevision: view.documentRevision, expectedParentSnapshotId: null, resultHash: view.resultHash!, selectedOperationIds: ["flow"] }), { code: "AI_RESULT_UNAVAILABLE" });
+  });
+});
+
+test("permanent applied evidence survives body cleanup and later graph edits; discarded and expired history remain honest", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner);
+    const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: generatedProposal });
+    const initial = await readRun(owner.identity, p, run);
+    const applied = await applyRun(owner.identity, p, run, { key: randomUUID(), draftId: initial.draftId, expectedDocumentRevision: initial.documentRevision, expectedParentSnapshotId: null, resultHash: initial.resultHash!, selectedOperationIds: ["flow", "step"] });
+    const before = await readRun(owner.identity, p, run);
+    assert.equal(before.application?.id, applied.applicationId); assert.equal(before.application?.evidence.after.find(record => "label" in record)?.label, "Pay");
+    assert.deepEqual(before.applicabilityReasons, ["APPLIED"]); assert.equal(before.expiresAt, new Date(new Date(before.terminalAt!).getTime() + 7 * 24 * 60 * MINUTES).toISOString());
+    const node = before.application!.createdIdMap.step;
+    await executeGraphCommand(owner.identity, p, initial.draftId, { key: randomUUID(), commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId: node, label: "Later manual text" } });
+    const discarded = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: generatedProposal });
+    const dview = await readRun(owner.identity, p, discarded);
+    await discardRun(owner.identity, p, discarded, { key: randomUUID(), expectedResultHash: dview.resultHash! });
+    const expired = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: generatedProposal, createdAt: ago(8 * 24 * 60 * MINUTES) });
+    await database.query("alter table app.ai_run disable trigger enforce_ai_run");
+    try { await database.query("update app.ai_run set terminal_at = now() - interval '8 days' where id = any($1::uuid[])", [[run, discarded]]); }
+    finally { await database.query("alter table app.ai_run enable trigger enforce_ai_run"); }
+    await workerCleanup();
+    const after = await readRun(owner.identity, p, run);
+    assert.equal(after.capture, null); assert.equal(after.result, null); assert.equal(after.diff, null); assert.equal(after.expiresAt, null);
+    assert.deepEqual(after.application, before.application); assert.deepEqual(after.applicabilityReasons, ["APPLIED"]);
+    assert.equal((await readRun(owner.identity, p, discarded)).disposition, "DISCARDED");
+    assert.deepEqual((await readRun(owner.identity, p, discarded)).applicabilityReasons, ["DISCARDED"]);
+    assert.equal((await readRun(owner.identity, p, expired)).disposition, "EXPIRED");
+    assert.deepEqual((await readRun(owner.identity, p, expired)).applicabilityReasons, ["EXPIRED"]);
+  });
+});
+
+test("current source heads stale only Apply authority while exact historical versions and captured diff remain readable", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner);
+    const sourceId = randomUUID(), oldId = randomUUID(), newId = randomUUID();
+    const text = "Original evidence";
+    await database.query("begin");
+    try {
+      await database.query("insert into app.source_document (id, project_id, kind, current_version_id, created_by) values ($1, $2, 'USER_TEXT', $3, $4)", [sourceId, p, oldId, owner.profile]);
+      for (const [id, n, title, value] of [[oldId, 1, "Original title", text], [newId, 2, "New title", "New evidence"]] as const) await database.query("insert into app.source_version (id, project_id, source_id, sequence, title, text, code_point_count, utf8_byte_count, content_hash, created_by) values ($1, $2, $3, $4, $5, $6, char_length($6), octet_length($6), $7, $8)", [id, p, sourceId, n, title, value, sha256(value), owner.profile]);
+      await database.query("commit");
+    } catch (error) { await database.query("rollback"); throw error; }
+    const source = { projectId: p, sourceId, sourceVersionId: oldId, currentVersionId: oldId, title: "Original title", text, contentHash: sha256(text) };
+    const runs = [];
+    for (let i = 0; i < 10; i++) runs.push(await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: generatedProposal, sources: [source] }));
+    const before = await readRun(owner.identity, p, runs[0]!);
+    await database.query("update app.source_document set current_version_id = $2 where id = $1", [sourceId, newId]);
+    const view = await readRun(owner.identity, p, runs[0]!);
+    assert.equal(view.applicability, "STALE"); assert.deepEqual(view.applicabilityReasons, ["SOURCE_HEAD_CHANGED"]);
+    assert.deepEqual(view.capture, before.capture); assert.deepEqual(view.diff, before.diff);
+    assert.equal((await readSourceVersion(owner.identity, p, oldId)).title, "Original title");
+    assert.equal((await readSourceVersion(owner.identity, p, oldId)).text, text);
+    assert.equal((await admitted(database, owner.identity, p)).state, "QUEUED");
+  });
+});
+
+test("guarded baseline-only change stales captured proposals and frees applicable capacity with unchanged draft revisions", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner); const other = await projectFor(owner);
+    const target = new URL(process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL!);
+    assert.equal(target.hostname, "127.0.0.1");
+    assert.equal((await database.query("select environment_id::text id from app.environment_identity where id = 1")).rows[0].id, process.env.SCOPEROOM_ENVIRONMENT_ID);
+    const definition = (await database.query("select pg_get_constraintdef(oid) definition from pg_constraint where conrelid = 'app.project'::regclass and conname = 'project_baseline_pending_snapshots'")).rows[0].definition as string;
+    const ids = [];
+    for (let i = 0; i < 10; i++) ids.push(await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: generatedProposal }));
+    const before = await readRun(owner.identity, p, ids[0]!);
+    await database.query("begin");
+    try {
+      await database.query("alter table app.project drop constraint project_baseline_pending_snapshots");
+      await database.query(`alter table app.project add constraint project_baseline_pending_snapshots CHECK ((id = '${p}'::uuid) OR ${definition.slice(6)})`);
+      await database.query("commit");
+    } catch (error) { await database.query("rollback"); throw error; }
+    try {
+      await assert.rejects(database.query("update app.project set approved_snapshot_id = $2 where id = $1", [other, randomUUID()]), { code: "23514" });
+      const baseline = randomUUID(); await database.query("update app.project set approved_snapshot_id = $2 where id = $1", [p, baseline]);
+      const view = await readRun(owner.identity, p, ids[0]!);
+      assert.equal(view.applicability, "STALE"); assert.deepEqual(view.applicabilityReasons, ["BASELINE_CHANGED"]);
+      assert.deepEqual(view.diff, before.diff); assert.equal(view.documentRevision, before.documentRevision);
+      assert.equal(await readAsMember(owner.identity, p, (tx, project) => applicableCapacityFull(tx, project)), false);
+    } finally {
+      await database.query("update app.project set approved_snapshot_id = null where id = $1", [p]);
+      await database.query("begin");
+      try {
+        await database.query("alter table app.project drop constraint project_baseline_pending_snapshots");
+        await database.query(`alter table app.project add constraint project_baseline_pending_snapshots ${definition}`);
+        await database.query("commit");
+      } catch (error) { await database.query("rollback"); throw error; }
+      assert.equal((await database.query("select pg_get_constraintdef(oid) definition from pg_constraint where conrelid = 'app.project'::regclass and conname = 'project_baseline_pending_snapshots'")).rows[0].definition, definition);
+    }
+  });
+});
+
+test("bounded quota pages skip malformed historical proposals and still find ten later valid proposals", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner);
+    for (let i = 1; i <= 11; i++) await seedRun(database, { id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`, projectId: p, owner: owner.profile, shape: "SUCCEEDED", uncounted: true, result: { schemaVersion: 1, kind: "proposal", operations: [], assumptions: [], citations: [] } });
+    for (let i = 1; i <= 10; i++) await seedRun(database, { id: `ffffffff-ffff-4fff-8fff-${String(i).padStart(12, "0")}`, projectId: p, owner: owner.profile, shape: "SUCCEEDED", uncounted: true, result: generatedProposal });
+    await assert.rejects(admitted(database, owner.identity, p), { code: "LIMIT_EXCEEDED", details: { limit: "APPLICABLE_PROPOSALS" } });
+    await database.query("update app.ai_run set disposition = 'DISCARDED' where id = 'ffffffff-ffff-4fff-8fff-000000000010'");
+    assert.equal((await admitted(database, owner.identity, p)).state, "QUEUED");
   });
 });

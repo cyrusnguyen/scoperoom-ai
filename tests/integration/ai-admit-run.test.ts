@@ -14,6 +14,9 @@ serializeSweeps(); // the expiry test sweeps globally: see sweep-lock.ts
 
 // Atomic AI admission (Stage 06.1 Task 2) through the real service on the web runtime role, with independent connections.
 const CONFIG = { model: "test-model", executionBinding: "binding-1" };
+const capacityProposal = { schemaVersion: 1, kind: "proposal", operations: [
+  { id: "flow", dependsOn: [], edit: { command: "CREATE_FLOW", payload: { ref: "flow", title: "Checkout", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" } } },
+], assumptions: [], citations: [] };
 const OTHER_CONFIG = { model: "other-model", executionBinding: "binding-2" };
 
 type Person = { identity: Identity; profile: string };
@@ -98,7 +101,7 @@ async function seedRun(db: Client, p: { projectId: string; owner: string; actor?
     [p.projectId, draft.id, actor, p.owner, createdAt, versionId, JSON.stringify(capture), hash]);
   if (p.terminal) {
     await db.query("update app.ai_run set state = 'RUNNING', budget_state = 'CONSUMED' where id = $1", [run!.id]);
-    await db.query("update app.ai_run set state = 'SUCCEEDED', disposition = 'AVAILABLE', result = $2::jsonb, result_hash = $3, terminal_at = now() where id = $1", [run!.id, JSON.stringify({ schemaVersion: 1, kind: "clarification", message: "x" }), "a".repeat(64)]);
+    await db.query("update app.ai_run set state = 'SUCCEEDED', disposition = 'AVAILABLE', result = $2::jsonb, result_hash = $3, terminal_at = now() where id = $1", [run!.id, JSON.stringify(capacityProposal), sha256(canonicalJson(capacityProposal))]);
   }
   return run!.id;
 }

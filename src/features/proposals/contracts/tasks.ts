@@ -1,4 +1,4 @@
-import type { FlowFields, NodeFields } from "../../drafts/contracts/commands.ts";
+import type { FlowFields, NodeFields, GraphCommand } from "../../drafts/contracts/commands.ts";
 import { LIMITS, type EdgeRecord, type FlowRecord, type NodeRecord, type SourceRef } from "../../drafts/contracts/scope-document.ts";
 import { id, idList, invalid, keys, object, oneOf, text, version } from "../../drafts/contracts/strict.ts";
 import { keyPattern } from "../../projects/contracts/project.ts";
@@ -127,7 +127,7 @@ export type RunApplicability = "APPLICABLE" | "STALE" | "UNAVAILABLE";
 export type RunView = RunSummary & {
   draftId: string; documentRevision: number; parentSnapshotId: string | null; model: string;
   capture: CapturedInput | null; result: ValidatedProposal | null; resultHash: string | null; attempts: RunAttemptView[];
-  applicability: RunApplicability; expiresAt: string | null;
+  applicability: RunApplicability; applicabilityReasons: RunApplicabilityReason[]; diff: ProposalDiff | null; application: RunApplication | null; expiresAt: string | null;
 };
 export type RunPage = { runs: RunSummary[]; nextCursor: string | null };
 
@@ -168,3 +168,12 @@ export function parseDiscardRunInput(raw: unknown, key: string): DiscardRunInput
   const body = object(raw); keys(body, ["expectedResultHash"]);
   return { key, expectedResultHash: resultHash(body.expectedResultHash) };
 }
+
+export type RunApplicabilityReason = "APPLIED" | "DISCARDED" | "EXPIRED" | "PROJECT_INACTIVE" | "CANCEL_REQUESTED" | "NOT_SUCCEEDED" | "INVALID_CAPTURE" | "INVALID_RESULT" | "BODY_UNAVAILABLE" | "CLARIFICATION" | "DRAFT_REPLACED" | "DOCUMENT_CHANGED" | "BASELINE_CHANGED" | "SOURCE_HEAD_CHANGED";
+/** Immutable application evidence; retained independently of the seven-day run bodies and current graph. */
+export type RunApplication = {
+  id: string; runId: string; draftId: string; actorId: string; promptSourceVersionId: string; resultHash: string;
+  selectedOperations: ProposalOperation[]; actualOperations: GraphCommand[]; idMap: Record<string, string>; createdIdMap: Record<string, string>;
+  evidence: { changedIds: string[]; before: (FlowRecord | NodeRecord | EdgeRecord)[]; after: (FlowRecord | NodeRecord | EdgeRecord)[]; assumptions: string[]; citations: SourceRef[] };
+  sourceVersionIds: string[]; beforeDocumentRevision: number; afterDocumentRevision: number; beforeLayoutRevision: number; afterLayoutRevision: number; createdAt: string;
+};
