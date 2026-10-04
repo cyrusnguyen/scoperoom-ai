@@ -599,3 +599,38 @@ test("bounded quota pages skip malformed historical proposals and still find ten
     assert.equal((await admitted(database, owner.identity, p)).state, "QUEUED");
   });
 });
+
+test("hash-consistent malformed legacy captures cannot gain direct Apply authority", { skip: !canRun }, async () => {
+  for (const shape of ["widened-limit", "malformed-sources"] as const) {
+    await withAi(async ({ person, projectFor, database }) => {
+      const owner = await person(); const p = await projectFor(owner);
+      const result = shape === "widened-limit" ? { ...generatedProposal, operations: [generatedProposal.operations[0],
+        ...Array.from({ length: 21 }, (_, i) => ({ id: `node${i}`, dependsOn: ["flow"], edit: { command: "ADD_NODE", payload: { ref: `node${i}`, flowId: "flow", kind: "ACTION", label: "Step", description: "", actorLabel: "" } } }))] } : generatedProposal;
+      const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result });
+      const original = (await database.query("select capture from app.ai_run where id = $1", [run])).rows[0].capture;
+      const capture = shape === "widened-limit" ? { ...original, limits: { ...original.limits, maxGraphNodes: 21 } } : { ...original, sources: { length: 0 } };
+      // Historical corruption fixture only. LOCAL replica mode resets at transaction end without disabling any trigger.
+      await database.query("begin");
+      try {
+        await database.query("set local session_replication_role = replica");
+        await database.query("update app.ai_run set capture = $2::jsonb, capture_hash = $3 where id = $1", [run, JSON.stringify(capture), sha256(canonicalJson(capture))]);
+        await database.query("commit");
+      } catch (error) { await database.query("rollback"); throw error; }
+      const view = await readRun(owner.identity, p, run);
+      assert.equal(view.applicability, "UNAVAILABLE"); assert.deepEqual(view.applicabilityReasons, ["INVALID_CAPTURE"]);
+      assert.equal(view.capture, null); assert.equal(view.result, null); assert.equal(view.diff, null);
+      const state = async () => (await database.query(`select d.document_json, d.layout_json, d.document_revision, d.layout_revision,
+        p.event_sequence::text, p.ai_revision::text, row_to_json(r) run,
+        (select count(*)::int from app.ai_suggestion_application where project_id = p.id) applications,
+        (select count(*)::int from app.ai_application_source where project_id = p.id) application_sources,
+        (select count(*)::int from app.source_version where project_id = p.id) sources,
+        (select count(*)::int from app.mutation_receipt where scope_id = p.id) receipts,
+        (select count(*)::int from app.audit_event where project_id = p.id) audits
+        from app.project p join app.scope_draft d on d.id = p.current_draft_id join app.ai_run r on r.project_id = p.id where p.id = $1 and r.id = $2`, [p, run])).rows[0];
+      const before = await state();
+      await assert.rejects(applyRun(owner.identity, p, run, { key: randomUUID(), draftId: view.draftId, expectedDocumentRevision: view.documentRevision,
+        expectedParentSnapshotId: null, resultHash: view.resultHash!, selectedOperationIds: result.operations.map(operation => operation!.id) }), { code: "AI_RESULT_UNAVAILABLE" });
+      assert.deepEqual(await state(), before, shape);
+    });
+  }
+});

@@ -19,10 +19,11 @@ export const sourcesChanged = Prisma.sql`EXISTS (
   LEFT JOIN app.source_document source ON source.project_id = run.project_id AND source.id::text = captured->>'sourceId'
   WHERE source.current_version_id::text IS DISTINCT FROM captured->>'expectedCurrentVersionId' OR source.id IS NULL)`;
 
-/** Stored bodies are immutable but older validation rules may have admitted unusable proposals. Never expose those as Apply authority. */
-export function inspectRun(row: ApplicabilityRow, project: Pick<ProjectRow, "status" | "currentDraftId" | "approvedSnapshotId">) {
-  let capture: CapturedInput | null = row.capture, result: ValidatedProposal | null = null, diff: ProposalDiff | null = null;
-  let invalidCapture = false, invalidResult = false;
+export type CaptureRow = Pick<ApplicabilityRow, "task_type" | "draft_id" | "expected_document_revision" | "parent_snapshot_id" | "capture" | "capture_hash">;
+
+/** One stored-input validation owner for reads, quota and Apply; hashes alone do not grant capture authority. */
+export function validatedCapture(row: CaptureRow): CapturedInput | null {
+  let capture = row.capture;
   if (capture) {
     try {
       if (capture.schemaVersion !== CAPTURE_SCHEMA_VERSION || capture.taskType !== row.task_type || capture.draftId !== row.draft_id
@@ -48,8 +49,15 @@ export function inspectRun(row: ApplicabilityRow, project: Pick<ProjectRow, "sta
         expectedParentSnapshotId: capture.parentSnapshotId, context: { selection: capture.selection, sources: capture.sources.map(source => ({ sourceVersionId: source.sourceVersionId, expectedCurrentVersionId: source.expectedCurrentVersionId })) } });
       rebuilt.capture.versions.prompt = capture.versions.prompt; // Historical prompt versions are attribution, not a request to recapture.
       if (canonicalJson(rebuilt.capture) !== canonicalJson(capture)) throw new Error();
-    } catch { capture = null; invalidCapture = true; }
+    } catch { capture = null; }
   }
+  return capture;
+}
+
+/** Stored bodies are immutable but older validation rules may have admitted unusable proposals. Never expose those as Apply authority. */
+export function inspectRun(row: ApplicabilityRow, project: Pick<ProjectRow, "status" | "currentDraftId" | "approvedSnapshotId">) {
+  const capture = validatedCapture(row), invalidCapture = row.capture !== null && capture === null;
+  let result: ValidatedProposal | null = null, diff: ProposalDiff | null = null, invalidResult = false;
   if (row.result && capture) {
     try {
       if (jsonbTextBytes(row.result) > AI_LIMITS.resultBytes || sha256(canonicalJson(row.result)) !== row.result_hash) throw new Error();

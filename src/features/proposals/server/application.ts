@@ -2,7 +2,7 @@ import { Prisma } from "../../../../prisma/generated/client.ts";
 import { uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import { checkReceipt, findReceipt, lockActor, lockProject, profileFor, requireActive, requireMember, saveReceipt, withDatabase, type ProjectRow, type Transaction } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
-import type { CapturedInput, RunDisposition, RunState, ValidatedProposal } from "../contracts/tasks.ts";
+import type { CapturedInput, RunDisposition, RunState, TaskKind, ValidatedProposal } from "../contracts/tasks.ts";
 
 export function cursor(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new ProjectError("UNAVAILABLE");
@@ -10,7 +10,7 @@ export function cursor(value: unknown): number {
 }
 
 export type ApplicationRun = {
-  id: string; draft_id: string; state: RunState; disposition: RunDisposition | null; result_hash: string | null;
+  id: string; task_type: TaskKind; draft_id: string; state: RunState; disposition: RunDisposition | null; result_hash: string | null;
   expected_document_revision: number; parent_snapshot_id: string | null; prompt_source_version_id: string;
   capture: CapturedInput | null; capture_hash: string; result: ValidatedProposal | null; cancel_requested_at: Date | null; terminal_at: Date | null;
 };
@@ -52,7 +52,7 @@ export async function applicationMutation<T extends object>(identity: ProjectIde
   });
 }
 export async function lockRun(tx: Transaction, projectId: string, runId: string): Promise<ApplicationRun> {
-  const [run] = await tx.$queryRaw<ApplicationRun[]>`SELECT id, draft_id, state::text AS state, disposition::text AS disposition, result_hash,
+  const [run] = await tx.$queryRaw<ApplicationRun[]>`SELECT id, task_type::text AS task_type, draft_id, state::text AS state, disposition::text AS disposition, result_hash,
     expected_document_revision, parent_snapshot_id, prompt_source_version_id, capture, capture_hash, result, cancel_requested_at, terminal_at
     FROM app.ai_run WHERE id = ${runId}::uuid AND project_id = ${projectId}::uuid FOR UPDATE`;
   if (!run) throw new ProjectError("NOT_FOUND");

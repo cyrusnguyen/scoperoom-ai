@@ -4,10 +4,11 @@ import { asJson, graphFailure, lockDraft, nextRevision, requireStoredSize } from
 import { recordEvent, requestHash } from "../../projects/server/access.ts";
 import { uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
-import { parseApplyRunInput, type AppliedRun, type ApplyRunInput, type CapturedInput } from "../contracts/tasks.ts";
+import { parseApplyRunInput, type AppliedRun, type ApplyRunInput } from "../contracts/tasks.ts";
 import { canonicalJson, sha256 } from "../domain/capture.ts";
 import { applyProposal } from "../domain/proposal-diff.ts";
 import { ResultError } from "../domain/validate-result.ts";
+import { validatedCapture, type CaptureRow } from "./applicability.ts";
 import { applicationMutation, available, cursor, lockRun } from "./application.ts";
 
 const OPERATION = "AI_APPLY_V1";
@@ -28,16 +29,19 @@ export async function applyRun(identity: ProjectIdentity, projectId: string, run
   return applicationMutation(identity, projectId, runId, key, OPERATION, hash, parseAppliedRun, async (tx, project, actorId) => {
     const [prior] = await tx.$queryRaw<Array<{ id: string; draft_id: string }>>`SELECT id, draft_id FROM app.ai_suggestion_application WHERE run_id = ${runId}::uuid`;
     if (prior) throw new ProjectError("AI_RUN_CONSUMED", { applicationId: prior.id, runId, draftId: prior.draft_id });
-    const [manifest] = await tx.$queryRaw<Array<{ draft_id: string; capture: CapturedInput | null }>>`SELECT draft_id, capture FROM app.ai_run WHERE id = ${runId}::uuid AND project_id = ${project.id}::uuid`;
+    const [manifest] = await tx.$queryRaw<Array<CaptureRow>>`SELECT task_type::text AS task_type, draft_id, expected_document_revision, parent_snapshot_id, capture, capture_hash FROM app.ai_run WHERE id = ${runId}::uuid AND project_id = ${project.id}::uuid`;
     if (!manifest || input.draftId !== manifest.draft_id) throw new ProjectError("DRAFT_REPLACED");
     const saved = await lockDraft(tx, project, input.draftId);
-    const sources = manifest.capture?.sources ?? [];
+    const captured = validatedCapture(manifest);
+    if (!captured) throw new ProjectError("AI_RESULT_UNAVAILABLE");
+    const sources = captured.sources;
     const heads = sources.length ? await tx.$queryRaw<Array<{ id: string; current_version_id: string | null }>>`
       SELECT id, current_version_id FROM app.source_document WHERE project_id = ${project.id}::uuid AND id = ANY(${sources.map(source => source.sourceId)}::uuid[]) ORDER BY id FOR SHARE` : [];
     const run = await lockRun(tx, project.id, runId);
     await available(tx, run, input.resultHash);
-    const capture = run.capture!;
-    if (sha256(canonicalJson(capture)) !== run.capture_hash || sha256(canonicalJson(run.result)) !== run.result_hash) throw new ProjectError("UNAVAILABLE");
+    const capture = validatedCapture(run);
+    if (!capture) throw new ProjectError("AI_RESULT_UNAVAILABLE");
+    if (sha256(canonicalJson(run.result)) !== run.result_hash) throw new ProjectError("UNAVAILABLE");
     if (capture.draftId !== input.draftId || capture.draftId !== run.draft_id) throw new ProjectError("DRAFT_REPLACED");
     if (input.expectedDocumentRevision !== capture.documentRevision || run.expected_document_revision !== capture.documentRevision || saved.documentRevision !== capture.documentRevision) throw new ProjectError("STALE_DOCUMENT_REVISION");
     if (input.expectedParentSnapshotId !== capture.parentSnapshotId || run.parent_snapshot_id !== capture.parentSnapshotId || project.approvedSnapshotId !== capture.parentSnapshotId) throw new ProjectError("BASELINE_CHANGED");
