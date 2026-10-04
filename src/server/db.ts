@@ -16,7 +16,7 @@ export async function createDatabase(connectionString = process.env.DATABASE_URL
   }
 }
 
-const cache = globalThis as typeof globalThis & { scoperoomDatabase?: Promise<PrismaClient> };
+const cache = globalThis as typeof globalThis & { scoperoomDatabase?: Promise<PrismaClient>; scoperoomWorkerDatabase?: Promise<PrismaClient> };
 
 /** One verified client per server process (surviving dev reloads); a failed start is retried on the next call. */
 export function getDatabase(): Promise<PrismaClient> {
@@ -25,4 +25,18 @@ export function getDatabase(): Promise<PrismaClient> {
     throw error;
   });
   return cache.scoperoomDatabase;
+}
+
+/**
+ * The restricted worker connection (WORKER_DATABASE_URL, role app_worker): it can read runs and call the fenced claim/settle/dispatch
+ * functions and nothing else. Worker services use only this, never web identity, cookies or request state.
+ */
+export function getWorkerDatabase(): Promise<PrismaClient> {
+  const url = process.env.WORKER_DATABASE_URL;
+  if (!url) return Promise.reject(new Error("WORKER_DATABASE_URL is required for worker database access."));
+  cache.scoperoomWorkerDatabase ??= createDatabase(url).catch((error: unknown) => {
+    cache.scoperoomWorkerDatabase = undefined;
+    throw error;
+  });
+  return cache.scoperoomWorkerDatabase;
 }

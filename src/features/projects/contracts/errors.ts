@@ -24,6 +24,11 @@ export const projectErrors = {
   IMPORT_EXPIRED: { status: 409, message: "This import preview expired. Create a new preview." },
   IMPORT_STALE: { status: 409, message: "This import target changed. Create a new preview." },
   IMPORT_PAYLOAD_MISMATCH: { status: 409, message: "This import does not match its preview." },
+  INVALID_SOURCE_REFERENCE: { status: 422, message: "A cited source is unavailable or doesn't belong to this project. Pick the source again." },
+  BASELINE_CHANGED: { status: 409, message: "The approved baseline changed. Reload the project and try again." },
+  AI_BUSY: { status: 409, message: "An AI request is already running. Wait for it to finish, then try again." },
+  AI_BUDGET_EXCEEDED: { status: 429, message: "This project owner has used the daily AI request limit. It resets at 00:00 UTC." },
+  RATE_LIMITED: { status: 429, message: "Too many AI requests. Wait a minute and try again." },
   EXPORT_REVISION_CHANGED: { status: 409, message: "The saved flow changed. Refresh and prepare the export again." },
 } as const;
 

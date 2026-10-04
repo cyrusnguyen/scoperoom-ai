@@ -64,6 +64,78 @@ enum FlowImportState {
   @@schema("app")
 }
 
+enum SourceKind {
+  USER_TEXT
+  USER_UPLOAD
+  QUESTION_ANSWER
+  AI_PROMPT
+  PROMOTED_GRAPH
+
+  @@map("source_kind")
+  @@schema("app")
+}
+
+enum AiTaskKind {
+  PROPOSE_FLOW
+  REFINE_FLOW_SELECTION
+
+  @@map("ai_task_kind")
+  @@schema("app")
+}
+
+enum AiRunState {
+  QUEUED
+  RUNNING
+  VALIDATING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  TIMED_OUT
+
+  @@map("ai_run_state")
+  @@schema("app")
+}
+
+enum AiResultDisposition {
+  AVAILABLE
+  APPLIED
+  DISCARDED
+  EXPIRED
+
+  @@map("ai_result_disposition")
+  @@schema("app")
+}
+
+enum AiDispatchState {
+  PENDING
+  DISPATCHED
+
+  @@map("ai_dispatch_state")
+  @@schema("app")
+}
+
+enum AiBudgetState {
+  RESERVED
+  CONSUMED
+  RELEASED
+
+  @@map("ai_budget_state")
+  @@schema("app")
+}
+
+enum AiAttemptOutcome {
+  COMPLETED
+  REFUSED
+  INCOMPLETE
+  UNAVAILABLE
+  UNKNOWN
+  TIMED_OUT
+  CANCELLED
+
+  @@map("ai_attempt_outcome")
+  @@schema("app")
+}
+
 enum ProjectMemberRole {
   EDITOR
   REVIEWER
@@ -89,6 +161,10 @@ model UserProfile {
   invitationsSent       Invitation[]        @relation("invitation_inviter")
   invitationsAccepted   Invitation[]        @relation("invitation_acceptor")
   designatedApproverFor Project[]           @relation("project_designated_approver")
+  sourceDocumentsCreated SourceDocument[]   @relation("source_document_creator")
+  sourceVersionsCreated SourceVersion[]     @relation("source_version_creator")
+  aiAllowance           AiOwnerAllowance?
+  aiRunsStarted         AiRun[]             @relation("ai_run_actor")
 
   @@map("user_profile")
   @@schema("app")
@@ -141,6 +217,8 @@ model Project {
   currentDraftId        String?             @map("current_draft_id") @db.Uuid
   realtimeEpoch         String              @default(dbgenerated("gen_random_uuid()")) @map("realtime_epoch") @db.Uuid
   eventSequence         BigInt              @default(0) @map("event_sequence") @db.BigInt
+  aiRevision            BigInt              @default(0) @map("ai_revision") @db.BigInt
+  approvedSnapshotId    String?             @map("approved_snapshot_id") @db.Uuid
   createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt             DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   owner                 UserProfile         @relation("project_owner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: NoAction)
@@ -151,6 +229,8 @@ model Project {
   memberships           ProjectMembership[]
   invitations           Invitation[]
   flowImportPreviews    FlowImportPreview[] @relation("flow_import_project")
+  sourceDocuments       SourceDocument[]
+  aiRuns                AiRun[]
 
   @@unique([id, currentDraftId])
   @@index([ownerId, status, updatedAt, id])
@@ -217,6 +297,7 @@ model ScopeDraft {
   creator          UserProfile      @relation(fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
   currentFor       Project?         @relation("project_current_draft")
   flowImportPreviews FlowImportPreview[] @relation("flow_import_draft")
+  aiRuns           AiRun[]
 
   @@unique([projectId, id])
   @@map("scope_draft")
@@ -250,6 +331,162 @@ model FlowImportPreview {
   @@index([projectId, actorId, id])
   @@index([actorId, createdAt], map: "flow_import_preview_actor_created_at_idx")
   @@map("flow_import_preview")
+  @@schema("app")
+}
+
+model SourceDocument {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId         String          @map("project_id") @db.Uuid
+  kind              SourceKind
+  currentVersionId  String?         @map("current_version_id") @db.Uuid
+  displayNickname   String?         @map("display_nickname") @db.Text
+  archived          Boolean         @default(false)
+  version           Int             @default(1)
+  lastEventSequence BigInt          @default(0) @map("last_event_sequence") @db.BigInt
+  createdBy         String          @map("created_by") @db.Uuid
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  project           Project         @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  creator           UserProfile     @relation("source_document_creator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  currentVersion    SourceVersion?  @relation("source_document_head", fields: [projectId, id, currentVersionId], references: [projectId, sourceId, id], onDelete: NoAction, onUpdate: NoAction, map: "source_document_current_version_fkey")
+  versions          SourceVersion[] @relation("source_document_versions")
+
+  @@unique([projectId, id])
+  @@map("source_document")
+  @@schema("app")
+}
+
+model SourceVersion {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId      String           @map("project_id") @db.Uuid
+  sourceId       String           @map("source_id") @db.Uuid
+  sequence       Int
+  title          String           @db.Text
+  text           String           @db.Text
+  codePointCount Int              @map("code_point_count")
+  utf8ByteCount  Int              @map("utf8_byte_count")
+  contentHash    String           @map("content_hash") @db.Char(64)
+  createdBy      String           @map("created_by") @db.Uuid
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  origin         Json?
+  source         SourceDocument   @relation("source_document_versions", fields: [projectId, sourceId], references: [projectId, id], onDelete: Cascade, onUpdate: NoAction, map: "source_version_source_fkey")
+  creator        UserProfile      @relation("source_version_creator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  headOf         SourceDocument[] @relation("source_document_head")
+  prompts        AiRun[]          @relation("ai_run_prompt_version")
+
+  @@unique([sourceId, sequence])
+  @@unique([projectId, sourceId, id])
+  @@unique([projectId, id])
+  @@map("source_version")
+  @@schema("app")
+}
+
+model AiOwnerAllowance {
+  ownerId   String        @id @map("owner_id") @db.Uuid
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  owner     UserProfile   @relation(fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "ai_owner_allowance_owner_fkey")
+  days      AiBudgetDay[]
+  runs      AiRun[]
+
+  @@map("ai_owner_allowance")
+  @@schema("app")
+}
+
+model AiBudgetDay {
+  ownerId      String           @map("owner_id") @db.Uuid
+  day          DateTime         @db.Date
+  reservedRuns Int              @default(0) @map("reserved_runs")
+  consumedRuns Int              @default(0) @map("consumed_runs")
+  allowance    AiOwnerAllowance @relation(fields: [ownerId], references: [ownerId], onDelete: Restrict, onUpdate: NoAction, map: "ai_budget_day_owner_fkey")
+  runs         AiRun[]
+
+  @@id([ownerId, day])
+  @@map("ai_budget_day")
+  @@schema("app")
+}
+
+model AiRun {
+  id                       String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId                String               @map("project_id") @db.Uuid
+  draftId                  String               @map("draft_id") @db.Uuid
+  actorId                  String               @map("actor_id") @db.Uuid
+  ownerId                  String               @map("owner_id") @db.Uuid
+  admissionDay             DateTime             @map("admission_day") @db.Date
+  promptSourceVersionId    String               @map("prompt_source_version_id") @db.Uuid
+  taskType                 AiTaskKind           @map("task_type")
+  flowId                   String?              @map("flow_id") @db.Uuid
+  model                    String               @db.Text
+  executionBinding         String               @map("execution_binding") @db.Text
+  capture                  Json?
+  captureHash              String               @map("capture_hash") @db.Char(64)
+  expectedDocumentRevision Int                  @map("expected_document_revision")
+  parentSnapshotId         String?              @map("parent_snapshot_id") @db.Uuid
+  state                    AiRunState           @default(QUEUED)
+  disposition              AiResultDisposition?
+  result                   Json?
+  resultHash               String?              @map("result_hash") @db.Char(64)
+  diff                     Json?
+  failureCode              String?              @map("failure_code") @db.Text
+  deadlineAt               DateTime             @map("deadline_at") @db.Timestamptz(6)
+  dispatchState            AiDispatchState      @default(PENDING) @map("dispatch_state")
+  dispatchId               String               @default(dbgenerated("gen_random_uuid()")) @map("dispatch_id") @db.Uuid
+  taskId                   String?              @map("task_id") @db.Text
+  dispatchLeaseUntil       DateTime?            @map("dispatch_lease_until") @db.Timestamptz(6)
+  nextDispatchAt           DateTime?            @map("next_dispatch_at") @db.Timestamptz(6)
+  currentAttemptId         String?              @map("current_attempt_id") @db.Uuid
+  budgetState              AiBudgetState        @default(RESERVED) @map("budget_state")
+  cancelRequestedAt        DateTime?            @map("cancel_requested_at") @db.Timestamptz(6)
+  terminalAt               DateTime?            @map("terminal_at") @db.Timestamptz(6)
+  lastEventSequence        BigInt               @default(0) @map("last_event_sequence") @db.BigInt
+  createdAt                DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  project                  Project              @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "ai_run_project_fkey")
+  draft                    ScopeDraft           @relation(fields: [projectId, draftId], references: [projectId, id], onDelete: Cascade, onUpdate: NoAction, map: "ai_run_project_draft_fkey")
+  actor                    UserProfile          @relation("ai_run_actor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "ai_run_actor_fkey")
+  allowance                AiOwnerAllowance     @relation(fields: [ownerId], references: [ownerId], onDelete: Restrict, onUpdate: NoAction, map: "ai_run_owner_allowance_fkey")
+  budgetDay                AiBudgetDay          @relation(fields: [ownerId, admissionDay], references: [ownerId, day], onDelete: Restrict, onUpdate: NoAction, map: "ai_run_budget_day_fkey")
+  promptVersion            SourceVersion        @relation("ai_run_prompt_version", fields: [projectId, promptSourceVersionId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "ai_run_prompt_version_fkey")
+  currentAttempt           AiRunAttempt?        @relation("ai_run_current_attempt", fields: [id, currentAttemptId], references: [runId, id], onDelete: NoAction, onUpdate: NoAction, map: "ai_run_current_attempt_fkey")
+  attempts                 AiRunAttempt[]       @relation("ai_run_attempts")
+
+  @@index([projectId, createdAt(sort: Desc), id(sort: Desc)], map: "ai_run_project_history_idx")
+  @@index([actorId], map: "ai_run_actor_idx")
+  @@index([projectId, promptSourceVersionId], map: "ai_run_prompt_version_idx")
+  @@map("ai_run")
+  @@schema("app")
+}
+
+model AiRunAttempt {
+  id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  runId              String            @map("run_id") @db.Uuid
+  attemptNumber      Int               @map("attempt_number")
+  token              String            @unique(map: "ai_run_attempt_token_key") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  startedAt          DateTime          @default(now()) @map("started_at") @db.Timestamptz(6)
+  deadlineAt         DateTime          @map("deadline_at") @db.Timestamptz(6)
+  callMayHaveStarted Boolean           @default(false) @map("call_may_have_started")
+  outcome            AiAttemptOutcome?
+  settledAt          DateTime?         @map("settled_at") @db.Timestamptz(6)
+  inputTokens        Int?              @map("input_tokens")
+  outputTokens       Int?              @map("output_tokens")
+  providerRequestId  String?           @map("provider_request_id") @db.Text
+  run                AiRun             @relation("ai_run_attempts", fields: [runId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "ai_run_attempt_run_fkey")
+  currentFor         AiRun[]           @relation("ai_run_current_attempt")
+
+  @@unique([runId, attemptNumber], map: "ai_run_attempt_run_number_key")
+  @@unique([runId, id], map: "ai_run_attempt_run_id_key")
+  @@map("ai_run_attempt")
+  @@schema("app")
+}
+
+model RateLimitBucket {
+  subjectHash String   @map("subject_hash") @db.Text
+  action      String   @db.Text
+  windowStart DateTime @map("window_start") @db.Timestamptz(6)
+  count       Int
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz(6)
+
+  @@id([subjectHash, action, windowStart])
+  @@index([expiresAt], map: "rate_limit_bucket_expires_at_idx")
+  @@map("rate_limit_bucket")
   @@schema("app")
 }
 

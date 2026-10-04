@@ -24,5 +24,9 @@ export async function insertProject(database: Client, ownerId: string, name = "S
 
 export async function removeSchemaRows(database: Client, profileIds: string[]) {
   await database.query("delete from app.project where owner_id = any($1::uuid[])", [profileIds]);
+  // Restrictive owner FKs: AI day counters, then the allowance row and entitlement, go before the profile itself.
+  await database.query("delete from app.ai_budget_day where owner_id = any($1::uuid[])", [profileIds]);
+  await database.query("delete from app.ai_owner_allowance where owner_id = any($1::uuid[])", [profileIds]);
+  await database.query("delete from app.pilot_entitlement where profile_id = any($1::uuid[])", [profileIds]);
   await database.query("delete from app.user_profile where id = any($1::uuid[])", [profileIds]);
 }

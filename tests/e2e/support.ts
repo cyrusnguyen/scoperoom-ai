@@ -23,7 +23,7 @@ export function withStatus<T extends { project: { status: string; role: string }
     ...bootstrap,
     status: {
       viewerId: MOCK_VIEWER_ID, status: project.status, role: project.role, version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null,
-      currentDraftId: draft.id, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, realtimeEpoch: "77777777-7777-4777-8777-777777777777", eventSequence: 1,
+      currentDraftId: draft.id, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, realtimeEpoch: "77777777-7777-4777-8777-777777777777", eventSequence: 1, aiRevision: 0, approvedSnapshotId: null,
     },
   };
 }
@@ -113,6 +113,9 @@ export async function cleanupUsers(database: Client, admin: SupabaseClient, user
   const profiles = "(select id from app.user_profile where auth_user_id = any($1::uuid[]))";
   await database.query(`delete from app.mutation_receipt where actor_id in ${profiles}`, [users]);
   await database.query(`delete from app.project where owner_id in ${profiles}`, [users]);
+  // AI runs went with their projects; the owner's allowance and day counters would still restrict deleting the profile.
+  await database.query(`delete from app.ai_budget_day where owner_id in ${profiles}`, [users]);
+  await database.query(`delete from app.ai_owner_allowance where owner_id in ${profiles}`, [users]);
   await database.query(`delete from app.pilot_entitlement where profile_id in ${profiles}`, [users]);
   await database.query(`delete from app.user_profile where auth_user_id = any($1::uuid[])`, [users]);
   await Promise.all(users.map((id) => admin.auth.admin.deleteUser(id)));

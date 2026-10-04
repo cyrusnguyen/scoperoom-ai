@@ -1,0 +1,104 @@
+name: deploy-worker
+
+# The single Trigger deployment owner. Keep Trigger GitHub/Vercel auto-deploy integrations off.
+# Vercel owns web builds. This workflow never runs on a PR, push or schedule.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment holding this synthetic target's Trigger configuration
+        type: choice
+        options: [worker-synthetic]
+        required: true
+      sha:
+        description: Full lowercase commit SHA on main with the latest exact main-push CI run green
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Require the trusted workflow ref and target
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          TARGET: ${{ inputs.environment }}
+        run: |
+          [ "$WORKFLOW_REF" = "refs/heads/main" ] || { echo "Run this workflow from main only."; exit 1; }
+          [ "$TARGET" = "worker-synthetic" ] || { echo "Unsupported worker target."; exit 1; }
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate the commit and its latest trusted CI run
+        id: validate
+        env:
+          SHA: ${{ inputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "$1"; exit 1; }
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "sha must be a full lowercase 40-character commit SHA."
+          git merge-base --is-ancestor "$SHA" origin/main || fail "The commit is not on main."
+          # Query the actual CI workflow, not repository-wide check names or a prior successful attempt.
+          run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&branch=main&event=push&per_page=100" \
+            --jq '[.workflow_runs[]] | max_by(.run_number) | .id // empty')
+          [[ "$run_id" =~ ^[0-9]+$ ]] || fail "No main-push CI run exists for this commit."
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$RUNNER_TEMP/worker-ci-run.json"
+          jq -e --arg sha "$SHA" --arg repo "$GITHUB_REPOSITORY" '
+            .head_sha == $sha and .head_branch == "main" and .event == "push" and
+            .path == ".github/workflows/ci.yml" and .head_repository.full_name == $repo and
+            .status == "completed" and .conclusion == "success"
+          ' "$RUNNER_TEMP/worker-ci-run.json" > /dev/null || fail "Latest exact main-push CI run is not green."
+          attempt=$(jq -r '.run_attempt' "$RUNNER_TEMP/worker-ci-run.json")
+          [[ "$attempt" =~ ^[0-9]+$ ]] || fail "Missing CI attempt identity."
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/attempts/$attempt/jobs?per_page=100" > "$RUNNER_TEMP/worker-ci-jobs.json"
+          jq -e --arg sha "$SHA" '
+            .jobs as $jobs | ["static-unit-build", "database-integration", "chromium"] |
+            all(.[]; . as $name | [$jobs[] | select(.name == $name)] |
+              length == 1 and all(.[]; .head_sha == $sha and .status == "completed" and .conclusion == "success"))
+          ' "$RUNNER_TEMP/worker-ci-jobs.json" > /dev/null || fail "Required CI jobs did not all succeed in the latest attempt."
+          echo "ci_run_id=$run_id" >> "$GITHUB_OUTPUT"
+          git checkout --detach "$SHA"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.21.0
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm db:generate
+      - name: Deploy the worker bound to the checked SHA
+        id: worker
+        env:
+          TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
+          TRIGGER_PROJECT_REF: ${{ vars.TRIGGER_PROJECT_REF }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          [ -n "$TRIGGER_ACCESS_TOKEN" ] || { echo "Missing environment-scoped Trigger deploy credential."; exit 1; }
+          [ -n "$TRIGGER_PROJECT_REF" ] || { echo "Missing environment-scoped Trigger project reference."; exit 1; }
+          corepack pnpm exec trigger deploy --env prod --external-id "$SHA" --skip-update-check --skip-telemetry
+      - name: Record the deployed identity
+        env:
+          SHA: ${{ inputs.sha }}
+          TARGET: ${{ inputs.environment }}
+          CI_RUN_ID: ${{ steps.validate.outputs.ci_run_id }}
+          DEPLOYMENT_VERSION: ${{ steps.worker.outputs.deploymentVersion }}
+        run: |
+          [ -n "$DEPLOYMENT_VERSION" ] || { echo "Trigger did not return a deployment version."; exit 1; }
+          {
+            echo "### Worker deploy"
+            echo "- target: $TARGET"
+            echo "- commit and external deployment id: $SHA"
+            echo "- Trigger deployment version: $DEPLOYMENT_VERSION"
+            echo "- required CI run: $CI_RUN_ID"
+          } >> "$GITHUB_STEP_SUMMARY"
