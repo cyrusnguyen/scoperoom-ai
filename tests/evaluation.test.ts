@@ -8,7 +8,7 @@ import { resultFixture } from "./support/ai-results.ts";
 import { buildModelRequest } from "../src/features/proposals/domain/model-request.ts";
 import { canonicalJson, sha256 } from "../src/features/proposals/domain/capture.ts";
 const request = () => { const capture = resultFixture().generate(); capture.versions.model = MODEL; return buildModelRequest({id: "00000000-0000-4000-8000-000000000001", model: MODEL, capture}, 1000); };
-const state = () => ({model: MODEL, authorizedCalls: 26, reservedCalls: 0, records: []});
+const state = () => ({purpose: "24 synthetic evaluation cases plus two product journeys", authorizationDate: "2026-10-05", scope: "No retries or calibration beyond cumulative budget", model: MODEL, authorizedCalls: 26, reservedCalls: 0, records: []});
 async function budgetTest(run: (journal: string) => Promise<void>) {
   const dir = mkdtempSync(join(tmpdir(), "scoperoom-evaluation-")); const journal = join(dir, "budget.json");
   writeFileSync(journal, JSON.stringify(state())); try { await run(journal); } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -28,11 +28,11 @@ test("physical inference is fsynced before transport and cannot repeat after res
 }));
 test("malformed, exhausted and mismatched journal authority never reaches transport", async () => budgetTest(async journal => {
   let calls = 0, denied = 0;
-  for (const value of ["{", JSON.stringify({...state(), model: "another-model"}), JSON.stringify({...state(), reservedCalls: 26}), JSON.stringify({...state(), authorizedCalls: 27}), JSON.stringify({...state(), records: [{slot: 1}]})]) {
+  for (const value of ["{", JSON.stringify({...state(), model: "another-model"}), JSON.stringify({...state(), reservedCalls: 26}), JSON.stringify({...state(), authorizedCalls: 27}), JSON.stringify({...state(), records: [{slot: 1}]}), JSON.stringify({...state(), authorizationDate: "2026-10-04"}), JSON.stringify({...state(), purpose: "Unrelated session"})]) {
     writeFileSync(journal, value);
     await budgetGateway({journal, id: "G01", kind: "corpus", apiKey: "synthetic-test-key", onDenied: () => denied++, transport: async () => {calls++; throw new Error("must not reach transport");}}).generate(request(), new AbortController().signal);
   }
-  assert.equal(calls, 0); assert.equal(denied, 5);
+  assert.equal(calls, 0); assert.equal(denied, 7);
 }));
 test("model mismatch and failed persistence deny before any inference", async () => budgetTest(async journal => {
   let calls = 0, denied = 0;

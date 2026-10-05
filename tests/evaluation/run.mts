@@ -86,8 +86,9 @@ type Budget = { model: string; authorizedCalls: number; reservedCalls: number; r
 function readBudget(path: string): Budget {
   if (!lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) throw new Error("BUDGET_INVALID");
   const raw = object(JSON.parse(readFileSync(path, "utf8")));
-  keys(raw, ["model", "authorizedCalls", "reservedCalls", "records"], ["purpose", "authorizationDate", "scope"]);
-  if (raw.model !== MODEL || raw.authorizedCalls !== 26 || !Number.isSafeInteger(raw.reservedCalls) || !Array.isArray(raw.records)
+  keys(raw, ["model", "authorizedCalls", "reservedCalls", "records", "purpose", "authorizationDate", "scope"]);
+  if (raw.purpose !== "24 synthetic evaluation cases plus two product journeys" || raw.authorizationDate !== "2026-10-05"
+    || raw.scope !== "No retries or calibration beyond cumulative budget" || raw.model !== MODEL || raw.authorizedCalls !== 26 || !Number.isSafeInteger(raw.reservedCalls) || !Array.isArray(raw.records)
     || raw.reservedCalls !== raw.records.length || raw.records.length > 26) throw new Error("BUDGET_INVALID");
   const seen = new Set<string>(); const runIds = new Set<string>();
   let journeys = 0;
