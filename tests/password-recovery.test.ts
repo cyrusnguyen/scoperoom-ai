@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createClient } from "@supabase/supabase-js";
 import type { RecoveryClient as ProviderClient } from "../src/features/access/server/password-recovery.ts";
 
 const recovery = await import("../src/features/access/server/password-recovery.ts").catch(() => null);
@@ -10,6 +11,7 @@ type RecoveryClient = {
     verifyOtp: (input: { email: string; token: string; type: "recovery" }) => Promise<unknown>;
     updateUser: (input: { password: string }) => Promise<unknown>;
     signOut: (options: { scope: "global" | "local" }) => Promise<{ error: unknown }>;
+    admin: { signOut: (jwt: string, scope: "global" | "local") => Promise<{ data: null; error: unknown }> };
   };
 };
 
@@ -46,6 +48,10 @@ function client(overrides: Partial<RecoveryClient["auth"]> = {}) {
       calls.push(["signOut", options]);
       return { error: null };
     },
+    admin: { signOut: async (_jwt, scope) => {
+      calls.push(["admin.signOut", scope]);
+      return { data: null, error: null };
+    } },
     ...overrides,
   };
   return { auth, calls } as unknown as { auth: ProviderClient["auth"]; calls: Array<[string, unknown]> };
@@ -129,7 +135,7 @@ test("valid recovery verifies the recovery OTP before one update and global sess
   assert.deepEqual(fake.calls, [
     ["verifyOtp", { email: "ada@example.test", token: "012345", type: "recovery" }],
     ["updateUser", { password: validInput.password }],
-    ["signOut", { scope: "global" }],
+    ["admin.signOut", "global"],
   ]);
 });
 
@@ -182,13 +188,13 @@ test("uncertain or mismatched update acknowledgement never reports success and o
 
 test("confirmed password update remains confirmed when global sign-out fails", async () => {
   const { recoverPassword } = operations();
-  const fake = client({ signOut: async (options) => {
-    fake.calls.push(["signOut", options]);
-    return { error: { code: "unexpected_failure", status: 503 } };
-  } });
+  const fake = client({ admin: { signOut: async (_jwt, scope) => {
+    fake.calls.push(["admin.signOut", scope]);
+    return { data: null, error: { code: "unexpected_failure", status: 503 } };
+  } } });
   assert.deepEqual(await recoverPassword(fake, validInput), { kind: "updated-with-signout-warning" });
   assert.equal(fake.calls.filter(([name]) => name === "updateUser").length, 1);
-  assert.deepEqual(fake.calls.at(-1), ["signOut", { scope: "global" }]);
+  assert.deepEqual(fake.calls.at(-1), ["admin.signOut", "global"]);
 });
 
 test("lost or unusable send acknowledgements remain unknown without retrying the send", async () => {
@@ -285,6 +291,35 @@ test("explicit update refusals require a fresh code while ambiguous errors stay 
 
 test("unusable global sign-out acknowledgement preserves the update with a warning", async () => {
   const { recoverPassword } = operations();
-  const fake = client({ signOut: async () => ({} as never) });
+  const fake = client({ admin: { signOut: async () => ({} as never) } });
   assert.deepEqual(await recoverPassword(fake, validInput), { kind: "updated-with-signout-warning" });
+});
+
+test("global revocation failures are reported through the explicit admin acknowledgement", async () => {
+  const { recoverPassword } = operations();
+  const failures = [
+    { status: 401, body: { code: "bad_jwt" } },
+    { status: 403, body: { code: "insufficient_privilege" } },
+    { status: 404, body: { code: "user_not_found" } },
+    { status: 400, body: { code: "session_not_found" } },
+  ];
+  for (const failure of failures) {
+    const requests: string[] = [];
+    const supabase = createClient("http://127.0.0.1:54321", "local-test-key", {
+      auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false },
+      global: { fetch: async (input, init) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        requests.push(`${init?.method ?? "GET"} ${url.pathname}${url.search}`);
+        if (url.pathname.endsWith("/verify")) return Response.json({ access_token: crypto.randomUUID(), refresh_token: crypto.randomUUID(), expires_in: 3600, token_type: "bearer", user: verifiedUser });
+        if (url.pathname.endsWith("/user")) return Response.json(verifiedUser);
+        return Response.json(failure.body, { status: failure.status });
+      } },
+    });
+    assert.deepEqual(await recoverPassword(supabase as unknown as ProviderClient, validInput), { kind: "updated-with-signout-warning" });
+    assert.deepEqual(requests, [
+      "POST /auth/v1/verify",
+      "PUT /auth/v1/user",
+      "POST /auth/v1/logout?scope=global",
+    ]);
+  }
 });

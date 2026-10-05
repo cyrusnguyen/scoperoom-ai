@@ -8,6 +8,7 @@
   background-size: 22px 22px;
 }
 .login-card {
+  box-sizing: border-box;
   width: min(100%, 440px);
   padding: clamp(28px, 6vw, 44px);
   border: 1px solid var(--border);
@@ -111,3 +112,15 @@
   .verification-digit { height: 48px; }
   .login-form .verification-input { height: 48px; }
 }
+.login-password-label-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0 8px; margin-bottom: 7px; }
+.login-password-label-row label { margin: 0; }
+.login-password-label-row a { display: inline-flex; min-height: 44px; align-items: center; color: var(--accent); font-size: 12px; text-underline-offset: 3px; }
+.login-password-label-row a:focus-visible, .login-footnote a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.login-form label[for="code"] { margin-bottom: 7px; }
+.login-form .login-field-error { margin: -16px 0 18px; color: var(--danger-foreground); font-size: 12px; line-height: 1.5; }
+.login-form input[aria-invalid="true"] { border-color: var(--danger-foreground); }
+.login-form .login-primary-link { display: grid; min-height: 44px; place-items: center; margin-top: 2px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--background); font-size: 13px; font-weight: 700; text-decoration: none; }
+.login-form .login-primary-link:hover { background: var(--accent-hover); }
+.login-form .login-primary-link:focus-visible, .login-form button:focus-visible, .verification-recipient button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.verification-recipient button { min-height: 44px; }
+.verification-recipient button:disabled { cursor: not-allowed; opacity: .55; }

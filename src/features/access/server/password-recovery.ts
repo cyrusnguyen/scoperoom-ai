@@ -21,7 +21,8 @@ export type RecoveryResult =
 export type PasswordResetRequestResult = { kind: "invalid-input" | "accepted" | "unavailable" | "send-unknown" };
 
 export type RecoveryClient = {
-  auth: Pick<SupabaseClient["auth"], "resetPasswordForEmail" | "verifyOtp" | "updateUser" | "signOut">;
+  auth: Pick<SupabaseClient["auth"], "resetPasswordForEmail" | "verifyOtp" | "updateUser" | "signOut"> &
+    { admin: Pick<SupabaseClient["auth"]["admin"], "signOut"> };
 };
 
 export function normalizeRecoveryEmail(value: unknown): string | null {
@@ -155,8 +156,13 @@ export async function recoverPassword(client: RecoveryClient, rawInput: unknown)
     return { kind: "update-unknown" };
   }
 
+  const accessToken = record(session)?.access_token;
+  if (typeof accessToken !== "string") {
+    await signOutLocal(client);
+    return { kind: "update-unknown" };
+  }
   try {
-    const response = record(await client.auth.signOut({ scope: "global" }));
+    const response = record(await client.auth.admin.signOut(accessToken, "global"));
     if (response?.error !== null) return { kind: "updated-with-signout-warning" };
   } catch {
     return { kind: "updated-with-signout-warning" };

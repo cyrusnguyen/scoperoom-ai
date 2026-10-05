@@ -10,6 +10,22 @@ ScopeRoom uses Supabase Auth for accounts, email confirmation, and sessions. Sup
 
 The app on port 3100 reads the Supabase URL and key in `.env.local`. Check whether those point to local (`127.0.0.1:54321`) or hosted Auth before testing an existing account. The two projects have separate users even when the email address is the same. Local confirmation mail stays in Mailpit; it does not reach Gmail. On Windows, browser tests require the isolated port-3101 Next server running with `SCOPEROOM_E2E=1` and local Supabase public variables.
 
+Local password recovery uses the `auth.email.template.recovery` entry in `supabase/config.toml` and `supabase/templates/recovery.html`. It sends the six-digit `{{ .Token }}` with a ten-minute expiry and a plain link to `/forgot-password/reset`; the code is not part of the URL. The page verifies the code before updating the password, then returns to sign-in instead of creating a browser session. The pending recovery address and resend timer use an HttpOnly presentation cookie scoped to `/forgot-password`, not an Auth session. Known and unknown addresses receive the same confirmation wording. A successful password change attempts global session revocation; if Auth refuses or cannot confirm that operation, the page still reports the confirmed password change and warns that other sessions may remain signed in.
+
+These settings affect only the local project. Restart local Supabase after changing the config and verify delivery in Mailpit. Hosted recovery email settings have not been applied or verified by this implementation.
+
+### Hosted password recovery qualification
+
+This implementation did not change hosted Auth settings or send hosted recovery mail. Before enabling password recovery for hosted users, qualify it in a controlled project with a mailbox and accounts owned by the operator:
+
+1. Confirm the hosted Site URL is the exact HTTPS app origin, `NEXT_PUBLIC_APP_URL` uses that same origin, and the redirect allow-list contains only the recovery destination required by the deployed app. Do not permit localhost or an unrelated preview origin for production users.
+2. Configure the hosted recovery template separately from signup confirmation. Verify the subject is `Reset your ScopeRoom password`, the template uses the six-digit `{{ .Token }}`, the email states the ten-minute expiry, and its plain reset URL contains no OTP or account identifier.
+3. Verify the hosted Auth OTP length is six, expiry is 600 seconds, and minimum email interval is at least 60 seconds. Confirm the selected SMTP provider is enabled, credentials remain server-side, and delivery plus suppression/bounce behavior is understood before using real accounts.
+4. With a controlled confirmed account, request recovery and inspect the received message without copying the code into logs or screenshots. Verify wrong, expired, and replayed codes cannot change the password; a valid code updates it without signing the recovery browser in; the old password fails and the new password works in a separate browser.
+5. Verify that a lost send acknowledgement asks the user to check email before resending, that unknown and known addresses show the same public response, and that a refused global session revocation warns that other sessions may remain signed in. Do not mark hosted recovery qualified until these checks pass and their evidence is stored without OTPs, passwords, tokens, or session cookies.
+
+These are deployment qualification steps, not completed hosted tests. This work used only local Auth and Mailpit and made no hosted Auth calls.
+
 Signup requires a name. Supabase saves its normalized value in `auth.users.raw_user_meta_data.full_name`. Existing users are not renamed. This metadata is suitable for display, not authorization.
 
 ## Hosted project

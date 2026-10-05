@@ -230,6 +230,10 @@ otp_expiry = 600
 subject = "Confirm your ScopeRoom email"
 content_path = "./supabase/templates/confirmation.html"
 
+[auth.email.template.recovery]
+subject = "Reset your ScopeRoom password"
+content_path = "./supabase/templates/recovery.html"
+
 # Uncomment to customize email template
 # [auth.email.template.invite]
 # subject = "You have been invited"

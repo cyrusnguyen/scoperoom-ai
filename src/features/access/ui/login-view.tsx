@@ -9,7 +9,7 @@ export default function LoginView({ message, isError, continuation }: { message:
         {continuation && <input type="hidden" name="continue" value={continuation} />}
         <label htmlFor="email">Email address</label>
         <input id="email" name="email" type="email" autoComplete="username" required maxLength={320} />
-        <label htmlFor="password">Password</label>
+        <div className="login-password-label-row"><label htmlFor="password">Password</label><Link href={continuation ? `/forgot-password?continue=${encodeURIComponent(continuation)}` : "/forgot-password"}>Forgot password?</Link></div>
         <input id="password" name="password" type="password" autoComplete="current-password" required maxLength={1024} />
         {message && <p className={isError ? "login-error" : "login-notice"} role={isError ? "alert" : "status"}>{message}</p>}
         <button type="submit">Sign in</button>

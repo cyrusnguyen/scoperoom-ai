@@ -3,8 +3,9 @@
 import { useState, type ChangeEvent } from "react";
 
 const CODE_LENGTH = 6;
+type Props = { invalid?: boolean; errorId?: string };
 
-export default function VerificationCodeInput() {
+export default function VerificationCodeInput({ invalid = false, errorId }: Props = {}) {
   const [code, setCode] = useState("");
 
   function updateCode(event: ChangeEvent<HTMLInputElement>) {
@@ -24,7 +25,8 @@ export default function VerificationCodeInput() {
           inputMode="numeric"
           autoComplete="one-time-code"
           pattern="[0-9]{6}"
-          aria-describedby="verification-hint"
+          aria-invalid={invalid || undefined}
+          aria-describedby={errorId ? `verification-hint ${errorId}` : "verification-hint"}
           value={code}
           onChange={updateCode}
           required
