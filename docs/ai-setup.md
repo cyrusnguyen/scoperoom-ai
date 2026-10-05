@@ -132,3 +132,38 @@ After the user topped up Google quota, a separate session allowed exactly two sy
 The measured cases support retaining the conservative three-bytes-per-token estimate: both accepted inputs passed its 16,000-token guard and their reported usage stayed below the ceiling. They do not prove tokenizer accuracy for every source or model, so no broader ceiling guarantee or unmeasured calibration claim is made.
 
 Trigger dispatch completed, repeating the original key returned the same provider run ID, and a forced duplicate made zero gateway or model HTTP calls. SQL confirmed `DISPATCHED`, no stored invalid content and zero reserved/one consumed run. The isolated worker was stopped and only its recorded fixture was cleaned. The new ledger is exhausted at two of two. No deployment, login or account change occurred.
+
+## Stage 06.3 curated synthetic evaluation
+
+The frozen corpus is `tests/evaluation/cases.json`: 24 synthetic captured inputs, 12 Generate and 12 Improve, split into 16 development and 8 held-out cases (four held-out per action). No prompt tuning is planned. Never tune from held-out results. Each case retains a saved document/layout, canonical capture/hash, source versions, expected invariants and an explicit human rubric. G10 exercises the last of five flow slots within the input-token bound; I10 exercises a 198-of-200-node saved document through a small captured selection.
+
+Default execution and imports make no network calls and need no provider credentials:
+
+```powershell
+node --experimental-strip-types tests/evaluation/run.mts
+node --experimental-strip-types --test tests/evaluation.test.ts
+```
+
+Default execution reconstructs all canonical captures, checks real bounds and applies synthetic validator probes through the existing result validator and graph transforms. Those probes establish deterministic schema/application/scope behavior only. They are not reference answers, model completions, semantic usefulness scores or provider evidence. Human omissions, unsupported claims, usefulness and correction effort remain explicitly unreviewed.
+
+After independent deterministic review and the lead's release, the authorized provider execution uses the exact model and an explicit unique bounded case selection:
+
+```powershell
+node --env-file=.env.evaluation.local --experimental-strip-types tests/evaluation/run.mts --live --synthetic --model=gemini-3.8-flash --target=synthetic --only=G01,G02,G03,G04,G05,G06,G07,G08,G09,G10,G11,G12,I01,I02,I03,I04,I05,I06,I07,I08,I09,I10,I11,I12 --limit=24
+```
+
+Run in a closed trusted environment, with `AI_MODEL=gemini-3.8-flash`, the Google key supplied only to this process, and both Trigger credentials blank. Do not inherit hosted/database settings from the primary environment. Cases use the production ModelGateway and validator without lifting any token/output/timeout limit. The CLI paces corpus requests by 13 seconds and makes no inference retries.
+
+The existing ignored `.tmp/stage-06.3-runtime/provider-budget.json` is the shared cumulative authority for at most 26 physical inference calls: one per frozen case plus one per product journey. Preserve it. It is neither created nor reset by this tool. An exclusive local file lock protects every read/write, and a reservation is persisted and fsynced immediately before the adapter's physical inference transport. Corrupt/exhausted/mismatched state, persistence failure, repeated case/run or a stale/concurrent lock deny transport. Unknown/in-flight reservations remain consumed. Redirect following is disabled; the SDK retains `maxRetries: 0`. Do not automatically remove a stale lock or refund/reclaim a slot after a crash. Resolve uncertain state with the lead while preserving consumed reservations.
+
+Safe summaries and bounded synthetic outputs are retained only under ignored `.tmp/stage-06.3-runtime/evaluation/`, with exact source/package/model/prompt/schema/corpus identities, captures, nullable usage, latency, validator failures and scope preservation. Standard output omits per-case outputs. `budget_denied` is separate from a provider refusal. Deterministic validity and human usefulness have no combined accuracy or invented pass threshold. Review every retained live result against its case rubric and record concrete omissions, unsupported claims and correction edits; do not turn unavailable human evidence into a pass.
+
+For the two reviewed local product journeys, the web server must capture `AI_MODEL=gemini-3.8-flash` and `AI_EXECUTION_BINDING=stage-06.3-local-evaluation`, with Google/Trigger keys blank and `SCOPEROOM_E2E=1`. After actual UI admission, the trusted worker CLI requires exact lead-approved run, project and environment UUIDs:
+
+```powershell
+node --experimental-strip-types tests/evaluation/run.mts --live --synthetic --model=gemini-3.8-flash --target=guarded-loopback --journey=RUN_UUID --project=PROJECT_UUID --environment=ENVIRONMENT_UUID
+```
+
+The trusted process receives the Google/model settings from the private evaluation environment and only `WORKER_DATABASE_URL`, `SCOPEROOM_ENVIRONMENT_ID`, `SCOPEROOM_SUPABASE_CONFIG` from the private guarded review environment, plus the exact local binding. `SCOPEROOM_DOCKER_BIN` is optional if Docker cannot be resolved through the normal paths. No bootstrap, migration, web, Auth or Trigger credential is needed. The CLI validates the configured loopback container/port, environment identity, `app_worker_runtime`/`app_worker` role, exact admitted model/binding, run/project IDs, current draft revision and a `Synthetic Stage 06.3` draft goal. That mutable synthetic marker supplements the lead-approved identities; it is not an authorization mechanism.
+
+Journey execution uses real `runAi` SQL claim/validator/settlement and allows one durable physical call per action, including across worker retries/process restarts. A blocked retry may consume a second SQL attempt and settle `MODEL_REFUSED` because the evaluator returns a synthetic refusal; the retained `budget_denied` event identifies that evaluator cause. Never report it as Gemini refusal or a completed product journey. A clarification or unusable output does not qualify the inspect/Apply journey. This CLI records worker outcomes; the lead still verifies the actual UI inspect, Apply and manual edit steps. Direct local invocation does not establish hosted Trigger delivery, external deployment binding or schedules. Live model results, the complete product journeys and the final integrated gate remain pending at deterministic implementation handoff.
