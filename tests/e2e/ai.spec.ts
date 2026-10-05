@@ -731,3 +731,145 @@ test("a fixture-scoped baseline change stales a run without changing the saved d
     }
   }
 });
+
+test("review regression: Studio draft checks open Details after AI was selected", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "AI Inspect tab recovery");
+  const flowId = randomUUID();
+  await seedStudioChanges(page, projectId, [
+    { command: "CREATE_FLOW", payload: { title: "Inspect this flow", purpose: "Review checks", classification: "USER_JOURNEY", inclusion: "INCLUDED" }, proposedIds: [flowId] },
+  ]);
+  await page.goto(`/app/projects/${projectId}`);
+  await openAi(page);
+  await page.locator(".studio-status").getByRole("button", { name: /draft checks|No draft checks/ }).click();
+  await expect(panel(page).getByRole("tab", { name: "Details", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(panel(page).getByLabel("Title", { exact: true })).toHaveValue("Inspect this flow");
+});
+
+for (const lateChange of ["typed buffer", "selection"] as const) {
+  test(`review regression: ${lateChange} during final AI capture admission sends nothing`, async ({ page }) => {
+    test.setTimeout(120_000);
+    const projectId = await createProjectViaApi(page, `AI late ${lateChange}`);
+    const flowId = randomUUID(), nodeId = randomUUID(), otherNodeId = randomUUID();
+    const draftId = await seedStudioChanges(page, projectId, [
+      { command: "CREATE_FLOW", payload: { title: "Late edit flow", purpose: "Saved context", classification: "USER_JOURNEY", inclusion: "INCLUDED" }, proposedIds: [flowId] },
+      { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Pay", description: "Saved step", actorLabel: "Customer" }, proposedIds: [nodeId] },
+      { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Receipt", description: "Saved next step", actorLabel: "Customer" }, proposedIds: [otherNodeId] },
+    ]);
+    await page.goto(`/app/projects/${projectId}`);
+    if (lateChange === "selection") {
+      await page.locator(".studio-toolbar").getByRole("button", { name: "List" }).click();
+      await page.getByRole("checkbox", { name: "Select Pay", exact: true }).check();
+    }
+    await openAi(page);
+    if (lateChange === "typed buffer") await page.locator(".studio-toolbar").getByRole("button", { name: "Canvas", exact: true }).click();
+    if (lateChange === "selection") await panel(page).getByLabel("Action", { exact: true }).selectOption("REFINE_FLOW_SELECTION");
+    await panel(page).getByLabel("Instruction").fill("Keep this instruction while context changes");
+    const statusUrl = `${appUrl}/api/projects/${projectId}/status`;
+    const draftUrl = `${appUrl}/api/projects/${projectId}/drafts/${draftId}`;
+    const startUrl = `${appUrl}/api/projects/${projectId}/ai-runs`;
+    let release!: () => void, sawFinalAdmission!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const finalAdmission = new Promise<void>((resolve) => { sawFinalAdmission = resolve; });
+    let holdNextStatus = false, captured = false, starts = 0;
+    page.on("request", (request) => { if (request.url() === startUrl && request.method() === "POST") starts++; });
+    await page.route(statusUrl, async (route) => {
+      if (!holdNextStatus) { await route.fallback(); return; }
+      holdNextStatus = false;
+      sawFinalAdmission();
+      await hold;
+      await route.fallback();
+    });
+    await page.route(draftUrl, async (route) => {
+      const response = await route.fetch();
+      if (!captured) {
+        captured = true;
+        holdNextStatus = true;
+        // Force the final authority check to await a read after the saved capture was inspected.
+        await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+      }
+      await route.fulfill({ response });
+    });
+    try {
+      await panel(page).getByRole("button", { name: lateChange === "selection" ? "Improve selection" : "Generate", exact: true }).click();
+      await finalAdmission;
+      if (lateChange === "selection") {
+        await page.getByRole("checkbox", { name: "Select Receipt", exact: true }).check();
+      } else {
+        await page.locator(`.react-flow__node[data-id="${nodeId}"] .step-label`).dblclick();
+        await page.locator(".inline-edit textarea").fill("Newer unsaved step label");
+      }
+      release();
+      await expect(panel(page).locator(".ai-message")).toContainText(/Studio edits changed|selected steps changed/i);
+      expect(starts).toBe(0);
+      await expect(panel(page).getByLabel("Instruction")).toHaveValue("Keep this instruction while context changes");
+      if (lateChange === "typed buffer") {
+        await expect(page.locator(".inline-edit textarea")).toHaveValue("Newer unsaved step label");
+        await expect(page.locator(".studio-status")).toContainText("Unsaved changes");
+      } else await expect(page.getByRole("checkbox", { name: "Select Receipt", exact: true })).toBeChecked();
+    } finally {
+      release();
+      await page.unroute(statusUrl);
+      await page.unroute(draftUrl);
+    }
+  });
+}
+
+test("review regression: expired proposal still recovers an uncertain Apply with its original receipt", async ({ page, workerAccount }) => {
+  test.setTimeout(120_000);
+  const projectId = await createProjectViaApi(page, "AI expired Apply recovery");
+  const completed = await storedSyntheticCompletion(page, workerAccount.database, projectId);
+  await page.goto(`/app/projects/${projectId}?run=${completed.runId}`);
+  const review = panel(page).getByRole("heading", { name: "Proposal review" }).locator("..");
+  await review.getByRole("checkbox").nth(0).check();
+  await review.getByRole("checkbox").nth(1).check();
+  const applyUrl = `${appUrl}/api/projects/${projectId}/ai-runs/${completed.runId}/apply`;
+  const sent: { key: string | undefined; body: unknown }[] = [];
+  let replayed = false, lostAcknowledgement!: () => void;
+  const lost = new Promise<void>((resolve) => { lostAcknowledgement = resolve; });
+  await page.route(applyUrl, async (route) => {
+    sent.push({ key: route.request().headers()["idempotency-key"], body: route.request().postDataJSON() });
+    const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    if (sent.length === 1) { await route.abort("failed"); lostAcknowledgement(); }
+    else {
+      replayed = (await response.json() as { replayed: boolean }).replayed;
+      await route.fulfill({ response });
+    }
+  });
+  try {
+    await review.getByRole("button", { name: "Apply selected changes" }).click();
+    await lost;
+    await expect(review.getByRole("button", { name: "Retry Apply with the same selection" })).toBeVisible();
+    const applied = await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { documentRevision: number; layoutRevision: number; document: { flows: Record<string, { title: string }> } } };
+    expect(Object.values(applied.draft.document.flows).filter((flow) => flow.title === "Reviewed checkout")).toHaveLength(1);
+    const databaseTarget = new URL(process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL!);
+    expect(databaseTarget.hostname).toBe("127.0.0.1");
+    expect((await workerAccount.database.query("select environment_id::text id from app.environment_identity where id = 1")).rows[0]?.id).toBe(process.env.SCOPEROOM_ENVIRONMENT_ID);
+    // Project-scoped historical aging fixture. LOCAL replica mode resets at transaction end.
+    await workerAccount.database.query("begin");
+    try {
+      await workerAccount.database.query("set local session_replication_role = replica");
+      await workerAccount.database.query("update app.ai_run set terminal_at = now() - interval '8 days' where id = $1", [completed.runId]);
+      await workerAccount.database.query("commit");
+    } catch (error) { await workerAccount.database.query("rollback"); throw error; }
+    expect((await workerAccount.database.query("show session_replication_role")).rows[0]?.session_replication_role).toBe("origin");
+    const expired = await workerAccount.database.query("select * from app.expire_ai_run_bodies(false, 100)");
+    expect(Number(expired.rows[0]?.clearedBodies)).toBeGreaterThan(0);
+    const cleaned = await (await page.request.get(`/api/projects/${projectId}/ai-runs/${completed.runId}`)).json();
+    expect(cleaned).toMatchObject({ disposition: "APPLIED", capture: null, result: null, application: { runId: completed.runId } });
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(review.getByText("No proposal is available for this run.", { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(review.getByRole("button", { name: "Apply selected changes" })).toHaveCount(0);
+    await expect(review.getByRole("button", { name: "Retry Apply with the same selection" })).toBeVisible();
+    await review.getByRole("button", { name: "Retry Apply with the same selection" }).click();
+    await expect(panel(page).getByText("Selected changes applied to the draft. They are not approved.", { exact: true })).toBeVisible();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+    expect(replayed).toBe(true);
+    const recovered = await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as typeof applied;
+    expect(recovered.draft).toEqual(applied.draft);
+    const freshApply = await page.request.post(applyUrl, { headers: mutation(), data: completed.body });
+    expect(freshApply.status()).toBe(409);
+    expect(await freshApply.json()).toMatchObject({ error: { code: "AI_RUN_CONSUMED" } });
+  } finally { await page.unroute(applyUrl); }
+});

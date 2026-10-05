@@ -1,7 +1,5 @@
 "use client";
 
-import "./ai.css";
-
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import { useAiSyncReader, useSync } from "@/features/collaboration/ui/sync-context";
@@ -11,7 +9,7 @@ import { createRunResources } from "./run-resources";
 import { RunCard } from "./run-card";
 import { RunHistory } from "./run-history";
 import { acknowledgedInstruction, retryStartRequest } from "./ai-submit";
-import type { RunPage, RunView, TaskKind } from "../contracts/tasks";
+import type { RunPage, RunView, StartRunInput, TaskKind } from "../contracts/tasks";
 
 const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -142,6 +140,21 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
       || authority.status.documentRevision !== request.body.expectedDocumentRevision
       || authority.status.approvedSnapshotId !== request.body.expectedParentSnapshotId)) {
       update((current) => ({ ...current, pendingRequest: null })); setMessage("The saved draft or baseline changed. Review the context and start again."); return;
+    }
+    if (!retry) {
+      const currentStudio = studioRef.current;
+      if (currentStudio.exportDirty) {
+        update((current) => ({ ...current, pendingRequest: null }));
+        setMessage("Studio edits changed while preparing this action. Save or resolve them and submit again."); return;
+      }
+      const capturedSelection = (request.body.context as StartRunInput["context"]).selection;
+      const selection = currentStudio.ui.selection;
+      if (capturedSelection && (selection?.kind !== "NODES"
+        || JSON.stringify(selection.ids) !== JSON.stringify(capturedSelection.nodeIds)
+        || selection.ids.some((id) => currentStudio.savedDraft.document.nodes[id]?.flowId !== capturedSelection.flowId))) {
+        update((current) => ({ ...current, pendingRequest: null }));
+        setMessage("The selected steps changed while preparing this action. Review the selection and submit again."); return;
+      }
     }
     setMessage("");
     const result = await apiMutate<{ runId: string; state: "QUEUED"; aiRevision: number }>(`/api/projects/${request.projectId}/ai-runs`, request.key, request.body);

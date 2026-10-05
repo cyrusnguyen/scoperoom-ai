@@ -75,9 +75,9 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
       </li>)}</ul></>}
       {run.applicability !== "APPLICABLE" && <p className="inline-note" role="status">This result is inspectable but can’t be applied: {run.applicabilityReasons.map((reason) => reason.toLowerCase().replaceAll("_", " ")).join(", ") || "it is no longer current"}.</p>}
       {blockedByPending && <p className="inline-note" role="status">Resolve the pending AI request before changing this proposal.</p>}
-      {pendingApply ? <button type="button" className="button primary" onClick={retry} disabled={busy || !canWrite}>Retry Apply with the same selection</button>
-        : <button type="button" className="button primary" onClick={apply} disabled={!canApply}>Apply selected changes</button>}
+      {!pendingApply && <button type="button" className="button primary" onClick={apply} disabled={!canApply}>Apply selected changes</button>}
     </>}
+    {pendingApply && <button type="button" className="button primary" onClick={retry} disabled={busy}>Retry Apply with the same selection</button>}
     <p className="muted">AI suggestions change the current draft only. Applying does not approve or publish them.</p>
   </section>;
 }

@@ -3,6 +3,7 @@ import "@xyflow/react/dist/style.css";
 import "@/features/shell/ui/shell.css";
 import "@/features/studio/ui/studio.css";
 import "@/features/shell/ui/flow-dialog.css";
+import "@/features/proposals/ui/ai.css";
 import { signOut } from "@/features/access/server/actions";
 import ProjectShell from "@/features/shell/ui/project-shell";
 import { PageAccessBoundary } from "@/features/access/ui/page-access";
