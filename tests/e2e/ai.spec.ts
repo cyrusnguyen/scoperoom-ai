@@ -12,6 +12,11 @@ test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
 const mutation = () => ({ Origin: appUrl, "Idempotency-Key": randomUUID() });
 const panel = (page: Page) => page.locator("#right-panel");
+const warnsBeforeUnload = (page: Page) => page.evaluate(() => {
+  const event = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(event);
+  return event.defaultPrevented;
+});
 const proposal: ValidatedProposal = { schemaVersion: 1, kind: "proposal", operations: [
   { id: "flow", dependsOn: [], edit: { command: "CREATE_FLOW", payload: { ref: "flow", title: "Reviewed checkout", purpose: "A clear checkout", classification: "USER_JOURNEY", inclusion: "INCLUDED" } } },
   { id: "step", dependsOn: ["flow"], edit: { command: "ADD_NODE", payload: { ref: "step", flowId: "flow", kind: "ACTION", label: "Pay", description: "Take payment", actorLabel: "Customer" } } },
@@ -100,6 +105,58 @@ test("Generate from an empty project and restore the exact queued run from its U
   await detailsTab.press("End");
   await expect(aiTab).toBeFocused();
   await expect(aiTab).toHaveAttribute("aria-selected", "true");
+});
+
+test("pending Start protects unload across project switches until the exact admission receipt is acknowledged", async ({ page, workerAccount }) => {
+  test.setTimeout(120_000);
+  const projectId = await createProjectViaApi(page, "AI pending Start source");
+  const otherId = await createProjectViaApi(page, "AI pending Start destination");
+  await page.goto("/app/projects/" + projectId);
+  await openAi(page);
+  await expect(page.locator(".studio-status")).not.toContainText("Unsaved changes");
+  expect(await warnsBeforeUnload(page)).toBe(false);
+  const startUrl = appUrl + "/api/projects/" + projectId + "/ai-runs";
+  const sent: { key: string; body: unknown; bytes: string | null }[] = [];
+  const responses: { runId: string; replayed: boolean }[] = [];
+  await page.route(startUrl, async (route) => {
+    if (route.request().method() !== "POST") { await route.fallback(); return; }
+    sent.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postDataJSON(), bytes: route.request().postData() });
+    const response = await route.fetch();
+    expect(response.status()).toBe(sent.length === 1 ? 202 : 200);
+    responses.push(await response.json() as { runId: string; replayed: boolean });
+    if (sent.length === 1) await route.abort("failed");
+    else await route.fulfill({ response });
+  });
+  try {
+    await panel(page).getByLabel("Instruction").fill("Capture this exact instruction");
+    await panel(page).getByRole("button", { name: "Generate", exact: true }).click();
+    await expect(panel(page).getByRole("button", { name: "Retry this request", exact: true })).toBeVisible();
+    await panel(page).getByLabel("Instruction").fill("Keep this newer instruction");
+    await expect(page.locator(".studio-status")).not.toContainText("Unsaved changes");
+    expect(await warnsBeforeUnload(page)).toBe(true);
+    await panel(page).getByRole("button", { name: "Close panel", exact: true }).click();
+    expect(await warnsBeforeUnload(page)).toBe(true);
+    await page.locator("#projects-nav").getByRole("button", { name: "AI pending Start destination", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp("/app/projects/" + otherId + "$"));
+    await expect(page.getByRole("dialog", { name: /Unsaved changes/ })).toHaveCount(0);
+    expect(await warnsBeforeUnload(page)).toBe(true);
+    await page.locator("#projects-nav").getByRole("button", { name: "AI pending Start source", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp("/app/projects/" + projectId + "$"));
+    await openAi(page);
+    await expect(panel(page).getByLabel("Instruction")).toHaveValue("Keep this newer instruction");
+    await panel(page).getByRole("button", { name: "Retry this request", exact: true }).click();
+    await expect(panel(page).getByText("Queued", { exact: true })).toBeVisible();
+    await expect.poll(() => warnsBeforeUnload(page)).toBe(false);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+    expect(sent[0]!.key).toBeTruthy();
+    expect(sent[0]!.body).toMatchObject({ prompt: "Capture this exact instruction" });
+    expect(responses[0]!.replayed).toBe(false);
+    expect(responses[1]).toEqual({ ...responses[0], replayed: true });
+    await expect(panel(page).getByLabel("Instruction")).toHaveValue("Keep this newer instruction");
+    const stored = await workerAccount.database.query("select count(*)::int runs from app.ai_run where project_id = $1", [projectId]);
+    expect(stored.rows[0].runs).toBe(1);
+  } finally { await page.unroute(startUrl); }
 });
 
 test("a second editor receives AI_BUSY without losing their instruction", async ({ page, browser, workerAccount }) => {
@@ -826,12 +883,14 @@ test("review regression: expired proposal still recovers an uncertain Apply with
   const review = panel(page).getByRole("heading", { name: "Proposal review" }).locator("..");
   await review.getByRole("checkbox").nth(0).check();
   await review.getByRole("checkbox").nth(1).check();
+  await expect(page.locator(".studio-status")).not.toContainText("Unsaved changes");
+  expect(await warnsBeforeUnload(page)).toBe(false);
   const applyUrl = `${appUrl}/api/projects/${projectId}/ai-runs/${completed.runId}/apply`;
-  const sent: { key: string | undefined; body: unknown }[] = [];
+  const sent: { key: string | undefined; body: unknown; bytes: string | null }[] = [];
   let replayed = false, lostAcknowledgement!: () => void;
   const lost = new Promise<void>((resolve) => { lostAcknowledgement = resolve; });
   await page.route(applyUrl, async (route) => {
-    sent.push({ key: route.request().headers()["idempotency-key"], body: route.request().postDataJSON() });
+    sent.push({ key: route.request().headers()["idempotency-key"], body: route.request().postDataJSON(), bytes: route.request().postData() });
     const response = await route.fetch();
     expect(response.status()).toBe(200);
     if (sent.length === 1) { await route.abort("failed"); lostAcknowledgement(); }
@@ -844,6 +903,8 @@ test("review regression: expired proposal still recovers an uncertain Apply with
     await review.getByRole("button", { name: "Apply selected changes" }).click();
     await lost;
     await expect(review.getByRole("button", { name: "Retry Apply with the same selection" })).toBeVisible();
+    await expect(page.locator(".studio-status")).not.toContainText("Unsaved changes");
+    expect(await warnsBeforeUnload(page)).toBe(true);
     const applied = await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { documentRevision: number; layoutRevision: number; document: { flows: Record<string, { title: string }> } } };
     expect(Object.values(applied.draft.document.flows).filter((flow) => flow.title === "Reviewed checkout")).toHaveLength(1);
     const databaseTarget = new URL(process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL!);
@@ -870,6 +931,7 @@ test("review regression: expired proposal still recovers an uncertain Apply with
     expect(sent).toHaveLength(2);
     expect(sent[1]).toEqual(sent[0]);
     expect(replayed).toBe(true);
+    await expect.poll(() => warnsBeforeUnload(page)).toBe(false);
     const recovered = await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as typeof applied;
     expect(recovered.draft).toEqual(applied.draft);
     const freshApply = await page.request.post(applyUrl, { headers: mutation(), data: completed.body });
@@ -961,10 +1023,14 @@ for (const kind of ["cancel", "discard"] as const) for (const accessChange of ["
         (select count(*)::int from app.audit_event where project_id = p.id and action = $4) audits
         from app.ai_run r join app.project p on p.id = r.project_id where r.id = $1 and p.id = $2`, [runId, projectId, sent[0]?.key ?? "not-yet-sent", auditAction])).rows[0];
       expect(await snapshot()).toMatchObject({ receipts: 0, audits: 0 });
+      await expect(editorPage.locator(".studio-status")).not.toContainText("Unsaved changes");
+      expect(await warnsBeforeUnload(editorPage)).toBe(false);
       await panel(editorPage).getByRole("button", { name: kind === "cancel" ? "Cancel run…" : "Discard proposal", exact: true }).click();
       await lost;
       const retry = panel(editorPage).getByRole("button", { name: `Retry ${kind}`, exact: true });
       await expect(retry).toBeVisible();
+      await expect(editorPage.locator(".studio-status")).not.toContainText("Unsaved changes");
+      expect(await warnsBeforeUnload(editorPage)).toBe(true);
       expect(responses[0]).toMatchObject(kind === "cancel" ? { runId, cancelRequested: true, replayed: false } : { runId, disposition: "DISCARDED", replayed: false });
       const committed = await snapshot();
       expect(committed).toMatchObject({ receipts: 1, audits: 1 });
@@ -987,12 +1053,14 @@ for (const kind of ["cancel", "discard"] as const) for (const accessChange of ["
       await expect(panel(editorPage).getByRole("button", { name: /Cancel run|Discard proposal|Regenerate with a fresh capture/ })).toHaveCount(0);
       await expect(panel(editorPage).getByRole("button", { name: "Generate", exact: true })).toBeDisabled();
       await expect(retry).toBeEnabled();
+      expect(await warnsBeforeUnload(editorPage)).toBe(true);
       const beforeReplay = await snapshot();
       expect(beforeReplay).toEqual(committed);
       await retry.click();
       await expect(panel(editorPage).locator(".ai-message")).toContainText(kind === "cancel" ? "Cancellation requested" : "Run discarded");
       expect(sent).toHaveLength(2); expect(sent[1]).toEqual(sent[0]);
       expect(responses[1]).toEqual({ ...responses[0], replayed: true });
+      await expect.poll(() => warnsBeforeUnload(editorPage)).toBe(false);
       expect(await snapshot()).toEqual(beforeReplay);
       // Removal still refuses the exact saved receipt without returning the successful result.
       await workerAccount.database.query("update app.project_membership set active = false, deactivated_sequence = (select event_sequence from app.project where id = $1) where project_id = $1 and profile_id = (select id from app.user_profile where auth_user_id = $2)", [projectId, editor.authUserId]);

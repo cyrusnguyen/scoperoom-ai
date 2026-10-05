@@ -5,7 +5,7 @@ import { edit, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
 import { acknowledgeExternalWrite, admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
-import { anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
+import { type AiRequest, anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
 const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
@@ -44,6 +44,32 @@ test("AI prompt and uncertain request stay in per-project memory across panel cl
   assert.equal(uiFor(store, "a").ai.pendingRequest, pendingRequest);
   assert.notEqual(uiFor(store, "b").ai.pendingRequest, pendingRequest);
 });
+
+for (const kind of ["start", "apply", "cancel", "discard"] as const) {
+  test(`pending AI ${kind} alone protects unload across retained projects without becoming a draft edit`, () => {
+    const body = Object.freeze({ draftId: "draft-a", expectedDocumentRevision: 3, selectedOperationIds: ["step"] });
+    const pendingRequest: AiRequest = Object.freeze({ kind, projectId: "a", draftId: "draft-a", key: "original-key", body, submittedText: "Original", runId: "run-a" });
+    let store = updateUi({}, "a", () => ({ ai: { instruction: "Newer instruction", action: "PROPOSE_FLOW", selectedRunId: "run-a", pendingRequest } }));
+    assert.equal(dirtyCount(store, "a"), 0, "a receipt is not an unsaved draft edit");
+    assert.equal(anyDirty(store), true, "an uncertain AI receipt must protect unload even with a clean Studio");
+    store = setRightOpen(setRightTab(store, "a", "ai"), "a", false);
+    store = setRightTab(store, "b", "ai");
+    store = discardDrafts(setDraft(store, "a", "name", "Local edit"), "a");
+    assert.equal(dirtyCount(store, "a"), 0);
+    assert.equal(dirtyCount(store, "b"), 0);
+    assert.equal(uiFor(store, "a").ai.pendingRequest, pendingRequest);
+    assert.equal(uiFor(store, "a").ai.pendingRequest?.body, body);
+    assert.equal(uiFor(store, "a").ai.pendingRequest?.key, "original-key");
+    assert.equal(uiFor(store, "a").ai.instruction, "Newer instruction");
+    assert.equal(anyDirty(store), true, "closing the panel and opening another project retain unload protection");
+    const acknowledged = updateUi(store, "a", (ui) => ({ ai: { ...ui.ai, pendingRequest: null } }));
+    assert.equal(anyDirty(acknowledged), false, "acknowledging the only pending receipt clears unload protection");
+    const otherDirty = setDraft(acknowledged, "b", "name", "Still local");
+    assert.equal(anyDirty(otherDirty), true, "ordinary unsaved edits still protect unload");
+    assert.equal(dirtyCount(otherDirty, "b"), 1);
+    assert.equal(anyDirty(dropProject(store, "a")), false, "dropping that project removes its pending state");
+  });
+}
 
 test("drafts belong to one project, and undefined clears a draft", () => {
   let store = setDraft({}, "a", "name", "New name");

@@ -51,8 +51,9 @@ export function dirtyCount(store: UiStore, projectId: string | undefined): numbe
   return Object.keys(ui.drafts).length + studioDirtyCount(ui);
 }
 
+/** Reload or close also protects pending AI receipts retained only in memory. */
 export function anyDirty(store: UiStore): boolean {
-  return Object.keys(store).some((projectId) => dirtyCount(store, projectId) > 0);
+  return Object.keys(store).some((projectId) => dirtyCount(store, projectId) > 0 || store[projectId].ai.pendingRequest !== null);
 }
 
 /**
