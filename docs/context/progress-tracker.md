@@ -1,6 +1,6 @@
 # Progress tracker
 
-## Stage 06.2 - local acceptance complete, authorized PR preparation (2026-10-05)
+## Stage 06.2 - local acceptance complete, PR #25 under review (2026-10-05)
 
 The user authorized Stage 06.2 previewed proposals on `feat/stage-6.2-previewed-proposals`, from merged Stage 06.1 `origin/main` e92f421 (PR #24), and authorized push, PR creation and CI/comment follow-up after all required tests and reviews pass. No merge or later-stage progression is authorized. The feature worktree is `C:/Users/Cyrus/.codex/worktrees/stage-6-2-previewed-proposals/scoperoom-ai`; the Atlas worktree and unrelated changes are preserved. Backend/application revision is `5a6408c2344bcb4a3da7f06c0939a11c580567df`, original 373-file aggregate `07cec064fc7e2353fa43745bdec8abfb63099a101127561af7808094ee827958`. Current reviewed test revision is `21ee9bce6bd3bccc4744318449b7b8feed234983`, aggregate `d917062cf745e4dd27c21a9e0bca053b062f30cf7f3bac80af46687e911df5d8`. Exactly one fixture, `tests/e2e/collaboration-sync.spec.ts`, differs from that backend snapshot; the other 372 application/schema/package/lock/test files are byte-identical. Native prerequisite evidence retains its original 5a6408c/07cec provenance. The source manifest is `.tmp/stage-06.2-runtime/receipt-fixture-frozen-source.json`.
 
@@ -16,7 +16,7 @@ After the user's reboot, exact25 immutable container identities/config/mounts/ne
 
 Private evidence: .tmp/stage-06.2-runtime/local-final-verification.md; reboot-resume/full-acceptance-report.md and restore-final-report.md; current full actual JSON/timing/proofs; post-crash/corrected-gates-report.md and unchanged original native prerequisite evidence. Reviews and completed ledger are preserved with per-file hashes in .tmp/stage-06.2-runtime/sdd-completed/ before deleting only this plan's ignored transient SDD workspace. All17 chronological rulings and costs remain in .tmp/stage-06.2-rulings-final.md. All three implementation tasks are complete. Evidence files remain uncommitted.
 
-Next: push the already-authorized branch, create its PR against main and monitor current-head CI/comments, fixing confirmed in-scope findings with meaningful coverage and scoped review. After CI/reviews are clean, remove only the13 exact owned Stage06.2 test containers (12stack identities plus stopped qualifier), preserving old Stage05.2, volumes/images, user Ubuntu state, evidence and worktrees. Cleanup preparation remains held until that gate. No merge or stage advancement.
+PR #25 is open against main: https://github.com/cyrusnguyen/scoperoom-ai/pull/25. Initial CI queued on 3cab84d84324f9be1923838e37d78c251ade869b, with no initial comments or review threads. Next: monitor current-head CI/comments, fixing confirmed in-scope findings with meaningful coverage and scoped review. After CI/reviews are clean, remove only the13 exact owned Stage06.2 test containers (12stack identities plus stopped qualifier), preserving old Stage05.2, volumes/images, user Ubuntu state, evidence and worktrees. Cleanup preparation remains held until that gate. No merge or stage advancement.
 
 ## Stage 05 UI follow-up fixes (2026-10-03)
 
