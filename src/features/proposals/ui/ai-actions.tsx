@@ -97,7 +97,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
       const saved = await latestStudio.inspectSavedExport(true);
       if (!stillCurrent()) { setMessage("The project changed while preparing this action. Review it and try again."); return; }
       if (!saved.ok) { setMessage(saved.message || "Save or resolve the pending Studio edits before continuing."); return; }
-      const captureAuthority = await beforeWrite();
+      const captureAuthority = await revalidate("before-save");
       if (!stillCurrent()) return;
       if (captureAuthority.kind !== "current" || captureAuthority.status.status !== "ACTIVE" || !["OWNER", "EDITOR"].includes(captureAuthority.status.role)
         || captureAuthority.status.currentDraftId !== saved.result.id || captureAuthority.status.documentRevision !== saved.result.documentRevision) {

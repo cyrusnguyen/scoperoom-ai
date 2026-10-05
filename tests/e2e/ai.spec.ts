@@ -5,6 +5,7 @@ import type { StartRunInput, ValidatedProposal } from "../../src/features/propos
 import { expect } from "@playwright/test";
 import { canonicalJson, sha256 } from "../../src/features/proposals/domain/capture";
 import type { BrowserContext, Page, Request } from "@playwright/test";
+import { interceptRealtime } from "./collaboration-fixtures";
 import { closeStudioContext, test } from "./studio-fixtures";
 import { adminClient, appUrl, cleanupUsers, createProjectViaApi, entitle, e2eReady, seedStudioChanges, signIn } from "./support";
 
@@ -350,6 +351,10 @@ test("Improve captures the saved selected steps after the person resolves inspec
     { command: "CREATE_FLOW", payload: { title: "Checkout", purpose: "Manual saved flow", classification: "USER_JOURNEY", inclusion: "INCLUDED" }, proposedIds: [flowId] },
     { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Pay", description: "Initial description", actorLabel: "Customer" }, proposedIds: [nodeId] },
   ]);
+  const wire = await interceptRealtime(page);
+  wire.dropEvents = true;
+  await page.addInitScript(() => { Math.random = () => 0; });
+  await page.clock.install();
   await page.goto(`/app/projects/${projectId}`);
   await page.locator(".studio-toolbar").getByRole("button", { name: "List" }).click();
   await page.getByRole("checkbox", { name: "Select Pay", exact: true }).check();
@@ -358,6 +363,8 @@ test("Improve captures the saved selected steps after the person resolves inspec
   await openAi(page);
   await panel(page).getByLabel("Action", { exact: true }).selectOption("REFINE_FLOW_SELECTION");
   await panel(page).getByLabel("Instruction").fill("Make payment failure recoverable");
+  await expect.poll(() => wire.joined).toBeGreaterThanOrEqual(2);
+  await page.clock.pauseAt(new Date(Date.now() + 2_000));
   const startUrl = `${appUrl}/api/projects/${projectId}/ai-runs`;
   let writes = 0;
   page.on("request", (request) => { if (request.url() === startUrl && request.method() === "POST") writes++; });
@@ -367,7 +374,8 @@ test("Improve captures the saved selected steps after the person resolves inspec
   await panel(page).getByRole("tab", { name: "Details" }).click();
   // Explicitly save the inspector buffer; the AI action itself never submits dirty field buffers.
   await expect(panel(page).getByLabel("Description")).toHaveValue("Saved manual payment behaviour");
-  const bootstrap = await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string } };
+  const bootstrap = await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; documentRevision: number } };
+  const beforeSaveRevision = bootstrap.draft.documentRevision;
   const changesUrl = `${appUrl}/api/projects/${projectId}/drafts/${bootstrap.draft.id}/changes`;
   await page.route(changesUrl, async (route) => route.request().method() === "POST" ? route.abort("failed") : route.fallback());
   await panel(page).getByRole("button", { name: "Save", exact: true }).click();
@@ -375,21 +383,86 @@ test("Improve captures the saved selected steps after the person resolves inspec
   await panel(page).getByRole("tab", { name: "AI", exact: true }).click();
   await panel(page).getByRole("button", { name: "Improve selection", exact: true }).click();
   await expect(panel(page).getByLabel("Instruction")).toHaveValue("Make payment failure recoverable");
+  await expect(panel(page).locator(".ai-message")).toHaveText("Your Studio changes could not be saved. Resolve them before capturing this action.");
+  await expect(panel(page).getByRole("button", { name: "Improve selection", exact: true })).toBeEnabled();
   expect(writes).toBe(0);
   await page.unroute(changesUrl);
-  const accepted = page.waitForResponse((response) => response.url() === startUrl && response.request().method() === "POST");
-  await panel(page).getByRole("button", { name: "Improve selection", exact: true }).click();
-  await expect(page.locator(".studio-status")).toContainText("All changes saved");
-  const response = await accepted;
-  expect(response.status()).toBe(202);
-  expect(response.request().postDataJSON()).toMatchObject({
-    taskType: "REFINE_FLOW_SELECTION", prompt: "Make payment failure recoverable",
-    context: { selection: { flowId, nodeIds: [nodeId] }, sources: [] },
+  const statusUrl = `${appUrl}/api/projects/${projectId}/status`;
+  let releaseSave = () => {}, releaseStaleStatus = () => {};
+  const saveHeld = new Promise<void>((resolve) => { releaseSave = resolve; });
+  const staleStatusHeld = new Promise<void>((resolve) => { releaseStaleStatus = resolve; });
+  let saveStarted!: () => void, staleStatusStarted!: () => void;
+  const saveStartedPromise = new Promise<void>((resolve) => { saveStarted = resolve; });
+  const staleStatusStartedPromise = new Promise<void>((resolve) => { staleStatusStarted = resolve; });
+  let saveHandlerSettled!: () => void, staleStatusHandlerSettled!: () => void;
+  const saveHandlerSettledPromise = new Promise<void>((resolve) => { saveHandlerSettled = resolve; });
+  const staleStatusHandlerSettledPromise = new Promise<void>((resolve) => { staleStatusHandlerSettled = resolve; });
+  let saveHandlerStarted = false, staleStatusHandlerStarted = false, captureStaleStatus = false, staleStatusRequest: Request | undefined, savedRevision: number | undefined;
+  await page.route(changesUrl, async (route) => {
+    if (route.request().method() !== "POST") { await route.fallback(); return; }
+    saveHandlerStarted = true;
+    try {
+      saveStarted();
+      await saveHeld;
+      let response;
+      try { response = await route.fetch({ timeout: 15_000, maxRetries: 0, maxRedirects: 0 }); } catch { throw new Error("The held saved write did not settle."); }
+      expect(response.status()).toBe(200);
+      savedRevision = (await response.json() as { documentRevision: number }).documentRevision;
+      await route.fulfill({ response });
+    } finally { saveHandlerSettled(); }
   });
-  const runId = (await response.json() as { runId: string }).runId;
-  const view = await (await page.request.get(`/api/projects/${projectId}/ai-runs/${runId}`)).json() as { documentRevision: number; capture: { graph: { nodes: { id: string; description: string }[] } } };
-  expect(view.capture.graph.nodes.find((node) => node.id === nodeId)?.description).toBe("Saved manual payment behaviour");
-  expect(view.documentRevision).toBeGreaterThan(1);
+  await page.route(statusUrl, async (route) => {
+    if (!captureStaleStatus || staleStatusRequest) { await route.fallback(); return; }
+    staleStatusHandlerStarted = true;
+    try {
+      staleStatusRequest = route.request();
+      let stale;
+      try { stale = await route.fetch({ timeout: 15_000, maxRetries: 0, maxRedirects: 0 }); } catch { throw new Error("The held status read did not settle."); }
+      expect(stale.status()).toBe(200);
+      expect((await stale.json() as { documentRevision: number }).documentRevision).toBe(beforeSaveRevision);
+      staleStatusStarted();
+      await staleStatusHeld;
+      await route.fulfill({ response: stale });
+    } finally { staleStatusHandlerSettled(); }
+  });
+  try {
+    const accepted = page.waitForResponse((response) => response.url() === startUrl && response.request().method() === "POST", { timeout: 10_000 });
+    void accepted.catch(() => undefined);
+    await panel(page).getByRole("button", { name: "Improve selection", exact: true }).click();
+    await saveStartedPromise;
+    // A real focus revalidation starts before the save commits. Its r3 response remains held while the r4 receipt lands.
+    captureStaleStatus = true;
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await staleStatusStartedPromise;
+    releaseSave();
+    await expect(page.locator(".studio-status")).toContainText("All changes saved");
+    expect(savedRevision).toBeGreaterThan(beforeSaveRevision);
+    expect(writes).toBe(0);
+    const freshStatus = page.waitForResponse((response) => response.url() === statusUrl && response.request() !== staleStatusRequest, { timeout: 10_000 });
+    void freshStatus.catch(() => undefined);
+    releaseStaleStatus();
+    const refreshed = await freshStatus;
+    expect(refreshed.status()).toBe(200);
+    expect((await refreshed.json() as { documentRevision: number }).documentRevision).toBe(savedRevision);
+    const response = await accepted;
+    expect(response.status()).toBe(202);
+    expect(writes).toBe(1);
+    expect(response.request().postDataJSON()).toMatchObject({
+      taskType: "REFINE_FLOW_SELECTION", prompt: "Make payment failure recoverable", expectedDocumentRevision: savedRevision,
+      context: { selection: { flowId, nodeIds: [nodeId] }, sources: [] },
+    });
+    const runId = (await response.json() as { runId: string }).runId;
+    const view = await (await page.request.get(`/api/projects/${projectId}/ai-runs/${runId}`)).json() as { documentRevision: number; capture: { graph: { nodes: { id: string; description: string }[] } } };
+    expect(view.capture.graph.nodes.find((node) => node.id === nodeId)?.description).toBe("Saved manual payment behaviour");
+    expect(view.documentRevision).toBe(savedRevision);
+  } finally {
+    releaseSave();
+    releaseStaleStatus();
+    if (saveHandlerStarted) await saveHandlerSettledPromise;
+    if (staleStatusHandlerStarted) await staleStatusHandlerSettledPromise;
+    await page.unroute(changesUrl);
+    await page.unroute(statusUrl);
+  }
 });
 
 test("a dependency-complete subset applies once and preserves a peer layout-only move", async ({ page, workerAccount }) => {
