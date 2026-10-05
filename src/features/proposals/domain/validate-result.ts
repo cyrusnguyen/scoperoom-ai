@@ -4,7 +4,7 @@ import { id, keys, object, oneOf, text } from "../../drafts/contracts/strict.ts"
 import {
   AI_LIMITS, LOCAL_REF, TASK_EDITS, type CapturedInput, type EditCommand, type ProposalEdit, type ProposalOperation, type SourceRef, type ValidatedProposal,
 } from "../contracts/tasks.ts";
-import { jsonbTextBytes } from "./capture.ts";
+import { jsonbTextBytes, sha256 } from "./capture.ts";
 
 /** Why a model output was refused. `reason` is a stable code for tests and support; it never carries model text. */
 export class ResultError extends Error {
@@ -191,6 +191,7 @@ function parseCitations(capture: CapturedInput, raw: unknown): SourceRef[] {
     const source = sources.get(id(citation.sourceVersionId));
     const { startLine, endLine } = citation;
     if (!source) return bad("CITATION_SOURCE");
+    if (source.contentHash !== sha256(source.text)) return bad("CITATION_HASH");
     const lines = source.text.split("\n");
     if (!Number.isSafeInteger(startLine) || !Number.isSafeInteger(endLine) || (startLine as number) < 1 || (endLine as number) < (startLine as number) || (endLine as number) > lines.length) return bad("CITATION_RANGE");
     const excerpt = text(citation.excerpt, AI_LIMITS.excerptCodePoints, true);
@@ -214,6 +215,8 @@ function validate(capture: CapturedInput, output: unknown): ValidatedProposal {
   if (!Array.isArray(root.assumptions) || root.assumptions.length > AI_LIMITS.assumptions) bad("ASSUMPTIONS");
   const assumptions = (root.assumptions as unknown[]).map((note) => text(note, AI_LIMITS.assumptionCodePoints, true));
   const citations = parseCitations(capture, root.citations);
+  if (new Set(citations.map(citation => JSON.stringify(citation))).size !== citations.length) bad("DUPLICATE_CITATION");
+  if (operations.some(op => op.edit.command === "ADD_NODE") && assumptions.some(note => [...note].length > LIMITS.note)) bad("SAVED_NOTES");
   // Only after the whole closed envelope validated: Improve with nothing to change is a no-change clarification.
   if (!operations.length) return capture.taskType === "REFINE_FLOW_SELECTION" ? NO_CHANGE : bad("EMPTY_PROPOSAL");
   return { schemaVersion: 1, kind: "proposal", operations, assumptions, citations };

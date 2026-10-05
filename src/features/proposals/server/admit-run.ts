@@ -11,6 +11,7 @@ import { assertSourceCapacity, insertPromptEvidence } from "../../sources/server
 import { AI_LIMITS, parseStartRunInput, startBody, startBodyBytes, type StartRunInput, type TaskKind } from "../contracts/tasks.ts";
 import { evidenceStats } from "../domain/capture.ts";
 import { captureSaved } from "./capture.ts";
+import { applicableCapacityFull } from "./applicability.ts";
 import { settleOverdueRuns } from "./settle-runs.ts";
 
 const START_OPERATION = "AI_RUN_START_V1";
@@ -67,11 +68,11 @@ async function admitLocked(tx: Transaction, project: ProjectRow, actorId: string
   const { capture, hash: captureHash } = await captureSaved(tx, project, input, configuration.model);
   const prompt = evidenceStats(capture.prompt);
   await assertSourceCapacity(tx, project.id, prompt.codePointCount);
-  const [slots] = await tx.$queryRaw<Array<{ active: number; applicable: number }>>`
-    SELECT count(*) FILTER (WHERE state IN ('QUEUED', 'RUNNING', 'VALIDATING'))::integer AS active, count(*) FILTER (WHERE state = 'SUCCEEDED' AND disposition = 'AVAILABLE')::integer AS applicable
+  const [slots] = await tx.$queryRaw<Array<{ active: number }>>`
+    SELECT count(*) FILTER (WHERE state IN ('QUEUED', 'RUNNING', 'VALIDATING'))::integer AS active
     FROM app.ai_run WHERE project_id = ${project.id}::uuid`;
   if (!slots || slots.active > 0) throw new ProjectError("AI_BUSY", { scope: "PROJECT" });
-  if (slots.applicable >= AI_LIMITS.applicableResults) throw new ProjectError("LIMIT_EXCEEDED", { limit: "APPLICABLE_PROPOSALS" });
+  if (await applicableCapacityFull(tx, project)) throw new ProjectError("LIMIT_EXCEEDED", { limit: "APPLICABLE_PROPOSALS" });
 
   // The owner allowance serializes admission across the owner's projects; its count is read afterwards, in a fresh statement.
   await tx.$executeRaw`INSERT INTO app.ai_owner_allowance (owner_id) VALUES (${project.ownerId}::uuid) ON CONFLICT DO NOTHING`;

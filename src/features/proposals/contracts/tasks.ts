@@ -1,5 +1,5 @@
-import type { FlowFields, NodeFields } from "../../drafts/contracts/commands.ts";
-import { LIMITS, type EdgeRecord, type FlowRecord, type NodeRecord } from "../../drafts/contracts/scope-document.ts";
+import type { FlowFields, NodeFields, GraphCommand } from "../../drafts/contracts/commands.ts";
+import { LIMITS, type EdgeRecord, type FlowRecord, type NodeRecord, type SourceRef } from "../../drafts/contracts/scope-document.ts";
 import { id, idList, invalid, keys, object, oneOf, text, version } from "../../drafts/contracts/strict.ts";
 import { keyPattern } from "../../projects/contracts/project.ts";
 
@@ -22,7 +22,7 @@ export const CAPTURE_SCHEMA_VERSION = 1;
 export const RESULT_SCHEMA_VERSION = 1;
 export const PROMPT_VERSION = "2026-10-03.1";
 
-export type SourceRef = { sourceVersionId: string; startLine: number; endLine: number; excerpt: string };
+export type { SourceRef } from "../../drafts/contracts/scope-document.ts";
 export type StartRunInput = {
   key: string; taskType: TaskKind; prompt: string; draftId: string; expectedDocumentRevision: number; expectedParentSnapshotId: string | null;
   context: { selection: { flowId: string; nodeIds: string[] } | null; sources: { sourceVersionId: string; expectedCurrentVersionId: string }[] };
@@ -127,6 +127,53 @@ export type RunApplicability = "APPLICABLE" | "STALE" | "UNAVAILABLE";
 export type RunView = RunSummary & {
   draftId: string; documentRevision: number; parentSnapshotId: string | null; model: string;
   capture: CapturedInput | null; result: ValidatedProposal | null; resultHash: string | null; attempts: RunAttemptView[];
-  applicability: RunApplicability; expiresAt: string | null;
+  applicability: RunApplicability; applicabilityReasons: RunApplicabilityReason[]; diff: ProposalDiff | null; application: RunApplication | null; expiresAt: string | null;
 };
 export type RunPage = { runs: RunSummary[]; nextCursor: string | null };
+
+/** Capture projection only: positions, origin and trust absent from the capture are never invented as diff facts. */
+export type ProposalDiff = {
+  selectedOperationIds: string[];
+  before: CapturedInput["graph"];
+  after: CapturedInput["graph"];
+  createdIds: string[];
+  updatedIds: string[];
+  retiredIds: string[];
+};
+
+export type ApplyRunInput = {
+  key: string; draftId: string; expectedDocumentRevision: number; expectedParentSnapshotId: string | null;
+  resultHash: string; selectedOperationIds: string[];
+};
+export type AppliedRun = {
+  applicationId: string; runId: string; draftId: string; documentRevision: number; layoutRevision: number;
+  eventSequence: number; aiRevision: number; replayed: boolean;
+};
+export type DiscardRunInput = { key: string; expectedResultHash: string };
+export type DiscardedRun = { runId: string; disposition: "DISCARDED"; aiRevision: number; replayed: boolean };
+
+const resultHash = (raw: unknown): string => typeof raw === "string" && /^[0-9a-f]{64}$/.test(raw) ? raw : invalid();
+export function parseApplyRunInput(raw: unknown, key: string): ApplyRunInput {
+  if (!keyPattern.test(key)) invalid();
+  const body = object(raw);
+  keys(body, ["draftId", "expectedDocumentRevision", "expectedParentSnapshotId", "resultHash", "selectedOperationIds"]);
+  if (!Array.isArray(body.selectedOperationIds) || !body.selectedOperationIds.length || body.selectedOperationIds.length > AI_LIMITS.operations) invalid();
+  const selectedOperationIds = body.selectedOperationIds.map(value => typeof value === "string" && LOCAL_REF.test(value) ? value : invalid());
+  if (new Set(selectedOperationIds).size !== selectedOperationIds.length) invalid();
+  return { key, draftId: id(body.draftId), expectedDocumentRevision: version(body.expectedDocumentRevision),
+    expectedParentSnapshotId: body.expectedParentSnapshotId === null ? null : id(body.expectedParentSnapshotId), resultHash: resultHash(body.resultHash), selectedOperationIds };
+}
+export function parseDiscardRunInput(raw: unknown, key: string): DiscardRunInput {
+  if (!keyPattern.test(key)) invalid();
+  const body = object(raw); keys(body, ["expectedResultHash"]);
+  return { key, expectedResultHash: resultHash(body.expectedResultHash) };
+}
+
+export type RunApplicabilityReason = "APPLIED" | "DISCARDED" | "EXPIRED" | "PROJECT_INACTIVE" | "CANCEL_REQUESTED" | "NOT_SUCCEEDED" | "INVALID_CAPTURE" | "INVALID_RESULT" | "BODY_UNAVAILABLE" | "CLARIFICATION" | "DRAFT_REPLACED" | "DOCUMENT_CHANGED" | "BASELINE_CHANGED" | "SOURCE_HEAD_CHANGED";
+/** Immutable application evidence; retained independently of the seven-day run bodies and current graph. */
+export type RunApplication = {
+  id: string; runId: string; draftId: string; actorId: string; promptSourceVersionId: string; resultHash: string;
+  selectedOperations: ProposalOperation[]; actualOperations: GraphCommand[]; idMap: Record<string, string>; createdIdMap: Record<string, string>;
+  evidence: { changedIds: string[]; before: (FlowRecord | NodeRecord | EdgeRecord)[]; after: (FlowRecord | NodeRecord | EdgeRecord)[]; assumptions: string[]; citations: SourceRef[] };
+  sourceVersionIds: string[]; beforeDocumentRevision: number; afterDocumentRevision: number; beforeLayoutRevision: number; afterLayoutRevision: number; createdAt: string;
+};

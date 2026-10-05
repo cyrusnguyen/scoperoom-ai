@@ -26,7 +26,7 @@ export function resultFixture() {
   const generate = (): CapturedInput => captureInput(saved(true), parseStartRunInput({ ...base, taskType: "PROPOSE_FLOW", prompt: "make a flow", context: { selection: null, sources } }, "k".repeat(24))).capture;
   /** Improve over `nodeIds` (default b and c): a and d are read-only boundary neighbours, e1 and e3 cross the boundary, e2 is internal. */
   const improve = (nodeIds = [ids.b, ids.c]): CapturedInput => captureInput(saved(true), parseStartRunInput({ ...base, taskType: "REFINE_FLOW_SELECTION", prompt: "tighten", context: { selection: { flowId, nodeIds }, sources } }, "k".repeat(24))).capture;
-  return { ids, flowId, otherFlowId, edges: { e1, e2, e3 }, sourceVersionId, generate, improve };
+  return { document, ids, flowId, otherFlowId, edges: { e1, e2, e3 }, sourceVersionId, generate, improve };
 }
 
 export const flowOp = (id = "op1", ref = "flow1", dependsOn: string[] = []) => ({

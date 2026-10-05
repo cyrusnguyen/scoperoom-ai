@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { expect, type APIResponse, type Page, type Route } from "@playwright/test";
-import { POLL_DEADLINE, poll, test } from "./collaboration-fixtures";
+import { expect, type APIResponse, type Page, type Response, type Route } from "@playwright/test";
+import { interceptRealtime, POLL_DEADLINE, poll, test } from "./collaboration-fixtures";
+import type { ChangesResult } from "../../src/features/drafts/contracts/changes.ts";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
 import { appUrl, createProjectViaApi, e2eReady, headerSave, seedStudioChanges } from "./support";
 
@@ -187,6 +188,10 @@ test.describe("two real users converge through status polling", () => {
 
   test("a read that started before my save and lands after its receipt cannot hide the saved edit; the covering read then completes", async ({ collaboration }) => {
     const { ownerPage, editorPage, projectId } = collaboration;
+    // This polling-only case needs current authority: a SUBSCRIBED read would block Save behind held R1.
+    const wire = await interceptRealtime(editorPage);
+    await wire.cut();
+    await editorPage.bringToFront();
     await openBoth(collaboration);
     const reads = await holdDraftReads(editorPage, projectId);
     await rename(ownerPage, projectId, ids.shipId, "Ship (theirs)");
@@ -200,8 +205,18 @@ test.describe("two real users converge through status polling", () => {
     expect(beforeSave.document.nodes[ids.shipId]!.label).toBe("Ship (theirs)");
     expect(beforeSave.document.nodes[ids.startId]!.label).toBe("Start");
     await renameLocally(editorPage, ids.startId, "Mine");
+    let saveResponse: Response | undefined;
+    const observeSave = (response: Response) => {
+      if (response.request().method() === "POST" && new URL(response.url()).pathname === `/api/projects/${projectId}/drafts/${ids.draftId}/changes`) saveResponse = response;
+    };
+    editorPage.on("response", observeSave);
     await headerSave(editorPage).click();
     await expect.poll(() => reads.held.length).toBe(2); // read R2, after my receipt: covers it
+    editorPage.off("response", observeSave);
+    expect(saveResponse).toBeDefined();
+    expect(saveResponse!.status()).toBe(200);
+    const receipt = await saveResponse!.json() as ChangesResult;
+    expect(receipt).toMatchObject({ draftId: ids.draftId, documentRevision: beforeSave.documentRevision + 1, layoutRevision: beforeSave.layoutRevision, replayed: false });
     await expect(nodeAt(editorPage, ids.startId)).toContainText("Mine");
 
     await reads.deliver(0); // R1 lands below the acknowledged floor: dropped
@@ -333,7 +348,11 @@ test.describe("two real users converge through status polling", () => {
     await openBoth(collaboration);
     const reads = await holdDraftReads(editorPage, projectId);
     await rename(ownerPage, projectId, ids.startId, "Theirs 1");
-    await poll(editorPage);
+    // A status read may already be waiting on this held D read, with no next poll scheduled until it lands.
+    for (let waited = 0; !reads.held.length && waited < POLL_DEADLINE; waited += 250) {
+      await editorPage.clock.runFor(250);
+      await new Promise((resolve) => setTimeout(resolve, 25)); // let the intercepted read reach this process
+    }
     await expect.poll(() => reads.held.length).toBe(1); // D read of A at "Theirs 1", delivered late
     await rename(ownerPage, projectId, ids.startId, "Theirs 2");
 

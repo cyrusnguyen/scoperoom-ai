@@ -165,6 +165,7 @@ model UserProfile {
   sourceVersionsCreated SourceVersion[]     @relation("source_version_creator")
   aiAllowance           AiOwnerAllowance?
   aiRunsStarted         AiRun[]             @relation("ai_run_actor")
+  aiApplications        AiSuggestionApplication[]
 
   @@map("user_profile")
   @@schema("app")
@@ -231,6 +232,7 @@ model Project {
   flowImportPreviews    FlowImportPreview[] @relation("flow_import_project")
   sourceDocuments       SourceDocument[]
   aiRuns                AiRun[]
+  aiApplications        AiSuggestionApplication[]
 
   @@unique([id, currentDraftId])
   @@index([ownerId, status, updatedAt, id])
@@ -298,6 +300,7 @@ model ScopeDraft {
   currentFor       Project?         @relation("project_current_draft")
   flowImportPreviews FlowImportPreview[] @relation("flow_import_draft")
   aiRuns           AiRun[]
+  aiApplications   AiSuggestionApplication[]
 
   @@unique([projectId, id])
   @@map("scope_draft")
@@ -373,6 +376,8 @@ model SourceVersion {
   creator        UserProfile      @relation("source_version_creator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
   headOf         SourceDocument[] @relation("source_document_head")
   prompts        AiRun[]          @relation("ai_run_prompt_version")
+  applicationPrompts AiSuggestionApplication[]
+  applicationSources AiApplicationSource[]
 
   @@unique([sourceId, sequence])
   @@unique([projectId, sourceId, id])
@@ -447,11 +452,56 @@ model AiRun {
   promptVersion            SourceVersion        @relation("ai_run_prompt_version", fields: [projectId, promptSourceVersionId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "ai_run_prompt_version_fkey")
   currentAttempt           AiRunAttempt?        @relation("ai_run_current_attempt", fields: [id, currentAttemptId], references: [runId, id], onDelete: NoAction, onUpdate: NoAction, map: "ai_run_current_attempt_fkey")
   attempts                 AiRunAttempt[]       @relation("ai_run_attempts")
+  applications             AiSuggestionApplication[]
 
+  @@unique([projectId, id], map: "ai_run_project_id_key")
   @@index([projectId, createdAt(sort: Desc), id(sort: Desc)], map: "ai_run_project_history_idx")
   @@index([actorId], map: "ai_run_actor_idx")
   @@index([projectId, promptSourceVersionId], map: "ai_run_prompt_version_idx")
   @@map("ai_run")
+  @@schema("app")
+}
+
+model AiSuggestionApplication {
+  id String @id @db.Uuid
+  projectId String @map("project_id") @db.Uuid
+  runId String @unique(map: "ai_application_run_key") @map("run_id") @db.Uuid
+  draftId String @map("draft_id") @db.Uuid
+  actorId String @map("actor_id") @db.Uuid
+  promptSourceVersionId String @map("prompt_source_version_id") @db.Uuid
+  resultHash String @map("result_hash") @db.Char(64)
+  selectedOperations Json @map("selected_operations")
+  actualOperations Json @map("actual_operations")
+  idMap Json @map("id_map")
+  createdIdMap Json @map("created_id_map")
+  evidence Json
+  sourceVersionIds String[] @map("source_version_ids") @db.Uuid
+  beforeDocumentRevision Int @map("before_document_revision")
+  afterDocumentRevision Int @map("after_document_revision")
+  beforeLayoutRevision Int @map("before_layout_revision")
+  afterLayoutRevision Int @map("after_layout_revision")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "ai_application_project_fkey")
+  run AiRun @relation(fields: [projectId, runId], references: [projectId, id], onDelete: Cascade, onUpdate: NoAction, map: "ai_application_run_fkey")
+  draft ScopeDraft @relation(fields: [projectId, draftId], references: [projectId, id], onDelete: Cascade, onUpdate: NoAction, map: "ai_application_draft_fkey")
+  actor UserProfile @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "ai_application_actor_fkey")
+  promptVersion SourceVersion @relation(fields: [projectId, promptSourceVersionId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "ai_application_prompt_fkey")
+  sources AiApplicationSource[]
+
+  @@unique([projectId, id], map: "ai_application_project_id_key")
+  @@map("ai_suggestion_application")
+  @@schema("app")
+}
+
+model AiApplicationSource {
+  projectId String @map("project_id") @db.Uuid
+  applicationId String @map("application_id") @db.Uuid
+  sourceVersionId String @map("source_version_id") @db.Uuid
+  application AiSuggestionApplication @relation(fields: [projectId, applicationId], references: [projectId, id], onDelete: Cascade, onUpdate: NoAction, map: "ai_application_source_application_fkey")
+  sourceVersion SourceVersion @relation(fields: [projectId, sourceVersionId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "ai_application_source_version_fkey")
+
+  @@id([applicationId, sourceVersionId])
+  @@map("ai_application_source")
   @@schema("app")
 }
 

@@ -1,8 +1,9 @@
 import { Prisma } from "../../../../prisma/generated/client.ts";
 import { uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
-import { readAsMember, type ProjectRow, type Transaction } from "../../projects/server/access.ts";
+import { readAsMember, type Transaction } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
-import { AI_LIMITS, type CapturedInput, type RunApplicability, type RunPage, type RunState, type RunDisposition, type RunSummary, type RunUsage, type RunView, type TaskKind, type ValidatedProposal } from "../contracts/tasks.ts";
+import { AI_LIMITS, type RunApplication, type RunPage, type RunState, type RunDisposition, type RunSummary, type RunUsage, type RunView, type TaskKind } from "../contracts/tasks.ts";
+import { inspectRun, sourcesChanged, type ApplicabilityRow } from "./applicability.ts";
 import { settleOverdueRuns } from "./settle-runs.ts";
 
 const BODY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -13,10 +14,7 @@ type RunRow = {
   deadline_at: Date; terminal_at: Date | null; cancel_requested_at: Date | null; failure_code: string | null; last_event_sequence: bigint;
   attempts: number; input_known: number; input_tokens: bigint | null; output_known: number; output_tokens: bigint | null;
 };
-type DetailRow = RunRow & {
-  draft_id: string; expected_document_revision: number; parent_snapshot_id: string | null; model: string; capture: CapturedInput | null; result: ValidatedProposal | null;
-  result_hash: string | null; current_revision: number | null; body_expired: boolean;
-};
+type DetailRow = RunRow & ApplicabilityRow & { model: string };
 
 /** Summary columns only (no capture, result or prompt), plus the attempt token totals. Tokens, leases and provider ids are never selected. */
 const summaryColumns = Prisma.sql`
@@ -41,13 +39,6 @@ function summaryOf(row: RunRow): RunSummary {
   };
 }
 
-/** Derived, never a competing state: nothing to apply, or the captured draft, revision or baseline has moved on. */
-function applicabilityOf(row: DetailRow, project: ProjectRow): RunApplicability {
-  if (row.state !== "SUCCEEDED" || row.disposition !== "AVAILABLE" || row.cancel_requested_at || row.result?.kind !== "proposal" || project.status !== "ACTIVE") return "UNAVAILABLE";
-  if (!row.terminal_at || row.body_expired) return "UNAVAILABLE";
-  return project.currentDraftId !== row.draft_id || row.current_revision !== row.expected_document_revision || project.approvedSnapshotId !== row.parent_snapshot_id ? "STALE" : "APPLICABLE";
-}
-
 /** Round trip, so an impossible date (2026-02-30) is refused here instead of failing the PostgreSQL cast. */
 function realInstant(time: string) {
   const milliseconds = Date.parse(`${time.slice(0, 23)}Z`);
@@ -70,8 +61,8 @@ export async function readRun(identity: ProjectIdentity, projectId: string, runI
   if (!uuid.test(runId)) throw new ProjectError("NOT_FOUND");
   return readAsMember(identity, projectId, async (tx, project) => {
     const [row] = await tx.$queryRaw<DetailRow[]>`
-      SELECT ${summaryColumns}, run.draft_id, run.expected_document_revision, run.parent_snapshot_id, run.model, run.capture, run.result, run.result_hash, draft.document_revision AS current_revision,
-        COALESCE(run.terminal_at + INTERVAL '7 days' <= transaction_timestamp(), false) AS body_expired
+      SELECT ${summaryColumns}, run.draft_id, run.expected_document_revision, run.parent_snapshot_id, run.model, run.capture, run.capture_hash, run.result, run.result_hash, draft.document_revision AS current_revision,
+        COALESCE(run.terminal_at + INTERVAL '7 days' <= clock_timestamp(), false) AS body_expired, ${sourcesChanged} AS sources_changed
       FROM app.ai_run run ${usageJoin} LEFT JOIN app.scope_draft draft ON draft.id = run.draft_id AND draft.project_id = run.project_id
       WHERE run.id = ${runId}::uuid AND run.project_id = ${project.id}::uuid`;
     if (!row) throw new ProjectError("NOT_FOUND");
@@ -79,15 +70,26 @@ export async function readRun(identity: ProjectIdentity, projectId: string, runI
       where: { runId: row.id }, orderBy: { attemptNumber: "asc" },
       select: { attemptNumber: true, outcome: true, callMayHaveStarted: true, startedAt: true, inputTokens: true, outputTokens: true },
     });
-    const bodiesLive = (row.capture !== null || row.result !== null) && row.disposition !== "APPLIED";
+    const bodies = inspectRun(row, project);
+    const [application] = await tx.$queryRaw<Array<Omit<RunApplication, "createdAt"> & { createdAt: Date; bounded: boolean }>>`
+      SELECT id, run_id AS "runId", draft_id AS "draftId", actor_id AS "actorId", prompt_source_version_id AS "promptSourceVersionId", result_hash AS "resultHash",
+        selected_operations AS "selectedOperations", actual_operations AS "actualOperations", id_map AS "idMap", created_id_map AS "createdIdMap", evidence,
+        source_version_ids AS "sourceVersionIds", before_document_revision AS "beforeDocumentRevision", after_document_revision AS "afterDocumentRevision",
+        before_layout_revision AS "beforeLayoutRevision", after_layout_revision AS "afterLayoutRevision", created_at AS "createdAt",
+        octet_length(selected_operations::text) <= 131072 AND octet_length(actual_operations::text) <= 262144
+          AND octet_length(id_map::text) <= 65536 AND octet_length(created_id_map::text) <= 65536 AND octet_length(evidence::text) <= 1048576 AS bounded
+      FROM app.ai_suggestion_application WHERE project_id = ${project.id}::uuid AND run_id = ${row.id}::uuid`;
+    if (application && !application.bounded) throw new ProjectError("UNAVAILABLE");
+    const applicationView = application ? (({ bounded, createdAt, ...evidence }) => { void bounded; return { ...evidence, createdAt: createdAt.toISOString() }; })(application) : null;
+    const bodiesLive = row.capture !== null || row.result !== null;
     return {
       ...summaryOf(row), draftId: row.draft_id, documentRevision: row.expected_document_revision, parentSnapshotId: row.parent_snapshot_id, model: row.model,
-      capture: row.capture, result: row.result, resultHash: row.result_hash,
+      ...bodies, resultHash: row.result_hash, application: applicationView,
       attempts: attempts.map((attempt) => ({
         number: attempt.attemptNumber, outcome: attempt.outcome, callMayHaveStarted: attempt.callMayHaveStarted, startedAt: attempt.startedAt.toISOString(),
         usage: { inputTokens: attempt.inputTokens, outputTokens: attempt.outputTokens },
       })),
-      applicability: applicabilityOf(row, project), expiresAt: row.terminal_at && bodiesLive ? new Date(row.terminal_at.getTime() + BODY_RETENTION_MS).toISOString() : null,
+      expiresAt: row.terminal_at && bodiesLive ? new Date(row.terminal_at.getTime() + BODY_RETENTION_MS).toISOString() : null,
     };
   }, settleOverdueRuns);
 }

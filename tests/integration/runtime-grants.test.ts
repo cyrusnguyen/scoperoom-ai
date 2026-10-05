@@ -56,7 +56,7 @@ test("AI storage grants are column- and function-exact for the web and worker ru
   const admin = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
   await admin.connect();
   try {
-    const tables = ["source_document", "source_version", "ai_owner_allowance", "ai_budget_day", "ai_run", "ai_run_attempt", "rate_limit_bucket"];
+    const tables = ["source_document", "source_version", "ai_owner_allowance", "ai_budget_day", "ai_run", "ai_run_attempt", "rate_limit_bucket", "ai_suggestion_application", "ai_application_source"];
     const roles = ["app_web", "app_worker", "app_web_runtime", "app_worker_runtime"];
     const { rows } = await admin.query<{ role: string; tbl: string; col: string | null; priv: string }>(`
       select r.role, t.tbl, null::text as col, p.priv from unnest($1::text[]) as r(role) cross join unnest($2::text[]) as t(tbl)
@@ -70,8 +70,9 @@ test("AI storage grants are column- and function-exact for the web and worker ru
     const grants = (role: string) => rows.filter((row) => row.role === role).map((row) => `${row.tbl}:${row.priv}${row.col ? `(${row.col})` : ""}`);
     const web = [
       "ai_budget_day:INSERT", "ai_budget_day:SELECT", "ai_budget_day:UPDATE(reserved_runs)",
+      "ai_application_source:INSERT", "ai_application_source:SELECT", "ai_suggestion_application:INSERT", "ai_suggestion_application:SELECT",
       "ai_owner_allowance:INSERT", "ai_owner_allowance:SELECT", "ai_owner_allowance:UPDATE(created_at)",
-      "ai_run:INSERT", "ai_run:SELECT", "ai_run:UPDATE(cancel_requested_at)", "ai_run:UPDATE(last_event_sequence)",
+      "ai_run:INSERT", "ai_run:SELECT", "ai_run:UPDATE(cancel_requested_at)", "ai_run:UPDATE(disposition)", "ai_run:UPDATE(last_event_sequence)",
       "ai_run_attempt:SELECT",
       "source_document:INSERT", "source_document:SELECT", "source_document:UPDATE(current_version_id)", "source_document:UPDATE(last_event_sequence)", "source_document:UPDATE(updated_at)", "source_document:UPDATE(version)",
       "source_version:INSERT", "source_version:SELECT",
@@ -79,6 +80,7 @@ test("AI storage grants are column- and function-exact for the web and worker ru
     ];
     const worker = [
       "ai_budget_day:SELECT", "ai_owner_allowance:SELECT",
+      "ai_application_source:SELECT", "ai_suggestion_application:SELECT",
       "ai_run:SELECT", // no column UPDATE at all: dispatch leases and acknowledgements go through definer functions
       "ai_run_attempt:SELECT", "source_document:SELECT", "source_version:SELECT",
     ];

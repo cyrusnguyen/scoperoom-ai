@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { test } from "node:test";
+import { LIMITS } from "../src/features/drafts/contracts/scope-document.ts";
 import { AI_LIMITS } from "../src/features/proposals/contracts/tasks.ts";
 import { jsonbTextBytes } from "../src/features/proposals/domain/capture.ts";
 import { NO_CHANGE, ResultError, validateResult } from "../src/features/proposals/domain/validate-result.ts";
@@ -136,7 +137,7 @@ test("graph, operation, dependency, assumption and byte limits reject instead of
   refuses(generate, proposal(Array.from({ length: AI_LIMITS.operations + 1 }, (_, index) => flowOp(`op${index}`, `f${index}`))), "OPERATIONS");
   refuses(generate, proposal([flowOp("op1", "flow1", Array.from({ length: AI_LIMITS.dependsOn + 1 }, (_, index) => `d${index}`))]), "DEPENDS_ON");
   refuses(generate, goodWith({ assumptions: Array.from({ length: AI_LIMITS.assumptions + 1 }, () => "a") }), "ASSUMPTIONS");
-  assert.equal(validateResult(generate, goodWith({ assumptions: ["a".repeat(AI_LIMITS.assumptionCodePoints)] })).kind, "proposal");
+  assert.equal(validateResult(generate, goodWith({ assumptions: ["a".repeat(LIMITS.note)] })).kind, "proposal");
   refuses(generate, goodWith({ assumptions: ["a".repeat(AI_LIMITS.assumptionCodePoints + 1)] }), "SHAPE");
   refuses(generate, goodWith({ assumptions: [" "] }), "SHAPE");
   const huge = { schemaVersion: 1, kind: "clarification", message: "x".repeat(AI_LIMITS.resultBytes) };
@@ -159,7 +160,7 @@ test("citations quote a literal substring within the captured source's line rang
   assert.equal(validateResult(generate, cite({})).kind, "proposal");
   assert.equal(validateResult(generate, cite({ excerpt: "one" })).kind, "proposal");
   assert.equal(validateResult(generate, cite({ endLine: 2, excerpt: "one\nline" })).kind, "proposal");
-  const longLine = { ...generate, sources: generate.sources.map((source) => ({ ...source, text: `${"x".repeat(2100)} exact quote` })) };
+  const longLine = { ...generate, sources: generate.sources.map((source) => ({ ...source, text: `${"x".repeat(2100)} exact quote`, contentHash: createHash("sha256").update(`${"x".repeat(2100)} exact quote`).digest("hex") })) };
   assert.equal(validateResult(longLine, cite({ excerpt: "exact quote" })).kind, "proposal");
   assert.equal(validateResult(generate, cite({ startLine: 1, endLine: 3, excerpt: "line one\nline two\nline three" })).kind, "proposal");
   refuses(generate, cite({ sourceVersionId: randomUUID() }), "CITATION_SOURCE"); // not a captured (same-project) source

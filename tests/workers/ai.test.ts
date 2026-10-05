@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
 import { Client } from "pg";
 import { wait } from "@trigger.dev/sdk";
+import { MAX_VERSION } from "../../src/features/drafts/contracts/strict.ts";
 import { canonicalJson, sha256 } from "../../src/features/proposals/domain/capture.ts";
 import { dispatchAi } from "../../src/features/proposals/server/dispatch-ai.ts";
 import type { JobDispatcher, JobRequest, ModelGateway, ModelReply, ModelRequest } from "../../src/features/proposals/server/ports.ts";
@@ -11,7 +12,7 @@ import { runAi } from "../../src/features/proposals/server/run-ai.ts";
 import { runAiDelivery } from "../../src/trigger/run-ai.ts";
 import { seedRun } from "../integration/support/ai-runs.ts";
 import { insertProfile, insertProject, removeSchemaRows } from "../integration/support/schema-fixture.ts";
-import { edgeOp, nodeOp, flowOp, proposal } from "../support/ai-results.ts";
+import { edgeOp, nodeOp, flowOp, proposal, resultFixture } from "../support/ai-results.ts";
 import { requireEnv } from "../support/env.ts";
 import { serializeSweeps } from "../integration/support/sweep-lock.ts";
 
@@ -50,13 +51,13 @@ async function withWorld(run: (ctx: Awaited<ReturnType<typeof world>>) => Promis
 async function world(admin: Client, profiles: string[]) {
   const person = async () => { const id = await insertProfile(admin); profiles.push(id); return id; };
   /** A fresh owner (entitled) with one project and one seeded run, so each case owns its single nonterminal slot. */
-  const seed = async (options: { createdAt?: Date; shape?: "QUEUED" | "RUNNING"; actor?: string } = {}) => {
+  const seed = async (options: { createdAt?: Date; shape?: "QUEUED" | "RUNNING"; actor?: string; flowId?: string } = {}) => {
     const owner = await person();
     await admin.query("insert into app.pilot_entitlement (profile_id, granted_by_operator) values ($1, gen_random_uuid())", [owner]);
     const projectId = await insertProject(admin, owner);
     const actor = options.actor ?? owner;
     if (actor !== owner) await admin.query("insert into app.project_membership (project_id, profile_id, role) values ($1, $2, 'EDITOR')", [projectId, actor]);
-    const runId = await seedRun(admin, { projectId, owner, actor, createdAt: options.createdAt, shape: options.shape });
+    const runId = await seedRun(admin, { projectId, owner, actor, createdAt: options.createdAt, shape: options.shape, flowId: options.flowId });
     return { owner, actor, projectId, runId };
   };
   const row = async (runId: string) => (await admin.query("select state::text, disposition::text, budget_state::text, dispatch_state::text, task_id, dispatch_lease_until, current_attempt_id, result, result_hash, failure_code, terminal_at, cancel_requested_at from app.ai_run where id = $1", [runId])).rows[0]!;
@@ -475,3 +476,46 @@ for (const fence of ["cancel", "deadline", "authority", "cancel-and-deadline"] a
     });
   });
 }
+
+test("generated assumptions too large for saved notes cannot settle as an applicable result", { skip: !canRun }, async () => {
+  await withWorld(async ({ seed, row, attempts, budget }) => {
+    const { runId, owner } = await seed({ createdAt: ago(5) });
+    const output = { ...GOOD, assumptions: ["a".repeat(501)] };
+    const { gateway, requests } = fakeGateway(() => completed(output, { inputTokens: null, outputTokens: null }));
+    await runAi(runId, gateway);
+    const stored = await row(runId);
+    assert.deepEqual([stored.state, stored.disposition, stored.failure_code, stored.result, stored.result_hash], ["FAILED", null, "RESULT_INVALID", null, null]);
+    const [attempt] = await attempts(runId);
+    assert.deepEqual([attempt.outcome, attempt.input_tokens, attempt.output_tokens], ["INCOMPLETE", null, null]);
+    assert.equal(requests.length, 1);
+    assert.deepEqual(await budget(owner), { reserved_runs: 0, consumed_runs: 1 });
+    await runAi(runId, gateway);
+    assert.equal(requests.length, 1, "terminal invalid results cannot call again");
+  });
+});
+
+
+test("captured counter exhaustion fails shared graph semantics before successful settlement", { skip: !canRun }, async () => {
+  await withWorld(async ({ admin, seed, row, attempts, budget }) => {
+    const fixture = resultFixture();
+    const { runId, owner } = await seed({ createdAt: ago(5), flowId: fixture.flowId });
+    const scoped = fixture.improve();
+    const { rows: [stored] } = await admin.query("select capture from app.ai_run where id = $1", [runId]);
+    const capture = { ...stored.capture, taskType: scoped.taskType, selection: scoped.selection, graph: scoped.graph };
+    capture.graph.flows[0]!.version = MAX_VERSION;
+    capture.graphHash = sha256(canonicalJson(capture.graph));
+    // Own immutable seeded input fixture, using the same trigger restoration as the existing oversized-input cases.
+    await admin.query("alter table app.ai_run disable trigger enforce_ai_run");
+    try {
+      await admin.query("update app.ai_run set capture = $2::jsonb, capture_hash = $3 where id = $1", [runId, JSON.stringify(capture), sha256(canonicalJson(capture))]);
+    } finally { await admin.query("alter table app.ai_run enable trigger enforce_ai_run"); }
+    const output = proposal([{ id: "update", dependsOn: [], edit: { command: "UPDATE_NODE", payload: { nodeId: fixture.ids.b, label: "Changed" } } }]);
+    const { gateway, requests } = fakeGateway(() => completed(output));
+    await runAi(runId, gateway);
+    const settled = await row(runId);
+    assert.deepEqual([settled.state, settled.failure_code, settled.result, settled.result_hash, settled.disposition], ["FAILED", "RESULT_INVALID", null, null, null]);
+    assert.equal((await attempts(runId))[0].outcome, "INCOMPLETE");
+    assert.equal(requests.length, 1);
+    assert.deepEqual(await budget(owner), { reserved_runs: 0, consumed_runs: 1 });
+  });
+});
