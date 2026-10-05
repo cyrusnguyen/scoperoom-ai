@@ -82,14 +82,62 @@ test("a baseline-only change reloads the selected run while AI-only changes neve
 
 test("a late 401 after sign-out leaves safe state unchanged and is retried", async () => {
   const pages: RunPage[] = [];
-  let first = true;
+  let current = true;
+  let late: ((value: ApiResult<RunPage>) => void) | undefined;
   const resources = createRunResources({
     projectId: "project",
-    apiRead: async <T,>() => first ? (first = false, { ok: false, code: "UNAUTHENTICATED", message: "Sign in", status: 401, uncertain: false } as ApiResult<T>) : ok(page() as T),
+    apiRead: <T,>() => !late
+      ? new Promise<ApiResult<T>>((resolve) => { late = resolve as (value: ApiResult<RunPage>) => void; })
+      : Promise.resolve(ok(page() as T)),
     adoptPage: (value) => { pages.push(value); },
     adoptRun: () => undefined,
   });
-  await resources.reconcile(status(), () => false);
+  const pending = resources.reconcile(status(), () => current);
+  current = false;
+  late!({ ok: false, code: "UNAUTHENTICATED", message: "Sign in", status: 401, uncertain: false });
+  await pending;
+  assert.deepEqual(pages, []);
   await resources.reconcile(status(), () => true);
   assert.deepEqual(pages, [page()]);
+});
+test("a newer status cursor fences held page and run reads even within one generation", async () => {
+  const held: Array<{ url: string; resolve: (value: ApiResult<RunPage | RunView>) => void }> = [];
+  const adopted: string[] = [];
+  const resources = createRunResources({
+    projectId: "project",
+    apiRead: <T,>(url: string) => new Promise<ApiResult<T>>((resolve) => { held.push({ url, resolve: resolve as (value: ApiResult<RunPage | RunView>) => void }); }),
+    adoptPage: () => { adopted.push("page"); }, adoptRun: (value) => { if (value) adopted.push("run"); },
+  });
+  resources.selectRun("run-1");
+  const fence = () => true;
+  const first = resources.reconcile(status(), fence);
+  const next = status({ aiRevision: 2, documentRevision: 2 });
+  const second = resources.reconcile(next, fence);
+  assert.equal(held.length, 2, "one page and detail request per generation");
+  for (const request of held.splice(0)) request.resolve(ok(request.url.endsWith("run-1") ? detail() : page()));
+  await Promise.all([first, second]);
+  assert.deepEqual(adopted, [], "responses for the old cursor cannot replace current resources");
+  const retry = resources.reconcile(next, fence);
+  assert.equal(held.length, 2, "new cursor remains unloaded and retries");
+  for (const request of held.splice(0)) request.resolve(ok(request.url.endsWith("run-1") ? detail() : page()));
+  await retry;
+  assert.deepEqual(adopted, ["page", "run"]);
+});
+
+test("lifecycle and replaced-draft status changes reload selected run applicability", async () => {
+  const adopted: string[] = [];
+  let applicability = "APPLICABLE";
+  const resources = createRunResources({
+    projectId: "project",
+    apiRead: async <T,>(url: string) => ok((url.endsWith("run-1") ? { ...detail(), applicability } : page()) as T),
+    adoptPage: () => undefined,
+    adoptRun: (value) => { if (value) adopted.push(value.applicability); },
+  });
+  resources.selectRun("run-1");
+  await resources.reconcile(status(), () => true);
+  applicability = "UNAVAILABLE";
+  await resources.reconcile(status({ status: "ARCHIVED" }), () => true);
+  applicability = "STALE";
+  await resources.reconcile(status({ currentDraftId: "replacement" }), () => true);
+  assert.deepEqual(adopted, ["APPLICABLE", "UNAVAILABLE", "STALE"]);
 });

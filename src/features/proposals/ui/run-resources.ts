@@ -24,13 +24,14 @@ export type RunResourcesOptions = {
 export function createRunResources({ projectId, apiRead, adoptPage, adoptRun }: RunResourcesOptions): RunResources {
   let loadedAiRevision: number | null = null;
   let selectedRunId: string | null = null;
-  let loadedRun = "";
+  let loadedRun = "", wantedRun = "";
+  let wantedAiRevision: number | null = null;
   const pageFlights = new Map<() => boolean, Promise<void>>();
   const runFlights = new Map<() => boolean, Map<string, Promise<void>>>();
 
   const pageUrl = `/api/projects/${projectId}/ai-runs`;
   const runKey = (status: ProjectStatusView, runId: string) => JSON.stringify([
-    runId, status.aiRevision, status.currentDraftId, status.documentRevision, status.approvedSnapshotId,
+    runId, status.aiRevision, status.currentDraftId, status.documentRevision, status.approvedSnapshotId, status.status,
   ]);
 
   function page(status: ProjectStatusView, fence: () => boolean): Promise<void> {
@@ -40,7 +41,7 @@ export function createRunResources({ projectId, apiRead, adoptPage, adoptRun }: 
     const flight = (async () => {
       try {
         const result = await apiRead<RunPage>(pageUrl);
-        if (result.ok && fence()) {
+        if (result.ok && wantedAiRevision === status.aiRevision && fence()) {
           adoptPage(result.data);
           loadedAiRevision = status.aiRevision;
         }
@@ -63,7 +64,7 @@ export function createRunResources({ projectId, apiRead, adoptPage, adoptRun }: 
     const flight = (async () => {
       try {
         const result = await apiRead<RunView>(`${pageUrl}/${runId}`);
-        if (result.ok && selectedRunId === runId && fence()) {
+        if (result.ok && selectedRunId === runId && wantedRun === key && fence()) {
           adoptRun(result.data);
           loadedRun = key;
         }
@@ -78,11 +79,16 @@ export function createRunResources({ projectId, apiRead, adoptPage, adoptRun }: 
   }
 
   return {
-    async reconcile(status, fence) { await Promise.all([page(status, fence), selected(status, fence)]); },
+    async reconcile(status, fence) {
+      if (!fence()) return;
+      wantedAiRevision = status.aiRevision;
+      wantedRun = selectedRunId ? runKey(status, selectedRunId) : "";
+      await Promise.all([page(status, fence), selected(status, fence)]);
+    },
     selectRun(runId) {
       if (runId === selectedRunId) return;
       selectedRunId = runId;
-      loadedRun = "";
+      loadedRun = wantedRun = "";
       adoptRun(null);
     },
   };

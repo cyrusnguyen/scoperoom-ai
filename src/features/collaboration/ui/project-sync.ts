@@ -12,7 +12,7 @@ export type Live = { role: ProjectStatusView["role"]; status: ProjectStatusView[
 export type SyncState = { status: ProjectStatusView; failures: number };
 /** replace: another draft is current. project: role or lifecycle changed. read: same draft, newer revisions. */
 export type Plan = "none" | "read" | "project" | "replace";
-/** An optional project resource reader. It owns its own cursor and only adopts while this fence remains current. */
+/** An optional project resource reader. The fence identity is stable per generation; its own cursor also gates adoption. */
 export type ReconcileResources = (status: ProjectStatusView, fence: () => boolean) => Promise<void>;
 
 export type SyncOptions = {
@@ -78,7 +78,12 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
   let cancelTimer: (() => void) | null = null, unlisten: (() => void) | null = null;
   let running: Promise<AuthorityResult> | null = null, queued: Promise<AuthorityResult> | null = null;
 
-  const fenceFor = (at: number) => () => started && at === generation;
+  let fenceAt = -1, currentFence = () => false;
+  const fenceFor = (at: number) => {
+    if (at !== generation) return () => false;
+    if (fenceAt !== at) { fenceAt = at; currentFence = () => started && at === generation; }
+    return currentFence;
+  };
   const publish = () => {
     const key = JSON.stringify([last, failures]);
     if (key !== shown) { shown = key; o.publish({ status: last, failures }); }
@@ -111,8 +116,8 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
       if (next === "read") await o.readDraft(fenceFor(at));
       else if (next !== "none") await o.bootstrap(fenceFor(at));
     } catch { /* retried by the next poll */ }
-    // AI and later resources have independent cursors. A failed or stale resource never invalidates saved draft/authority adoption.
-    try { await o.reconcileResources?.(last, fenceFor(at)); } catch { /* retried by the next successful status cycle */ }
+    // Independent reads cannot delay authority or the next status poll. Their cursor/fence owns late adoption.
+    try { void o.reconcileResources?.(last, fenceFor(at)).catch(() => undefined); } catch { /* retried by the next successful status cycle */ }
     if (!fenceFor(at)()) return unavailable;
     if (seen === invalidations) invalid = false;
     schedule();

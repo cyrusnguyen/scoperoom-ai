@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { ApiResult } from "../src/client/api.ts";
+import { createRunResources } from "../src/features/proposals/ui/run-resources.ts";
 import type { ProjectStatusView } from "../src/features/projects/contracts/project.ts";
 import {
   createProjectSync, plan, statusDelay, type Live, type StatusRead, type SyncOptions, type VisibilityEvent,
@@ -975,4 +977,35 @@ test("live: the preview snapshot keeps its identity while unchanged and changes 
   assert.equal(t.live.snapshot(), drawn);
   await t.advance(2_000);
   assert.deepEqual(t.live.snapshot().cursors, [], "an expired entry drops on the next read");
+});
+
+test("held AI resources do not block authority or the next status poll, and share one flight per generation", async () => {
+  const held: Array<(value: { ok: true; data: never }) => void> = [];
+  const adopted: string[] = [];
+  const resources = createRunResources({
+    projectId: "project",
+    apiRead: <T,>() => new Promise<ApiResult<T>>((resolve) => { held.push(resolve as (value: { ok: true; data: never }) => void); }),
+    adoptPage: () => { adopted.push("page"); }, adoptRun: (value) => { if (value) adopted.push("run"); },
+  });
+  resources.selectRun("run-1");
+  const t = rig(status(), resources.reconcile);
+  t.sync.start();
+  t.sync.setActiveJobVisible(true);
+  t.sync.invalidate();
+  let current = false;
+  void t.sync.beforeWrite().then((result) => { current = result.kind === "current"; });
+  await t.answer(ok(status()));
+  assert.equal(current, true, "status authority resolves while AI reads are held");
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [2_000]);
+  assert.equal(held.length, 2);
+  await t.advance(2_000);
+  await t.answer(ok(status()));
+  assert.equal(held.length, 2, "identical status shares held page/detail reads");
+  await t.advance(2_000);
+  await t.answer(fail(401));
+  assert.deepEqual(t.log, ["session"]);
+  for (const resolve of held) resolve({ ok: true, data: {} as never });
+  await settle();
+  assert.deepEqual(adopted, [], "session stop fences late resource adoption");
+  t.sync.dispose();
 });
