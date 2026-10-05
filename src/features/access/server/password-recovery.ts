@@ -18,7 +18,7 @@ export type RecoveryResult =
   | { kind: "updated" }
   | { kind: "updated-with-signout-warning" };
 
-export type PasswordResetRequestResult = { kind: "invalid-input" | "accepted" | "unavailable" };
+export type PasswordResetRequestResult = { kind: "invalid-input" | "accepted" | "unavailable" | "send-unknown" };
 
 export type RecoveryClient = {
   auth: Pick<SupabaseClient["auth"], "resetPasswordForEmail" | "verifyOtp" | "updateUser" | "signOut">;
@@ -53,18 +53,28 @@ function errorStatus(error: unknown): number | null {
 }
 
 function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
 function confirmedUserId(value: unknown, email: string): string | null {
   const user = record(value);
-  if (!user || typeof user.id !== "string" || !user.id || user.is_anonymous !== false || !user.email_confirmed_at) return null;
+  if (!user || typeof user.id !== "string" || !user.id || user.is_anonymous !== false || typeof user.email_confirmed_at !== "string" || !Number.isFinite(Date.parse(user.email_confirmed_at))) return null;
   return normalizeRecoveryEmail(user.email) === email ? user.id : null;
 }
 
 function matchingSession(value: unknown, userId: string, email: string): boolean {
   const session = record(value);
-  return typeof session?.access_token === "string" && session.access_token.length > 0 && confirmedUserId(session.user, email) === userId;
+  return typeof session?.access_token === "string" && session.access_token.length > 0
+    && typeof session.refresh_token === "string" && session.refresh_token.length > 0
+    && typeof session.expires_in === "number" && Number.isFinite(session.expires_in) && session.expires_in > 0
+    && (session.expires_at === undefined || (typeof session.expires_at === "number" && Number.isFinite(session.expires_at) && session.expires_at > 0))
+    && session.token_type === "bearer" && confirmedUserId(session.user, email) === userId;
+}
+
+function explicitRefusal(error: unknown): boolean {
+  const status = errorStatus(error);
+  return status !== null && Number.isInteger(status) && status >= 400 && status < 500 && status !== 408 && status !== 429
+    && record(error)?.name !== "AuthRetryableFetchError";
 }
 
 async function signOutLocal(client: RecoveryClient) {
@@ -75,11 +85,15 @@ export async function requestPasswordReset(client: RecoveryClient, rawEmail: unk
   const email = normalizeRecoveryEmail(rawEmail);
   if (!email) return { kind: "invalid-input" };
   try {
-    const { error } = await client.auth.resetPasswordForEmail(email);
-    if (!error || errorCode(error) === "over_email_send_rate_limit") return { kind: "accepted" };
-    return { kind: "unavailable" };
+    const response = record(await client.auth.resetPasswordForEmail(email));
+    const error = response?.error;
+    if (error === null && record(response?.data)) return { kind: "accepted" };
+    if (errorCode(error) === "over_email_send_rate_limit" && errorStatus(error) === 429) return { kind: "accepted" };
+    // A timeout, transport failure or unusable acknowledgement may follow a completed send.
+    if (explicitRefusal(error) || errorStatus(error) === 429) return { kind: "unavailable" };
+    return { kind: "send-unknown" };
   } catch {
-    return { kind: "unavailable" };
+    return { kind: "send-unknown" };
   }
 }
 
@@ -106,7 +120,7 @@ export async function recoverPassword(client: RecoveryClient, rawInput: unknown)
   }
 
   const userId = confirmedUserId(verifyData?.user, input.email);
-  if (!userId || !matchingSession(session, userId, input.email)) {
+  if (verifyError !== null || !userId || !matchingSession(session, userId, input.email)) {
     if (session) await signOutLocal(client);
     return { kind: "invalid-code" };
   }
@@ -124,14 +138,14 @@ export async function recoverPassword(client: RecoveryClient, rawInput: unknown)
   const updateError = updateResponse?.error;
   if (updateError) {
     await signOutLocal(client);
-    return ["weak_password", "same_password"].includes(errorCode(updateError) ?? "")
+    return explicitRefusal(updateError)
       ? { kind: "new-code-required" }
       : { kind: "update-unknown" };
   }
 
   const updatedUser = updateData?.user;
   const updateUserId = confirmedUserId(updatedUser, input.email);
-  if (updateUserId !== userId) {
+  if (updateError !== null || updateUserId !== userId) {
     await signOutLocal(client);
     return { kind: "update-unknown" };
   }
@@ -142,8 +156,8 @@ export async function recoverPassword(client: RecoveryClient, rawInput: unknown)
   }
 
   try {
-    const { error } = await client.auth.signOut({ scope: "global" });
-    if (error) return { kind: "updated-with-signout-warning" };
+    const response = record(await client.auth.signOut({ scope: "global" }));
+    if (response?.error !== null) return { kind: "updated-with-signout-warning" };
   } catch {
     return { kind: "updated-with-signout-warning" };
   }

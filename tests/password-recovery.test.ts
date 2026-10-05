@@ -21,6 +21,9 @@ const verifiedUser = {
 };
 const verifiedSession = {
   access_token: "opaque-session-token",
+  refresh_token: "opaque-refresh-token",
+  expires_in: 3600,
+  token_type: "bearer",
   user: verifiedUser,
 };
 
@@ -37,7 +40,7 @@ function client(overrides: Partial<RecoveryClient["auth"]> = {}) {
     },
     updateUser: async (input) => {
       calls.push(["updateUser", input]);
-      return { data: { user: verifiedUser, session: verifiedSession }, error: null };
+      return { data: { user: verifiedUser }, error: null };
     },
     signOut: async (options) => {
       calls.push(["signOut", options]);
@@ -186,4 +189,102 @@ test("confirmed password update remains confirmed when global sign-out fails", a
   assert.deepEqual(await recoverPassword(fake, validInput), { kind: "updated-with-signout-warning" });
   assert.equal(fake.calls.filter(([name]) => name === "updateUser").length, 1);
   assert.deepEqual(fake.calls.at(-1), ["signOut", { scope: "global" }]);
+});
+
+test("lost or unusable send acknowledgements remain unknown without retrying the send", async () => {
+  const { requestPasswordReset } = operations();
+  const responses = [
+    { data: null, error: { name: "AuthRetryableFetchError", status: 0 } },
+    { data: null, error: { name: "AuthRetryableFetchError", status: 503 } },
+    { data: {} },
+    null,
+  ];
+  for (const response of responses) {
+    let sends = 0;
+    const fake = client({ resetPasswordForEmail: async () => { sends += 1; return response as never; } });
+    assert.deepEqual(await requestPasswordReset(fake, "ada@example.test"), { kind: "send-unknown" });
+    assert.equal(sends, 1);
+  }
+  let sends = 0;
+  const thrown = client({ resetPasswordForEmail: async () => { sends += 1; throw new Error("lost send acknowledgement"); } });
+  assert.deepEqual(await requestPasswordReset(thrown, "ada@example.test"), { kind: "send-unknown" });
+  assert.equal(sends, 1);
+});
+
+test("invalid-type verification identities and sessions never authorize a password update", async () => {
+  const { recoverPassword } = operations();
+  const invalidUsers = [
+    { ...verifiedUser, email_confirmed_at: true },
+    { ...verifiedUser, email_confirmed_at: 1 },
+    { ...verifiedUser, email_confirmed_at: {} },
+    { ...verifiedUser, email_confirmed_at: "not-a-timestamp" },
+    { ...verifiedUser, is_anonymous: true },
+    { ...verifiedUser, email: "other@example.test" },
+  ];
+  const invalidSessions = [
+    { ...verifiedSession, access_token: 1 },
+    { ...verifiedSession, refresh_token: 1 },
+    { ...verifiedSession, expires_in: "3600" },
+    { ...verifiedSession, expires_at: "not-a-timestamp" },
+    { ...verifiedSession, token_type: 1 },
+  ];
+  for (const data of [
+    ...invalidUsers.map((user) => ({ user, session: { ...verifiedSession, user } })),
+    ...invalidSessions.map((session) => ({ user: verifiedUser, session })),
+  ]) {
+    const fake = client({ verifyOtp: async () => ({ data, error: null }) });
+    assert.deepEqual(await recoverPassword(fake, validInput), { kind: "invalid-code" });
+    assert.equal(fake.calls.some(([name]) => name === "updateUser"), false);
+    assert.deepEqual(fake.calls, [["signOut", { scope: "local" }]]);
+  }
+});
+
+test("unacknowledged verification never authorizes a password update", async () => {
+  const { recoverPassword } = operations();
+  const fake = client({ verifyOtp: async () => ({ data: { user: verifiedUser, session: verifiedSession } }) });
+  assert.deepEqual(await recoverPassword(fake, validInput), { kind: "invalid-code" });
+  assert.equal(fake.calls.some(([name]) => name === "updateUser"), false);
+});
+
+test("malformed update acknowledgements remain unknown and clean up locally", async () => {
+  const { recoverPassword } = operations();
+  for (const response of [
+    { data: { user: verifiedUser } },
+    { data: { user: { ...verifiedUser, email_confirmed_at: 1 } }, error: null },
+    { data: { user: { ...verifiedUser, email: "other@example.test" } }, error: null },
+    { data: { user: null }, error: null },
+    null,
+  ]) {
+    let updates = 0;
+    const fake = client({ updateUser: async () => { updates += 1; return response; } });
+    assert.deepEqual(await recoverPassword(fake, validInput), { kind: "update-unknown" });
+    assert.equal(updates, 1);
+    assert.deepEqual(fake.calls.at(-1), ["signOut", { scope: "local" }]);
+    assert.equal(fake.calls.some(([name, input]) => name === "signOut" && (input as { scope: string }).scope === "global"), false);
+  }
+});
+
+test("explicit update refusals require a fresh code while ambiguous errors stay unknown", async () => {
+  const { recoverPassword } = operations();
+  const cases = [
+    { error: { code: "bad_jwt", status: 401 }, kind: "new-code-required" },
+    { error: { code: "reauthentication_needed", status: 400 }, kind: "new-code-required" },
+    { error: { code: "validation_failed", status: 422 }, kind: "new-code-required" },
+    { error: { code: "request_timeout", status: 408 }, kind: "update-unknown" },
+    { error: { code: "over_request_rate_limit", status: 429 }, kind: "update-unknown" },
+    { error: { code: "weak_password", status: 503 }, kind: "update-unknown" },
+    { error: { name: "AuthRetryableFetchError", status: 400 }, kind: "update-unknown" },
+    { error: { code: "weak_password" }, kind: "update-unknown" },
+  ];
+  for (const { error, kind } of cases) {
+    const fake = client({ updateUser: async () => ({ data: { user: null }, error }) });
+    assert.deepEqual(await recoverPassword(fake, validInput), { kind });
+    assert.deepEqual(fake.calls.at(-1), ["signOut", { scope: "local" }]);
+  }
+});
+
+test("unusable global sign-out acknowledgement preserves the update with a warning", async () => {
+  const { recoverPassword } = operations();
+  const fake = client({ signOut: async () => ({} as never) });
+  assert.deepEqual(await recoverPassword(fake, validInput), { kind: "updated-with-signout-warning" });
 });

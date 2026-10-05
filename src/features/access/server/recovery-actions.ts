@@ -56,9 +56,9 @@ export async function requestPasswordResetAction(formData: FormData): Promise<Re
 
   let result: Awaited<ReturnType<typeof requestPasswordReset>>;
   try { result = await requestPasswordReset(createRecoveryClient(), email); } catch { return { kind: "unavailable" }; }
-  if (result.kind !== "accepted") return result;
+  if (result.kind !== "accepted" && result.kind !== "send-unknown") return result;
   try { await setPendingRecovery(email); } catch { return { kind: "send-unknown" }; }
-  return { kind: "accepted" };
+  return result;
 }
 
 export async function recoverPasswordAction(formData: FormData): Promise<RecoveryActionsResult> {
