@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
+import type { StartRunInput, ValidatedProposal } from "../../src/features/proposals/contracts/tasks";
 import { expect } from "@playwright/test";
 import { canonicalJson, sha256 } from "../../src/features/proposals/domain/capture";
 import type { BrowserContext, Page, Request } from "@playwright/test";
@@ -11,31 +12,31 @@ test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
 const mutation = () => ({ Origin: appUrl, "Idempotency-Key": randomUUID() });
 const panel = (page: Page) => page.locator("#right-panel");
-const proposal = { schemaVersion: 1, kind: "proposal", operations: [
+const proposal: ValidatedProposal = { schemaVersion: 1, kind: "proposal", operations: [
   { id: "flow", dependsOn: [], edit: { command: "CREATE_FLOW", payload: { ref: "flow", title: "Reviewed checkout", purpose: "A clear checkout", classification: "USER_JOURNEY", inclusion: "INCLUDED" } } },
   { id: "step", dependsOn: ["flow"], edit: { command: "ADD_NODE", payload: { ref: "step", flowId: "flow", kind: "ACTION", label: "Pay", description: "Take payment", actorLabel: "Customer" } } },
 ], assumptions: ["The customer has a valid payment method."], citations: [] };
 
 /** This advances only test SQL state after real admission. It is not a worker or model execution. */
-async function storedSyntheticCompletion(page: Page, database: Client, projectId: string, expired = false) {
+async function storedSyntheticCompletion(page: Page, database: Client, projectId: string, expired = false, result: ValidatedProposal = proposal, selection: StartRunInput["context"]["selection"] = null) {
   const draft = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; documentRevision: number } }).draft;
   const prompt = `Synthetic reviewed proposal ${randomUUID()}`;
   const start = await page.request.post(`/api/projects/${projectId}/ai-runs`, { headers: mutation(), data: {
-    taskType: "PROPOSE_FLOW", prompt, draftId: draft.id, expectedDocumentRevision: draft.documentRevision,
-    expectedParentSnapshotId: null, context: { selection: null, sources: [] },
+    taskType: selection ? "REFINE_FLOW_SELECTION" : "PROPOSE_FLOW", prompt, draftId: draft.id, expectedDocumentRevision: draft.documentRevision,
+    expectedParentSnapshotId: null, context: { selection, sources: [] },
   } });
   expect(start.status()).toBe(202);
   const runId = (await start.json() as { runId: string }).runId;
-  const resultHash = sha256(canonicalJson(proposal));
+  const resultHash = sha256(canonicalJson(result));
   await database.query("update app.ai_run set state = 'RUNNING', budget_state = 'CONSUMED' where id = $1", [runId]);
-  await database.query("update app.ai_run set state = 'SUCCEEDED', disposition = 'AVAILABLE', terminal_at = CASE WHEN $4 THEN now() - interval '8 days' ELSE now() END, result = $2::jsonb, result_hash = $3 where id = $1", [runId, JSON.stringify(proposal), resultHash, expired]);
+  await database.query("update app.ai_run set state = 'SUCCEEDED', disposition = 'AVAILABLE', terminal_at = CASE WHEN $4 THEN now() - interval '8 days' ELSE now() END, result = $2::jsonb, result_hash = $3 where id = $1", [runId, JSON.stringify(result), resultHash, expired]);
   await database.query("select app.record_ai_event((select project_id from app.ai_run where id = $1), $1, 'AI_RUN_SUCCEEDED', jsonb_build_object('testOnly', true))", [runId]);
   if (expired) {
     const expiration = await database.query("select * from app.expire_ai_run_bodies(false, 100)");
     expect(Number(expiration.rows[0]?.expiredResults)).toBeGreaterThan(0);
   }
   return { runId, resultHash, prompt, body: {
-    draftId: draft.id, expectedDocumentRevision: draft.documentRevision, expectedParentSnapshotId: null, resultHash, selectedOperationIds: ["flow", "step"],
+    draftId: draft.id, expectedDocumentRevision: draft.documentRevision, expectedParentSnapshotId: null, resultHash, selectedOperationIds: result.kind === "proposal" ? result.operations.map((operation) => operation.id) : [],
   } };
 }
 
@@ -350,6 +351,9 @@ test("a dependency-complete subset applies once and preserves a peer layout-only
   await panel(page).locator(`[data-run-id="${completed.runId}"]`).getByRole("button").click();
   const review = panel(page).getByRole("heading", { name: "Proposal review" }).locator("..");
   await review.getByRole("checkbox", { name: /create flow/i }).check();
+  await expect(review.getByRole("heading", { name: "Full proposal context", exact: true })).toBeVisible();
+  await expect(review.getByText("1 of 2 operations selected for Apply. Unchecked operations are context only.", { exact: true })).toBeVisible();
+  await expect(review.getByRole("checkbox", { name: /add node.*Pay/i }).locator("..")).toContainText("Context only, not selected for Apply");
   await expect(review.getByRole("button", { name: "Apply selected changes" })).toBeEnabled();
   await review.getByRole("button", { name: "Apply selected changes" }).click();
   await expect(panel(page).getByText("Selected changes applied to the draft. They are not approved.", { exact: true })).toBeVisible();
@@ -873,3 +877,135 @@ test("review regression: expired proposal still recovers an uncertain Apply with
     expect(await freshApply.json()).toMatchObject({ error: { code: "AI_RUN_CONSUMED" } });
   } finally { await page.unroute(applyUrl); }
 });
+
+
+test("corrective regression: two node updates identify their target and fields before subset Apply", async ({ page, workerAccount }) => {
+  test.setTimeout(120_000);
+  const projectId = await createProjectViaApi(page, "AI distinguish node updates");
+  const flowId = randomUUID(), paymentId = randomUUID(), receiptId = randomUUID();
+  await seedStudioChanges(page, projectId, [
+    { command: "CREATE_FLOW", payload: { title: "Checkout", purpose: "Saved flow", classification: "USER_JOURNEY", inclusion: "INCLUDED" }, proposedIds: [flowId] },
+    { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Pay", description: "Original payment", actorLabel: "Customer" }, proposedIds: [paymentId] },
+    { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Receipt", description: "Original receipt", actorLabel: "Customer" }, proposedIds: [receiptId] },
+  ]);
+  const paymentDescription = "Retry payment safely <img src=x onerror=alert(1)> " + "x".repeat(140);
+  const result: ValidatedProposal = { schemaVersion: 1, kind: "proposal", operations: [
+    { id: "first", dependsOn: [], edit: { command: "UPDATE_NODE", payload: { nodeId: paymentId, description: paymentDescription } } },
+    { id: "second", dependsOn: [], edit: { command: "UPDATE_NODE", payload: { nodeId: receiptId, label: "Send receipt", actorLabel: "Staff" } } },
+  ], assumptions: [], citations: [] };
+  const completed = await storedSyntheticCompletion(page, workerAccount.database, projectId, false, result, { flowId, nodeIds: [paymentId, receiptId] });
+  const before = await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { nodes: Record<string, { description: string }> } } };
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.goto(`/app/projects/${projectId}?run=${completed.runId}`);
+  const review = panel(page).getByRole("heading", { name: "Proposal review" }).locator("..");
+  const payment = review.getByRole("checkbox", { name: /update node.*Pay.*Behaviour.*Retry payment safely/i });
+  const receipt = review.getByRole("checkbox", { name: /update node.*Receipt.*Step.*Send receipt.*Actor.*Staff/i });
+  await expect(payment).toBeVisible(); await expect(receipt).toBeVisible();
+  await expect(payment.locator("..")).toContainText(paymentDescription);
+  await expect(review.locator("img")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  expect(await review.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await payment.check();
+  await expect(receipt).not.toBeChecked();
+  await expect(review.getByText("1 of 2 operations selected for Apply. Unchecked operations are context only.", { exact: true })).toBeVisible();
+  const applyUrl = `${appUrl}/api/projects/${projectId}/ai-runs/${completed.runId}/apply`;
+  const appliedPromise = page.waitForResponse((response) => response.url() === applyUrl && response.request().method() === "POST");
+  await review.getByRole("button", { name: "Apply selected changes" }).click();
+  const applied = await appliedPromise;
+  expect(applied.status()).toBe(200);
+  expect(applied.request().postDataJSON()).toMatchObject({ selectedOperationIds: ["first"] });
+  await expect(panel(page).getByText("Selected changes applied to the draft. They are not approved.", { exact: true })).toBeVisible();
+  const after = await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as typeof before;
+  expect(after.draft.document.nodes[paymentId]?.description).toBe(paymentDescription);
+  expect(after.draft.document.nodes[receiptId]).toEqual(before.draft.document.nodes[receiptId]);
+});
+
+for (const kind of ["cancel", "discard"] as const) for (const accessChange of ["downgrade", "archive"] as const) {
+  test(`corrective regression: pending ${kind} recovers after ${accessChange} with current membership only`, async ({ page, browser, workerAccount }) => {
+    test.setTimeout(120_000);
+    const projectId = await createProjectViaApi(page, `AI ${kind} ${accessChange} recovery`);
+    const admin = adminClient(), users: string[] = [];
+    const editorContext = await browser.newContext({ baseURL: appUrl, storageState: { cookies: [], origins: [] } });
+    const editorPage = await editorContext.newPage();
+    try {
+      const editor = await signIn(editorPage, admin, users, "AI control retry editor");
+      const invitation = await page.request.post(`/api/projects/${projectId}/invitations`, { headers: mutation(), data: { verifiedEmail: editor.email, role: "EDITOR" } });
+      expect(invitation.status()).toBe(201);
+      expect((await editorPage.request.post("/api/invitations/accept", { headers: mutation(), data: { token: (await invitation.json() as { url: string }).url.split("/").at(-1) } })).status()).toBe(201);
+      let runId: string;
+      if (kind === "discard") runId = (await storedSyntheticCompletion(editorPage, workerAccount.database, projectId)).runId;
+      else {
+        const draft = (await (await editorPage.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; documentRevision: number } }).draft;
+        const admitted = await editorPage.request.post(`/api/projects/${projectId}/ai-runs`, { headers: mutation(), data: {
+          taskType: "PROPOSE_FLOW", prompt: "Cancel exact request", draftId: draft.id, expectedDocumentRevision: draft.documentRevision,
+          expectedParentSnapshotId: null, context: { selection: null, sources: [] },
+        } });
+        expect(admitted.status()).toBe(202); runId = (await admitted.json() as { runId: string }).runId;
+      }
+      await editorPage.goto(`/app/projects/${projectId}?run=${runId}`);
+      const controlUrl = `${appUrl}/api/projects/${projectId}/ai-runs/${runId}/${kind}`;
+      const sent: { key: string; body: Record<string, unknown>; bytes: string | null }[] = [];
+      const responses: Record<string, unknown>[] = [];
+      let lostAcknowledgement!: () => void;
+      const lost = new Promise<void>((resolve) => { lostAcknowledgement = resolve; });
+      await editorPage.route(controlUrl, async (route) => {
+        sent.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postDataJSON() as Record<string, unknown>, bytes: route.request().postData() });
+        const response = await route.fetch(); expect(response.status()).toBe(200);
+        responses.push(await response.json() as Record<string, unknown>);
+        if (sent.length === 1) { await route.abort("failed"); lostAcknowledgement(); }
+        else await route.fulfill({ response });
+      });
+      const auditAction = kind === "cancel" ? "AI_RUN_CANCEL_REQUESTED" : "AI_PROPOSAL_DISCARDED";
+      const snapshot = async () => (await workerAccount.database.query(`select r.state, r.disposition, r.cancel_requested_at, r.budget_state, r.last_event_sequence, p.ai_revision,
+        (select count(*)::int from app.mutation_receipt where scope_id = p.id and key = $3) receipts,
+        (select count(*)::int from app.audit_event where project_id = p.id and action = $4) audits
+        from app.ai_run r join app.project p on p.id = r.project_id where r.id = $1 and p.id = $2`, [runId, projectId, sent[0]?.key ?? "not-yet-sent", auditAction])).rows[0];
+      expect(await snapshot()).toMatchObject({ receipts: 0, audits: 0 });
+      await panel(editorPage).getByRole("button", { name: kind === "cancel" ? "Cancel run…" : "Discard proposal", exact: true }).click();
+      await lost;
+      const retry = panel(editorPage).getByRole("button", { name: `Retry ${kind}`, exact: true });
+      await expect(retry).toBeVisible();
+      expect(responses[0]).toMatchObject(kind === "cancel" ? { runId, cancelRequested: true, replayed: false } : { runId, disposition: "DISCARDED", replayed: false });
+      const committed = await snapshot();
+      expect(committed).toMatchObject({ receipts: 1, audits: 1 });
+      if (kind === "cancel") { expect(committed.state).toBe("QUEUED"); expect(committed.cancel_requested_at).not.toBeNull(); expect(committed.budget_state).toBe("RESERVED"); }
+      else expect(committed.disposition).toBe("DISCARDED");
+      const member = async () => {
+        const members = (await (await page.request.get(`/api/projects/${projectId}/members`)).json() as { members: { profileId: string; version: number }[] }).members;
+        const profileId = (await workerAccount.database.query("select id from app.user_profile where auth_user_id = $1", [editor.authUserId])).rows[0].id as string;
+        return members.find((item) => item.profileId === profileId)!;
+      };
+      if (accessChange === "downgrade") {
+        const current = await member();
+        expect((await page.request.patch(`/api/projects/${projectId}/members/${current.profileId}`, { headers: mutation(), data: { role: "VIEWER", expectedMemberVersion: current.version } })).status()).toBe(200);
+      } else {
+        const status = await (await page.request.get(`/api/projects/${projectId}/status`)).json() as { version: number };
+        expect((await page.request.post(`/api/projects/${projectId}/archive`, { headers: mutation(), data: { expectedProjectVersion: status.version, reason: "Control receipt recovery" } })).status()).toBe(200);
+      }
+      await editorPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect(panel(editorPage).getByText("Read-only history.", { exact: false })).toBeVisible({ timeout: 15_000 });
+      await expect(panel(editorPage).getByRole("button", { name: /Cancel run|Discard proposal|Regenerate with a fresh capture/ })).toHaveCount(0);
+      await expect(panel(editorPage).getByRole("button", { name: "Generate", exact: true })).toBeDisabled();
+      await expect(retry).toBeEnabled();
+      const beforeReplay = await snapshot();
+      expect(beforeReplay).toEqual(committed);
+      await retry.click();
+      await expect(panel(editorPage).locator(".ai-message")).toContainText(kind === "cancel" ? "Cancellation requested" : "Run discarded");
+      expect(sent).toHaveLength(2); expect(sent[1]).toEqual(sent[0]);
+      expect(responses[1]).toEqual({ ...responses[0], replayed: true });
+      expect(await snapshot()).toEqual(beforeReplay);
+      // Removal still refuses the exact saved receipt without returning the successful result.
+      await workerAccount.database.query("update app.project_membership set active = false, deactivated_sequence = (select event_sequence from app.project where id = $1) where project_id = $1 and profile_id = (select id from app.user_profile where auth_user_id = $2)", [projectId, editor.authUserId]);
+      const refusalRequestId = randomUUID();
+      const denied = await editorPage.request.post(controlUrl, { headers: { Origin: appUrl, "Idempotency-Key": sent[0]!.key, "X-Request-Id": refusalRequestId }, data: sent[0]!.body });
+      expect(denied.status()).toBe(404);
+      const denial = await denied.json() as { error: { code: string } };
+      expect(denial.error.code).toBe("NOT_FOUND");
+      const unknownRun = await editorPage.request.post(`${appUrl}/api/projects/${projectId}/ai-runs/${randomUUID()}/${kind}`, { headers: { ...mutation(), "X-Request-Id": refusalRequestId }, data: sent[0]!.body });
+      expect(unknownRun.status()).toBe(404); expect(await unknownRun.json()).toEqual(denial);
+      expect((await editorPage.request.get(`/api/projects/${projectId}/ai-runs/${runId}`)).status()).toBe(404);
+      expect(await snapshot()).toEqual(beforeReplay);
+      await editorPage.unroute(controlUrl);
+    } finally { await cleanupInvitedUsers(workerAccount.database, admin, users, projectId, [page.context(), editorContext]); }
+  });
+}

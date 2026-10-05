@@ -37,11 +37,11 @@ export function RunCard({ run, summary, busy, canWrite, blockedByPending, pendin
     </details>}
     {summary?.flowId && <p className="muted">Flow id {summary.flowId}</p>}
     <p className="muted">Request id {run.id}</p>
-    {pendingControl && <button type="button" className="button quiet small" onClick={onRetryControl} disabled={busy || !canWrite}>Retry {pendingControl.kind}</button>}
+    {pendingControl && <button type="button" className="button quiet small" onClick={onRetryControl} disabled={busy}>Retry {pendingControl.kind}</button>}
     {canWrite && active(run.state) && !run.cancelRequestedAt && !pendingControl?.kind.includes("cancel") && <button type="button" className="button quiet small" disabled={busy || blockedByPending} onClick={onCancel}>Cancel run…</button>}
     {canWrite && run.state === "SUCCEEDED" && run.disposition === "AVAILABLE" && run.resultHash && !pendingControl?.kind.includes("discard") && <button type="button" className="button quiet small" disabled={busy || blockedByPending} onClick={onDiscard}>Discard proposal</button>}
     {canWrite && run.capture && <button type="button" className="button quiet small" disabled={busy || blockedByPending || Boolean(pendingApply || pendingControl)} onClick={onRegenerate}>{run.applicability === "STALE" ? "Improve again with a fresh capture" : "Regenerate with a fresh capture"}</button>}
-    {!canWrite && <p className="muted" role="status">Read-only history. Apply and run controls are available to project editors in an active project.</p>}
+    {!canWrite && <p className="muted" role="status">Read-only history. New Apply and run controls are available to project editors in an active project.</p>}
     <ProposalReview key={run.id} run={run} pendingApply={pendingApply} busy={busy} canWrite={canWrite} blockedByPending={blockedByPending} onApply={onApply} />
   </article>;
 }

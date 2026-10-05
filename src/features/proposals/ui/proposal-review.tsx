@@ -41,6 +41,31 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
   const retry = () => pendingApply && onApply({ runId: run.id, key: pendingApply.key, body: pendingApply.body });
   const sourceNames = new Map(run.capture?.sources.map((source) => [source.sourceVersionId, source.title]) ?? []);
 
+  const records = [
+    ...(run.capture ? [...run.capture.graph.flows, ...run.capture.graph.nodes, ...run.capture.graph.edges] : []),
+    ...operations.flatMap(({ edit }) => edit.command === "CREATE_FLOW" || edit.command === "ADD_NODE" ? [{ ...edit.payload, id: edit.payload.ref }] : []),
+  ] as unknown as Record<string, unknown>[];
+  const label = (id: string) => recordLabel(records.find((record) => record.id === id), id);
+  const edgeLabel = (id: string) => {
+    const edge = run.capture?.graph.edges.find((record) => record.id === id);
+    return edge ? `${label(edge.fromId)} → ${label(edge.toId)}${edge.condition ? ` (${edge.condition})` : ""}` : id;
+  };
+  const target = ({ edit }: ProposalOperation) => {
+    switch (edit.command) {
+      case "CREATE_FLOW": return edit.payload.title;
+      case "ADD_NODE": return `${edit.payload.label} (in ${label(edit.payload.flowId)})`;
+      case "UPDATE_NODE": return label(edit.payload.nodeId);
+      case "DELETE_NODES": return edit.payload.nodeIds.map(label).join(", ");
+      case "ADD_EDGE": return `${label(edit.payload.fromId)} → ${label(edit.payload.toId)}`;
+      case "UPDATE_EDGE": case "RECONNECT_EDGE": case "DELETE_EDGE": return edgeLabel(edit.payload.edgeId);
+    }
+  };
+  const fields = ({ edit }: ProposalOperation) => recordFields.filter((field) => field in edit.payload).map((field) => {
+    // Inclusion is reset by Apply; only name the field here, with its actual value in the full context.
+    if (field === "inclusion") return fieldLabels[field];
+    return `${fieldLabels[field]}: ${displayValue(field, (edit.payload as unknown as Record<string, unknown>)[field], records)}`;
+  }).join(" · ");
+
   return <section className="detail-section proposal-review" aria-labelledby="proposal-heading">
     <h2 id="proposal-heading">Proposal review</h2>
     {run.disposition === "EXPIRED" && <p className="inline-note" role="status">This result has expired. Its history remains, but the proposal body is no longer available.</p>}
@@ -49,12 +74,19 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
     {run.result?.kind === "clarification" && <p>{run.result.message}</p>}
     {run.result?.kind === "proposal" && <>
       <p className="muted">Select one dependency-complete group. Applying any subset consumes this run; remaining suggestions need a new action.</p>
+      <h3>Choose changes for Apply</h3>
+      <p className="muted">{selected.length} of {operations.length} operations selected for Apply. Unchecked operations are context only.</p>
       {operations.map((operation) => <label className="proposal-operation" key={operation.id}>
         <input type="checkbox" checked={selected.includes(operation.id)} onChange={() => toggle(operation.id)} disabled={!canWrite || run.applicability !== "APPLICABLE" || Boolean(pendingApply)} />
-        <span>{noun(operation)} <small>({operation.id})</small></span>
+        <span><strong>{noun(operation)}: {target(operation)}</strong>
+          {fields(operation) && <><br /><small>{fields(operation)}</small></>}
+          <br /><small>{selected.includes(operation.id) ? "Selected for Apply" : "Context only, not selected for Apply"} · Operation {operation.id}</small>
+        </span>
       </label>)}
       {missing.length > 0 && <p className="field-error" role="alert">Also select required operations: {missing.join(", ")}.</p>}
-      {run.diff && <div className="proposal-diff" aria-label="Before and after changes">
+      {run.diff && <div className="proposal-diff" aria-label="Full proposal before and after changes">
+        <h3>Full proposal context</h3>
+        <p className="muted">This before/after list includes all suggestions, including unchecked operations. Apply sends only the checked operations above.</p>
         <p>{run.diff.createdIds.length} added · {run.diff.updatedIds.length} updated · {run.diff.retiredIds.length} removed</p>
         {[...run.diff.createdIds.map((id) => ["Added", id] as const), ...run.diff.updatedIds.map((id) => ["Updated", id] as const), ...run.diff.retiredIds.map((id) => ["Removed", id] as const)].map(([kind, id]) => {
           const before = [...run.diff!.before.flows, ...run.diff!.before.nodes, ...run.diff!.before.edges].find((item) => item.id === id);
