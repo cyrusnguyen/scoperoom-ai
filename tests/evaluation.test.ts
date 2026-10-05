@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, fsyncSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -104,3 +104,75 @@ test("unavailable output never becomes a validation or usefulness success in agg
   const counts=outcomeCounts([{outcome:"unavailable",assessment:null},{outcome:"completed",assessment:assess(item,{schemaVersion:1,kind:"clarification",message:"Which authorizer?"})},{outcome:"completed",assessment:assess(item,{schemaVersion:1,kind:"proposal",operations:[]})}]);
   assert.deepEqual(counts,{providerNoncompletion:1,schemaFailures:1,applicationFailures:0,scopePreservationFailures:0,validatedProposals:0,validatedClarifications:1});
 });
+
+const renewedState = () => ({wave:"2026-10-06-renewed",purpose:"24 corrected synthetic evaluation cases plus up to six targeted journeys or diagnostics",authorizationDate:"2026-10-06",scope:"No retries, refunds, reclaim or automatic replay",model:MODEL,authorizedCalls:30,priorCalls:26,priorJournalSha256:"ad4371362e02488ba6b7489404ea4cb8d7172eeeac4be2733c408ea0a5dea5c0",cumulativeAuthorizedCalls:56,reservedCalls:0,records:[]});
+async function renewedTest(run: (journal: string, baselineJournal: string) => Promise<void>) {
+  const dir=mkdtempSync(join(tmpdir(),"scoperoom-renewed-evaluation-")); const journal=join(dir,"budget.json"), baselineJournal=join(dir,"original.json");
+  writeFileSync(journal,JSON.stringify(renewedState()));
+  const names=["G","I"].flatMap(p=>Array.from({length:12},(_,i)=>`${p}${String(i+1).padStart(2,"0")}`)).concat(["journey:PROPOSE_FLOW","journey:REFINE_FLOW_SELECTION"]);
+  writeFileSync(baselineJournal,JSON.stringify({...state(),reservedCalls:26,records:names.map((name,i)=>({slot:i+1,id:name,kind:i<24?"corpus":"journey",runId:`00000000-0000-4000-8000-${String(i+100).padStart(12,"0")}`,model:MODEL,reservedAt:"2026-10-05T00:00:00.000Z"}))}));
+  try {await run(journal,baselineJournal);} finally {rmSync(dir,{recursive:true,force:true});}
+}
+const renewedOptions = (journal: string, baselineJournal: string, transport: typeof fetch) => ({journal,baselineJournal,baselineSha256:sha256(readFileSync(baselineJournal,"utf8")),wave:"2026-10-06-renewed" as const,id:"G01",kind:"corpus" as const,apiKey:"synthetic-test-key",transport});
+const renewedRequest = (n: number) => ({...request(),runId:`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`});
+const renewedRecord = (name: string, n: number, kind: "corpus" | "journey") => ({slot:n,id:name,kind,runId:renewedRequest(n+200).runId,model:MODEL,reservedAt:"2026-10-06T00:00:00.000Z"});
+test("renewed authority fsyncs a separate call before transport, preserves original bytes and denies replay",async()=>renewedTest(async(journal,baselineJournal)=>{
+  const before=readFileSync(baselineJournal); let calls=0,synced=false;const observations:unknown[]=[];
+  const options={...renewedOptions(journal,baselineJournal,async(_input,init)=>{calls++;const saved=JSON.parse(readFileSync(journal,"utf8"));observations.push({synced,redirect:init?.redirect,reservedCalls:saved.reservedCalls,runId:saved.records[0].runId});throw Error("uncertain response");}),syncFile:(fd:number)=>{fsyncSync(fd);synced=true;}};
+  await budgetGateway(options).generate(renewedRequest(901),new AbortController().signal);
+  await budgetGateway(options).generate(renewedRequest(902),new AbortController().signal);
+  assert.equal(calls,1);assert.deepEqual(observations,[{synced:true,redirect:"error",reservedCalls:1,runId:"00000000-0000-4000-8000-000000000901"}]);assert.deepEqual(readFileSync(baselineJournal),before);assert.equal(JSON.parse(readFileSync(journal,"utf8")).reservedCalls,1);
+}));
+test("renewed wave must be explicit and cannot be selected by deterministic arguments",()=>{
+  assert.deepEqual(selectCases(["--live","--synthetic",`--model=${MODEL}`,"--target=synthetic","--wave=2026-10-06-renewed","--only=G01","--limit=1"]),["G01"]);
+  for(const args of [["--wave=2026-10-06-renewed"],["--live","--wave=other"],["--wave=2026-10-06-renewed","--only=G01"]]) assert.throws(()=>selectCases(args));
+});
+test("renewed authority rejects malformed journals, baseline changes and authority mismatches before transport",async()=>renewedTest(async(journal,baselineJournal)=>{
+  let calls=0,denied=0; const options={...renewedOptions(journal,baselineJournal,async()=>{calls++;throw Error("must not call");}),onDenied:()=>denied++};
+  const original=readFileSync(baselineJournal);
+  const mutations=["{",JSON.stringify({...renewedState(),wave:"another-wave"}),JSON.stringify({...renewedState(),model:"another-model"}),JSON.stringify({...renewedState(),authorizedCalls:31}),JSON.stringify({...renewedState(),priorCalls:25}),JSON.stringify({...renewedState(),cumulativeAuthorizedCalls:57}),JSON.stringify({...renewedState(),priorJournalSha256:"0".repeat(64)}),JSON.stringify({...renewedState(),reservedCalls:1}),JSON.stringify({...renewedState(),records:[{slot:1}]}),JSON.stringify({...renewedState(),scope:"Refund permitted"}),JSON.stringify({...renewedState(),authorizationDate:"2026-10-05"}),JSON.stringify({...renewedState(),unexpected:true})];
+  for(const value of mutations){writeFileSync(journal,value);await budgetGateway(options).generate(renewedRequest(901),new AbortController().signal);}
+  writeFileSync(journal,JSON.stringify(renewedState()));
+  for(const baseline of ["{",JSON.stringify(state()),`${original.toString("utf8")} `]){writeFileSync(baselineJournal,baseline);await budgetGateway(options).generate(renewedRequest(901),new AbortController().signal);}
+  assert.equal(calls,0);assert.equal(denied,15);
+}));
+test("renewed corpus and targeted caps allow the thirtieth call and refuse the thirty-first",async()=>renewedTest(async(journal,baselineJournal)=>{
+  const names=["G","I"].flatMap(p=>Array.from({length:12},(_,i)=>`${p}${String(i+1).padStart(2,"0")}`));
+  const records=names.map((name,i)=>renewedRecord(name,i+1,"corpus"));
+  for(let n=25;n<=29;n++)records.push(renewedRecord(`journey:${renewedRequest(n+200).runId}`,n,"journey"));
+  writeFileSync(journal,JSON.stringify({...renewedState(),reservedCalls:29,records})); let calls=0;
+  const invoke=(n:number)=>budgetGateway({...renewedOptions(journal,baselineJournal,async()=>{calls++;throw Error("uncertain response");}),id:`journey:${renewedRequest(n).runId}`,kind:"journey"}).generate(renewedRequest(n),new AbortController().signal);
+  await invoke(901);await invoke(902); assert.equal(calls,1); assert.equal(JSON.parse(readFileSync(journal,"utf8")).reservedCalls,30);
+}));
+test("renewed authority enforces six targeted calls independently of available corpus capacity",async()=>renewedTest(async(journal,baselineJournal)=>{
+  const records=Array.from({length:6},(_,i)=>renewedRecord(`journey:${renewedRequest(i+201).runId}`,i+1,"journey"));
+  writeFileSync(journal,JSON.stringify({...renewedState(),reservedCalls:6,records}));let calls=0;
+  const transport:typeof fetch=async()=>{calls++;throw Error("uncertain response");};
+  await budgetGateway({...renewedOptions(journal,baselineJournal,transport),id:`journey:${renewedRequest(901).runId}`,kind:"journey"}).generate(renewedRequest(901),new AbortController().signal);
+  assert.equal(calls,0);
+  await budgetGateway(renewedOptions(journal,baselineJournal,transport)).generate(renewedRequest(902),new AbortController().signal);
+  assert.equal(calls,1);assert.equal(JSON.parse(readFileSync(journal,"utf8")).reservedCalls,7);
+}));
+test("renewed duplicate ids, run ids, original run reuse and mismatched targeted ids deny",async()=>renewedTest(async(journal,baselineJournal)=>{
+  const record=renewedRecord("G01",1,"corpus");let calls=0;const options=renewedOptions(journal,baselineJournal,async()=>{calls++;throw Error("must not call");});
+  for(const [first,second] of [[record,{...record,slot:2}], [record,{...record,slot:2,id:"G02"}],[record,{...record,slot:2,id:"journey:bad",kind:"journey"}]]){
+    writeFileSync(journal,JSON.stringify({...renewedState(),reservedCalls:2,records:[first,second]}));await budgetGateway(options).generate(renewedRequest(901),new AbortController().signal);
+  }
+  writeFileSync(journal,JSON.stringify(renewedState()));
+  const old=JSON.parse(readFileSync(baselineJournal,"utf8"));
+  await budgetGateway(options).generate({...request(),runId:old.records[0].runId},new AbortController().signal);
+  await budgetGateway({...options,id:`journey:${renewedRequest(902).runId}`,kind:"journey"}).generate(renewedRequest(901),new AbortController().signal);
+  assert.equal(calls,0);assert.equal(JSON.parse(readFileSync(journal,"utf8")).reservedCalls,0);
+}));
+test("renewed locked or uncertain persistence never reaches transport or reclaims a call",async()=>renewedTest(async(journal,baselineJournal)=>{
+  let calls=0;const options=renewedOptions(journal,baselineJournal,async()=>{calls++;throw Error("must not call");});
+  writeFileSync(`${journal}.lock`,"other process");await budgetGateway(options).generate(renewedRequest(901),new AbortController().signal);assert.equal(calls,0);assert.equal(JSON.parse(readFileSync(journal,"utf8")).reservedCalls,0);rmSync(`${journal}.lock`);
+  await budgetGateway({...options,syncFile:()=>{throw Error("injected fsync failure");}}).generate(renewedRequest(901),new AbortController().signal);
+  assert.equal(calls,0);assert.equal(JSON.parse(readFileSync(journal,"utf8")).reservedCalls,1);
+  await budgetGateway(options).generate(renewedRequest(902),new AbortController().signal);assert.equal(calls,0);assert.equal(JSON.parse(readFileSync(journal,"utf8")).reservedCalls,1);
+}));
+
+test("renewed normal guard rejects a synthetic baseline without a test hash override",async()=>renewedTest(async(journal,baselineJournal)=>{
+  let calls=0;const {baselineSha256,...options}=renewedOptions(journal,baselineJournal,async()=>{calls++;throw Error("must not call");});void baselineSha256;
+  await budgetGateway(options).generate(renewedRequest(901),new AbortController().signal);assert.equal(calls,0);assert.equal(JSON.parse(readFileSync(journal,"utf8")).reservedCalls,0);
+}));
