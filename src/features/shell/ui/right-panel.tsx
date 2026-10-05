@@ -51,18 +51,21 @@ export function tabListKeyDown<T extends string>(event: ReactKeyboardEvent<HTMLE
 }
 
 /** The on-demand right panel. Closed means hidden (display:none): it reserves no width and its in-memory state survives. */
-export default function RightPanel({ mode, onClose, children }: { mode: PanelMode; onClose: () => void; children: ReactNode }) {
+export default function RightPanel({ mode, tab, onTabChange, onClose, children }: { mode: PanelMode; tab: "details" | "ai"; onTabChange: (tab: "details" | "ai") => void; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLElement>(null);
   const overlay = mode === "overlay";
   useOverlay(ref, overlay, onClose);
   return <aside ref={ref} id="right-panel" className="right-panel" aria-label="Project panel" role={overlay ? "dialog" : undefined} aria-modal={overlay || undefined} data-dock={mode} hidden={mode === "closed"}>
     <header className="right-panel-header">
-      {/* One tab until AI (Stage 06) and Specs (Stages 07/11) join it. */}
       <div className="right-panel-tabs" role="tablist" aria-label="Project panel tabs">
-        <button type="button" role="tab" id="right-tab-details" aria-selected="true" aria-controls="right-body-details" data-active="true">Details</button>
+        {(["details", "ai"] as const).map((id) => <button key={id} type="button" role="tab" id={`right-tab-${id}`} aria-selected={tab === id} aria-controls={`right-body-${id}`} tabIndex={tab === id ? 0 : -1} data-active={tab === id}
+          onClick={() => onTabChange(id)} onKeyDown={(event) => {
+            const next = event.key === "ArrowRight" || event.key === "ArrowLeft" ? (id === "details" ? "ai" : "details") : event.key === "Home" ? "details" : event.key === "End" ? "ai" : null;
+            if (next) { event.preventDefault(); onTabChange(next); document.getElementById(`right-tab-${next}`)?.focus(); }
+          }}>{id === "details" ? "Details" : "AI"}</button>)}
       </div>
       <button type="button" className="button quiet small" onClick={onClose} aria-label="Close panel"><Icon name="close" /></button>
     </header>
-    <div className="right-panel-body" id="right-body-details" role="tabpanel" aria-labelledby="right-tab-details">{children}</div>
+    <div className="right-panel-body" id={`right-body-${tab}`} role="tabpanel" aria-labelledby={`right-tab-${tab}`}>{children}</div>
   </aside>;
 }

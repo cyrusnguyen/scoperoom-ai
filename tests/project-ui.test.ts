@@ -4,10 +4,10 @@ import type { Changes } from "../src/features/drafts/contracts/changes.ts";
 import { edit, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
-import { admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
-import { anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
+import { acknowledgeExternalWrite, admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
+import { anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
-const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
+const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("discard preserves an uncertain import's original per-project request; dropping access clears it", () => {
@@ -32,6 +32,17 @@ test("opening mounts the panel; closing hides it but keeps it mounted", () => {
   assert.deepEqual(uiFor(opened, "a"), { ...closed, rightOpen: true, rightMounted: true });
   assert.deepEqual(uiFor(setRightOpen(opened, "a", false), "a"), { ...closed, rightOpen: false, rightMounted: true });
   assert.equal(uiFor(setRightOpen({}, "a", false), "a").rightMounted, false);
+});
+
+test("AI prompt and uncertain request stay in per-project memory across panel close and project switches", () => {
+  const pendingRequest = { kind: "start" as const, projectId: "a", draftId: "draft-a", key: "same-key", submittedText: "Original", body: { prompt: "Original" } };
+  let store = updateUi({}, "a", () => ({ ai: { instruction: "Newer", action: "PROPOSE_FLOW", selectedRunId: null, pendingRequest } }));
+  store = setRightTab(store, "a", "ai");
+  store = setRightOpen(store, "a", false);
+  store = setRightTab(store, "b", "ai");
+  assert.equal(uiFor(store, "a").ai.instruction, "Newer");
+  assert.equal(uiFor(store, "a").ai.pendingRequest, pendingRequest);
+  assert.notEqual(uiFor(store, "b").ai.pendingRequest, pendingRequest);
 });
 
 test("drafts belong to one project, and undefined clears a draft", () => {
@@ -108,6 +119,21 @@ test("reads must cover both acknowledged revision floors and clear only the qual
   assert.equal(read.refreshFailed, false);
   assert.deepEqual(read.acknowledgedRevisions, { d2: floors.d2 });
   assert.deepEqual(ui.acknowledgedRevisions, floors, "the original per-project state is immutable");
+});
+
+test("a replayed Apply receipt pins its original draft without raising the replacement draft floor", () => {
+  const floors = {
+    oldDraft: { documentRevision: 4, layoutRevision: 2 },
+    currentDraft: { documentRevision: 8, layoutRevision: 5 },
+  };
+  const receipt = { draftId: "oldDraft", documentRevision: 9, layoutRevision: 7 };
+  const ack = acknowledgeExternalWrite("currentDraft", floors, receipt);
+  assert.equal(ack.currentDraft, false);
+  assert.deepEqual(ack.currentFloor, floors.currentDraft);
+  assert.deepEqual(ack.acknowledgedRevisions, {
+    oldDraft: { documentRevision: 9, layoutRevision: 7 },
+    currentDraft: floors.currentDraft,
+  });
 });
 
 test("one admission predicate: a read must be current, not older than the adopted draft, and cover the floor", () => {

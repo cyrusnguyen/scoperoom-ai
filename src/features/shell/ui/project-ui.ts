@@ -3,10 +3,17 @@
 import { discardOutbox } from "../../studio/ui/outbox.ts";
 import { defaultStudioUi, studioDirtyCount, type StudioUi } from "../../studio/ui/studio-ui.ts";
 
-export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; drafts: Record<string, string> } & StudioUi;
+type AiRequestBase = { projectId: string; draftId: string; key: string; body: Record<string, unknown>; };
+export type AiRequest =
+  | (AiRequestBase & { kind: "start"; submittedText: string })
+  | (AiRequestBase & { kind: "apply"; runId: string })
+  | (AiRequestBase & { kind: "discard" | "cancel"; runId: string });
+export type AiUi = { instruction: string; action: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; selectedRunId: string | null; pendingRequest: AiRequest | null };
+export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: "details" | "ai"; drafts: Record<string, string>; ai: AiUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
-export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, drafts: {}, ...defaultStudioUi };
+export const defaultAiUi: AiUi = { instruction: "", action: "PROPOSE_FLOW", selectedRunId: null, pendingRequest: null };
+export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, rightTab: "details", drafts: {}, ai: defaultAiUi, ...defaultStudioUi };
 
 export function uiFor(store: UiStore, projectId: string | undefined): ProjectUi {
   return (projectId && store[projectId]) || defaultUi;
@@ -16,6 +23,11 @@ export function uiFor(store: UiStore, projectId: string | undefined): ProjectUi 
 export function setRightOpen(store: UiStore, projectId: string, open: boolean): UiStore {
   const current = uiFor(store, projectId);
   return { ...store, [projectId]: { ...current, rightOpen: open, rightMounted: current.rightMounted || open } };
+}
+
+export function setRightTab(store: UiStore, projectId: string, rightTab: ProjectUi["rightTab"]): UiStore {
+  const current = uiFor(store, projectId);
+  return { ...store, [projectId]: { ...current, rightOpen: true, rightMounted: true, rightTab } };
 }
 
 /** Records an unsaved value; `undefined` means the field matches its saved value again. */

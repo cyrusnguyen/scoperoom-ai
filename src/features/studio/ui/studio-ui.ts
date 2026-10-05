@@ -70,6 +70,16 @@ export function requireDraftRevision(floors: StudioUi["acknowledgedRevisions"], 
   } };
 }
 
+/** A receipt replay for a replaced draft stays pinned to that draft and never advances the current draft's read floor. */
+export function acknowledgeExternalWrite(currentDraftId: string, floors: StudioUi["acknowledgedRevisions"], receipt: Pick<CommandResult, "draftId" | "documentRevision" | "layoutRevision">) {
+  const acknowledgedRevisions = requireDraftRevision(floors, receipt);
+  return {
+    acknowledgedRevisions,
+    currentDraft: receipt.draftId === currentDraftId,
+    currentFloor: receipt.draftId === currentDraftId ? acknowledgedRevisions[currentDraftId] : floors[currentDraftId],
+  };
+}
+
 /**
  * The one admission gate for every draft-bearing read (bootstrap, adopt, Studio reload, polling): the same draft, not
  * older than the adopted one, and covering the draft's acknowledged floor. A rejected read changes nothing.
