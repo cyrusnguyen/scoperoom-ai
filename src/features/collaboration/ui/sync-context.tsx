@@ -10,7 +10,7 @@ import { createDirectory, type DirectoryMember } from "./participants";
 import { createProjectLive, savedViewOf, type ProjectLive } from "./project-live";
 import type { PreviewSnapshot } from "./preview-store";
 import type { LiveState } from "./realtime-transport";
-import { createProjectSync, type AuthorityResult, type Live, type ReconcileReason, type SyncOptions, type SyncState } from "./project-sync";
+import { createProjectSync, type AuthorityResult, type Live, type ReconcileReason, type ReconcileResources, type SyncOptions, type SyncState } from "./project-sync";
 
 /** Focus, `online` and a tab becoming visible again revalidate; one listener set per controller. */
 const visibility: SyncOptions["visibility"] = {
@@ -43,6 +43,8 @@ type Sync = {
   /** True while nothing has replaced this project or its draft: check right before adopting a late response. */
   fence: (at?: number) => () => boolean;
   setReader: (read: Reader) => () => void;
+  setAiReader: (read: ReconcileResources) => () => void;
+  setActiveJobVisible: (on: boolean) => void;
   /** The Studio reports each adopted saved draft, so previews are checked against saved data. */
   setSavedDraft: (draft: DraftView) => void;
   /** Realtime: `degraded` shows "Live updates delayed" and never blocks saving. */
@@ -75,6 +77,12 @@ export function useSyncReader(read: Reader) {
   useEffect(() => setReader?.(read), [setReader, read]);
 }
 
+/** The mounted AI panel contributes one resource reader to the project's existing status controller. */
+export function useAiSyncReader(read: ReconcileResources) {
+  const setAiReader = useContext(SyncContext)?.setAiReader;
+  useEffect(() => setAiReader?.(read), [setAiReader, read]);
+}
+
 /** The Studio reports the saved draft it has adopted (once per adoption), so remote previews are validated against it. */
 export function useSyncSavedDraft(draft: DraftView) {
   const setSavedDraft = useContext(SyncContext)?.setSavedDraft;
@@ -91,7 +99,7 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
   projectId: string; initial: ProjectStatusView; live: () => Live | null; bootstrap: (fence: () => boolean) => Promise<unknown>; children: ReactNode;
 }) {
   // What the controller calls back into: the latest shell callbacks and the Studio's registered read.
-  const [bridge] = useState(() => ({ live, bootstrap, reader: null as Reader | null }));
+  const [bridge] = useState(() => ({ live, bootstrap, reader: null as Reader | null, aiReader: null as ReconcileResources | null }));
   useLayoutEffect(() => { Object.assign(bridge, { live, bootstrap }); });
   const [state, setState] = useState<SyncState>({ status: initial, failures: 0 });
   const [sync] = useState(() => createProjectSync({
@@ -106,6 +114,7 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
     readDraft: (fence) => bridge.reader?.(fence) ?? Promise.resolve(),
     bootstrap: (fence) => bridge.bootstrap(fence),
     publish: setState,
+    reconcileResources: (status, fence) => bridge.aiReader?.(status, fence) ?? Promise.resolve(),
   }));
   const [realtime] = useState(() => createProjectLive({
     transport, sessionId: crypto.randomUUID(), now: Date.now,
@@ -135,10 +144,11 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
   const installed = useRef(initial);
   useEffect(() => { if (installed.current !== initial) { installed.current = initial; sync.invalidate(); } }, [initial, sync]);
   const setReader = useMemo(() => (read: Reader) => { Object.assign(bridge, { reader: read }); return () => { if (bridge.reader === read) Object.assign(bridge, { reader: null }); }; }, [bridge]);
+  const setAiReader = useMemo(() => (read: ReconcileResources) => { Object.assign(bridge, { aiReader: read }); return () => { if (bridge.aiReader === read) Object.assign(bridge, { aiReader: null }); }; }, [bridge]);
   const previews = useMemo(() => ({ snapshot: realtime.snapshot, subscribe: realtime.subscribe, nextExpiry: realtime.nextExpiry }), [realtime]);
   const value = useMemo<Sync>(() => ({
-    ...state, revalidate: sync.revalidate, beforeWrite: sync.beforeWrite, invalidate: sync.invalidate, fence: sync.fence, setReader, setSavedDraft,
+    ...state, revalidate: sync.revalidate, beforeWrite: sync.beforeWrite, invalidate: sync.invalidate, fence: sync.fence, setReader, setAiReader, setActiveJobVisible: sync.setActiveJobVisible, setSavedDraft,
     liveState, roster, directory, previews, sendCursor: realtime.sendCursor, sendDrag: realtime.sendDrag, endDrag: realtime.endDrag, setPresence: realtime.setPresence,
-  }), [state, sync, setReader, setSavedDraft, liveState, roster, directory, previews, realtime]);
+  }), [state, sync, setReader, setAiReader, setSavedDraft, liveState, roster, directory, previews, realtime]);
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;
 }

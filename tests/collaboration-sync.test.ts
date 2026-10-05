@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProjectStatusView } from "../src/features/projects/contracts/project.ts";
 import {
-  createProjectSync, plan, statusDelay, type Live, type StatusRead, type VisibilityEvent,
+  createProjectSync, plan, statusDelay, type Live, type StatusRead, type SyncOptions, type VisibilityEvent,
 } from "../src/features/collaboration/ui/project-sync.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
 import type { PeerMessage, PresenceState } from "../src/features/collaboration/contracts/messages.ts";
@@ -22,7 +22,7 @@ const fail = (code: number): StatusRead => ({ ok: false, status: code });
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /** A fake clock, fake visibility and a status endpoint answered by hand: no real timers, no DOM. */
-function rig(start = status()) {
+function rig(start = status(), reconcileResources?: SyncOptions["reconcileResources"]) {
   let clock = 0, ids = 0, hidden = false;
   const timers: { id: number; at: number; fn: () => void; ms: number }[] = [];
   const listeners = new Set<(reason: VisibilityEvent) => void>();
@@ -46,6 +46,7 @@ function rig(start = status()) {
     readDraft: async (fence) => { log.push(`read:${fence()}`); },
     bootstrap: async (fence) => { log.push(`bootstrap:${fence()}`); },
     publish: (state) => published.push(state),
+    reconcileResources,
   });
   return {
     sync, log, published, shell, timers, listeners, pending,
@@ -518,7 +519,50 @@ test("a follow-up queued behind an account-change stop never fetches, so the she
 
 test("statusDelay: the degraded base is 5 s and backs off like the normal one", () => {
   assert.deepEqual([0, 1, 2, 3].map((failures) => statusDelay(failures, 0.5, true)), [5_000, 10_000, 20_000, 20_000]);
+  assert.deepEqual([0, 1, 2, 3].map((failures) => statusDelay(failures, 0.5, true, true)), [2_000, 4_000, 8_000, 8_000]);
   assert.equal(statusDelay(0, 0.5, false), 10_000);
+});
+
+test("an active visible job uses the 2 s cadence and closing it restores the current cadence", () => {
+  const t = rig();
+  t.sync.start();
+  t.sync.setActiveJobVisible(true);
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [2_000]);
+  t.sync.setDegraded(true);
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [2_000]);
+  t.sync.setActiveJobVisible(false);
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [5_000]);
+  t.sync.setDegraded(false);
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [10_000]);
+  t.sync.dispose();
+  assert.equal(t.timers.length, 0);
+});
+
+test("successful status cycles reconcile resources, including identical and AI-only changes, without draft reads", async () => {
+  const calls: Array<{ aiRevision: number; current: boolean }> = [];
+  const t = rig(status(), async (next, fence) => { calls.push({ aiRevision: next.aiRevision, current: fence() }); });
+  t.sync.start();
+  const first = t.sync.revalidate("manual");
+  await t.answer(ok(status()));
+  await first;
+  await t.advance(10_000);
+  await t.answer(ok(status()));
+  await t.advance(10_000);
+  await t.answer(ok(status({ aiRevision: 1 })));
+  assert.deepEqual(calls, [{ aiRevision: 0, current: true }, { aiRevision: 0, current: true }, { aiRevision: 1, current: true }]);
+  assert.deepEqual(t.log, []);
+  t.sync.dispose();
+});
+
+test("a resource failure leaves authority current and the status timer running", async () => {
+  const t = rig(status(), async () => { throw new Error("resource unavailable"); });
+  t.sync.start();
+  const result = t.sync.revalidate("manual");
+  await t.answer(ok(status()));
+  assert.equal((await result).kind, "current");
+  assert.equal((await t.sync.beforeWrite()).kind, "current");
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [10_000]);
+  t.sync.dispose();
 });
 
 test("degraded moves the waiting poll to 5 s and recovery back to 10 s, always with exactly one timer", async () => {
