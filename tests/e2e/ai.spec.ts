@@ -50,6 +50,12 @@ async function openAi(page: Page) {
   await expect(panel(page).getByRole("tab", { name: "AI", exact: true })).toHaveAttribute("aria-selected", "true");
 }
 
+async function revealRequestId(page: Page, runId: string) {
+  const details = panel(page).locator(".ai-run-details");
+  if (await details.getAttribute("open") === null) await details.locator("summary").click();
+  await expect(details.locator("div").filter({ has: page.getByText("Request id", { exact: true }) }).locator("dd")).toHaveText(runId);
+}
+
 async function cleanupInvitedUsers(database: Client, admin: ReturnType<typeof adminClient>, users: string[], projectId: string, contexts: BrowserContext[] = []) {
   for (const context of contexts) await closeStudioContext(context);
   await database.query("delete from app.project where id = $1", [projectId]);
@@ -80,22 +86,22 @@ test("Generate from an empty project and restore the exact queued run from its U
   const runId = (await started.json() as { runId: string }).runId;
   await expect(page).toHaveURL(new RegExp(`[?&]run=${runId}(?:&|$)`));
   await expect(panel(page).getByText("Queued", { exact: true })).toBeVisible();
-  await expect(panel(page).getByText("Request id " + runId, { exact: true })).toBeVisible();
+  await revealRequestId(page, runId);
   await page.reload();
   await expect(panel(page).getByRole("tab", { name: "AI", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(panel(page).getByText("Request id " + runId, { exact: true })).toBeVisible();
+  await revealRequestId(page, runId);
   await panel(page).getByText("Exact captured instruction and context", { exact: true }).click();
   await expect(panel(page).getByText("Improve the customer journey", { exact: true })).toBeVisible();
   await expect(panel(page).getByRole("button", { name: "Cancel run…" })).toBeEnabled();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/app/projects/${projectId}?run=${runId}`);
   await expect(panel(page).getByRole("tab", { name: "AI", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(panel(page).getByText("Request id " + runId, { exact: true })).toBeVisible();
+  await revealRequestId(page, runId);
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await page.setViewportSize({ width: 320, height: 844 });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await page.evaluate(() => { document.documentElement.style.zoom = "2"; });
-  await expect(panel(page).getByText("Request id " + runId, { exact: true })).toBeVisible();
+  await revealRequestId(page, runId);
   const aiTab = panel(page).getByRole("tab", { name: "AI", exact: true });
   await aiTab.focus();
   await aiTab.press("ArrowLeft");
@@ -681,11 +687,12 @@ test("uncertain Apply stays pinned to its run and a viewer sees read-only saved 
   await expect(proposalReview.getByRole("alert")).toContainText("Also select required operations");
   await expect(proposalReview.getByRole("button", { name: "Apply selected changes" })).toBeDisabled();
   await operations.nth(0).check();
+  await operations.nth(1).uncheck();
   const applyUrl = `${appUrl}/api/projects/${projectId}/ai-runs/${first.runId}/apply`;
-  const sent: { key: string | undefined; body: unknown }[] = [];
+  const sent: { key: string | undefined; body: unknown; bytes: string | null }[] = [];
   await page.route(applyUrl, async (route) => {
     const request = route.request();
-    sent.push({ key: request.headers()["idempotency-key"], body: request.postDataJSON() });
+    sent.push({ key: request.headers()["idempotency-key"], body: request.postDataJSON(), bytes: request.postData() });
     if (sent.length === 1) {
       const response = await route.fetch();
       expect(response.status()).toBe(200);
@@ -700,13 +707,23 @@ test("uncertain Apply stays pinned to its run and a viewer sees read-only saved 
   const otherReview = panel(page).getByRole("heading", { name: "Proposal review" }).locator("..");
   await expect(otherReview.getByRole("button", { name: "Apply selected changes" })).toBeDisabled();
   await history.nth(1).click();
+  await panel(page).getByRole("tab", { name: "Details", exact: true }).click();
+  await panel(page).getByRole("tab", { name: "AI", exact: true }).click();
   const pinnedReview = panel(page).getByRole("heading", { name: "Proposal review" }).locator("..");
+  await expect(pinnedReview.getByRole("checkbox", { name: /create flow.*Reviewed checkout/i })).toBeChecked();
+  await expect(pinnedReview.getByRole("checkbox", { name: /create flow.*Reviewed checkout/i })).toBeDisabled();
+  await expect(pinnedReview.getByRole("checkbox", { name: /add node.*Pay/i })).not.toBeChecked();
+  await expect(pinnedReview.getByRole("checkbox", { name: /add node.*Pay/i })).toBeDisabled();
+  await expect(pinnedReview.getByText("1 of 2 operations selected for Apply. Unchecked operations are context only.", { exact: true })).toBeVisible();
+  await expect(pinnedReview.getByRole("checkbox", { name: /add node.*Pay/i }).locator("..")).toContainText("Context only, not selected for Apply");
+  expect(sent[0]?.body).toMatchObject({ selectedOperationIds: ["flow"] });
   await pinnedReview.getByRole("button", { name: "Retry Apply with the same selection" }).click();
   await expect.poll(() => sent.length).toBe(2);
   expect(sent[1]).toEqual(sent[0]);
   await expect(panel(page).getByText("Selected changes applied to the draft. They are not approved.", { exact: true })).toBeVisible();
-  const bootstrap = await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { flows: Record<string, { title: string }> } }; status: { approvedSnapshotId: string | null } };
+  const bootstrap = await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { flows: Record<string, { title: string }>; nodes: Record<string, unknown> } }; status: { approvedSnapshotId: string | null } };
   expect(Object.values(bootstrap.draft.document.flows).some((flow) => flow.title === "Reviewed checkout")).toBe(true);
+  expect(bootstrap.draft.document.nodes).toEqual({});
   expect(bootstrap.status.approvedSnapshotId).toBeNull();
   await page.unroute(applyUrl);
 
@@ -944,10 +961,11 @@ test("review regression: expired proposal still recovers an uncertain Apply with
 test("corrective regression: two node updates identify their target and fields before subset Apply", async ({ page, workerAccount }) => {
   test.setTimeout(120_000);
   const projectId = await createProjectViaApi(page, "AI distinguish node updates");
+  const paymentLabel = "Pay for the customer order " + "longname".repeat(16);
   const flowId = randomUUID(), paymentId = randomUUID(), receiptId = randomUUID();
   await seedStudioChanges(page, projectId, [
     { command: "CREATE_FLOW", payload: { title: "Checkout", purpose: "Saved flow", classification: "USER_JOURNEY", inclusion: "INCLUDED" }, proposedIds: [flowId] },
-    { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Pay", description: "Original payment", actorLabel: "Customer" }, proposedIds: [paymentId] },
+    { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: paymentLabel, description: "Original payment", actorLabel: "Customer" }, proposedIds: [paymentId] },
     { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Receipt", description: "Original receipt", actorLabel: "Customer" }, proposedIds: [receiptId] },
   ]);
   const paymentDescription = "Retry payment safely <img src=x onerror=alert(1)> " + "x".repeat(140);
@@ -967,7 +985,27 @@ test("corrective regression: two node updates identify their target and fields b
   await expect(review.locator("img")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   expect(await review.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await payment.check();
+  const runDetails = panel(page).locator(".ai-run-details summary");
+  await runDetails.focus();
+  await expect(runDetails).toBeFocused();
+  await expect(panel(page).locator(".ai-run-details")).not.toHaveAttribute("open", "");
+  await runDetails.press("Enter");
+  await expect(panel(page).locator(".ai-run-details")).toHaveAttribute("open", "");
+  await revealRequestId(page, completed.runId);
+  await panel(page).locator(".ai-capture summary").click();
+  await review.locator(".proposal-diff > details").first().locator(":scope > summary").click();
+  await expect(panel(page)).toHaveAttribute("data-dock", "overlay");
+  expect(await panel(page).evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(panel(page)).toHaveAttribute("data-dock", "docked");
+  expect(await panel(page).evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.setViewportSize({ width: 320, height: 900 });
+  await expect(panel(page)).toHaveAttribute("data-dock", "overlay");
+  await payment.focus();
+  await expect(payment).toBeFocused();
+  await payment.press("Space");
+  await expect(payment).toBeChecked();
   await expect(receipt).not.toBeChecked();
   await expect(review.getByText("1 of 2 operations selected for Apply. Unchecked operations are context only.", { exact: true })).toBeVisible();
   const applyUrl = `${appUrl}/api/projects/${projectId}/ai-runs/${completed.runId}/apply`;

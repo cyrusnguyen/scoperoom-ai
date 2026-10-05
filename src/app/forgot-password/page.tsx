@@ -21,6 +21,6 @@ export default async function ForgotPasswordPage({ searchParams }: Props) {
       signedIn = Boolean(user?.email_confirmed_at && !user.is_anonymous);
     } catch { /* Actions still require a trusted anonymous identity before sending. */ }
   }
-  if (signedIn) return <RecoverySignedInView />;
+  if (signedIn) return <RecoverySignedInView continuation={continuation} />;
   return <ForgotPasswordView continuation={continuation} requestAction={requestPasswordResetAction} />;
 }

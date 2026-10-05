@@ -363,7 +363,8 @@ test.describe("local Auth password recovery", () => {
     if (created.error || !created.data.user) throw new Error("Could not create the local action-gate fixture.");
     const otherContext = await browser.newContext();
     try {
-      await page.goto("/forgot-password/reset");
+      const continuation = "/invite/" + "a".repeat(43);
+      await gotoRecoveryContinuation(page, "/forgot-password/reset?continue=" + encodeURIComponent(continuation));
       await expect(page.getByRole("heading", { name: "Reset your password" })).toBeVisible();
 
       const signedInPage = await otherContext.newPage();
@@ -383,10 +384,85 @@ test.describe("local Auth password recovery", () => {
       await page.getByRole("button", { name: "Reset password" }).click();
       await expect(page.getByRole("heading", { name: "You are already signed in" })).toBeVisible();
       await expect(page.getByRole("link", { name: "Return to app" })).toBeVisible();
+      await safeRecoveryAction(() => page.getByRole("button", { name: "Sign out", exact: true }).click());
+      await expect.poll(() => {
+        const url = new URL(page.url());
+        return url.pathname === "/login" && url.searchParams.get("continue") === continuation;
+      }).toBe(true);
+      expect((await page.request.get("/api/me")).status()).toBe(401);
     } finally {
       await otherContext.close();
       await admin.auth.admin.deleteUser(created.data.user.id);
     }
   });
 
+});
+
+for (const recoveryRoute of ["/forgot-password", "/forgot-password/reset"]) for (const safe of [true, false]) {
+  test(`signed-in recovery Sign out preserves only a safe continuation on ${recoveryRoute} (${safe ? "safe" : "unsafe"})`, async ({ page }) => {
+    const admin = adminClient();
+    const database = await openDatabase();
+    const email = `recovery-signout-${randomUUID()}@example.test`;
+    const password = `Recovery-${randomUUID()}!`;
+    const continuation = safe ? "/invite/" + "a".repeat(43) : "https://example.invalid/";
+    const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+    if (created.error || !created.data.user) throw new Error("Could not create the signed-in recovery fixture.");
+    try {
+      await page.goto("/login");
+      await fillPrivateField(page.getByLabel("Email address"), email);
+      await fillPrivateField(page.getByLabel("Password", { exact: true }), password);
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await expect(page).toHaveURL(/\/app$/);
+      await gotoRecoveryContinuation(page, recoveryRoute + "?continue=" + encodeURIComponent(continuation));
+      await expect(page.getByRole("heading", { name: "You are already signed in" })).toBeVisible();
+      await safeRecoveryAction(() => page.getByRole("button", { name: "Sign out", exact: true }).click());
+      await expect.poll(() => {
+        const url = new URL(page.url());
+        return url.pathname === "/login" && url.searchParams.get("continue") === (safe ? continuation : null);
+      }).toBe(true);
+      expect((await page.request.get("/api/me")).status()).toBe(401);
+    } finally {
+      await cleanupUsers(database, admin, [created.data.user.id], page);
+      await database.end();
+    }
+  });
+}
+
+test("accepted resend clears all secrets, sends only email and continuation, and cooldown preserves pending fields", async ({ page }) => {
+  const admin = adminClient();
+  const email = `recovery-resend-${randomUUID()}@example.test`;
+  const continuation = "/invite/" + "a".repeat(43);
+  const created = await admin.auth.admin.createUser({ email, email_confirm: true });
+  if (created.error || !created.data.user) throw new Error("Could not create the resend fixture.");
+  const stalePage = await page.context().newPage();
+  const candidate = "Unused-" + randomUUID() + "!";
+  const code = String(Math.floor(Math.random() * 1_000_000)).padStart(6, "0");
+  const resendFields: string[][] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.headers()["next-action"]) {
+      resendFields.push(Array.from((request.postDataBuffer()?.toString() ?? "").matchAll(/name="([^"]+)"/g), (match) => match[1]!.replace(/^_[0-9]+_/, "")).filter((name) => name !== "0").sort());
+    }
+  });
+  try {
+    for (const current of [page, stalePage]) {
+      await gotoRecoveryContinuation(current, "/forgot-password/reset?continue=" + encodeURIComponent(continuation));
+      await fillPrivateField(current.getByLabel("Email address"), email);
+      await fillPrivateField(current.getByLabel("Verification code"), code);
+      await fillPrivateField(current.getByLabel("New password", { exact: true }), candidate);
+      await fillPrivateField(current.getByLabel("Confirm new password"), candidate);
+    }
+    await safeRecoveryAction(() => page.getByRole("button", { name: "Resend code", exact: true }).click());
+    await expect(page.getByRole("status")).toContainText("If an account exists");
+    expect(resendFields).toEqual([["continue", "email"]]);
+    expect(await page.evaluate(() => Array.from(document.querySelectorAll<HTMLInputElement>("input[type=password], input[autocomplete=one-time-code]")).every((input) => input.value.length === 0))).toBe(true);
+    expect(await page.locator('input[name="email"]').evaluate((input: HTMLInputElement, expected) => input.value === expected, email)).toBe(true);
+    expect(new URL(page.url()).searchParams.get("continue") === continuation).toBe(true);
+    await deliveredRecoveryCode(process.env.E2E_MAILPIT_URL!, email);
+    await safeRecoveryAction(() => stalePage.getByRole("button", { name: "Resend code", exact: true }).click());
+    await expect(stalePage.getByRole("status")).toContainText("Wait");
+    expect(await stalePage.evaluate(({ code, candidate }) => Array.from(document.querySelectorAll<HTMLInputElement>("input[type=password], input[autocomplete=one-time-code]")).every((input) => input.value === (input.name === "code" ? code : candidate)), { code, candidate })).toBe(true);
+  } finally {
+    await stalePage.close();
+    await admin.auth.admin.deleteUser(created.data.user.id);
+  }
 });

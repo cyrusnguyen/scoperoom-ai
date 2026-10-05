@@ -23,13 +23,17 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
   onApply: (request: { key: string; body: Record<string, unknown>; runId: string }) => void;
 }) {
   const operations = run.result?.kind === "proposal" ? run.result.operations : [];
-  const [selected, setSelected] = useState<string[]>([]);
+  const [localSelection, setSelected] = useState<string[]>([]);
   const byId = new Map(operations.map((operation) => [operation.id, operation]));
+  const pendingSelection = pendingApply?.body.selectedOperationIds;
+  const selected = pendingApply
+    ? Array.isArray(pendingSelection) ? pendingSelection.filter((id): id is string => typeof id === "string" && byId.has(id)) : []
+    : localSelection;
   const missingSet = new Set<string>();
   const includeDependencies = (id: string) => { for (const dependency of byId.get(id)?.dependsOn ?? []) if (!selected.includes(dependency) && !missingSet.has(dependency)) { missingSet.add(dependency); includeDependencies(dependency); } };
   selected.forEach(includeDependencies);
   const missing = [...missingSet];
-  const canApply = canWrite && !blockedByPending && run.applicability === "APPLICABLE" && operations.length > 0 && selected.length > 0 && missing.length === 0 && run.resultHash !== null && !busy;
+  const canApply = canWrite && !pendingApply && !blockedByPending && run.applicability === "APPLICABLE" && operations.length > 0 && selected.length > 0 && missing.length === 0 && run.resultHash !== null && !busy;
   const toggle = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   const apply = () => {
     if (!canApply || !run.resultHash) return;

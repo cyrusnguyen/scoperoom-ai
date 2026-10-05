@@ -87,15 +87,19 @@ export default function ResetPasswordForm({ email: initialEmail, sentAt, status,
     const form = formRef.current;
     if (!form) return;
     setMessage(null);
-    const data = new FormData(form);
+    const data = new FormData();
+    data.set("email", email);
+    if (continuation) data.set("continue", continuation);
     startTransition(async () => {
       let result: RequestResult;
       try { result = await requestAction(data); }
       catch {
+        clearSecrets();
         setNotice("We could not confirm the request. Check your email before requesting another code.");
         return;
       }
       if (result.kind === "accepted" || result.kind === "send-unknown") {
+        clearSecrets();
         setEmail(String(data.get("email") ?? "").trim().toLowerCase());
         setRemembered(true);
         setNotice(result.kind === "accepted" ? "If an account exists for this email, we have sent a reset code." : "We could not confirm the request. Check your email before requesting another code.");

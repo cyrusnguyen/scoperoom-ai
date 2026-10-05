@@ -150,16 +150,23 @@ test("fresh anonymous contexts reach provider resend suppression with the same p
 
 test("resend stays disabled while its server action is pending", async ({ page }) => {
   const account = await createAccount(`fault-resend-${randomUUID()}@example.test`);
+  const candidate = "Unused-" + randomUUID() + "!";
+  const code = String(Math.floor(Math.random() * 1_000_000)).padStart(6, "0");
   try {
     setFault("request-delay");
     await page.goto("/forgot-password/reset");
     await fillPrivateField(page.getByLabel("Email address"), account.email);
+    await fillPrivateField(page.getByLabel("Verification code"), code);
+    await fillPrivateField(page.getByLabel("New password", { exact: true }), candidate);
+    await fillPrivateField(page.getByLabel("Confirm new password"), candidate);
     const resend = page.getByRole("button", { name: "Resend code", exact: true });
     await resend.click();
     await expect(resend).toBeDisabled();
     await expect(page.getByRole("status")).toContainText("temporarily unavailable");
     await expect(resend).toBeEnabled();
     await expectFault("recover", 400);
+    expect(await page.evaluate(({ code, candidate }) => Array.from(document.querySelectorAll<HTMLInputElement>("input[type=password], input[autocomplete=one-time-code]")).every((input) => input.value === (input.name === "code" ? code : candidate)), { code, candidate })).toBe(true);
+    expect(events().some((event) => event.operation === "update")).toBe(false);
   } finally {
     setFault();
     await cleanupAccount(account, page);
@@ -350,3 +357,51 @@ test("global revocation outage reports the confirmed password update warning", a
     await cleanupAccount(account, page);
   }
 });
+
+for (const mode of ["request-outage", "request-lost", "action-ack-lost"] as const) {
+  test(`resend clears obsolete secrets after ${mode} and preserves email and continuation`, async ({ page }) => {
+    const account = await createAccount(`fault-resend-clear-${randomUUID()}@example.test`);
+    const continuation = "/invite/" + "a".repeat(43);
+    const actionUrl = (url: URL) => url.pathname === "/forgot-password/reset";
+    const candidate = "Unused-" + randomUUID() + "!";
+    const code = String(Math.floor(Math.random() * 1_000_000)).padStart(6, "0");
+    const resendFields: string[][] = [];
+    let serverAcknowledged = false;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.headers()["next-action"]) {
+        resendFields.push(Array.from((request.postDataBuffer()?.toString() ?? "").matchAll(/name="([^"]+)"/g), (match) => match[1]!.replace(/^_[0-9]+_/, "")).filter((name) => name !== "0").sort());
+      }
+    });
+    try {
+      setFault(mode === "action-ack-lost" ? "observe" : mode);
+      try { await page.goto("/forgot-password/reset?continue=" + encodeURIComponent(continuation)); }
+      catch { throw new Error("Could not open the resend continuation fixture."); }
+      await fillPrivateField(page.getByLabel("Email address"), account.email);
+      await fillPrivateField(page.getByLabel("Verification code"), code);
+      await fillPrivateField(page.getByLabel("New password", { exact: true }), candidate);
+      await fillPrivateField(page.getByLabel("Confirm new password"), candidate);
+      if (mode === "action-ack-lost") await page.route(actionUrl, async (route) => {
+        if (route.request().method() !== "POST" || !route.request().headers()["next-action"]) { await route.continue(); return; }
+        const response = await route.fetch();
+        serverAcknowledged = response.status() === 200;
+        await response.dispose();
+        await route.abort("failed");
+      });
+      try { await page.getByRole("button", { name: "Resend code", exact: true }).click(); }
+      catch { throw new Error("Could not submit the resend continuation fixture."); }
+      await expect(page.getByRole("status")).toContainText("Check your email");
+      expect(resendFields).toEqual([["continue", "email"]]);
+      expect(await page.evaluate(() => Array.from(document.querySelectorAll<HTMLInputElement>("input[type=password], input[autocomplete=one-time-code]")).every((input) => input.value.length === 0))).toBe(true);
+      expect(await page.locator('input[name="email"]').evaluate((input: HTMLInputElement, expected) => input.value === expected, account.email)).toBe(true);
+      expect(new URL(page.url()).searchParams.get("continue") === continuation).toBe(true);
+      await expectFault("recover", mode === "request-outage" ? 503 : 200);
+      if (mode !== "request-outage") await deliveredCode(account.email);
+      if (mode === "action-ack-lost") expect(serverAcknowledged).toBe(true);
+      expect(events().some((event) => event.operation === "update")).toBe(false);
+    } finally {
+      await page.unroute(actionUrl).catch(() => {});
+      setFault();
+      await cleanupAccount(account, page);
+    }
+  });
+}

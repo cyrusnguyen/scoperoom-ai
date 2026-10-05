@@ -22,7 +22,7 @@ export default async function ResetPasswordPage({ searchParams }: Props) {
       signedIn = Boolean(user?.email_confirmed_at && !user.is_anonymous);
     } catch { /* Mutating actions remain closed when trusted identity cannot be read. */ }
   }
-  if (signedIn) return <RecoverySignedInView />;
+  if (signedIn) return <RecoverySignedInView continuation={continuation} />;
   const pending = await getPendingRecovery().catch(() => null);
   const status = rawStatus === "sent" || rawStatus === "send-unknown" ? rawStatus : null;
   const error = rawError === "unavailable" || rawError === "cooldown" ? rawError : null;
