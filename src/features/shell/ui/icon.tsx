@@ -1,4 +1,6 @@
 const paths = {
+  ai: ["m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z", "M20 2v4m-2-2h4"],
+  send: ["M12 19V5m-6 6 6-6 6 6"],
   panel: ["M3 3h18v18H3V3Zm5 0v18"],
   details: ["M3 3h18v18H3V3Zm13 0v18"],
   lock: ["M5 10h14v11H5V10Zm3 0V6a4 4 0 0 1 8 0v4"],

@@ -5,6 +5,7 @@ import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import { useAiSyncReader, useSync } from "@/features/collaboration/ui/sync-context";
 import type { ProjectUi } from "@/features/shell/ui/project-ui";
 import { useStudio } from "@/features/studio/ui/studio-context";
+import { Icon } from "@/features/shell/ui/icon";
 import { createRunResources } from "./run-resources";
 import { RunCard } from "./run-card";
 import { RunHistory } from "./run-history";
@@ -218,24 +219,28 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
 
   return <div className="ai-panel">
     <section className="detail-section ai-action" aria-labelledby="ai-action-heading">
-      <h2 id="ai-action-heading">AI actions</h2>
-      <label htmlFor="ai-action">Action</label>
-      <select id="ai-action" value={ui.action} onChange={(event) => { const action = event.target.value as TaskKind; update((current) => ({ ...current, action })); setMessage(""); }} disabled={busy || Boolean(ui.pendingRequest)}>
-        <option value="PROPOSE_FLOW">Generate a flow</option>
-        <option value="REFINE_FLOW_SELECTION">Improve selected steps</option>
-      </select>
-      {ui.action === "REFINE_FLOW_SELECTION" && <p className="muted">Selection: {studio.ui.selection?.kind === "NODES" ? studio.ui.selection.ids.map((id) => studio.draft.document.nodes[id]?.label ?? id).join(", ") : "none"}. Only these steps and their incident connections are in scope.</p>}
-      <label htmlFor="ai-instruction">Instruction</label>
-      <textarea id="ai-instruction" rows={5} maxLength={16000} value={ui.instruction} onChange={(event) => update((current) => ({ ...current, instruction: event.target.value }))} placeholder={ui.action === "PROPOSE_FLOW" ? "Describe the flow to create…" : "Describe how these steps should improve…"} />
-      {ui.pendingRequest?.kind === "start" ? <div className="view-actions"><button className="button primary small" type="button" onClick={() => void start(true)} disabled={busy}>Retry this request</button></div>
-        : <button type="button" className="button primary" onClick={() => void start()} disabled={busy || Boolean(ui.pendingRequest) || !studio.editable}>{busy ? "Working…" : ui.action === "PROPOSE_FLOW" ? "Generate" : "Improve selection"}</button>}
+      <header className="ai-heading"><span className="ai-mark"><Icon name="ai" size={20} /></span><div><h2 id="ai-action-heading">AI actions</h2><p>Turn an idea into a flow.</p></div></header>
+      <div className="ai-context"><span><Icon name="flow" size={13} />Saved draft · r{studio.savedDraft.documentRevision}</span>{ui.action === "REFINE_FLOW_SELECTION" && <span>{studio.ui.selection?.kind === "NODES" ? studio.ui.selection.ids.length : 0} steps selected</span>}</div>
+      {ui.action === "REFINE_FLOW_SELECTION" && <p className="ai-selection">Selection: {studio.ui.selection?.kind === "NODES" ? studio.ui.selection.ids.map((id) => studio.draft.document.nodes[id]?.label ?? id).join(", ") : "none"}. Only these steps and their incident connections are in scope.</p>}
+      <div className="ai-composer">
+        <label htmlFor="ai-instruction">Instruction</label>
+        <textarea id="ai-instruction" rows={4} maxLength={16000} value={ui.instruction} onChange={(event) => update((current) => ({ ...current, instruction: event.target.value }))} placeholder={ui.action === "PROPOSE_FLOW" ? "Describe the flow to create…" : "Describe how these steps should improve…"} />
+        <div className="ai-composer-footer">
+          <div className="ai-mode"><label htmlFor="ai-action">Action</label><select id="ai-action" value={ui.action} onChange={(event) => { const action = event.target.value as TaskKind; update((current) => ({ ...current, action })); setMessage(""); }} disabled={busy || Boolean(ui.pendingRequest)}>
+            <option value="PROPOSE_FLOW">Generate a flow</option>
+            <option value="REFINE_FLOW_SELECTION">Improve selected steps</option>
+          </select></div>
+          {ui.pendingRequest?.kind === "start" ? <button className="button primary ai-send" type="button" onClick={() => void start(true)} disabled={busy}>Retry this request<Icon name="send" /></button>
+            : <button type="button" className="button primary ai-send" onClick={() => void start()} disabled={busy || Boolean(ui.pendingRequest) || !studio.editable}>{busy ? "Working…" : ui.action === "PROPOSE_FLOW" ? "Generate" : "Improve selection"}<Icon name="send" /></button>}
+        </div>
+      </div>
       <p className="ai-message" role={message.includes("refused") || message.includes("could not") ? "alert" : "status"} aria-live="polite">{message}</p>
-      <p className="muted">The saved draft, current baseline, action and selected flow or steps are sent. Run instructions and results are shared with current project members. Source management is not available in this stage; requests include no sources.</p>
+      <p className="ai-disclosure">The saved draft, current baseline, action and selected flow or steps are sent. Run instructions and results are shared with current project members. Requests include no sources.</p>
     </section>
     {run ? <RunCard run={run} summary={selectedSummary} busy={busy} canWrite={canWrite} blockedByPending={Boolean(ui.pendingRequest && ui.pendingRequest.kind !== "apply" || ui.pendingRequest?.kind === "apply" && ui.pendingRequest.runId !== run.id)} pendingApply={ui.pendingRequest?.kind === "apply" && ui.pendingRequest.runId === run.id ? ui.pendingRequest : null}
       pendingControl={ui.pendingRequest && (ui.pendingRequest.kind === "cancel" || ui.pendingRequest.kind === "discard") && ui.pendingRequest.runId === run.id ? ui.pendingRequest : null}
       onCancel={() => void runControl("cancel", run)} onDiscard={() => void runControl("discard", run)} onApply={(request) => void retryApply(request)} onRegenerate={() => regenerate(run)}
-      onRetryControl={() => void runControl(ui.pendingRequest?.kind === "cancel" ? "cancel" : "discard", run, true)} /> : <section className="detail-section"><h2>Selected run</h2><p className="muted">Choose a saved run from history or submit an action.</p></section>}
+      onRetryControl={() => void runControl(ui.pendingRequest?.kind === "cancel" ? "cancel" : "discard", run, true)} /> : <section className="detail-section ai-empty"><span className="ai-empty-icon"><Icon name="flow" size={22} /></span><h2>Ready for your next idea</h2><p>Describe a flow, or select steps to improve. Review every suggestion before applying it.</p></section>}
     <RunHistory runs={page.runs} selectedId={ui.selectedRunId} nextCursor={page.nextCursor} loading={loadingMore} onSelect={chooseRun} onMore={() => void loadMore()} />
   </div>;
 
