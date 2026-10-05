@@ -11,7 +11,7 @@ Use the pinned Node and pnpm versions in package.json. Install with `corepack pn
 
 Keep fast unit tests for edge-case combinations, database integration tests for authority/atomicity/retry guarantees, and browser tests for workflows and actual interaction. A real pointer regression is necessary for clipped connection handles; a pure direction calculation cannot replace it. Preserve dedicated authentication/session/membership coverage.
 
-After local testing is complete and the PR checks and review are clean, retain the logs/reports, then stop and remove only containers created for that test stack. Prove ownership from the exact container IDs together with the stack project label, environment and network; record the cleanup result. Preserve unrelated containers, volumes and images. Do not use a global Docker prune.
+Keep the local test stack available for manual testing while the PR is open. After the PR is confirmed merged, retain the logs/reports, then stop and remove only containers created for that test stack. Prove ownership from the exact container IDs together with the stack project label, environment and network; record the cleanup result. Preserve unrelated containers, volumes and images. Do not use a global Docker prune.
 
 ## Private Realtime socket suite
 
@@ -60,7 +60,19 @@ These tests cover the implemented native format 1 import/export path. Results an
 - `tests/e2e/collaboration-auth-outage.spec.ts`: process-local Auth fault recovery, private route retention, definitive denial, healthy project-store preservation and the local-state cost of a committed unavailable-page unmount.
 - `tests/e2e/studio.spec.ts` with `studio-fixtures.ts`: UI flow creation waits for the matching completed saved CREATE_FLOW receipt before its UI assertions; the held real-success regression covers delayed save completion and fixture cleanup.
 
+## Stage 06.3 AI and recovery verification
+
+`tests/e2e/ai.spec.ts` covers real admission/history/Inspect/selected Apply, save-first capture and acknowledgement recovery, dependency refusal, stale/expired result handling, readable operation targets, narrow-panel escaping and exact-key control replay after downgrade/archive. Its SQL completions are explicit fixtures; this automated gate makes no provider call. Actual live Generate/Improve journeys use separate bounded trusted worker execution and retain admitted model/binding/capture and saved Apply evidence.
+
+Recovery owning specs cover `/forgot-password` and `/forgot-password/reset`, anonymous identity, generic email responses/cooldown, safe continuation, wrong/consumed codes, validation before consumption, ordinary login and actual global refresh revocation. The separate `recovery-fault` project uses a loopback production process at normal port + 100, independent of the collaboration fault server at + 50. It injects provider/acknowledgement failures without stopping shared Auth. Expired-code mapping is injected; it does not claim a ten-minute elapsed experiment.
+
+Recovery credential fills use `tests/support/recovery-sensitive-input.ts`; trace, video, screenshots and Playwright copy-prompt page snapshots are disabled. Avoid assertion/exception serialization of email codes, passwords, response bodies or Auth tokens. Archive diagnostic evidence outside `test-results` before a subsequent run clears that directory.
+
+The default `tests/evaluation/run.mts` invocation validates 24 synthetic canonical captures and safety/application probes with no network. `tests/evaluation.test.ts` covers durable physical-call reservation, session/model identity, redirect refusal and restart deduplication with injected transports. Live execution is separately authorized and budgeted as described in [AI setup](ai-setup.md); record exact prompt/corpus/source identities and distinguish schema/scope results from nullable human utility scores. Preserve failed old-version outcomes after a correction. No live provider or private handoff credentials belong in CI or committed evidence.
+
 Use the pinned package/lockfile and the existing commands: `corepack pnpm lint`, `corepack pnpm typecheck`, `corepack pnpm test:unit`, `corepack pnpm test:integration`, `corepack pnpm test:workers`, `corepack pnpm test:realtime`, `corepack pnpm build` and `corepack pnpm test:e2e:production`. Load the documented ignored private review environment explicitly; do not replace `.env.local`. Keep integration's default concurrency, run Realtime serially and alone on its stack, and retain production's default two workers and zero retries. Focused production browser runs may pass the owning spec paths to the same runner. Local results do not establish hosted qualification, deployment, GitHub CI or the manual NVDA pass.
+
+Stage 06.3 local acceptance at e1e7226 (2026-10-06): full lint/import boundaries and TypeScript; 461/461 units, 262/262 default-concurrency integration and 29/29 workers passed. Unchanged Realtime retains its separately observed serial-alone 13/13 pass at 60af6cd with byte-equality proof for the relevant paths. The final unfiltered production browser gate passed all 389 distinct cases/attempts across Chromium and recovery-fault with two workers and zero retries/skips/flakes/failures/global errors. Fresh build/test/total: 10.217s/986.860s/997.077s, exits 0. All 425 frozen source hashes and archived output hashes matched. Separate real corrected-prompt Generate and manual-save/Improve journeys passed Inspect/Apply/API/SQL/reload; budget 26/26 is exhausted. The original failed 24-case old-prompt evaluation remains separate evidence; no current full-corpus live or human utility qualification is claimed. Final documentation-only changes preserve application/test source identity.
 
 ## Browser fixture ownership
 
@@ -91,6 +103,8 @@ corepack pnpm test:e2e:production tests/e2e/studio-canvas.spec.ts tests/e2e/stud
 - Failure traces remain under `test-results/`. CI retains timing reports even when a run succeeds.
 
 Treat these reports as test artifacts: keep them out of Git. Authentication state must stay in memory or ignored local files, never in published reports.
+
+Before starting another browser run, copy any reports, failure artifacts and source identity needed for diagnosis into an ignored directory outside `test-results/`. Playwright clears its output directory at the next run; archives inside it are lost. Verify the copied files before continuing.
 
 ## Performance methodology
 
