@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { emptyDraft, parseDraftPair } from "../src/features/drafts/contracts/scope-document.ts";
+import { applyProposal } from "../src/features/proposals/domain/proposal-diff.ts";
+import { ResultError, validateResult } from "../src/features/proposals/domain/validate-result.ts";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { AI_LIMITS } from "../src/features/proposals/contracts/tasks.ts";
+import { AI_LIMITS, type CapturedInput } from "../src/features/proposals/contracts/tasks.ts";
 import { buildModelRequest, estimateInputTokens, OUTPUT_SCHEMA } from "../src/features/proposals/domain/model-request.ts";
 import { MAX_RESPONSE_BYTES, boundedFetch, createModelGateway } from "../src/features/proposals/server/adapters/model.ts";
 import { RUN_AI_TASK_ID, createJobDispatcher, type TriggerApi } from "../src/features/proposals/server/adapters/trigger.ts";
 import type { ModelRequest } from "../src/features/proposals/server/ports.ts";
 import { jobDispatcher, modelGateway } from "../src/features/proposals/server/providers.ts";
 import { PROVIDER_SECRET_NAMES, withoutProviderSecrets } from "../scripts/e2e/provider-env.mjs";
-import { resultFixture } from "./support/ai-results.ts";
+import { flowOp, goodGenerate, proposal, resultFixture } from "./support/ai-results.ts";
 
 // Everything here is a fake or a fetch stub: no key, no network, no SDK client that reaches a provider.
 const request = (over: Partial<ModelRequest> = {}): ModelRequest => ({ ...buildModelRequest({ id: "run-1", model: "model-x", capture: resultFixture().generate() }, 5_000), ...over });
@@ -36,6 +40,74 @@ test("a completed reply returns the parsed output and normalized usage from exac
   assert.match(calls[0]!.url, /models\/model-x:generateContent/);
   assert.equal(body.generationConfig.maxOutputTokens, AI_LIMITS.maxOutputTokens);
   assert.equal(body.generationConfig.responseMimeType, "application/json"); // provider-side structured output is requested
+});
+
+const payloadContracts = {
+  CREATE_FLOW: "required: ref, title, purpose, classification, inclusion; optional: none",
+  ADD_NODE: "required: ref, flowId, kind, label, description, actorLabel; optional: none",
+  UPDATE_NODE: "required: nodeId; optional: kind, label, description, actorLabel, assumptionNotes",
+  DELETE_NODES: "required: flowId, nodeIds, removeEdgeIds; optional: none",
+  ADD_EDGE: "required: flowId, fromId, toId, condition; optional: none",
+  UPDATE_EDGE: "required: edgeId, condition; optional: none",
+  RECONNECT_EDGE: "required: edgeId, fromId, toId; optional: none",
+  DELETE_EDGE: "required: edgeId; optional: none",
+};
+for (const task of ["PROPOSE_FLOW", "REFINE_FLOW_SELECTION"] as const) {
+  test("the actual " + task + " provider request states exact payload fields and required blank strings", async () => {
+    const fixture = resultFixture();
+    const capture: CapturedInput = task === "PROPOSE_FLOW" ? fixture.generate() : fixture.improve();
+    const { gateway: model, calls } = gateway(() => respond(gemini('{"schemaVersion":1,"kind":"clarification","message":"Which actor?"}')));
+    assert.equal((await model.generate(buildModelRequest({ id: "contract-run", model: "model-x", capture }, 5_000), signal())).kind, "completed");
+    assert.equal(calls.length, 1);
+    const body = JSON.parse(calls[0]!.body);
+    const instruction: string = body.systemInstruction.parts.map((part: { text: string }) => part.text).join("\n");
+    const permitted = task === "PROPOSE_FLOW" ? ["CREATE_FLOW", "ADD_NODE", "ADD_EDGE"] : ["ADD_NODE", "UPDATE_NODE", "DELETE_NODES", "ADD_EDGE", "UPDATE_EDGE", "RECONNECT_EDGE", "DELETE_EDGE"];
+    for (const [command, fields] of Object.entries(payloadContracts)) {
+      assert.equal(instruction.includes(command + " payload " + fields + "."), permitted.includes(command), command);
+    }
+    assert.match(instruction, /required description, actorLabel, purpose and condition strings even when empty \(use ""\)/);
+    assert.match(instruction, /Do not include unrelated or unknown payload fields/);
+    if (task === "REFINE_FLOW_SELECTION") assert.match(instruction, /UPDATE_NODE must include at least one optional field/);
+    assert.deepEqual(body.generationConfig.responseJsonSchema, OUTPUT_SCHEMA);
+  });
+};
+
+test("a complete Generate reply from the actual adapter validates and applies with blank required strings and dependent refs", async () => {
+  const fixture = resultFixture();
+  const capture = fixture.generate();
+  const output = goodGenerate(fixture.sourceVersionId);
+  const { gateway: model } = gateway(() => respond(gemini(JSON.stringify(output))));
+  const reply = await model.generate(buildModelRequest({ id: "generate-run", model: "model-x", capture }, 5_000), signal());
+  assert.equal(reply.kind, "completed");
+  if (reply.kind !== "completed") assert.fail("expected complete output");
+  const result = validateResult(capture, reply.output);
+  assert.equal(result.kind, "proposal");
+  if (result.kind !== "proposal") assert.fail("expected proposal");
+  const saved = emptyDraft();
+  saved.document = structuredClone(fixture.document);
+  for (const flow of Object.values(saved.document.flows)) saved.layout.directions[flow.id] = "LR";
+  for (const node of Object.values(saved.document.nodes)) saved.layout.positions[node.id] = { x: 300, y: 700, version: 8 };
+  const applied = applyProposal(saved, capture, result, result.operations.map(op => op.id), randomUUID);
+  assert.equal(applied.createdIds.length, 4);
+  assert.equal(applied.document.nodes[applied.idMap.n1!]!.description, "");
+  assert.equal(applied.document.nodes[applied.idMap.n1!]!.actorLabel, "");
+  assert.equal(applied.document.edges[applied.createdIdMap.op4!]!.condition, "");
+  assert.equal(applied.document.flows[applied.idMap.flow1!]!.inclusion, "UNDECIDED");
+  for (const node of Object.values(saved.document.nodes)) {
+    assert.deepEqual(applied.document.nodes[node.id], node);
+    assert.deepEqual(applied.layout.positions[node.id], saved.layout.positions[node.id]);
+  }
+  parseDraftPair(applied.document, applied.layout);
+});
+
+test("the original development G01 node payload remains SHAPE-rejected rather than accepted as useful output", () => {
+  // Exact offending ADD_NODE payload from the original development response, reduced to the failing operation.
+  const output = proposal([flowOp("op_create_flow", "flow_request_book"), {
+    id: "op_node_start", dependsOn: ["op_create_flow"], edit: { command: "ADD_NODE", payload: {
+    flowId: "flow_request_book", kind: "START", label: "Visitor wants to request a book",
+    actorLabel: "Library Visitor", assumptionNotes: ["The visitor initiates the book request journey."], condition: "",
+  } } }]);
+  assert.throws(() => validateResult(resultFixture().generate(), output), error => error instanceof ResultError && error.reason === "SHAPE");
 });
 
 test("missing usage is null, never zero", async () => {

@@ -67,7 +67,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -80,7 +80,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "817311567a645b8ca647f162f98562ea9b54af4fbe069dbc5cfa7aea003e9c75",
+      "captureHash": "0d35eef111ade20eb8c34919e91493aec8fee28636907a401df93af375a078f2",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -197,7 +197,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -210,7 +210,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "96244968032c6ebd51bc0cc3be533b87bb19a3d590cb65d3a9fcc92c21d8575f",
+      "captureHash": "169fd1741b6873953aed440fb51aad1973a3d75eaa609d0a283e5e7db27cf05f",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -327,7 +327,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -340,7 +340,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "34e3b640afb410d825fcb908be8f812bb87509e6748fb475f12ca25a339f655d",
+      "captureHash": "dacd314b850b13b5195b6be1b6212709f8c24bde4f284f60270d7cf7c149a523",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -457,7 +457,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -470,7 +470,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "b56a9de7f0f053c66570b6a1999e71df004e3d201561cb9cf30afef938b68b06",
+      "captureHash": "2d77e6fa8bbe15e252c6d7052dc5cffd8bd4eef8fdd6bde58e1c580a18634732",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -587,7 +587,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -600,7 +600,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "2409cfe2716c6a4031f5e11c10968a1ee1b6e3efb57490d5942ad512cb17f3f0",
+      "captureHash": "8b0546629b97aded3213bdb4870ddc8839797db896eba5b9fb401d264da178de",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -717,7 +717,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -730,7 +730,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "33b4c7eb9369d320f8d0a7d4b162b12d3318902e73ebaea337707d2148ae2b93",
+      "captureHash": "14922b03daf8c78615a4a37680454c9cb01377930af17c5b51d8397d71da1eeb",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -896,7 +896,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -909,7 +909,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "e40432a80a110160afdb5c25c3ddb65c67a59bf6cf9c99ba5d964c50b3f7106a",
+      "captureHash": "aeaa05cd220a2d17b3274d1e2124135dc6a32d8a1d3b6f104fd887affd5fbbdf",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -1052,7 +1052,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -1065,7 +1065,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "e5c9d679fe7a9a4e78428dead13e6e88236d134da0277d5921eb416b21f71132",
+      "captureHash": "30985317b0aee898cc413f1c6ab3c3ae43343931df6057d88759fd3fc690a8cd",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -1208,7 +1208,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -1221,7 +1221,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "2026973b6c54fc829b7ce4ce8fd86f041357c01ca968f876e39babc1f46ad0bf",
+      "captureHash": "e6cabb0d5972dce5087b69e71e82c7e8f4a2f4adb405952da9de3b2f5644747f",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -1617,7 +1617,7 @@
         "graphHash": "0ca10f7255c1ea03ade2ea8fe41e2b542482782906269223aca0f3fdd25a1397",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -1630,7 +1630,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "31147ea19404854cd55aca891c89bdf6f043b492dda3e706cdca1ee3e703ecb0",
+      "captureHash": "9982ca7e1d0b3fecb994a7d9cd8c1d69a3064220736711e311dcf11d793726e4",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -1747,7 +1747,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -1760,7 +1760,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "a8761756ade6fe777fa476059b41ee96d702a67636470f8c15103fa21ef00cd4",
+      "captureHash": "a3446f59789038c722709fe6fa02eaef9306be1cb17b976b2ae94ca0a677a076",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -1877,7 +1877,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -1890,7 +1890,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "6cf112cb0fc3cd1b29256ce104ee121db9d5dd89ce6add9fabe8f12ca182d558",
+      "captureHash": "85f2b79c469ec7e8a97fb87ff9f21a188ba83d331fd2396135b2285e0b8b1009",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -2238,7 +2238,7 @@
         "graphHash": "9d62ad109cc49e96279629e64f19e0035b9559f2fd01f36b1dc7e5359e8c5aca",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -2251,7 +2251,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "31ac862329e91bbb1ea88c638c3eaa1fba3e6398e29fd4b78a32b353da90350f",
+      "captureHash": "5228dfac93f53cd9f1487e93c72bbebb4656268e05c72b40c84eb6a41114774a",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -2579,7 +2579,7 @@
         "graphHash": "3616926e64459786e6fe7e03ee4116535c5f8b74a2a46d46c9ab34e15886d686",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -2592,7 +2592,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "5eeece9de8fe251954d879e1b54c9d913b548a328a8559d15d024b2d2c292594",
+      "captureHash": "a3f2e7d6d54b193c80e8bec54f61331bad6f1ee324670ab233eda65971bf1884",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -2938,7 +2938,7 @@
         "graphHash": "2242c7be9b1589f3bd4269d799d4e889261c3d09db69d5d04c1b10fba7089e85",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -2951,7 +2951,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "981c35c6b81544055a2e601f3ec428fee17df9c5278d528dcc7c4f9cf5c4af48",
+      "captureHash": "66cff9cdda34958fe9fcf26f5f4a6afde63fd54195e56b767733e31943977a13",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -3279,7 +3279,7 @@
         "graphHash": "d044a12f4132decd73f2c84b2230292d89fd896cb4341ed16bd596297683fbfb",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -3292,7 +3292,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "d8afb4d0f44d2f38b6a64d576d6da0d2231b46583643ef051e69282e2940bdbd",
+      "captureHash": "c94183007beb8d3bb003eb4874e39697c8893e57119932c8004360deb79a4f83",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -3653,7 +3653,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -3666,7 +3666,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "b593e985bcd944d35ca1c02aa668dbee21c7dec2f39c3588d149195d1797ad47",
+      "captureHash": "920c80ea0b89a3fcf637c6e2e25f592ad81a87cf0d28c93069de67e7bcf7d667",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -4043,7 +4043,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -4056,7 +4056,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "0ab325bab5c817fc983d08acf312e19cbb1fff95d3f06716d192ff21fcd87b47",
+      "captureHash": "9213ff5cc5d0ca4aa389ad4a201a5f6aeba64ab37fb1eb8deaac7748dd687856",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -4410,7 +4410,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -4423,7 +4423,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "743f43d6471e87990de19f442119bbe71006d17346c8b235e65ebbe328ff8bb8",
+      "captureHash": "09d4cfae6b75e539ef28d91bb009f2c66f119df0174177c250d4eb5ef6da70a5",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -4751,7 +4751,7 @@
         "graphHash": "6913aaa1140494f6905304d84c3d8253102925bcaabc4b39c67519f3c8051e49",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -4764,7 +4764,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "a7c26507d4cc3ed2ed93644499b4bfda59abe05c1790577bebe3cf647b4cd345",
+      "captureHash": "47cd7a648ba51a8926d4009bc85477ed546c8533f0986833b3d6263d367706da",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -5118,7 +5118,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -5131,7 +5131,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "cc74c66fae6ffc4ab6d39edaffb1e2daa11628047a1117ab4bfc6c4428249510",
+      "captureHash": "f79f01d4ce614a17c770984a372bfd26f5e6aec2843e74a61dcbdaf63d747e11",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -8951,7 +8951,7 @@
         "graphHash": "c224f5ed4ded350705f2f1c574348a9642746fb6193ac5bcc64b5360adfdee7b",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -8964,7 +8964,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "7a85a7e1f604b60191e74d5a645a1cac96f405f3f4d45adb37fc4538500577a0",
+      "captureHash": "adb7cbf68bab673db166ba45ed6480bf98a9b9bc94381b0247dfa88c02bd744f",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -9292,7 +9292,7 @@
         "graphHash": "0e5581636613f8e3168ef2b8d50995f7406d589276783356d63ad66a70f9e2ea",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -9305,7 +9305,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "fd064c23163591187e374e81f6db8dcd82387f6b6d193d1cbd4aefac4c1e2fa7",
+      "captureHash": "2b2d39de04cbbe1d8c82fe0dd013d82fb2eeadf8a444ac23099b61b48f4064d0",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -9633,7 +9633,7 @@
         "graphHash": "69b84c496237744c3c27ffb6edbb04c31002eb0f1a0e471542eef119115ca11e",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-03.1",
+          "prompt": "2026-10-06.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -9646,7 +9646,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "91352ae4e980d0d821efcc8d3874372ce745eb969f532fc396d370b7ff783f5b",
+      "captureHash": "7e9bdd6176b31aa3f75b2c68f7dc9a2eda9734b708a373a6e2c0b00da4e7fbae",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",

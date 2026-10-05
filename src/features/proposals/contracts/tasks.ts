@@ -20,7 +20,7 @@ export const AI_LIMITS = {
 
 export const CAPTURE_SCHEMA_VERSION = 1;
 export const RESULT_SCHEMA_VERSION = 1;
-export const PROMPT_VERSION = "2026-10-03.1";
+export const PROMPT_VERSION = "2026-10-06.1";
 
 export type { SourceRef } from "../../drafts/contracts/scope-document.ts";
 export type StartRunInput = {

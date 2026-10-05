@@ -137,6 +137,8 @@ Trigger dispatch completed, repeating the original key returned the same provide
 
 The frozen corpus is `tests/evaluation/cases.json`: 24 synthetic captured inputs, 12 Generate and 12 Improve, split into 16 development and 8 held-out cases (four held-out per action). No prompt tuning is planned. Never tune from held-out results. Each case retains a saved document/layout, canonical capture/hash, source versions, expected invariants and an explicit human rubric. G10 exercises the last of five flow slots within the input-token bound; I10 exercises a 198-of-200-node saved document through a small captured selection.
 
+The 2026-10-06 contract correction records prompt version 2026-10-06.1. System instructions now state each task's exact command payload required/optional fields and require empty strings for blank required text fields. The strict validator and provider-compatible output schema are unchanged. All 24 saved inputs, layouts, prompts, sources, validator probes, partitions and rubrics remain identical to the original frozen corpus; only captured prompt-version attribution and canonical capture hashes were recaptured. Original 2026-10-03.1 live results and source identities remain historical evidence: nine SHAPE failures, one incomplete reply, six validated proposals and eight clarifications. They are not results for the corrected contract. New-version live corpus evaluation remains pending; no held-out output informed the correction.
+
 Default execution and imports make no network calls and need no provider credentials:
 
 ```powershell
