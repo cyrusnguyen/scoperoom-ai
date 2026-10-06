@@ -5,7 +5,7 @@ import { edit, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
 import { acknowledgeExternalWrite, admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
-import { type AiRequest, currentAiRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
+import { type AiRequest, currentAiRun, recoverUnavailableCurrentRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
 const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
@@ -242,6 +242,27 @@ test("only an exact Apply receipt establishes retained acknowledgement", () => {
   assert.equal(retainAiApply(ai,pending,{...receipt,draftId:'other'}),ai);
   for(const changed of [{...pending,key:'other'},{...pending,projectId:'other'},{...pending,runId:'other'},{...pending,draftId:'other'}]) assert.equal(retainAiApply({...ai,pendingRequest:changed},pending,receipt).applyPhase,undefined);
   assert.equal(retainAiApply(ai,pending,{...receipt,adopted:true}).pendingRequest,null);
+});
+
+test("only an eligible matching missing Current selection clears", () => {
+  const eligible = { ...defaultUi.ai, selectedRunId: "gone" };
+  const live = { id: "gone", isLive: () => true };
+  assert.equal(recoverUnavailableCurrentRun(eligible, live).selectedRunId, null);
+  const replacement = { ...eligible, selectedRunId: "newer" };
+  assert.equal(recoverUnavailableCurrentRun(replacement, live), replacement, "a stale 404 cannot clear a replacement");
+  assert.equal(recoverUnavailableCurrentRun(eligible, { id: "gone", isLive: () => false }), eligible, "the functional write rechecks the reader ticket");
+  for (const kind of ["start", "apply", "cancel", "discard"] as const) {
+    const body = Object.freeze({ expectedDocumentRevision: 3 });
+    const pending = { kind, projectId: "a", draftId: "draft", runId: "gone", key: "exact", submittedText: "Original", body } as AiRequest;
+    const current = { ...eligible, pendingRequest: pending };
+    assert.equal(recoverUnavailableCurrentRun(current, live), current, `${kind} receipt remains byte-for-byte retryable`);
+    for (const state of ["uncertain", "acknowledged"] as const) assert.equal(recoverUnavailableCurrentRun({ ...eligible, applyPhase: { key: "exact", projectId: "a", draftId: "draft", runId: "gone", state } }, live).selectedRunId, "gone");
+    assert.equal(body, pending.body);
+  }
+  const adopted = { key: "exact", projectId: "a", draftId: "draft", runId: "gone", state: "adopted" as const };
+  const recovered = recoverUnavailableCurrentRun({ ...eligible, applyPhase: adopted }, live);
+  assert.equal(recovered.selectedRunId, null, "a completed adopted receipt does not pin an unavailable selection");
+  assert.equal(recovered.applyPhase, adopted, "recovery preserves the exact completed receipt");
 });
 
 test("an unrelated newer Save floor cannot acknowledge a pending Apply", () => {

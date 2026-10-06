@@ -77,6 +77,12 @@ export function currentAiRun(ui: AiUi, requested: string | null, latest?: string
   return ui.pendingRequest && ui.pendingRequest.kind !== "start" ? ui.pendingRequest.runId : requested ?? ui.selectedRunId ?? latest ?? null;
 }
 
+/** A missing detail never settles an in-memory request or Apply receipt. */
+export function recoverUnavailableCurrentRun(ui: AiUi, ticket: { id: string; isLive: () => boolean }): AiUi {
+  const unresolvedApply = ui.applyPhase?.state === "uncertain" || ui.applyPhase?.state === "acknowledged";
+  return ticket.isLive() && ui.selectedRunId === ticket.id && !ui.pendingRequest && !unresolvedApply ? { ...ui, selectedRunId: null } : ui;
+}
+
 export function acknowledgedApplyCovered(phase: NonNullable<AiUi["applyPhase"]>, saved: Pick<import("../../drafts/contracts/scope-document").DraftView, "id" | "documentRevision" | "layoutRevision">): boolean {
   return phase.state === "acknowledged" && saved.id === phase.draftId && saved.documentRevision >= (phase.documentRevision ?? Infinity) && saved.layoutRevision >= (phase.layoutRevision ?? Infinity);
 }

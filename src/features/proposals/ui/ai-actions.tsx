@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import { useAiSyncReader, useSync } from "@/features/collaboration/ui/sync-context";
-import { finishAiApply, retainAiApply, acknowledgedApplyCovered, currentAiRun, type ProjectUi } from "@/features/shell/ui/project-ui";
+import { finishAiApply, retainAiApply, acknowledgedApplyCovered, currentAiRun, recoverUnavailableCurrentRun, type ProjectUi } from "@/features/shell/ui/project-ui";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import { Icon } from "@/features/shell/ui/icon";
 import { createRunResources, type ReadState } from "./run-resources";
@@ -40,6 +40,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
   const canWrite = status.status === "ACTIVE" && (status.role === "OWNER" || status.role === "EDITOR");
   const activeJobVisible = Boolean((runTab === "current" && run && !isTerminal(run.state)) || (runTab === "history" && historyRun && !isTerminal(historyRun.state)));
 
+  useEffect(() => { resources.setMissingCurrentHandler(ticket => update(current => recoverUnavailableCurrentRun(current,ticket))); return () => resources.setMissingCurrentHandler(undefined); }, [resources, update]);
   useAiSyncReader(useCallback((status, fence) => resources.reconcile(status, fence), [resources]));
   useEffect(() => {
     resources.selectRun(ui.selectedRunId);

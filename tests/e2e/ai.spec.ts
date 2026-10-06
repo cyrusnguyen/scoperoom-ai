@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
-import type { StartRunInput, ValidatedProposal } from "../../src/features/proposals/contracts/tasks";
+import type { RunPage, StartRunInput, ValidatedProposal } from "../../src/features/proposals/contracts/tasks";
 import { expect } from "@playwright/test";
 import { canonicalJson, sha256 } from "../../src/features/proposals/domain/capture";
 import type { BrowserContext, Page, Request } from "@playwright/test";
@@ -1394,6 +1394,92 @@ test("AI reads show loading and errors, explicit retry and true loaded empty", a
   await page.goto(`/app/projects/${emptyId}`); await openAi(page);
   await panel(page).getByRole('tab', { name: 'History', exact: true }).click();
   await expect(panel(page).getByText('No AI runs yet.', { exact: true })).toBeVisible();
+});
+
+test("a read-only viewer preserves an omitted valid link and recovers unavailable scoped links without mutation", async ({ page, browser, workerAccount }) => {
+  const projectId = await createProjectViaApi(page, "AI unavailable deep link");
+  const older = await storedSyntheticCompletion(page, workerAccount.database, projectId);
+  const latest = await storedSyntheticCompletion(page, workerAccount.database, projectId);
+  const foreignProjectId = await createProjectViaApi(page, "AI foreign deep link");
+  const foreign = await storedSyntheticCompletion(page, workerAccount.database, foreignProjectId);
+  const pageUrl = `${appUrl}/api/projects/${projectId}/ai-runs`;
+  const foreignUrl = `${pageUrl}/${foreign.runId}`;
+  const admin = adminClient(), viewerUsers: string[] = [];
+  const viewerContext = await browser.newContext({ baseURL: appUrl, storageState: { cookies: [], origins: [] } });
+  const viewerPage = await viewerContext.newPage();
+  const watchedProjects = new Set([projectId]);
+  const aiMutations: string[] = [], realtimeTokenReads: string[] = [], unexpectedProjectWrites: string[] = [];
+  viewerPage.on("request", request => {
+    if (request.method() !== "POST") return;
+    const pathname = new URL(request.url()).pathname;
+    const watchedProjectId = [...watchedProjects].find((id) => pathname.startsWith(`/api/projects/${id}/`));
+    if (!watchedProjectId) return;
+    const aiBase = `/api/projects/${watchedProjectId}/ai-runs`;
+    if (pathname === `${aiBase}` || pathname.startsWith(`${aiBase}/`)) aiMutations.push(pathname);
+    else if (pathname === `/api/projects/${watchedProjectId}/realtime-token`) realtimeTokenReads.push(pathname);
+    else unexpectedProjectWrites.push(pathname);
+  });
+  let suppliedPageOmittedOlder = false;
+  await viewerPage.route(pageUrl, async route => {
+    if (route.request().method() !== "GET") { await route.fallback(); return; }
+    const response = await route.fetch();
+    const body = await response.json() as RunPage;
+    const scopedPage = { ...body, runs: body.runs.filter((run) => run.id !== older.runId) };
+    suppliedPageOmittedOlder = !scopedPage.runs.some((run) => run.id === older.runId);
+    await route.fulfill({ response, json: scopedPage });
+  });
+  try {
+    const viewer = await signIn(viewerPage, admin, viewerUsers, "AI unavailable-link viewer");
+    for (const targetProjectId of [projectId, await createProjectViaApi(page, "AI unavailable empty deep link")]) {
+      const invitation = await page.request.post(`/api/projects/${targetProjectId}/invitations`, { headers: mutation(), data: { verifiedEmail: viewer.email, role: "VIEWER" } });
+      expect(invitation.status()).toBe(201);
+      const accepted = await viewerPage.request.post("/api/invitations/accept", { headers: mutation(), data: { token: (await invitation.json() as { url: string }).url.split("/").at(-1) } });
+      expect(accepted.status()).toBe(201);
+      if (targetProjectId !== projectId) watchedProjects.add(targetProjectId);
+    }
+    const emptyProjectId = [...watchedProjects].find((id) => id !== projectId)!;
+    const viewerStatus = await viewerPage.request.get(`/api/projects/${projectId}/status`);
+    expect(viewerStatus.status()).toBe(200);
+    expect(await viewerStatus.json()).toMatchObject({ role: "VIEWER" });
+
+    const mainRealtimeTokenUrl = `${appUrl}/api/projects/${projectId}/realtime-token`;
+    const mainRealtimeTokenRequest = viewerPage.waitForRequest(request => request.method() === "POST" && request.url() === mainRealtimeTokenUrl);
+    const mainRealtimeTokenResponse = viewerPage.waitForResponse(response => response.request().method() === "POST" && response.url() === mainRealtimeTokenUrl);
+    await viewerPage.goto(`/app/projects/${projectId}?run=${older.runId}`);
+    await mainRealtimeTokenRequest;
+    expect((await mainRealtimeTokenResponse).status()).toBe(200);
+    await expect(viewerPage).toHaveURL(new RegExp(`/app/projects/${projectId}\\?run=${older.runId}$`));
+    await revealRequestId(viewerPage, older.runId);
+    expect(suppliedPageOmittedOlder, "the valid detail is absent from the supplied successful first page").toBe(true);
+    await expect(panel(viewerPage).getByRole("button", { name: "Generate", exact: true })).toBeDisabled();
+
+    const missing = viewerPage.waitForResponse(response => response.url() === foreignUrl && response.request().method() === "GET");
+    await viewerPage.goto(`/app/projects/${projectId}?run=${foreign.runId}`);
+    expect((await missing).status()).toBe(404);
+    await expect(viewerPage).toHaveURL(new RegExp(`/app/projects/${projectId}\\?run=${latest.runId}$`));
+    await revealRequestId(viewerPage, latest.runId);
+    await expect(panel(viewerPage)).not.toContainText(foreign.prompt);
+    await viewerPage.reload();
+    await expect(viewerPage).toHaveURL(new RegExp(`/app/projects/${projectId}\\?run=${latest.runId}$`));
+    await revealRequestId(viewerPage, latest.runId);
+
+    const missingId = randomUUID(), emptyUrl = `${appUrl}/api/projects/${emptyProjectId}/ai-runs/${missingId}`;
+    const emptyMissing = viewerPage.waitForResponse(response => response.url() === emptyUrl && response.request().method() === "GET");
+    const emptyRealtimeTokenUrl = `${appUrl}/api/projects/${emptyProjectId}/realtime-token`;
+    const emptyRealtimeTokenRequest = viewerPage.waitForRequest(request => request.method() === "POST" && request.url() === emptyRealtimeTokenUrl);
+    const emptyRealtimeTokenResponse = viewerPage.waitForResponse(response => response.request().method() === "POST" && response.url() === emptyRealtimeTokenUrl);
+    await viewerPage.goto(`/app/projects/${emptyProjectId}?run=${missingId}`);
+    await emptyRealtimeTokenRequest;
+    expect((await emptyRealtimeTokenResponse).status()).toBe(200);
+    expect((await emptyMissing).status()).toBe(404);
+    await expect(viewerPage).toHaveURL(new RegExp(`/app/projects/${emptyProjectId}$`));
+    await expect(panel(viewerPage).getByText("Ready for your next idea", { exact: true })).toBeVisible();
+    expect(aiMutations).toEqual([]);
+    expect(unexpectedProjectWrites).toEqual([]);
+    for (const watchedProjectId of watchedProjects) expect(realtimeTokenReads).toContain(`/api/projects/${watchedProjectId}/realtime-token`);
+  } finally {
+    await cleanupInvitedUsers(workerAccount.database, admin, viewerUsers, projectId, [page.context(), viewerContext]);
+  }
 });
 
 test("keyboard admission from History reveals the new Current run", async ({page,workerAccount}) => {

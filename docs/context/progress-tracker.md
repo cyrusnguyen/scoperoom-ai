@@ -6,6 +6,12 @@ The user authorized Stage 06.3 implementation and PR follow-up, accepted the Arr
 
 Worktree: `C:/Users/Cyrus/.codex/worktrees/stage-6-3-ai-and-forgot-password-ui/scoperoom-ai`; branch `feat/stage-6.3-ai-and-forgot-password-ui`; base `9a916ec87b59d2a380a0540ae871639b93f1f902`. Node 24.21.0 and pnpm 10.34.5 are pinned. The primary checkout, initial uncommitted CI timing note and `ui/v15-atlas-projects` reference remain preserved. The lead coordinates/reviews; bounded delegated authors implement.
 
+### PR review follow-up: unavailable deep-linked run (2026-10-06)
+
+Codex P2 on 072d2ab: a valid-looking `run` deep link that returns a scoped 404 left Current stuck on "Could not load Current run". The old P1 (pending receipt unload guard) was already resolved. The fix clears the selection only after a definite NOT_FOUND 404 for the exact Current selection, with the originating request, the Current participant generation/key/selection fences re-checked inside the functional UI write, and matching successful scoped page evidence. Transient, auth and uncertain failures keep the selection; pending requests and uncertain or acknowledged Apply receipts are never settled by a missing detail. An overlapping same-status reconcile that joins the held detail read now takes over the participant, so recovery does not wait for the next status poll. The handler is cleared on unmount. No backend, mutation or poller change.
+
+Evidence at this change: lint/import boundaries and TypeScript exit 0; 498/498 units (488 at 072d2ab). The new browser case in `tests/e2e/ai.spec.ts` is read-reviewed only; it has not run locally because the browser suite needs an isolated database. Hosted CI on the pushed head is the first real run. Known minor limit: if the forced scoped page read used as recovery evidence fails, "Could not load AI history." stays until Retry or the next AI revision. Next action: confirm CI on the new head, then reply on the review thread.
+
 ### Current implementation and qualification
 
 Delivered Stage 06.3 features include Generate/Improve, durable run history, captured-context inspection and selected proposal Apply, one resource/status controller, email-code password recovery and a bounded synthetic evaluator. Earlier corrections preserve pending-receipt unload protection, invitation continuation, secret clearing, resend request minimization and the Atlas-inspired composer. Exact authority, scoped receipts, immutable bodies/keys, targeted revisions, transaction boundaries and save-first checks remain intact.
