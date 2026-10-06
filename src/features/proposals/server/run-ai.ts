@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { getWorkerDatabase } from "../../../server/db.ts";
-import type { CapturedInput, ValidatedProposal } from "../contracts/tasks.ts";
+import { PROMPT_VERSION, type CapturedInput, type ValidatedProposal } from "../contracts/tasks.ts";
 import { canonicalJson, sha256 } from "../domain/capture.ts";
 import { buildModelRequest, estimateInputTokens } from "../domain/model-request.ts";
 import { proposalDiff } from "../domain/proposal-diff.ts";
@@ -60,6 +60,8 @@ export async function runAi(runId: string, gateway: ModelGateway, db?: Sql): Pro
     const [run] = await sql.$queryRaw<Array<{ model: string; capture: CapturedInput | null; terminal: boolean }>>`
       SELECT model, capture, terminal_at IS NOT NULL AS terminal FROM app.ai_run WHERE id = ${runId}::uuid`;
     if (!run || run.terminal || !run.capture) return;
+    // Only this build's prompt is available: another captured version would be sent with rules its record does not name, and a retry could mix prompts. Fail before any claim, so the reservation is released.
+    if (run.capture.versions.prompt !== PROMPT_VERSION) { await finishRun(sql, runId, "FAILED", "PROMPT_VERSION_UNSUPPORTED"); return; }
     const request = buildModelRequest({ id: runId, model: run.model, capture: run.capture }, ATTEMPT_MS);
     // Too large for the configured ceiling: fail before any claim, so the reservation is released, not consumed.
     if (estimateInputTokens(request) > request.maxInputTokens) { await finishRun(sql, runId, "FAILED", "INPUT_TOO_LARGE"); return; }
