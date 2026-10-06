@@ -5,14 +5,16 @@ import { CODE_VALIDITY_SECONDS, RESEND_COOLDOWN_SECONDS, secondsRemaining } from
 
 type Props = {
   sentAt: number | null;
-  resendAction: (formData: FormData) => Promise<void>;
+  resendAction?: (formData: FormData) => Promise<void>;
+  onResend?: () => void;
+  disabled?: boolean;
 };
 
 function minutesAndSeconds(seconds: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export default function VerificationTiming({ sentAt, resendAction }: Props) {
+export default function VerificationTiming({ sentAt, resendAction, onResend, disabled = false }: Props) {
   const [now, setNow] = useState(sentAt ?? 0);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -28,7 +30,7 @@ export default function VerificationTiming({ sentAt, resendAction }: Props) {
   return (
     <>
       <p className="verification-timing">{hint}</p>
-      <button type="submit" formAction={resendAction} formNoValidate disabled={resendIn > 0} className="login-secondary-button">
+      <button {...(onResend ? { type: "button" as const, onClick: onResend } : { type: "submit" as const, formAction: resendAction })} formNoValidate disabled={disabled || resendIn > 0} className="login-secondary-button">
         {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
       </button>
     </>

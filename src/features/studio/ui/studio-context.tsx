@@ -8,6 +8,7 @@ import type { GraphCommand } from "@/features/drafts/contracts/commands";
 import type { ArrangementPreview, ArrangeFlow, ArrangementRequest, PositionResult } from "@/features/drafts/contracts/positions";
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { ImportApplyResult } from "@/features/exchange/contracts/import";
+import type { AppliedRun, ApplyRunInput } from "@/features/proposals/contracts/tasks";
 import { importBlocker, importStorageError, persistImport } from "@/features/exchange/ui/import-recovery";
 import { exportSaveBlocker } from "@/features/exports/ui/export-state";
 import { GraphError } from "@/features/drafts/domain/graph";
@@ -21,7 +22,7 @@ import {
   acknowledged, addDrop, discardOutbox, enqueue, keepTheirs as keepTheirsChange, optimistic, pendingCount, rebase, redo as redoChange, replay, startSave, undo as undoChange,
   wireBody, withEntries, type ConflictTarget, type Outbox, type Placement, type Sending,
 } from "./outbox";
-import { advanceOnRead, afterDraftRead, AUTOSAVE_MS, clearedRedo, covers, frozenBehind, requireDraftRevision, stranded, studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
+import { acknowledgeExternalWrite, advanceOnRead, afterDraftRead, AUTOSAVE_MS, clearedRedo, covers, frozenBehind, requireDraftRevision, stranded, studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
 
 export type Outcome<T> =
   | { ok: true; result: T }
@@ -66,6 +67,8 @@ type Studio = {
   preview: (request: ArrangementRequest) => Promise<Outcome<ArrangementPreview>>;
   importFlow: (previewId: string, input: { draftId: string; previewHash: string }, key: string) => Promise<Outcome<ImportApplyResult>>;
   inspectSavedExport: (saveFirst: boolean) => Promise<Outcome<DraftView>>;
+  /** AI Apply uses the Studio's admission, request lock, exact receipt floor and saved-read adoption path. */
+  applyAiRun: (runId: string, input: Omit<ApplyRunInput, "key">, key: string, retry?: boolean, onAcknowledged?: (receipt: AppliedRun) => void) => Promise<Outcome<AppliedRun & { adopted: boolean; currentDraft: boolean }>>;
   exportDirty: boolean;
   reload: (fence?: () => boolean) => Promise<DraftView | null>;
   /** The canvas reports a pointer drag in progress, so autosave never sends mid-drag. */
@@ -317,6 +320,55 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     return { ok: true, result: view };
   }, [admit, draftId, fence, reload, saveChanges]);
 
+  const applyAiRun = useCallback(async (runId: string, input: Omit<ApplyRunInput, "key">, key: string, retry = false, onAcknowledged?: (receipt: AppliedRun) => void): Promise<Outcome<AppliedRun & { adopted: boolean; currentDraft: boolean }>> => {
+    const invocation = fence(), current = () => mounted.current && invocation();
+    const refused = (code: string, message: string, uncertain = false): Outcome<AppliedRun & { adopted: boolean; currentDraft: boolean }> => ({ ok: false, code, message, uncertain });
+    const guard = () => exportSaveBlocker({ ...uiRef.current, outbox: latest.current }, dragging.current);
+    if (inFlight.current) return refused("BUSY", busyOutcome.message, retry);
+    if (!retry && !editable) return readOnly;
+    let reason = guard();
+    if (reason) return refused("LOCAL_CHANGES", reason, retry);
+    if (!await saveChanges()) return refused("LOCAL_CHANGES", "Resolve the unsaved Studio changes before applying.", retry);
+    if (!current()) return refused("DRAFT_REPLACED", "The project changed. Recover this Apply when you return.", true);
+    reason = guard();
+    if (reason || pendingCount(latest.current) || inFlight.current) return refused("LOCAL_CHANGES", reason ?? "New edits are waiting in the Studio. Resolve them before applying.", retry);
+
+    inFlight.current = key;
+    update(() => ({ request: key }));
+    const release = () => update((value) => value.request === key ? { request: null } : {});
+    try {
+      const { blocked, stillCurrent } = await admit(!retry, input.draftId);
+      if (!current()) return refused("DRAFT_REPLACED", "The project changed. Recover this Apply when you return.", true);
+      if (blocked) return refused(blocked.code, blocked.message, retry);
+      reason = guard();
+      if (reason || pendingCount(latest.current)) return refused("LOCAL_CHANGES", reason ?? "New edits are waiting in the Studio. Resolve them before applying.", retry);
+      if (!stillCurrent()) return refused("DRAFT_REPLACED", projectErrors.DRAFT_REPLACED.message, retry);
+
+      const result = await apiMutate<AppliedRun>(`/api/projects/${projectId}/ai-runs/${runId}/apply`, key, input);
+      if (!current() || !stillCurrent()) return refused("DRAFT_REPLACED", "The project changed before Apply could be confirmed. Retry the same request when you return.", true);
+      if (sessionEnded(result)) return refused("UNAUTHENTICATED", "", false);
+      if (!result.ok) {
+        if (result.uncertain) { invalidate(); return refused(result.code, result.message, true); }
+        if (accessCodes.has(result.code)) onAccessChanged(); else await reload(stillCurrent);
+        return refused(result.code, result.message, false);
+      }
+
+      const receipt = result.data;
+      const acknowledgement = acknowledgeExternalWrite(saved.current.id, { ...uiRef.current.acknowledgedRevisions, ...(floorRef.current ? { [saved.current.id]: floorRef.current } : {}) }, receipt);
+      update(() => ({ acknowledgedRevisions: acknowledgement.acknowledgedRevisions }));
+      if (!acknowledgement.currentDraft) return { ok: true, result: { ...receipt, adopted: false, currentDraft: false } };
+      floorRef.current = acknowledgement.currentFloor;
+      // Presentation observes only this exact successful current-draft receipt, before the covering read.
+      onAcknowledged?.(receipt);
+      const view = await reload(stillCurrent);
+      const adopted = Boolean(view && stillCurrent() && covers(view, floorRef.current));
+      return { ok: true, result: { ...receipt, adopted, currentDraft: true } };
+    } finally {
+      if (inFlight.current === key) inFlight.current = null;
+      release();
+    }
+  }, [admit, editable, fence, invalidate, onAccessChanged, projectId, reload, saveChanges, update]);
+
   /** Native append uses the Studio's write barrier and receipt floor, never a graph command or preview draft. */
   const importFlow = useCallback(async (previewId: string, input: { draftId: string; previewHash: string }, key: string): Promise<Outcome<ImportApplyResult>> => {
     const invocation = fence();
@@ -472,9 +524,9 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   const exportDirty = isDragging || studioDirtyCount(ui) > 0 || busy || refreshFailed;
   const value = useMemo<Studio>(() => ({
     projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, readFailures, frozen, redoCleared, dismissRedoCleared, run, moveSteps, saveChanges, unsaved,
-    applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, importFlow, inspectSavedExport, exportDirty, reload, dragActive, inspect: onInspect,
+    applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, importFlow, inspectSavedExport, applyAiRun, exportDirty, reload, dragActive, inspect: onInspect,
   }), [projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, readFailures, frozen, redoCleared, dismissRedoCleared, run, moveSteps, saveChanges, unsaved,
-    applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, importFlow, inspectSavedExport, exportDirty, reload, dragActive, onInspect]);
+    applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, importFlow, inspectSavedExport, applyAiRun, exportDirty, reload, dragActive, onInspect]);
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }
 

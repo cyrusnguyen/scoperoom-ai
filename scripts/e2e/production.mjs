@@ -22,12 +22,22 @@ if (missing.length) throw new Error(`Production browser tests require: ${missing
 
 const require = createRequire(import.meta.url);
 const origin = `http://127.0.0.1:${port}`;
+const faultPort = port + 100;
+if (faultPort > 65535) throw new Error("The recovery fault server port must be valid.");
+const authOrigin = new URL(process.env.E2E_SUPABASE_URL).origin;
+if (!(authOrigin.startsWith("http://127.0.0.1:") || authOrigin.startsWith("http://localhost:") || authOrigin.startsWith("http://[::1]:"))) {
+  throw new Error("Production recovery browser tests require a loopback E2E_SUPABASE_URL.");
+}
 // The managed server never sees provider keys, so dispatch finds no dispatcher and no test can reach a provider.
 const env = withoutProviderSecrets({
   ...process.env,
   SCOPEROOM_E2E: "1",
   SCOPEROOM_E2E_SERVER: "production",
   NEXT_PUBLIC_APP_URL: origin,
+  RECOVERY_FAULT_PORT: String(faultPort),
+  RECOVERY_FAULT_AUTH_ORIGIN: authOrigin,
+  RECOVERY_FAULT_FILE: `.tmp/recovery-fault-${process.pid}.mode`,
+  RECOVERY_FAULT_RESULT_FILE: `.tmp/recovery-fault-${process.pid}.events.json`,
   // Admission only needs a model name and an opaque binding (no provider call is made); real values are never required for the gate.
   AI_MODEL: process.env.AI_MODEL?.trim() || "e2e-model",
   AI_EXECUTION_BINDING: process.env.AI_EXECUTION_BINDING?.trim() || "e2e-binding",
@@ -39,6 +49,9 @@ if (process.platform === "win32") {
 }
 const reportDir = "test-results";
 mkdirSync(reportDir, { recursive: true });
+mkdirSync(".tmp", { recursive: true });
+writeFileSync(env.RECOVERY_FAULT_FILE, "\n");
+writeFileSync(env.RECOVERY_FAULT_RESULT_FILE, "[]\n");
 rmSync(`${reportDir}/e2e-timing.json`, { force: true });
 rmSync(`${reportDir}/playwright-results.json`, { force: true });
 
@@ -55,7 +68,7 @@ let testExitCode = null;
 let testMs = null;
 if (buildExitCode === 0) {
   const testStarted = performance.now();
-  testExitCode = run("@playwright/test/cli", ["test", "--project=chromium", ...process.argv.slice(2)]);
+  testExitCode = run("@playwright/test/cli", ["test", "--project=chromium", "--project=recovery-fault", ...process.argv.slice(2)]);
   testMs = Math.round(performance.now() - testStarted);
 }
 

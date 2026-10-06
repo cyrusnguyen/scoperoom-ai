@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import {
-  Background, BaseEdge, ConnectionMode, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
+  Background, Controls, BaseEdge, ConnectionMode, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
   useReactFlow, type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
 } from "@xyflow/react";
 import LiveOverlay from "@/features/collaboration/ui/live-overlay";
@@ -12,7 +12,7 @@ import { useSync } from "@/features/collaboration/ui/sync-context";
 import { SelectedBy, useParticipants } from "@/features/collaboration/ui/use-participants";
 import type { Person } from "@/features/collaboration/ui/participants";
 import { SIDES, STEP_SIZE, type Direction, type SavedPosition, type Side } from "@/features/drafts/contracts/draft-layout";
-import type { NodeKind } from "@/features/drafts/contracts/scope-document";
+import type { DraftView, NodeKind } from "@/features/drafts/contracts/scope-document";
 import { bufferKey, discard, edit, editFields, refuse, type Saved } from "./buffers";
 import { endpointGuard, inlinePlan, KIND_LABELS, reconnectCommand, savedOf, updateCommand } from "./fields";
 import CanvasControls from "./canvas-controls";
@@ -181,6 +181,30 @@ const nodeTypes = { step: StepCard };
 const edgeTypes = { flow: FlowEdgeLine };
 const defaultEdgeOptions = { type: "flow" as const };
 
+/** A detached projected canvas for proposal review. It deliberately never mounts Studio, Sync, participants or shortcuts. */
+export function ReadOnlyFlowCanvas({ draft, flowId }: { draft: DraftView; flowId: string }) {
+  const direction = draft.layout.directions[flowId] ?? "TB";
+  const nodes = Object.values(draft.document.nodes).filter((node) => node.flowId === flowId).map<StepNode>((node) => {
+    const size = STEP_SIZE[node.kind], position = draft.layout.positions[node.id]!;
+    return { id: node.id, type: "step", width: size.width, height: size.height, position, data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction } };
+  });
+  const edges = Object.values(draft.document.edges).filter((edge) => edge.flowId === flowId).map<FlowEdge>((edge) => {
+    const sides = draft.layout.edgeSides[edge.id], defaults = HANDLE_ORDER[direction];
+    return { id: edge.id, type: "flow", source: edge.fromId, target: edge.toId, data: { condition: edge.condition },
+      sourceHandle: sides?.from ?? defaults.find((handle) => handle.type === "source")!.position,
+      targetHandle: sides?.to ?? defaults.find((handle) => handle.type === "target")!.position,
+      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: "var(--foreground-subtle)" } };
+  });
+  return <div className="canvas proposal-flow-canvas" onKeyDown={(event) => event.stopPropagation()}>
+    <ReactFlow<StepNode, FlowEdge> nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions}
+      nodesDraggable={false} nodesConnectable={false} edgesReconnectable={false} elementsSelectable={false} deleteKeyCode={null} zoomOnDoubleClick={false}
+      fitView fitViewOptions={{ padding: 0.2, maxZoom: 1 }} minZoom={0.1} maxZoom={4} aria-label={`Proposed workflow canvas: ${draft.document.flows[flowId]?.title ?? ""}`}>
+      <Background gap={24} size={1} /><Controls showInteractive={false} />
+    </ReactFlow>
+    {!nodes.length && <div className="canvas-empty"><p>This flow has no steps yet.</p></div>}
+  </div>;
+}
+
 /**
  * Controlled React Flow view of one flow of the shown draft (saved content plus unsaved changes). Selection, pan, zoom
  * and measurement stay local and never become edits; connecting and reconnecting queue the same commands as the Connect
@@ -292,14 +316,17 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   }, [document, layout, flowId, ui.selection, preview, dragging, interactive, measured, selectedBy]);
 
   const edges = useMemo<FlowEdge[]>(() => Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => {
-    // A saved connection point (UI02 Task 13); absent, an edge renders with today's direction-based default.
+    // Saved connection points stay authoritative. A plain edge names its effective direction's defaults instead of
+    // asking React Flow for its first cached handle, which can be ordered for the direction before an in-place Arrange.
     const sides = layout.edgeSides[edge.id];
+    const defaults = HANDLE_ORDER[preview?.direction ?? layout.directions[flowId] ?? "TB"];
     return {
       id: edge.id, type: "flow", source: edge.fromId, target: edge.toId, data: { condition: edge.condition },
-      ...(sides ? { sourceHandle: sides.from, targetHandle: sides.to } : {}),
+      sourceHandle: sides?.from ?? defaults.find((handle) => handle.type === "source")!.position,
+      targetHandle: sides?.to ?? defaults.find((handle) => handle.type === "target")!.position,
       markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: "var(--foreground-subtle)" }, selected: interactive && ui.selection?.kind === "EDGE" && ui.selection.id === edge.id,
     };
-  }), [document, layout, flowId, ui.selection, interactive]);
+  }), [document, layout, flowId, ui.selection, interactive, preview]);
 
   const picks = (changes: (NodeChange<StepNode> | EdgeChange<FlowEdge>)[]): SelectChange[] =>
     changes.flatMap((change) => (change.type === "select" ? [{ id: change.id, selected: change.selected }] : []));

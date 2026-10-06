@@ -7,7 +7,14 @@ import { RESEND_COOLDOWN_SECONDS, secondsRemaining } from "@/features/access/ver
 import { authConfig } from "@/server/web/auth-config";
 import { createAuthClient } from "@/server/web/supabase";
 import { clearPendingEmail, getCodeSentAt, getPendingEmail, markCodeSent, setPendingEmail } from "@/server/web/pending-email";
+import { clearPendingRecovery } from "@/server/web/pending-recovery";
 import { safeInviteContinuation, withContinuation } from "./continuation";
+
+/** Signing in or out ends the remembered signup and recovery emails, so a shared browser keeps neither for the next person. */
+async function clearPendingIdentity() {
+  await clearPendingEmail();
+  await clearPendingRecovery();
+}
 
 function emailField(formData: FormData) {
   const value = formData.get("email");
@@ -35,7 +42,7 @@ export async function signIn(formData: FormData) {
     }
     redirect(withContinuation(`/login?error=${result.reason}`, continuation));
   }
-  await clearPendingEmail();
+  await clearPendingIdentity();
   redirect(continuation ?? "/app");
 }
 
@@ -68,7 +75,7 @@ export async function verifyEmailCode(formData: FormData) {
 
   const result = await createAuthHandler(await createAuthClient()).verifyEmail(email, code);
   if (!result.ok) redirect(verifyPath(`error=${result.reason}`, continuation));
-  await clearPendingEmail();
+  await clearPendingIdentity();
   redirect(continuation ?? "/app");
 }
 
@@ -100,6 +107,6 @@ export async function signOut(formData?: FormData) {
   const supabase = await createAuthClient();
   const { error } = await supabase.auth.signOut();
   if (error) throw new Error("Could not sign out. Please try again.");
-  await clearPendingEmail();
+  await clearPendingIdentity();
   redirect(withContinuation("/login", continuation));
 }

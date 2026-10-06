@@ -12,6 +12,8 @@ export type Live = { role: ProjectStatusView["role"]; status: ProjectStatusView[
 export type SyncState = { status: ProjectStatusView; failures: number };
 /** replace: another draft is current. project: role or lifecycle changed. read: same draft, newer revisions. */
 export type Plan = "none" | "read" | "project" | "replace";
+/** An optional project resource reader. The fence identity is stable per generation; its own cursor also gates adoption. */
+export type ReconcileResources = (status: ProjectStatusView, fence: () => boolean) => Promise<void>;
 
 export type SyncOptions = {
   /** The bootstrap's status: the authority every consumer starts from. */
@@ -33,6 +35,8 @@ export type SyncOptions = {
   bootstrap: (fence: () => boolean) => Promise<unknown>;
   /** Latest status and consecutive failure count, when either changed. */
   publish: (state: SyncState) => void;
+  /** Project resources whose cursors are independent from the saved draft. Failed reads retry on the next successful status cycle. */
+  reconcileResources?: ReconcileResources;
 };
 
 export type ProjectSync = {
@@ -45,12 +49,15 @@ export type ProjectSync = {
   invalidate: () => void;
   /** Realtime is delayed: the poll runs on the 5 s base instead of 10 s (never a second timer; hints are hints, the poll is the guarantee). */
   setDegraded: (on: boolean) => void;
+  /** A visible nonterminal job uses the existing poll timer at the 2 s base. */
+  setActiveJobVisible: (on: boolean) => void;
   /** A check that generation `at` (default: the current one; an authority result carries its own) is still current: call it right before adopting anything. */
   fence: (at?: number) => () => boolean;
 };
 
-export function statusDelay(failures: number, random: number, degraded = false): number {
-  const backedOff = Math.min(30_000, (degraded ? 5_000 : 10_000) * 2 ** Math.min(failures, 2));
+export function statusDelay(failures: number, random: number, degraded = false, activeJobVisible = false): number {
+  const base = activeJobVisible ? 2_000 : degraded ? 5_000 : 10_000;
+  const backedOff = Math.min(30_000, base * 2 ** Math.min(failures, 2));
   return Math.round(Math.min(30_000, backedOff * (0.9 + Math.max(0, Math.min(1, random)) * 0.2)));
 }
 
@@ -64,21 +71,26 @@ export function plan(live: Live, next: ProjectStatusView): Plan {
 const unavailable: AuthorityResult = { kind: "unavailable" };
 
 export function createProjectSync(o: SyncOptions): ProjectSync {
-  let generation = 0, session = 0, started = false, stopped = false, failures = 0, invalid = false, invalidations = 0, degraded = false;
+  let generation = 0, session = 0, started = false, stopped = false, failures = 0, invalid = false, invalidations = 0, degraded = false, activeJobVisible = false;
   // What the request in flight started with: one that saw every invalidation covers a later beforeWrite; a window event is covered only by another window event's or a write's request.
   let runSeen = -1, runReason: ReconcileReason = "poll";
   let last = o.initial, shown = "";
   let cancelTimer: (() => void) | null = null, unlisten: (() => void) | null = null;
   let running: Promise<AuthorityResult> | null = null, queued: Promise<AuthorityResult> | null = null;
 
-  const fenceFor = (at: number) => () => started && at === generation;
+  let fenceAt = -1, currentFence = () => false;
+  const fenceFor = (at: number) => {
+    if (at !== generation) return () => false;
+    if (fenceAt !== at) { fenceAt = at; currentFence = () => started && at === generation; }
+    return currentFence;
+  };
   const publish = () => {
     const key = JSON.stringify([last, failures]);
     if (key !== shown) { shown = key; o.publish({ status: last, failures }); }
   };
   function schedule() {
     cancelTimer?.();
-    cancelTimer = started && !stopped ? o.setTimer(() => { cancelTimer = null; void revalidate("poll"); }, statusDelay(failures, o.random(), degraded)) : null;
+    cancelTimer = started && !stopped ? o.setTimer(() => { cancelTimer = null; void revalidate("poll"); }, statusDelay(failures, o.random(), degraded, activeJobVisible)) : null;
   }
 
   async function run(): Promise<AuthorityResult> {
@@ -104,6 +116,8 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
       if (next === "read") await o.readDraft(fenceFor(at));
       else if (next !== "none") await o.bootstrap(fenceFor(at));
     } catch { /* retried by the next poll */ }
+    // Independent reads cannot delay authority or the next status poll. Their cursor/fence owns late adoption.
+    try { void o.reconcileResources?.(last, fenceFor(at)).catch(() => undefined); } catch { /* retried by the next successful status cycle */ }
     if (!fenceFor(at)()) return unavailable;
     if (seen === invalidations) invalid = false;
     schedule();
@@ -152,7 +166,7 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
       schedule();
     },
     dispose() {
-      started = false; generation++; session++; running = queued = null; degraded = false;
+      started = false; generation++; session++; running = queued = null; degraded = activeJobVisible = false;
       cancelTimer?.(); cancelTimer = null;
       unlisten?.(); unlisten = null;
     },
@@ -162,6 +176,11 @@ export function createProjectSync(o: SyncOptions): ProjectSync {
       : running && runSeen === invalidations ? running : revalidate("before-save")),
     invalidate,
     setDegraded,
+    setActiveJobVisible(on) {
+      if (on === activeJobVisible) return;
+      activeJobVisible = on;
+      if (cancelTimer) schedule();
+    },
     fence: (at = generation) => fenceFor(at),
   };
 }

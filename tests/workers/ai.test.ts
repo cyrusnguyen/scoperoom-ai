@@ -453,6 +453,19 @@ test("an oversized capture fails before any claim and refunds its reservation", 
   });
 });
 
+test("a capture from another prompt version fails before any claim and refunds its reservation", { skip: !canRun }, async () => {
+  await withWorld(async ({ admin, seed, row, attempts, budget }) => {
+    const { runId, owner } = await seed({ createdAt: ago(5) });
+    const { gateway, requests } = fakeGateway(() => completed());
+    await admin.query("alter table app.ai_run disable trigger enforce_ai_run");
+    try { await admin.query(`update app.ai_run set capture = jsonb_set(capture, '{versions,prompt}', '"2026-10-03.1"') where id = $1`, [runId]); } finally { await admin.query("alter table app.ai_run enable trigger enforce_ai_run"); }
+    await runAi(runId, gateway);
+    assert.equal(requests.length, 0);
+    assert.deepEqual([(await row(runId)).state, (await row(runId)).failure_code, (await attempts(runId)).length], ["FAILED", "PROMPT_VERSION_UNSUPPORTED", 0]);
+    assert.deepEqual(await budget(owner), { reserved_runs: 0, consumed_runs: 0 });
+  });
+});
+
 for (const fence of ["cancel", "deadline", "authority", "cancel-and-deadline"] as const) {
   test(`an oversized capture honors the committed ${fence} fence before input failure`, { skip: !canRun }, async () => {
     await withWorld(async ({ admin, seed, row, attempts, budget }) => {

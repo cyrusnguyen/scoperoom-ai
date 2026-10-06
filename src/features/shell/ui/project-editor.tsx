@@ -26,8 +26,8 @@ function ShowProjects({ onClick }: { onClick: () => void }) {
 }
 
 /** Keyed by project id in the shell: switching projects unmounts this project's editor state. Renders inside the StudioProvider. */
-export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onShowProjects, panelOpen, onTogglePanel, restoreNote, onRestore }: {
-  bootstrap: ProjectBootstrap; autoFocus: boolean; sidebarClosed: boolean; onShowProjects: () => void; panelOpen: boolean; onTogglePanel: () => void;
+export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onShowProjects, panelOpen, activeTab, onOpenDetails, onOpenAI, restoreNote, onRestore }: {
+  bootstrap: ProjectBootstrap; autoFocus: boolean; sidebarClosed: boolean; onShowProjects: () => void; panelOpen: boolean; activeTab: "details" | "ai"; onOpenDetails: () => void; onOpenAI: () => void;
   restoreNote?: string; onRestore: () => void;
 }) {
   const { project } = bootstrap;
@@ -37,7 +37,7 @@ export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onS
       const flow = currentFlow(draft.document, ui.flowId);
       if (flow) update(() => ({ selection: { kind: "FLOW", id: flow.id } }));
     }
-    onTogglePanel();
+    onOpenDetails();
   };
   const titleRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => { if (autoFocus) titleRef.current?.focus(); }, [autoFocus]);
@@ -50,7 +50,8 @@ export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onS
       <FlowSwitcher />
       <span className="editor-spacer" />
       <SaveChanges />
-      <button type="button" className="button small editor-toggle" aria-pressed={panelOpen} aria-controls="right-panel" onClick={toggleInspector}><Icon name="details" size={14} /><span>Inspect</span></button>
+      <button type="button" className="button small editor-toggle" aria-pressed={panelOpen && activeTab === "details"} aria-controls="right-panel" onClick={toggleInspector}><Icon name="details" size={14} /><span>Inspect</span></button>
+      <button type="button" className="button small editor-toggle ai-toggle" aria-pressed={panelOpen && activeTab === "ai"} aria-controls="right-panel" onClick={onOpenAI}><Icon name="ai" size={16} /><span>AI</span></button>
     </header>
     {archived && <div className="editor-banner">
       <span><Icon name="lock" size={14} />Archived · read-only</span>

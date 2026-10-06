@@ -34,6 +34,14 @@ Unavailable future actions are hidden; simulated screens never claim real saved,
   - *Inspector text typed against a newer record:* the typed text stays, "Changed by someone else" shows their saved value, with Save my edit and Keep saved value.
   - *No authority:* "Not saved" (status unavailable; the edit is kept and a later Save works); "Your account changed. Reloading…" and a return to /app when another account signed in; "Project unavailable" after removal; "This draft is read-only now, so your unsaved changes can’t be saved" with the edits listed for copying and Discard my changes after a downgrade.
 
+## AI proposal review
+
+The AI panel places Current/History below its heading. Current retains the saved-context chip, instruction/action composer, disclosure and actionable full preview or uncertain request. History replaces that content with compact run rows or one read-only inspection and Back; token usage remains in Run details. Switching preserves controlled inputs and exact recovery identity and makes no request admission. A pending or uncertain action offers Return to Current and restores keyboard focus to its tab. Historical or stale captures cannot reconstruct the entire past saved graph, so inspection labels that limit and does not offer Apply controls.
+
+An eligible Current proposal previews the complete saved draft with all proposed changes, including unchanged flows, nodes, connections and current saved layout. It is labelled Preview · not saved and supports a flow selector, Canvas/List, local pan/zoom/fit and an expanded dialog. Preview interaction does not edit the live draft or trigger its Save/Undo/Redo shortcuts. Assumptions and change counts remain visible; Change details shows the captured textual comparison.
+
+Apply all changes sends every operation only on explicit click. Choose individual changes is optional and starts with no selection; it does not alter the full preview. A subset still consumes the proposal and must satisfy existing dependencies. Unsaved work, missing authority, stale content and busy writes retain their existing guards. A lost response offers exact-key Retry; an acknowledged write awaiting a covering read says Changes applied. Refreshing saved draft... before claiming the saved draft updated. A definite refusal clears only the matching attempt. Generation completion does not apply changes automatically.
+
 ## User-visible truth
 
 The October 1 review preserves unsubmitted X/Y coordinates across remote moves, deletion and downgrade; these buffers count toward the leave guard and offer explicit keep/reapply or copy/discard recovery. Pointer drags retain their drag-start position guard, including while a newer saved move arrives; a refused save keeps the attempted geometry visible. Arrange pins its preview and direction while an Apply result is uncertain, so Retry sends the same attempt.

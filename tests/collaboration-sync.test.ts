@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { ApiResult } from "../src/client/api.ts";
+import { createRunResources } from "../src/features/proposals/ui/run-resources.ts";
 import type { ProjectStatusView } from "../src/features/projects/contracts/project.ts";
 import {
-  createProjectSync, plan, statusDelay, type Live, type StatusRead, type VisibilityEvent,
+  createProjectSync, plan, statusDelay, type Live, type StatusRead, type SyncOptions, type VisibilityEvent,
 } from "../src/features/collaboration/ui/project-sync.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
 import type { PeerMessage, PresenceState } from "../src/features/collaboration/contracts/messages.ts";
@@ -22,7 +24,7 @@ const fail = (code: number): StatusRead => ({ ok: false, status: code });
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /** A fake clock, fake visibility and a status endpoint answered by hand: no real timers, no DOM. */
-function rig(start = status()) {
+function rig(start = status(), reconcileResources?: SyncOptions["reconcileResources"]) {
   let clock = 0, ids = 0, hidden = false;
   const timers: { id: number; at: number; fn: () => void; ms: number }[] = [];
   const listeners = new Set<(reason: VisibilityEvent) => void>();
@@ -46,6 +48,7 @@ function rig(start = status()) {
     readDraft: async (fence) => { log.push(`read:${fence()}`); },
     bootstrap: async (fence) => { log.push(`bootstrap:${fence()}`); },
     publish: (state) => published.push(state),
+    reconcileResources,
   });
   return {
     sync, log, published, shell, timers, listeners, pending,
@@ -518,7 +521,50 @@ test("a follow-up queued behind an account-change stop never fetches, so the she
 
 test("statusDelay: the degraded base is 5 s and backs off like the normal one", () => {
   assert.deepEqual([0, 1, 2, 3].map((failures) => statusDelay(failures, 0.5, true)), [5_000, 10_000, 20_000, 20_000]);
+  assert.deepEqual([0, 1, 2, 3].map((failures) => statusDelay(failures, 0.5, true, true)), [2_000, 4_000, 8_000, 8_000]);
   assert.equal(statusDelay(0, 0.5, false), 10_000);
+});
+
+test("an active visible job uses the 2 s cadence and closing it restores the current cadence", () => {
+  const t = rig();
+  t.sync.start();
+  t.sync.setActiveJobVisible(true);
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [2_000]);
+  t.sync.setDegraded(true);
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [2_000]);
+  t.sync.setActiveJobVisible(false);
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [5_000]);
+  t.sync.setDegraded(false);
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [10_000]);
+  t.sync.dispose();
+  assert.equal(t.timers.length, 0);
+});
+
+test("successful status cycles reconcile resources, including identical and AI-only changes, without draft reads", async () => {
+  const calls: Array<{ aiRevision: number; current: boolean }> = [];
+  const t = rig(status(), async (next, fence) => { calls.push({ aiRevision: next.aiRevision, current: fence() }); });
+  t.sync.start();
+  const first = t.sync.revalidate("manual");
+  await t.answer(ok(status()));
+  await first;
+  await t.advance(10_000);
+  await t.answer(ok(status()));
+  await t.advance(10_000);
+  await t.answer(ok(status({ aiRevision: 1 })));
+  assert.deepEqual(calls, [{ aiRevision: 0, current: true }, { aiRevision: 0, current: true }, { aiRevision: 1, current: true }]);
+  assert.deepEqual(t.log, []);
+  t.sync.dispose();
+});
+
+test("a resource failure leaves authority current and the status timer running", async () => {
+  const t = rig(status(), async () => { throw new Error("resource unavailable"); });
+  t.sync.start();
+  const result = t.sync.revalidate("manual");
+  await t.answer(ok(status()));
+  assert.equal((await result).kind, "current");
+  assert.equal((await t.sync.beforeWrite()).kind, "current");
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [10_000]);
+  t.sync.dispose();
 });
 
 test("degraded moves the waiting poll to 5 s and recovery back to 10 s, always with exactly one timer", async () => {
@@ -931,4 +977,35 @@ test("live: the preview snapshot keeps its identity while unchanged and changes 
   assert.equal(t.live.snapshot(), drawn);
   await t.advance(2_000);
   assert.deepEqual(t.live.snapshot().cursors, [], "an expired entry drops on the next read");
+});
+
+test("held AI resources do not block authority or the next status poll, and share one flight per generation", async () => {
+  const held: Array<(value: { ok: true; data: never }) => void> = [];
+  const adopted: string[] = [];
+  const resources = createRunResources({
+    projectId: "project",
+    apiRead: <T,>() => new Promise<ApiResult<T>>((resolve) => { held.push(resolve as (value: { ok: true; data: never }) => void); }),
+    adoptPage: () => { adopted.push("page"); }, adoptRun: (value) => { if (value) adopted.push("run"); },
+  });
+  resources.selectRun("run-1");
+  const t = rig(status(), resources.reconcile);
+  t.sync.start();
+  t.sync.setActiveJobVisible(true);
+  t.sync.invalidate();
+  let current = false;
+  void t.sync.beforeWrite().then((result) => { current = result.kind === "current"; });
+  await t.answer(ok(status()));
+  assert.equal(current, true, "status authority resolves while AI reads are held");
+  assert.deepEqual(t.timers.map((timer) => timer.ms), [2_000]);
+  assert.equal(held.length, 2);
+  await t.advance(2_000);
+  await t.answer(ok(status()));
+  assert.equal(held.length, 2, "identical status shares held page/detail reads");
+  await t.advance(2_000);
+  await t.answer(fail(401));
+  assert.deepEqual(t.log, ["session"]);
+  for (const resolve of held) resolve({ ok: true, data: {} as never });
+  await settle();
+  assert.deepEqual(adopted, [], "session stop fences late resource adoption");
+  t.sync.dispose();
 });

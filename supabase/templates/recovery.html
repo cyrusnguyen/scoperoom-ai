@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:32px;background:#191d1a;color:#eeeee7;font-family:Arial,sans-serif;">
+    <table role="presentation" style="width:100%;max-width:560px;margin:0 auto;border:1px solid #3b403b;border-radius:10px;background:#222623;">
+      <tr><td style="padding:36px;">
+        <p style="margin:0 0 12px;color:#b49c65;font-size:11px;font-weight:700;letter-spacing:2px;">SCOPEROOM</p>
+        <h1 style="margin:0 0 16px;font-size:25px;font-weight:500;">Reset your password</h1>
+        <p style="margin:0 0 20px;color:#b0b5ac;line-height:1.6;">Use this six-digit code to choose a new ScopeRoom password:</p>
+        <p style="margin:0 0 24px;padding:16px;border:1px solid #535a52;border-radius:7px;background:#292e2a;text-align:center;font-size:28px;font-weight:700;letter-spacing:8px;">{{ .Token }}</p>
+        <p style="margin:0 0 20px;color:#b0b5ac;line-height:1.6;">This code expires in 10 minutes. Enter it on the reset page:</p>
+        <p style="margin:0 0 24px;"><a href="{{ .SiteURL }}/forgot-password/reset" style="display:inline-block;padding:12px 18px;border-radius:6px;background:#b49c65;color:#191d1a;font-weight:700;text-decoration:none;">Open password reset</a></p>
+        <p style="margin:0;color:#8f968d;font-size:12px;line-height:1.6;">If you did not request a password reset, you can ignore this email.</p>
+      </td></tr>
+    </table>
+  </body>
+</html>

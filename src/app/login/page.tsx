@@ -21,7 +21,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const message = error === "invalid"
     ? "We could not sign you in. Check your email and password."
     : error === "unavailable" ? "Sign-in is temporarily unavailable. Please try again."
-    : status === "confirmed" ? "Email confirmed. Sign in to continue." : null;
+    : status === "confirmed" ? "Email confirmed. Sign in to continue." : status === "password-reset" ? "Password updated. Sign in with your new password." : status === "password-reset-warning" ? "Password updated. We could not confirm sign-out on other devices." : null;
 
   return <LoginView message={message} isError={error === "invalid" || error === "unavailable"} continuation={continuation} />;
 }
