@@ -428,6 +428,38 @@ for (const recoveryRoute of ["/forgot-password", "/forgot-password/reset"]) for 
   });
 }
 
+test("signing in and signing out forget the remembered recovery email", async ({ page }) => {
+  const admin = adminClient();
+  const database = await openDatabase();
+  const email = `recovery-forget-${randomUUID()}@example.test`;
+  const password = `Recovery-${randomUUID()}!`;
+  const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+  if (created.error || !created.data.user) throw new Error("Could not create the recovery cookie fixture.");
+  const remembered = async () => (await page.context().cookies()).some((cookie) => cookie.name === "scoperoom.pending-recovery");
+  const remember = () => page.context().addCookies([{
+    name: "scoperoom.pending-recovery", value: Buffer.from(JSON.stringify({ email: "shared-browser@example.test", sentAt: Date.now() - 1_000 })).toString("base64url"),
+    domain: new URL(page.url()).hostname, path: "/forgot-password", httpOnly: true, sameSite: "Lax",
+  }]);
+  try {
+    await page.goto("/login");
+    await remember();
+    expect(await remembered()).toBe(true);
+    await fillPrivateField(page.getByLabel("Email address"), email);
+    await fillPrivateField(page.getByLabel("Password", { exact: true }), password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page).toHaveURL(/\/app$/);
+    expect(await remembered()).toBe(false);
+    await remember();
+    expect(await remembered()).toBe(true);
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    expect(await remembered()).toBe(false);
+  } finally {
+    await cleanupUsers(database, admin, [created.data.user.id], page);
+    await database.end();
+  }
+});
+
 test("accepted resend clears all secrets, sends only email and continuation, and cooldown preserves pending fields", async ({ page }) => {
   const admin = adminClient();
   const email = `recovery-resend-${randomUUID()}@example.test`;

@@ -30,7 +30,7 @@ function fixture() {
   const capture = { schemaVersion: 1 as const, taskType: "REFINE_FLOW_SELECTION" as const, prompt: "Retry", promptHash: "", draftId: saved.id, documentRevision: 4, parentSnapshotId: null,
     selection: { flowId: firstFlow, nodeIds: [selected] }, graph: { flows: [capturedFlow], nodes: [{ ...draft.document.nodes[selected], readOnly: false }], edges: [], boundaryNodeIds: [] }, graphHash: "", sources: [], versions: { prompt: "test", resultSchema: 1, model: "test" }, limits: { maxInputTokens: 16_000, maxOutputTokens: 6_000, maxGraphNodes: 20, maxGraphEdges: 40, operations: 100, resultBytes: 128 * 1024 } };
   const run = { id: id("8"), state: "SUCCEEDED", disposition: "AVAILABLE", applicability: "APPLICABLE", result, resultHash: "a".repeat(64), capture, draftId: saved.id, documentRevision: 4, parentSnapshotId: null } as unknown as RunView;
-  const status = { status: "ACTIVE", currentDraftId: saved.id, documentRevision: 4, approvedSnapshotId: null } as ProjectStatusView;
+  const status = { status: "ACTIVE", currentDraftId: saved.id, documentRevision: 4, layoutRevision: 8, approvedSnapshotId: null } as ProjectStatusView;
   return { saved, run, status, firstFlow, secondFlow, contextual, occupiedPreviewId, savedEdge };
 }
 
@@ -56,6 +56,7 @@ test("projects every saved flow and avoids occupied temporary ids", () => {
 test("refuses a full preview when the saved semantic authority changed", () => {
   const { saved, run, status } = fixture();
   assert.equal(projectProposalPreview(saved, { ...status, documentRevision: 5 }, run), null);
+  assert.equal(projectProposalPreview(saved, { ...status, layoutRevision: 9 }, run), null, "a saved read behind the status layout would preview stale positions");
   assert.equal(projectProposalPreview(saved, status, { ...run, capture: { ...run.capture!, draftId: id("7") } }), null);
   assert.equal(projectProposalPreview(saved, status, { ...run, applicability: "STALE" }), null);
   assert.equal(projectProposalPreview(saved, status, { ...run, disposition: "APPLIED" }), null);

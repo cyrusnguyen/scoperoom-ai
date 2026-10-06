@@ -4,12 +4,13 @@ import { applyProposal } from "../domain/proposal-diff.ts";
 import type { RunView } from "../contracts/tasks.ts";
 
 /** Projects an applicable proposal onto the coherent saved draft without changing Studio state or persisted data. */
-export function projectProposalPreview(saved: DraftView, status: Pick<ProjectStatusView, "status" | "currentDraftId" | "documentRevision" | "approvedSnapshotId">, run: RunView, inspection = false): DraftView | null {
+export function projectProposalPreview(saved: DraftView, status: Pick<ProjectStatusView, "status" | "currentDraftId" | "documentRevision" | "layoutRevision" | "approvedSnapshotId">, run: RunView, inspection = false): DraftView | null {
   const capture = run.capture, result = run.result;
   if (inspection || !capture || !result || result.kind !== "proposal" || run.state !== "SUCCEEDED" || run.disposition !== "AVAILABLE" || run.applicability !== "APPLICABLE"
     || status.status !== "ACTIVE" || saved.status !== "EDITABLE"
     || saved.id !== status.currentDraftId || saved.id !== run.draftId || saved.id !== capture.draftId
     || saved.documentRevision !== status.documentRevision || saved.documentRevision !== run.documentRevision || saved.documentRevision !== capture.documentRevision
+    || saved.layoutRevision < status.layoutRevision // Apply places new steps on the newest saved layout; a saved read behind the status would preview other positions.
     || status.approvedSnapshotId !== run.parentSnapshotId || status.approvedSnapshotId !== capture.parentSnapshotId) return null;
   const used = new Set([...Object.keys(saved.document.flows), ...Object.keys(saved.document.nodes), ...Object.keys(saved.document.edges), ...saved.document.retiredEntityIds]);
   let sequence = 0;
