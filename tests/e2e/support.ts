@@ -105,7 +105,9 @@ export async function cleanupUsers(database: Client, admin: SupabaseClient, user
     // the page closes, seconds later. A request a test's route handler holds forever never reaches the server, hence the bound.
     const responses = (await page.requests()).map((request) => request.response().catch(() => null));
     await Promise.race([Promise.all(responses), new Promise((resolve) => setTimeout(resolve, 5_000))]);
-    await page.close();
+    // A close that races the page's own sign-in navigation (a session-ended teardown) can hang until the test timeout; closing the whole context ends it.
+    const closed = await Promise.race([page.close().then(() => true, () => true), new Promise<boolean>((resolve) => setTimeout(resolve, 5_000, false))]);
+    if (!closed) await page.context().close().catch(() => undefined);
     // ponytail: fixed settle for requests sent after the snapshot above; warm handlers finish in <=300 ms, a cold compile can exceed it.
     await new Promise((resolve) => setTimeout(resolve, 500));
   }

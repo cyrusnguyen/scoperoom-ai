@@ -259,6 +259,7 @@ test("replacement draft generation fences a held native preparation", async ({ p
   const status = page.waitForResponse(response => response.url().endsWith("/status")); await page.evaluate(() => window.dispatchEvent(new Event("focus"))); await status; await expect.poll(() => replacementRead).toBe(true);
   const finished = page.waitForResponse(response => response.url().endsWith("/export")); release(); await (await finished).finished();
   await expect(dialog(page).getByRole("button", { name: "Download JSON", exact: true })).toBeEnabled(); expect(downloaded).toBe(0);
+  await page.unrouteAll({ behavior: "ignoreErrors" }); // a status poll mid-fetch when the context closes would fail this test from its route callback
 });
 
 test("acknowledged save with under-floor saved reads blocks export until a covering inspection", async ({ page }) => {

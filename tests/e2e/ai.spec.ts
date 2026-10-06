@@ -1055,13 +1055,19 @@ test("review regression: expired proposal still recovers an uncertain Apply with
   expect(await warnsBeforeUnload(page)).toBe(false);
   const applyUrl = `${appUrl}/api/projects/${projectId}/ai-runs/${completed.runId}/apply`;
   const sent: { key: string | undefined; body: unknown; bytes: string | null }[] = [];
+  // Expiring an applied run's bodies records no AI event, so the page re-reads the run only when its own post-failure read comes after the expiry.
+  // Hold that read until the bodies have expired, instead of racing the test's database steps.
+  const detailUrl = `${appUrl}/api/projects/${projectId}/ai-runs/${completed.runId}`;
+  let holdDetail = false, releaseDetail!: () => void;
+  const detailHeld = new Promise<void>((resolve) => { releaseDetail = resolve; });
+  await page.route(detailUrl, async (route) => { if (holdDetail && route.request().method() === "GET") await detailHeld; await route.continue(); });
   let replayed = false, lostAcknowledgement!: () => void;
   const lost = new Promise<void>((resolve) => { lostAcknowledgement = resolve; });
   await page.route(applyUrl, async (route) => {
     sent.push({ key: route.request().headers()["idempotency-key"], body: route.request().postDataJSON(), bytes: route.request().postData() });
     const response = await route.fetch();
     expect(response.status()).toBe(200);
-    if (sent.length === 1) { await route.abort("failed"); lostAcknowledgement(); }
+    if (sent.length === 1) { holdDetail = true; await route.abort("failed"); lostAcknowledgement(); }
     else {
       replayed = (await response.json() as { replayed: boolean }).replayed;
       await route.fulfill({ response });
@@ -1090,6 +1096,7 @@ test("review regression: expired proposal still recovers an uncertain Apply with
     expect(Number(expired.rows[0]?.clearedBodies)).toBeGreaterThan(0);
     const cleaned = await (await page.request.get(`/api/projects/${projectId}/ai-runs/${completed.runId}`)).json();
     expect(cleaned).toMatchObject({ disposition: "APPLIED", capture: null, result: null, application: { runId: completed.runId } });
+    releaseDetail();
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     await expect(review.getByText("No proposal is available for this run.", { exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(review.getByRole("button", { name: "Apply selected changes" })).toHaveCount(0);
@@ -1105,7 +1112,7 @@ test("review regression: expired proposal still recovers an uncertain Apply with
     const freshApply = await page.request.post(applyUrl, { headers: mutation(), data: completed.body });
     expect(freshApply.status()).toBe(409);
     expect(await freshApply.json()).toMatchObject({ error: { code: "AI_RUN_CONSUMED" } });
-  } finally { await page.unroute(applyUrl); }
+  } finally { releaseDetail(); await page.unroute(applyUrl); await page.unroute(detailUrl); }
 });
 
 
