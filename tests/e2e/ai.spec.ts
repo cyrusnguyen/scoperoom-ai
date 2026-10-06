@@ -57,9 +57,10 @@ async function revealRequestId(page: Page, runId: string) {
   await expect(details.locator("div").filter({ has: page.getByText("Request id", { exact: true }) }).locator("dd")).toHaveText(runId);
 }
 
-async function cleanupInvitedUsers(database: Client, admin: ReturnType<typeof adminClient>, users: string[], projectId: string, contexts: BrowserContext[] = []) {
+async function cleanupInvitedUsers(database: Client, admin: ReturnType<typeof adminClient>, users: string[], projectIds: string | string[], contexts: BrowserContext[] = []) {
   for (const context of contexts) await closeStudioContext(context);
-  await database.query("delete from app.project where id = $1", [projectId]);
+  // Every project the invited users joined: a surviving membership row blocks deleting their profile.
+  await database.query("delete from app.project where id = any($1::uuid[])", [[projectIds].flat()]);
   await cleanupUsers(database, admin, users);
 }
 
@@ -1478,7 +1479,7 @@ test("a read-only viewer preserves an omitted valid link and recovers unavailabl
     expect(unexpectedProjectWrites).toEqual([]);
     for (const watchedProjectId of watchedProjects) expect(realtimeTokenReads).toContain(`/api/projects/${watchedProjectId}/realtime-token`);
   } finally {
-    await cleanupInvitedUsers(workerAccount.database, admin, viewerUsers, projectId, [page.context(), viewerContext]);
+    await cleanupInvitedUsers(workerAccount.database, admin, viewerUsers, [...watchedProjects], [page.context(), viewerContext]);
   }
 });
 
