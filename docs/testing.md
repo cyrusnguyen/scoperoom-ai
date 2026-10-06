@@ -13,6 +13,8 @@ Keep fast unit tests for edge-case combinations, database integration tests for 
 
 Keep the local test stack available for manual testing while the PR is open. After the PR is confirmed merged, retain the logs/reports, then stop and remove only containers created for that test stack. Prove ownership from the exact container IDs together with the stack project label, environment and network; record the cleanup result. Preserve unrelated containers, volumes and images. Do not use a global Docker prune.
 
+Arrange direction coverage in `tests/e2e/studio-positions.spec.ts` checks the actual SVG path against the chosen handle outer face in preview and after in-place Apply, in both TB/LR directions. It also checks reload, preserved explicit connection sides and zero writes on Cancel. Stored direction and node coordinates alone cannot catch cached handle-order routing. Keep the real pointer connection coverage in `studio-canvas.spec.ts` alongside this regression.
+
 ## Private Realtime socket suite
 
 `corepack pnpm test:workers` runs `tests/workers/*.test.ts`: the AI dispatch, claim and settlement services and the scheduled maintenance tick (`maintenance.test.ts`) against the real local database through the restricted worker role, with injected fake model and dispatcher ports only. It runs in the CI database job after the integration suite. No test composes a real provider; automated servers and suites blank `GOOGLE_GENERATIVE_AI_API_KEY`, `TRIGGER_SECRET_KEY` and `TRIGGER_ACCESS_TOKEN`, and the live provider probe is a separate, explicitly authorized step.

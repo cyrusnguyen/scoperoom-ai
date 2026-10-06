@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect, type Page, type Request } from "@playwright/test";
+import { expect, type Locator, type Page, type Request } from "@playwright/test";
 import { interceptRealtime } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
 import type { DraftView } from "../../src/features/drafts/contracts/scope-document.ts";
@@ -26,6 +26,41 @@ const warnsBeforeUnload = (page: Page) => page.evaluate(() => {
 
 async function draftOf(page: Page, projectId: string): Promise<DraftView> {
   return (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: DraftView }).draft;
+}
+
+/** The path's endpoints prove the rendered edge uses the expected sides, rather than only checking saved layout data. */
+type DrawnSide = "top" | "right" | "bottom" | "left";
+
+async function edgePoints(scope: Page | Locator, edgeId: string) {
+  return scope.locator(`.react-flow__edge[data-id="${edgeId}"] path.react-flow__edge-path`).evaluate((path: SVGPathElement) => {
+    const matrix = path.getScreenCTM()!;
+    const length = path.getTotalLength();
+    const start = path.getPointAtLength(0).matrixTransform(matrix);
+    const end = path.getPointAtLength(length).matrixTransform(matrix);
+    return { start: { x: start.x, y: start.y }, end: { x: end.x, y: end.y } };
+  });
+}
+
+async function edgeMatchesSides(scope: Page | Locator, edgeId: string, sourceId: string, targetId: string, from: DrawnSide, to: DrawnSide) {
+  const source = await scope.locator(`.react-flow__node[data-id="${sourceId}"] .react-flow__handle.source[data-handleid="${from}"]`).boundingBox();
+  const target = await scope.locator(`.react-flow__node[data-id="${targetId}"] .react-flow__handle.target[data-handleid="${to}"]`).boundingBox();
+  if (!source || !target) return false;
+  const points = await edgePoints(scope, edgeId);
+  const outerFace = (box: typeof source, side: DrawnSide) => {
+    if (side === "top") return { x: box.x + box.width / 2, y: box.y };
+    if (side === "right") return { x: box.x + box.width, y: box.y + box.height / 2 };
+    if (side === "bottom") return { x: box.x + box.width / 2, y: box.y + box.height };
+    return { x: box.x, y: box.y + box.height / 2 };
+  };
+  const near = (point: { x: number; y: number }, box: typeof source, side: DrawnSide) => {
+    const expected = outerFace(box, side);
+    return Math.abs(point.x - expected.x) < 2 && Math.abs(point.y - expected.y) < 2;
+  };
+  return near(points.start, source, from) && near(points.end, target, to);
+}
+
+async function expectEdgeSides(scope: Page | Locator, edgeId: string, sourceId: string, targetId: string, from: DrawnSide, to: DrawnSide) {
+  await expect.poll(() => edgeMatchesSides(scope, edgeId, sourceId, targetId, from, to)).toBe(true);
 }
 
 /** One flow with steps (a chain unless `connect` is false), created in one real batch. */
@@ -411,6 +446,56 @@ test.describe("saved positions and arrangement", () => {
     expect(after.layout.directions[seeded.flowId]).toBe("LR");
     for (const nodeId of seeded.nodeIds) expect({ x: after.layout.positions[nodeId]!.x, y: after.layout.positions[nodeId]!.y }).toEqual(preview.positions[nodeId]);
     expect(after.documentRevision).toBe(before.documentRevision);
+  });
+
+  test("Arrange applies the preview direction in place and preserves explicit connection sides", async ({ page }) => {
+    const [start, middle, end] = seeded.nodeIds;
+    const manualEdgeId = randomUUID();
+    await seedStudioChanges(page, projectId, [{
+      command: "ADD_EDGE", payload: { flowId: seeded.flowId, fromId: start!, toId: end!, condition: "", fromSide: "top", toSide: "bottom" }, proposedIds: [manualEdgeId],
+    }]);
+    await page.reload();
+    await expect(nodeAt(page, middle!)).toBeVisible();
+    const before = await draftOf(page, projectId);
+    const plainEdgeId = Object.values(before.document.edges).find((edge) => edge.fromId === start && edge.toId === middle && !before.layout.edgeSides[edge.id])!.id;
+    const arrange = async (direction: "TB" | "LR", from: "top" | "right" | "bottom" | "left", to: "top" | "right" | "bottom" | "left") => {
+      await page.locator(".studio-toolbar").getByRole("button", { name: "Arrange" }).click();
+      const dialog = page.getByRole("dialog", { name: "Arrange flow" });
+      await dialog.getByLabel("Direction").selectOption(direction);
+      await dialog.getByRole("button", { name: "Preview" }).click();
+      const preview = dialog.locator(".arrange-preview");
+      await expectEdgeSides(preview, plainEdgeId, start!, middle!, from, to);
+      await expectEdgeSides(preview, manualEdgeId, start!, end!, "top", "bottom");
+      await dialog.getByRole("button", { name: "Apply arrangement" }).click();
+      await expect(dialog).toBeHidden();
+      await expectEdgeSides(page, plainEdgeId, start!, middle!, from, to);
+      await expectEdgeSides(page, manualEdgeId, start!, end!, "top", "bottom");
+    };
+
+    await arrange("LR", "right", "left");
+    let saved = await draftOf(page, projectId);
+    expect(saved.layout.directions[seeded.flowId]).toBe("LR");
+    expect(saved.layout.edgeSides[manualEdgeId]).toEqual({ from: "top", to: "bottom" });
+    await page.reload();
+    await expectEdgeSides(page, plainEdgeId, start!, middle!, "right", "left");
+    await expectEdgeSides(page, manualEdgeId, start!, end!, "top", "bottom");
+
+    await arrange("TB", "bottom", "top");
+    saved = await draftOf(page, projectId);
+    expect(saved.layout.directions[seeded.flowId]).toBe("TB");
+    expect(saved.layout.edgeSides[manualEdgeId]).toEqual({ from: "top", to: "bottom" });
+    await page.reload();
+    await expectEdgeSides(page, plainEdgeId, start!, middle!, "bottom", "top");
+    await expectEdgeSides(page, manualEdgeId, start!, end!, "top", "bottom");
+
+    const writesBeforeCancel = positionWrites.length;
+    await page.locator(".studio-toolbar").getByRole("button", { name: "Arrange" }).click();
+    const dialog = page.getByRole("dialog", { name: "Arrange flow" });
+    await dialog.getByLabel("Direction").selectOption("LR");
+    await dialog.getByRole("button", { name: "Preview" }).click();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    expect(positionWrites).toHaveLength(writesBeforeCancel);
+    expect((await draftOf(page, projectId)).layout).toEqual(saved.layout);
   });
 
   test("an unconfirmed arrangement keeps its preview and retries the exact request", async ({ page }) => {

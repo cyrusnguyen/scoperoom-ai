@@ -292,14 +292,17 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
   }, [document, layout, flowId, ui.selection, preview, dragging, interactive, measured, selectedBy]);
 
   const edges = useMemo<FlowEdge[]>(() => Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => {
-    // A saved connection point (UI02 Task 13); absent, an edge renders with today's direction-based default.
+    // Saved connection points stay authoritative. A plain edge names its effective direction's defaults instead of
+    // asking React Flow for its first cached handle, which can be ordered for the direction before an in-place Arrange.
     const sides = layout.edgeSides[edge.id];
+    const defaults = HANDLE_ORDER[preview?.direction ?? layout.directions[flowId] ?? "TB"];
     return {
       id: edge.id, type: "flow", source: edge.fromId, target: edge.toId, data: { condition: edge.condition },
-      ...(sides ? { sourceHandle: sides.from, targetHandle: sides.to } : {}),
+      sourceHandle: sides?.from ?? defaults.find((handle) => handle.type === "source")!.position,
+      targetHandle: sides?.to ?? defaults.find((handle) => handle.type === "target")!.position,
       markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: "var(--foreground-subtle)" }, selected: interactive && ui.selection?.kind === "EDGE" && ui.selection.id === edge.id,
     };
-  }), [document, layout, flowId, ui.selection, interactive]);
+  }), [document, layout, flowId, ui.selection, interactive, preview]);
 
   const picks = (changes: (NodeChange<StepNode> | EdgeChange<FlowEdge>)[]): SelectChange[] =>
     changes.flatMap((change) => (change.type === "select" ? [{ id: change.id, selected: change.selected }] : []));
