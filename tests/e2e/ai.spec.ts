@@ -837,6 +837,9 @@ test("uncertain Apply stays pinned to its run and a viewer sees read-only saved 
   const otherReview = panel(page).getByRole("heading", { name: "Proposal review" }).locator("..");
   await expect(otherReview.getByRole("button", { name: /Apply all|Apply selected|Retry Apply/ })).toHaveCount(0);
   await expect(otherReview.locator(".proposal-workflow-preview")).toHaveCount(0);
+  await expect(history).toHaveCount(0);
+  await panel(page).getByRole("button", { name: "Back to history", exact: true }).click();
+  await expect(history).toHaveCount(2);
   await history.nth(1).click();
   await page.evaluate(runId => window.history.replaceState(null, "", `${window.location.pathname}?run=${runId}`), second.runId);
   await page.locator("#projects-nav").getByRole("button", { name: "AI receipt navigation destination", exact: true }).click();
@@ -1295,7 +1298,7 @@ test("Apply all ignores an incomplete subset and History stays capture-only with
   await review.getByText('Choose individual changes',{exact:true}).click(); await review.getByRole('checkbox').nth(1).check(); await expect(review.getByRole('button',{name:'Apply selected changes (1)',exact:true})).toBeDisabled();
   const expand=review.getByRole('button',{name:'Expand preview',exact:true}); await expand.click(); await expect(page.getByRole('dialog',{name:'Full proposed workflow'})).toBeVisible(); await page.keyboard.press('Escape'); await expect(expand).toBeFocused();
   const response=page.waitForResponse(r=>r.url().endsWith(`/ai-runs/${completed.runId}/apply`)&&r.request().method()==='POST'); await review.getByRole('button',{name:'Apply all changes',exact:true}).click(); const applied=await response; expect(applied.status()).toBe(200); expect(applied.request().postDataJSON().selectedOperationIds).toEqual(['flow','step']);
-  await expect(panel(page).getByText('Applied to draft. Changes are not approved.',{exact:true})).toBeVisible(); await page.reload(); const saved=await(await page.request.get(`/api/projects/${projectId}/bootstrap`)).json(); expect(Object.values(saved.draft.document.nodes).map(n=>(n as {label:string}).label)).toContain('Pay');
+  await expect(panel(page).getByText('Applied to draft. Changes are not approved.',{exact:true})).toBeVisible(); await history.click(); await expect(panel(page).getByRole('button',{name:'Return to Current',exact:true})).toHaveCount(0); await current.click(); await page.reload(); const saved=await(await page.request.get(`/api/projects/${projectId}/bootstrap`)).json(); expect(Object.values(saved.draft.document.nodes).map(n=>(n as {label:string}).label)).toContain('Pay');
 });
 
 test("preview controls cannot save, undo or redo a dirty live canvas outbox", async ({ page, workerAccount }) => {
@@ -1353,15 +1356,61 @@ test("preview controls cannot save, undo or redo a dirty live canvas outbox", as
   expect((await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json()).draft).toEqual(before.draft);
 });
 
-test("AI reads show loading and errors, explicit retry and true loaded empty", async ({page,workerAccount}) => {
-  const projectId=await createProjectViaApi(page,"AI read recovery"),completed=await storedSyntheticCompletion(page,workerAccount.database,projectId); let failed=true,release!:()=>void; const held=new Promise<void>(resolve=>{release=resolve;});
-  const url=`${appUrl}/api/projects/${projectId}/ai-runs/${completed.runId}`; await page.route(url,async route=>{if(failed){await held;await route.fulfill({status:503,json:{error:{code:'UNAVAILABLE',message:'Unavailable'}}});}else await route.fallback();});
-  try{await page.goto(`/app/projects/${projectId}?run=${completed.runId}`); await expect(panel(page).getByText('Loading Current run…',{exact:true})).toBeVisible(); await expect(panel(page).getByText('Ready for your next idea',{exact:true})).toHaveCount(0); release(); await expect(panel(page).getByText('Could not load Current run.',{exact:true})).toBeVisible(); failed=false; await panel(page).getByRole('button',{name:'Retry AI reads',exact:true}).click(); await expect(panel(page).getByRole('heading',{name:'Proposal review',exact:true})).toBeVisible();}finally{release();await page.unroute(url);}
-  const emptyId=await createProjectViaApi(page,'AI truly empty history'); await page.goto(`/app/projects/${emptyId}`); await openAi(page); await panel(page).getByRole('tab',{name:'History',exact:true}).click(); await expect(panel(page).getByText('No AI runs yet.',{exact:true})).toBeVisible();
+test("AI reads show loading and errors, explicit retry and true loaded empty", async ({ page, workerAccount }) => {
+  const projectId = await createProjectViaApi(page, "AI read recovery"), completed = await storedSyntheticCompletion(page, workerAccount.database, projectId);
+  let failed = true, statusReads = 0, pageReads = 0, detailReads = 0, release!: () => void, releaseStatus!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const statusHeld = new Promise<void>(resolve => { releaseStatus = resolve; });
+  const pageUrl = `${appUrl}/api/projects/${projectId}/ai-runs`, url = `${pageUrl}/${completed.runId}`, statusUrl = `${appUrl}/api/projects/${projectId}/status`;
+  page.on("request", request => { if (request.method() === "GET") { if (request.url() === pageUrl) pageReads++; if (request.url() === url) detailReads++; } });
+  // A queued status cycle may retry the failed detail read; hold it until the native Retry click completes.
+  await page.route(statusUrl, async route => { if (++statusReads > 1) await statusHeld; await route.fallback(); });
+  await page.route(url, async route => { if (failed) { await held; await route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Unavailable' } } }); } else await route.fallback(); });
+  try {
+    await page.goto(`/app/projects/${projectId}?run=${completed.runId}`);
+    await expect(panel(page).getByText('Loading Current run…', { exact: true })).toBeVisible();
+    await expect(panel(page).getByText('Ready for your next idea', { exact: true })).toHaveCount(0);
+    release();
+    await expect(panel(page).getByText('Could not load Current run.', { exact: true })).toBeVisible();
+    // A visible History row proves the initial page was adopted; automatic detail retry alone cannot reload it.
+    await panel(page).getByRole('tab', { name: 'History', exact: true }).click();
+    await expect(panel(page).locator(`.ai-history [data-run-id="${completed.runId}"]`)).toBeVisible();
+    await panel(page).getByRole('tab', { name: 'Current', exact: true }).click();
+    await expect(panel(page).getByText('Could not load Current run.', { exact: true })).toBeVisible();
+    expect(pageReads).toBe(1); expect(detailReads).toBe(1);
+    const recoveredPage = page.waitForResponse(response => response.url() === pageUrl && response.request().method() === 'GET' && response.status() === 200);
+    const recovered = page.waitForResponse(response => response.url() === url && response.request().method() === 'GET' && response.status() === 200);
+    await panel(page).getByRole('button', { name: 'Retry AI reads', exact: true }).click();
+    failed = false;
+    releaseStatus();
+    await Promise.all([recoveredPage, recovered]);
+    expect(pageReads).toBe(2); expect(detailReads).toBe(2);
+    await expect(panel(page).getByRole('heading', { name: 'Proposal review', exact: true })).toBeVisible();
+  } finally {
+    release(); releaseStatus();
+    await page.unroute(url); await page.unroute(statusUrl);
+  }
+  const emptyId = await createProjectViaApi(page, 'AI truly empty history');
+  await page.goto(`/app/projects/${emptyId}`); await openAi(page);
+  await panel(page).getByRole('tab', { name: 'History', exact: true }).click();
+  await expect(panel(page).getByText('No AI runs yet.', { exact: true })).toBeVisible();
 });
 
 test("keyboard admission from History reveals the new Current run", async ({page,workerAccount}) => {
-  const projectId=await createProjectViaApi(page,'AI History admission'),completed=await storedSyntheticCompletion(page,workerAccount.database,projectId); await page.goto(`/app/projects/${projectId}?run=${completed.runId}`); await panel(page).getByRole('tab',{name:'History',exact:true}).click(); await panel(page).getByLabel('Instruction',{exact:true}).fill('Create a keyboard review flow'); const response=page.waitForResponse(r=>r.url()===`${appUrl}/api/projects/${projectId}/ai-runs`&&r.request().method()==='POST'); await panel(page).getByRole('button',{name:'Generate',exact:true}).focus(); await page.keyboard.press('Enter'); const started=await response; expect(started.status()).toBe(202); const id=(await started.json()).runId; await expect(panel(page).getByRole('tab',{name:'Current',exact:true})).toHaveAttribute('aria-selected','true'); await expect(panel(page).getByText('Generating',{exact:true})).toBeVisible(); await panel(page).getByText('Run details',{exact:true}).click(); await expect(panel(page).getByText(id,{exact:true}).first()).toBeVisible();
+  const projectId=await createProjectViaApi(page,'AI History admission'),completed=await storedSyntheticCompletion(page,workerAccount.database,projectId); await page.goto(`/app/projects/${projectId}?run=${completed.runId}`); await panel(page).getByRole('tab',{name:'History',exact:true}).click(); await expect(panel(page).getByLabel('Instruction',{exact:true})).toHaveCount(0); await panel(page).getByRole('tab',{name:'Current',exact:true}).click(); await panel(page).getByLabel('Instruction',{exact:true}).fill('Create a keyboard review flow'); const response=page.waitForResponse(r=>r.url()===`${appUrl}/api/projects/${projectId}/ai-runs`&&r.request().method()==='POST'); await panel(page).getByRole('button',{name:'Generate',exact:true}).focus(); await page.keyboard.press('Enter'); const started=await response; expect(started.status()).toBe(202); const id=(await started.json()).runId; await expect(panel(page).getByRole('tab',{name:'Current',exact:true})).toHaveAttribute('aria-selected','true'); await expect(panel(page).getByText('Generating',{exact:true})).toBeVisible(); await panel(page).getByText('Run details',{exact:true}).click(); await expect(panel(page).getByText(id,{exact:true}).first()).toBeVisible();
+});
+
+test("Current keeps its composer and exact pending request separate from History", async ({page,workerAccount}) => {
+  const projectId=await createProjectViaApi(page,'AI History pending recovery'),completed=await storedSyntheticCompletion(page,workerAccount.database,projectId); await page.goto(`/app/projects/${projectId}?run=${completed.runId}`);
+  const startUrl=`${appUrl}/api/projects/${projectId}/ai-runs`,sent:{key:string;body:unknown;bytes:string|null}[]=[];
+  await page.route(startUrl,async route=>{if(route.request().method()!=='POST'){await route.fallback();return;}sent.push({key:route.request().headers()['idempotency-key']!,body:route.request().postDataJSON(),bytes:route.request().postData()});const response=await route.fetch();if(sent.length===1)await route.abort('failed');else await route.fulfill({response});});
+  try {
+    await panel(page).getByLabel('Instruction',{exact:true}).fill('Create a keyboard review flow'); await panel(page).getByRole('tab',{name:'History',exact:true}).click(); await expect(panel(page).getByLabel('Instruction',{exact:true})).toHaveCount(0); await expect(panel(page).getByRole('button',{name:'Generate',exact:true})).toHaveCount(0);
+    const current=panel(page).getByRole('tab',{name:'Current',exact:true}),history=panel(page).getByRole('tab',{name:'History',exact:true}); await history.focus(); await page.keyboard.press('Home'); await expect(current).toBeFocused(); await expect(current).toHaveAttribute('aria-selected','true'); await expect(panel(page).getByLabel('Instruction',{exact:true})).toHaveValue('Create a keyboard review flow'); await expect(panel(page).getByLabel('Action',{exact:true})).toHaveValue('PROPOSE_FLOW');
+    await panel(page).getByRole('button',{name:'Generate',exact:true}).click(); await expect(panel(page).getByRole('button',{name:'Retry this request',exact:true})).toBeVisible(); expect(sent).toHaveLength(1);
+    await history.click(); await expect(panel(page).getByRole('button',{name:'Retry this request',exact:true})).toHaveCount(0); await panel(page).getByRole('button',{name:'Return to Current',exact:true}).click(); await expect(current).toBeFocused(); await expect(panel(page).getByRole('button',{name:'Retry this request',exact:true})).toBeVisible(); await expect(panel(page).getByLabel('Instruction',{exact:true})).toHaveValue('Create a keyboard review flow'); await expect(panel(page).getByLabel('Action',{exact:true})).toHaveValue('PROPOSE_FLOW'); expect(sent).toHaveLength(1);
+    await panel(page).getByRole('button',{name:'Retry this request',exact:true}).click(); await expect(panel(page).getByText('Generating',{exact:true})).toBeVisible(); expect(sent).toHaveLength(2); expect(sent[1]).toEqual(sent[0]);
+  } finally { await page.unroute(startUrl); }
 });
 
 test("acknowledged Apply read-behind phase survives remount and ends on a covering read",async({page,workerAccount})=>{

@@ -36,7 +36,7 @@ Unavailable future actions are hidden; simulated screens never claim real saved,
 
 ## AI proposal review
 
-The AI panel separates Current from History. Current retains the instruction and actionable proposal or uncertain request; History shows compact run rows and read-only captured-context inspection. Historical or stale captures cannot reconstruct the entire past saved graph, so inspection labels that limit and does not offer Apply controls.
+The AI panel places Current/History below its heading. Current retains the saved-context chip, instruction/action composer, disclosure and actionable full preview or uncertain request. History replaces that content with compact run rows or one read-only inspection and Back; token usage remains in Run details. Switching preserves controlled inputs and exact recovery identity and makes no request admission. A pending or uncertain action offers Return to Current and restores keyboard focus to its tab. Historical or stale captures cannot reconstruct the entire past saved graph, so inspection labels that limit and does not offer Apply controls.
 
 An eligible Current proposal previews the complete saved draft with all proposed changes, including unchanged flows, nodes, connections and current saved layout. It is labelled Preview · not saved and supports a flow selector, Canvas/List, local pan/zoom/fit and an expanded dialog. Preview interaction does not edit the live draft or trigger its Save/Undo/Redo shortcuts. Assumptions and change counts remain visible; Change details shows the captured textual comparison.
 

@@ -74,6 +74,8 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
   }, [ui.applyPhase, studio.savedDraft, update]);
   const phaseMessage = ui.applyPhase?.state === "acknowledged" ? "Changes applied. Refreshing saved draft..." : ui.applyPhase?.state === "adopted" ? "Applied to draft. Changes are not approved." : "Apply not confirmed. Retry uses the same selection, input and key.";
   const shownMessage = ui.pendingRequest?.kind === "apply" ? busy && !ui.applyPhase ? "Applying changes…" : phaseMessage : message || (ui.applyPhase ? phaseMessage : "");
+  const needsCurrentAttention = Boolean(ui.pendingRequest || ui.applyPhase?.state === "uncertain");
+  const returnToCurrent = () => { setRunTab("current"); requestAnimationFrame(() => document.getElementById("ai-tab-current")?.focus()); };
   const retryReads = () => { resources.retry(); void revalidate("focus"); };
   const chooseRun = (id: string | null) => { setHistoryId(id); setRunTab("history"); };
   const start = async (retry = false) => {
@@ -232,8 +234,16 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
   };
 
   return <div className="ai-panel">
-    <section className="detail-section ai-action" aria-labelledby="ai-action-heading">
+    <section className="ai-action" aria-labelledby="ai-action-heading">
       <header className="ai-heading"><span className="ai-mark"><Icon name="ai" size={20} /></span><div><h2 id="ai-action-heading">AI actions</h2><p>Turn an idea into a flow.</p></div></header>
+      <div className="ai-run-tabs" role="tablist" aria-label="AI runs">{(["current", "history"] as const).map(id => <button key={id} type="button" role="tab" id={`ai-tab-${id}`} aria-controls={`ai-panel-${id}`} tabIndex={runTab === id ? 0 : -1} aria-selected={runTab === id} onClick={() => setRunTab(id)} onKeyDown={event => {
+        const next = event.key === "ArrowRight" || event.key === "ArrowLeft" ? id === "current" ? "history" : "current" : event.key === "Home" ? "current" : event.key === "End" ? "history" : null;
+        if (next) { event.preventDefault(); event.stopPropagation(); setRunTab(next); document.getElementById(`ai-tab-${next}`)?.focus(); }
+      }}>{id === "current" ? "Current" : "History"}</button>)}</div>
+    </section>
+    <div id={`ai-panel-${runTab}`} className="ai-run-panel" role="tabpanel" aria-labelledby={`ai-tab-${runTab}`}>
+    {runTab === "current" && <>
+      <section className="ai-current-content">
       <div className="ai-context"><span><Icon name="flow" size={13} />Saved draft · r{studio.savedDraft.documentRevision}</span>{ui.action === "REFINE_FLOW_SELECTION" && <span>{studio.ui.selection?.kind === "NODES" ? studio.ui.selection.ids.length : 0} steps selected</span>}</div>
       {ui.action === "REFINE_FLOW_SELECTION" && <p className="ai-selection">Selection: {studio.ui.selection?.kind === "NODES" ? studio.ui.selection.ids.map((id) => studio.draft.document.nodes[id]?.label ?? id).join(", ") : "none"}. Only these steps and their incident connections are in scope.</p>}
       <div className="ai-composer">
@@ -250,19 +260,13 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
       </div>
       <p className="ai-message" role={message.includes("refused") || message.includes("could not") ? "alert" : "status"} aria-live="polite">{shownMessage}</p>
       <p className="ai-disclosure">The saved draft, current baseline, action and selected flow or steps are sent. Run instructions and results are shared with current project members. Requests include no sources.</p>
-    </section>
-    <div className="ai-run-tabs" role="tablist" aria-label="AI runs">{(["current", "history"] as const).map(id => <button key={id} type="button" role="tab" id={`ai-tab-${id}`} aria-controls={`ai-panel-${id}`} tabIndex={runTab === id ? 0 : -1} aria-selected={runTab === id} onClick={() => setRunTab(id)} onKeyDown={event => {
-      const next = event.key === "ArrowRight" || event.key === "ArrowLeft" ? id === "current" ? "history" : "current" : event.key === "Home" ? "current" : event.key === "End" ? "history" : null;
-      if (next) { event.preventDefault(); event.stopPropagation(); setRunTab(next); document.getElementById(`ai-tab-${next}`)?.focus(); }
-    }}>{id === "current" ? "Current" : "History"}</button>)}</div>
-    <div id={`ai-panel-${runTab}`} role="tabpanel" aria-labelledby={`ai-tab-${runTab}`}>
-    {runTab === "current" && <>{reads.page === "error" && <p role="alert">Could not load AI history.</p>}{reads.current === "error" ? <p role="alert">Could not load Current run.</p> : ui.selectedRunId && (!run || reads.current === "uninitialized" || reads.current === "loading") ? <p role="status">Loading Current run…</p> : reads.page === "uninitialized" || reads.page === "loading" ? <p role="status">Loading AI runs…</p> : null}
+      </section>
+      {reads.page === "error" && <p role="alert">Could not load AI history.</p>}{reads.current === "error" ? <p role="alert">Could not load Current run.</p> : ui.selectedRunId && (!run || reads.current === "uninitialized" || reads.current === "loading") ? <p role="status">Loading Current run…</p> : reads.page === "uninitialized" || reads.page === "loading" ? <p role="status">Loading AI runs…</p> : null}
     {run ? <RunCard run={run} summary={selectedSummary} busy={busy} canWrite={canWrite} authorityConfirmed={!failures && reads.current === "loaded"} blockedByPending={Boolean(ui.pendingRequest && ui.pendingRequest.kind !== "apply" || ui.pendingRequest?.kind === "apply" && ui.pendingRequest.runId !== run.id)} pendingApply={ui.pendingRequest?.kind === "apply" && ui.pendingRequest.runId === run.id ? ui.pendingRequest : null}
       pendingControl={ui.pendingRequest && (ui.pendingRequest.kind === "cancel" || ui.pendingRequest.kind === "discard") && ui.pendingRequest.runId === run.id ? ui.pendingRequest : null}
       onCancel={() => void runControl("cancel", run)} onDiscard={() => void runControl("discard", run)} onApply={(request) => void retryApply(request)} onRegenerate={() => regenerate(run)}
       onRetryControl={() => void runControl(ui.pendingRequest?.kind === "cancel" ? "cancel" : "discard", run, true)} /> : reads.page === "loaded" && !page.runs.length && !ui.selectedRunId && <section className="detail-section ai-empty"><h2>Ready for your next idea</h2><p>Describe a flow, or select steps to improve. Review every suggestion before applying it.</p></section>}</>}
-    {runTab === "history" && <>{historyId && (reads.history === "error" ? <p role="alert">Could not load History run.</p> : !historyRun ? <p role="status">Loading History run…</p> : null)}{historyRun ? <><RunCard inspection run={historyRun} summary={page.runs.find(item => item.id === historyRun.id)} busy={false} canWrite={false} blockedByPending={false} pendingApply={null} pendingControl={null} onCancel={() => {}} onDiscard={() => {}} onApply={() => {}} onRegenerate={() => {}} onRetryControl={() => {}} /><button type="button" className="button quiet small" onClick={() => setHistoryId(null)}>Back to history</button></> : !historyId && <p className="muted">Choose a run to inspect its saved history.</p>}
-      {reads.page === "loaded" ? <RunHistory runs={page.runs} selectedId={historyId} nextCursor={page.nextCursor} loading={loadingMore} onSelect={chooseRun} onMore={() => void loadMore()} /> : <p role={reads.page === "error" ? "alert" : "status"}>{reads.page === "error" ? "Could not load AI history." : "Loading AI history…"}</p>}</>}
+    {runTab === "history" && <>{needsCurrentAttention && <p className="ai-history-return" role="status">A current AI request needs attention. <button type="button" className="button quiet small" onClick={returnToCurrent}>Return to Current</button></p>}{historyId ? <><button type="button" className="button quiet small" onClick={() => setHistoryId(null)}>Back to history</button>{reads.history === "error" ? <p role="alert">Could not load History run.</p> : !historyRun ? <p role="status">Loading History run…</p> : <RunCard inspection run={historyRun} summary={page.runs.find(item => item.id === historyRun.id)} busy={false} canWrite={false} blockedByPending={false} pendingApply={null} pendingControl={null} onCancel={() => {}} onDiscard={() => {}} onApply={() => {}} onRegenerate={() => {}} onRetryControl={() => {}} />}</> : <>{reads.page === "loaded" ? <><p className="muted">Choose a run to inspect its saved history.</p><RunHistory runs={page.runs} selectedId={null} nextCursor={page.nextCursor} loading={loadingMore} onSelect={chooseRun} onMore={() => void loadMore()} /></> : <p role={reads.page === "error" ? "alert" : "status"}>{reads.page === "error" ? "Could not load AI history." : "Loading AI history…"}</p>}</>}</>}
     </div>
     {Object.values(reads).includes("error") && <button type="button" className="button quiet small" onClick={retryReads}>Retry AI reads</button>}
   </div>;
