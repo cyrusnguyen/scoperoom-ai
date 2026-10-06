@@ -141,3 +141,41 @@ test("lifecycle and replaced-draft status changes reload selected run applicabil
   await resources.reconcile(status({ currentDraftId: "replacement" }), () => true);
   assert.deepEqual(adopted, ["APPLICABLE", "UNAVAILABLE", "STALE"]);
 });
+
+test("History shares already loaded Current detail without depending on a later cursor", async () => {
+  const requests: string[] = [], history: Array<RunView | null> = [];
+  const resources = createRunResources({ projectId: "project", apiRead: async <T,>(url: string) => { requests.push(url); return ok((url.endsWith("run-1") ? detail() : page()) as T); }, adoptPage: () => {}, adoptRun: () => {}, adoptHistoryRun: value => history.push(value) });
+  const fence = () => true; resources.selectRun("run-1"); await resources.reconcile(status(), fence);
+  resources.selectHistory("run-1"); await resources.reconcile(status(), () => true);
+  assert.equal(history.at(-1)?.id, "run-1"); assert.equal(requests.filter(url => url.endsWith("run-1")).length, 1);
+});
+
+test("a shared held read adopts History independently when Current switches", async () => {
+  const history: Array<RunView | null> = []; let resolve!: (result: ApiResult<RunView>) => void;
+  const resources = createRunResources({ projectId: "project", apiRead: <T,>(url: string) => url.endsWith("run-1") ? new Promise<ApiResult<T>>(done => { resolve = done as typeof resolve; }) : Promise.resolve(ok(page() as T)), adoptPage: () => {}, adoptRun: () => {}, adoptHistoryRun: value => history.push(value) });
+  const fence = () => true; resources.selectRun("run-1"); resources.selectHistory("run-1"); const flight = resources.reconcile(status(), fence);
+  resources.selectRun("run-2"); resolve(ok(detail())); await flight;
+  assert.equal(history.at(-1)?.id, "run-1");
+});
+
+test("overlapping History reads deduplicate and obsolete identity failures cannot alter it", async () => {
+  const held: Array<{url: string; resolve: (value: ApiResult<RunView>) => void}> = []; const history: Array<RunView | null> = [];
+  const resources = createRunResources({ projectId: "project", apiRead: <T,>(url: string) => url.endsWith("ai-runs") ? Promise.resolve(ok(page() as T)) : new Promise<ApiResult<T>>(resolve => held.push({url,resolve: resolve as (value: ApiResult<RunView>) => void})), adoptPage: () => {}, adoptRun: () => {}, adoptHistoryRun: value => history.push(value) });
+  const fence = () => true; resources.selectHistory("run-1"); const a = resources.reconcile(status(),fence), b = resources.reconcile(status(),fence);
+  assert.equal(held.length,1); resources.selectHistory("run-2"); const c = resources.reconcile(status(),fence);
+  held[0].resolve(unavailable()); held[1].resolve(ok(detail("run-2"))); await Promise.all([a,b,c]); assert.equal(history.at(-1)?.id,"run-2");
+});
+
+test("resource reads publish held loading, failure and explicit unchanged-key retry states", async () => {
+  const states: string[]=[]; let fail=true;
+  const resources=createRunResources({projectId:"project",apiRead:async<T,>()=>fail?unavailable<T>():ok(page() as T),adoptPage:()=>{},adoptRun:()=>{},adoptReadState:(destination: string,state: string)=>states.push(destination+":"+state)});
+  const fence=()=>true; await resources.reconcile(status(),fence); assert.deepEqual(states,["page:loading","page:error"]);
+  fail=false; resources.retry(); await resources.reconcile(status(),fence); assert.deepEqual(states.slice(-2),["page:loading","page:loaded"]);
+});
+
+test("History generation and status changes fence stale success and failure independently",async()=>{
+  const held:Array<{resolve:(value:ApiResult<RunView>)=>void}>=[],adopted:Array<RunView|null>=[],states:string[]=[];
+  const resources=createRunResources({projectId:'project',apiRead:<T,>(url:string)=>url.endsWith('ai-runs')?Promise.resolve(ok(page() as T)):new Promise<ApiResult<T>>(resolve=>held.push({resolve:resolve as (value:ApiResult<RunView>)=>void})),adoptPage:()=>{},adoptRun:()=>{},adoptHistoryRun:value=>adopted.push(value),adoptReadState:(destination,state)=>{if(destination==='history')states.push(state);}});
+  resources.selectHistory('run-1');let alive=true;const first=resources.reconcile(status(),()=>alive);alive=false;const fence=()=>true;const second=resources.reconcile(status({aiRevision:2}),fence);held[0].resolve(unavailable());held[1].resolve(ok(detail()));await Promise.all([first,second]);assert.equal(adopted.at(-1)?.id,'run-1');assert.equal(states.includes('error'),false);
+  const third=resources.reconcile(status({approvedSnapshotId:'new'}),fence);held[2].resolve(unavailable());await third;assert.equal(states.at(-1),'error');const retry=resources.reconcile(status({approvedSnapshotId:'new'}),fence);held[3].resolve(ok(detail()));await retry;assert.equal(states.at(-1),'loaded');
+});

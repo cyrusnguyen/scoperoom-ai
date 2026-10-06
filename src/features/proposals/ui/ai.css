@@ -78,6 +78,16 @@
 .proposal-diff dt { color: var(--foreground-muted); font-size: 12px; }
 .proposal-diff dd { margin: 2px 0 0; }
 .proposal-review > button { margin-top: var(--space-2); }
+.proposal-workflow-preview { display: grid; gap: var(--space-2); margin: var(--space-3) 0; }
+.proposal-workflow-preview > header { display: flex; align-items: start; justify-content: space-between; gap: var(--space-2); }
+.proposal-workflow-preview h3, .proposal-workflow-preview h4 { margin: 0; }
+.proposal-workflow-preview label { display: grid; gap: 4px; font-size: 13px; }
+.proposal-flow-canvas { min-height: 280px; border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; }
+.proposal-preview-list ul { display: grid; gap: var(--space-2); padding-left: var(--space-4); }
+.proposal-preview-list li { overflow-wrap: anywhere; }
+.proposal-preview-list li > * { display: block; }
+.proposal-preview-list p { margin: 2px 0; white-space: pre-wrap; }
+.proposal-subset { margin-top: var(--space-2); }
 
 @media (max-width: 390px) {
   .ai-panel .view-actions { align-items: stretch; }

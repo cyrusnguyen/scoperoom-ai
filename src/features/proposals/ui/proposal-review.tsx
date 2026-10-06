@@ -1,7 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { useSync } from "@/features/collaboration/ui/sync-context";
+import { useStudio } from "@/features/studio/ui/studio-context";
 import type { ProposalOperation, RunView } from "../contracts/tasks";
+import { projectProposalPreview, newApplyBlocker } from "./preview-projection";
+import { WorkflowPreview } from "./workflow-preview";
 
 const noun = (operation: ProposalOperation) => operation.edit.command.replaceAll("_", " ").toLowerCase();
 const fieldLabels: Record<string, string> = {
@@ -18,11 +22,14 @@ function displayValue(key: string, value: unknown, records: Record<string, unkno
   return typeof value === "string" || typeof value === "number" ? String(value) || "Empty" : "None";
 }
 
-export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPending, onApply }: {
+export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPending, onApply, inspection = false, authorityConfirmed = true }: {
   run: RunView; pendingApply: { key: string; body: Record<string, unknown>; runId?: string } | null; busy: boolean; canWrite: boolean; blockedByPending: boolean;
-  onApply: (request: { key: string; body: Record<string, unknown>; runId: string }) => void;
+  authorityConfirmed?: boolean; inspection?: boolean; onApply: (request: { key: string; body: Record<string, unknown>; runId: string }) => void;
 }) {
+  const studio = useStudio();
+  const { status, failures } = useSync();
   const operations = run.result?.kind === "proposal" ? run.result.operations : [];
+  const preview = projectProposalPreview(studio.savedDraft, status, run, inspection);
   const [localSelection, setSelected] = useState<string[]>([]);
   const byId = new Map(operations.map((operation) => [operation.id, operation]));
   const pendingSelection = pendingApply?.body.selectedOperationIds;
@@ -33,13 +40,14 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
   const includeDependencies = (id: string) => { for (const dependency of byId.get(id)?.dependsOn ?? []) if (!selected.includes(dependency) && !missingSet.has(dependency)) { missingSet.add(dependency); includeDependencies(dependency); } };
   selected.forEach(includeDependencies);
   const missing = [...missingSet];
-  const canApply = canWrite && !pendingApply && !blockedByPending && run.applicability === "APPLICABLE" && operations.length > 0 && selected.length > 0 && missing.length === 0 && run.resultHash !== null && !busy;
+  const blocker = newApplyBlocker({ canWrite, editable: studio.editable, authorityConfirmed: authorityConfirmed && !failures, busy: studio.busy || busy, dirty: studio.exportDirty, blockedByPending, preview: Boolean(preview) });
+  const canApply = !inspection && !blocker && !pendingApply && run.applicability === "APPLICABLE" && operations.length > 0 && run.resultHash !== null;
   const toggle = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-  const apply = () => {
+  const apply = (selectedOperationIds: string[]) => {
     if (!canApply || !run.resultHash) return;
     onApply({ runId: run.id, key: crypto.randomUUID(), body: {
       draftId: run.draftId, expectedDocumentRevision: run.documentRevision, expectedParentSnapshotId: run.parentSnapshotId,
-      resultHash: run.resultHash, selectedOperationIds: selected,
+      resultHash: run.resultHash, selectedOperationIds,
     } });
   };
   const retry = () => pendingApply && onApply({ runId: run.id, key: pendingApply.key, body: pendingApply.body });
@@ -77,8 +85,18 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
     {!run.result && run.disposition !== "EXPIRED" && <p className="muted">No proposal is available for this run.</p>}
     {run.result?.kind === "clarification" && <p>{run.result.message}</p>}
     {run.result?.kind === "proposal" && <>
-      <p className="muted">Select one dependency-complete group. Applying any subset consumes this run; remaining suggestions need a new action.</p>
-      <h3>Choose changes for Apply</h3>
+      {inspection ? <p className="inline-note">Capture-only history inspection.</p> : preview ? <WorkflowPreview draft={preview} narrow={studio.narrow} /> : <p className="inline-note" role="status">Full preview is unavailable because this saved draft no longer matches the captured proposal. Capture-only details remain below.</p>}
+      {run.diff && <p>{run.diff.createdIds.length} added · {run.diff.updatedIds.length} updated · {run.diff.retiredIds.length} removed</p>}
+      {run.result.assumptions.length > 0 && <><h3>Assumptions</h3><ul>{run.result.assumptions.map((item, i) => <li key={`${i}-${item}`}>{item}</li>)}</ul></>}
+      {run.result.citations.length > 0 && <><h3>Source citations</h3><ul>{run.result.citations.map((source) => <li key={`${source.sourceVersionId}-${source.startLine}-${source.endLine}`}>
+        {sourceNames.get(source.sourceVersionId) ?? source.sourceVersionId}, lines {source.startLine}–{source.endLine}: “{source.excerpt}” <small>({source.sourceVersionId})</small>
+      </li>)}</ul></>}
+      {!inspection && blocker && (preview || !blocker.startsWith("Full preview")) && <p className="inline-note" role="status">{blocker}</p>}
+      {run.applicability !== "APPLICABLE" && <p className="inline-note" role="status">This result is inspectable but can’t be applied: {run.applicabilityReasons.map(reason => reason.toLowerCase().replaceAll("_", " ")).join(", ") || "it is no longer current"}.</p>}
+      {!inspection && <>
+      <p className="muted">Apply all uses every proposed change. Choosing a subset also consumes this proposal; the full preview always shows all proposed changes.</p>
+      {!pendingApply && <button type="button" className="button primary" onClick={() => apply(operations.map(operation => operation.id))} disabled={!canApply}>Apply all changes</button>}
+      <details className="proposal-subset"><summary>Choose individual changes</summary>
       <p className="muted">{selected.length} of {operations.length} operations selected for Apply. Unchecked operations are context only.</p>
       {operations.map((operation) => <label className="proposal-operation" key={operation.id}>
         <input type="checkbox" checked={selected.includes(operation.id)} onChange={() => toggle(operation.id)} disabled={!canWrite || run.applicability !== "APPLICABLE" || Boolean(pendingApply)} />
@@ -88,9 +106,12 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
         </span>
       </label>)}
       {missing.length > 0 && <p className="field-error" role="alert">Also select required operations: {missing.join(", ")}.</p>}
+      {!pendingApply && <button type="button" className="button quiet" onClick={() => apply(selected)} disabled={!canApply || !selected.length || missing.length > 0}>Apply selected changes ({selected.length})</button>}
+      </details></>}
+      <details className="proposal-change-details"><summary>Change details</summary>
       {run.diff && <div className="proposal-diff" aria-label="Full proposal before and after changes">
         <h3>Full proposal context</h3>
-        <p className="muted">This before/after list includes all suggestions, including unchecked operations. Apply sends only the checked operations above.</p>
+        <p className="muted">This before/after list includes all suggestions, including unchecked operations. These are capture-only change details, not a complete historical saved workflow.</p>
         <p>{run.diff.createdIds.length} added · {run.diff.updatedIds.length} updated · {run.diff.retiredIds.length} removed</p>
         {[...run.diff.createdIds.map((id) => ["Added", id] as const), ...run.diff.updatedIds.map((id) => ["Updated", id] as const), ...run.diff.retiredIds.map((id) => ["Removed", id] as const)].map(([kind, id]) => {
           const before = [...run.diff!.before.flows, ...run.diff!.before.nodes, ...run.diff!.before.edges].find((item) => item.id === id);
@@ -105,15 +126,9 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
           </details>;
         })}
       </div>}
-      {run.result.assumptions.length > 0 && <><h3>Assumptions</h3><ul>{run.result.assumptions.map((item, i) => <li key={`${i}-${item}`}>{item}</li>)}</ul></>}
-      {run.result.citations.length > 0 && <><h3>Source citations</h3><ul>{run.result.citations.map((source) => <li key={`${source.sourceVersionId}-${source.startLine}-${source.endLine}`}>
-        {sourceNames.get(source.sourceVersionId) ?? source.sourceVersionId}, lines {source.startLine}–{source.endLine}: “{source.excerpt}” <small>({source.sourceVersionId})</small>
-      </li>)}</ul></>}
-      {run.applicability !== "APPLICABLE" && <p className="inline-note" role="status">This result is inspectable but can’t be applied: {run.applicabilityReasons.map((reason) => reason.toLowerCase().replaceAll("_", " ")).join(", ") || "it is no longer current"}.</p>}
-      {blockedByPending && <p className="inline-note" role="status">Resolve the pending AI request before changing this proposal.</p>}
-      {!pendingApply && <button type="button" className="button primary" onClick={apply} disabled={!canApply}>Apply selected changes</button>}
+      </details>
     </>}
-    {pendingApply && <button type="button" className="button primary" onClick={retry} disabled={busy}>Retry Apply with the same selection</button>}
+    {!inspection && pendingApply && <button type="button" className="button primary" onClick={retry} disabled={busy}>Retry Apply with the same selection</button>}
     <p className="muted">AI suggestions change the current draft only. Applying does not approve or publish them.</p>
   </section>;
 }

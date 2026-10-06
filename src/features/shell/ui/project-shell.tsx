@@ -22,7 +22,7 @@ import { Icon } from "./icon";
 import LifecycleDialog, { type LifecycleKind } from "./lifecycle-dialog";
 import NewProjectDialog from "./new-project-dialog";
 import ProjectEditor, { NoProjectOpen, ProjectUnavailable } from "./project-editor";
-import { anyDirty, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi, type UiStore } from "./project-ui";
+import { currentAiRun, anyDirty, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi, type UiStore } from "./project-ui";
 import ProjectsSidebar, { LIST_TABS, type InviteRow, type ListTab } from "./projects-sidebar";
 import RightPanel from "./right-panel";
 import AiActions from "@/features/proposals/ui/ai-actions";
@@ -176,7 +176,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     requestAnimationFrame(() => {
       if (projectIdRef.current !== projectId) return;
       setStore((previous) => updateUi(previous, projectId, (current) => ({
-        rightOpen: true, rightMounted: true, rightTab: "ai", ai: { ...current.ai, selectedRunId: runId },
+        rightOpen: true, rightMounted: true, rightTab: "ai", ai: { ...current.ai, selectedRunId: currentAiRun(current.ai, runId) },
       })));
       setLastOpened("right");
     });

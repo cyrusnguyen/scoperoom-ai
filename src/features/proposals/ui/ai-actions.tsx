@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import { useAiSyncReader, useSync } from "@/features/collaboration/ui/sync-context";
-import type { ProjectUi } from "@/features/shell/ui/project-ui";
+import { finishAiApply, retainAiApply, acknowledgedApplyCovered, currentAiRun, type ProjectUi } from "@/features/shell/ui/project-ui";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import { Icon } from "@/features/shell/ui/icon";
-import { createRunResources } from "./run-resources";
+import { createRunResources, type ReadState } from "./run-resources";
 import { RunCard } from "./run-card";
 import { RunHistory } from "./run-history";
 import { acknowledgedInstruction, retryStartRequest } from "./ai-submit";
@@ -16,10 +16,14 @@ const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 
 export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update: (change: (current: ProjectUi["ai"]) => ProjectUi["ai"]) => void }) {
   const studio = useStudio();
-  const { revalidate, setActiveJobVisible, beforeWrite, fence, status } = useSync();
+  const { revalidate, setActiveJobVisible, beforeWrite, fence, status, failures } = useSync();
   const [pageState, setPageState] = useState({ page: { runs: [], nextCursor: null } as RunPage, version: 0 });
   const page = pageState.page;
+  const [reads, setReads] = useState<Record<"page" | "current" | "history", ReadState>>({ page: "uninitialized", current: "uninitialized", history: "uninitialized" });
   const [run, setRun] = useState<RunView | null>(null);
+  const [historyRun, setHistoryRun] = useState<RunView | null>(null);
+  const [historyId, setHistoryId] = useState<string | null>(null);
+  const [runTab, setRunTab] = useState<"current" | "history">("current");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -31,24 +35,25 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
   useLayoutEffect(() => { uiRef.current = ui; studioRef.current = studio; }, [ui, studio]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const adoptPage = useCallback((next: RunPage) => setPageState((current) => ({ page: next, version: current.version + 1 })), []);
-  const resources = useMemo(() => createRunResources({ projectId: studio.projectId, apiRead, adoptPage, adoptRun: setRun }), [studio.projectId, adoptPage]);
+  const resources = useMemo(() => createRunResources({ projectId: studio.projectId, apiRead, adoptPage, adoptRun: setRun, adoptHistoryRun: setHistoryRun, adoptReadState: (destination, state) => setReads(current => ({ ...current, [destination]: state })) }), [studio.projectId, adoptPage]);
   const selectedSummary = page.runs.find((item) => item.id === ui.selectedRunId);
   const canWrite = status.status === "ACTIVE" && (status.role === "OWNER" || status.role === "EDITOR");
-  const activeJobVisible = Boolean(run && !isTerminal(run.state));
+  const activeJobVisible = Boolean((runTab === "current" && run && !isTerminal(run.state)) || (runTab === "history" && historyRun && !isTerminal(historyRun.state)));
 
   useAiSyncReader(useCallback((status, fence) => resources.reconcile(status, fence), [resources]));
   useEffect(() => {
     resources.selectRun(ui.selectedRunId);
+    resources.selectHistory(historyId);
     const frame = requestAnimationFrame(() => void revalidate("focus"));
     return () => cancelAnimationFrame(frame);
-  }, [resources, ui.selectedRunId, revalidate]);
+  }, [resources, ui.selectedRunId, historyId, revalidate]);
   useEffect(() => {
     setActiveJobVisible(activeJobVisible);
     return () => setActiveJobVisible(false);
   }, [activeJobVisible, setActiveJobVisible]);
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("run");
-    if (requested && RUN_ID.test(requested) && requested !== ui.selectedRunId) update((current) => ({ ...current, selectedRunId: requested }));
+    update((current) => ({ ...current, selectedRunId: currentAiRun(current, requested && RUN_ID.test(requested) ? requested : null) }));
   // Initial URL restoration is project-keyed; later selection changes use the component state.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -59,10 +64,18 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
     window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
   }, [ui.selectedRunId]);
   useEffect(() => {
-    if (page.runs.length && !ui.selectedRunId) update((current) => ({ ...current, selectedRunId: page.runs[0]!.id }));
+    if (page.runs.length && !ui.selectedRunId) update((current) => ({ ...current, selectedRunId: currentAiRun(current, null, page.runs[0]!.id) }));
   }, [page.runs, ui.selectedRunId, update]);
 
-  const chooseRun = (id: string | null) => update((current) => ({ ...current, selectedRunId: id }));
+  useEffect(() => {
+    const phase = ui.applyPhase;
+    if (!phase || !acknowledgedApplyCovered(phase, studio.savedDraft)) return;
+    update(current => current.applyPhase?.key !== phase.key || current.applyPhase.projectId !== phase.projectId ? current : ({ ...current, applyPhase: { ...phase, state: "adopted" }, pendingRequest: current.pendingRequest?.kind === "apply" && current.pendingRequest.runId === phase.runId && current.pendingRequest.key === phase.key && current.pendingRequest.projectId === phase.projectId && current.pendingRequest.draftId === phase.draftId ? null : current.pendingRequest }));
+  }, [ui.applyPhase, studio.savedDraft, update]);
+  const phaseMessage = ui.applyPhase?.state === "acknowledged" ? "Changes applied. Refreshing saved draft..." : ui.applyPhase?.state === "adopted" ? "Applied to draft. Changes are not approved." : "Apply not confirmed. Retry uses the same selection, input and key.";
+  const shownMessage = ui.pendingRequest?.kind === "apply" ? busy && !ui.applyPhase ? "Applying changes…" : phaseMessage : message || (ui.applyPhase ? phaseMessage : "");
+  const retryReads = () => { resources.retry(); void revalidate("focus"); };
+  const chooseRun = (id: string | null) => { setHistoryId(id); setRunTab("history"); };
   const start = async (retry = false) => {
     if (actionFlight.current) return;
     const invocationFence = fence();
@@ -162,8 +175,9 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
     if (!stillCurrent()) return;
     if (sessionEnded(result)) return;
     if (result.ok) {
-      update((current) => ({ ...current, pendingRequest: null, selectedRunId: result.data.runId,
+      update((current) => ({ ...current, pendingRequest: null, applyPhase: undefined, selectedRunId: result.data.runId,
         ...(request.kind === "start" ? { instruction: acknowledgedInstruction(current.instruction, request.submittedText) } : {}) }));
+      setRunTab("current");
       setMessage("Run queued.");
       await revalidate("focus");
     } else if (result.uncertain) {
@@ -234,14 +248,23 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
             : <button type="button" className="button primary ai-send" onClick={() => void start()} disabled={busy || Boolean(ui.pendingRequest) || !studio.editable}>{busy ? "Working…" : ui.action === "PROPOSE_FLOW" ? "Generate" : "Improve selection"}<Icon name="send" /></button>}
         </div>
       </div>
-      <p className="ai-message" role={message.includes("refused") || message.includes("could not") ? "alert" : "status"} aria-live="polite">{message}</p>
+      <p className="ai-message" role={message.includes("refused") || message.includes("could not") ? "alert" : "status"} aria-live="polite">{shownMessage}</p>
       <p className="ai-disclosure">The saved draft, current baseline, action and selected flow or steps are sent. Run instructions and results are shared with current project members. Requests include no sources.</p>
     </section>
-    {run ? <RunCard run={run} summary={selectedSummary} busy={busy} canWrite={canWrite} blockedByPending={Boolean(ui.pendingRequest && ui.pendingRequest.kind !== "apply" || ui.pendingRequest?.kind === "apply" && ui.pendingRequest.runId !== run.id)} pendingApply={ui.pendingRequest?.kind === "apply" && ui.pendingRequest.runId === run.id ? ui.pendingRequest : null}
+    <div className="ai-run-tabs" role="tablist" aria-label="AI runs">{(["current", "history"] as const).map(id => <button key={id} type="button" role="tab" id={`ai-tab-${id}`} aria-controls={`ai-panel-${id}`} tabIndex={runTab === id ? 0 : -1} aria-selected={runTab === id} onClick={() => setRunTab(id)} onKeyDown={event => {
+      const next = event.key === "ArrowRight" || event.key === "ArrowLeft" ? id === "current" ? "history" : "current" : event.key === "Home" ? "current" : event.key === "End" ? "history" : null;
+      if (next) { event.preventDefault(); event.stopPropagation(); setRunTab(next); document.getElementById(`ai-tab-${next}`)?.focus(); }
+    }}>{id === "current" ? "Current" : "History"}</button>)}</div>
+    <div id={`ai-panel-${runTab}`} role="tabpanel" aria-labelledby={`ai-tab-${runTab}`}>
+    {runTab === "current" && <>{reads.page === "error" && <p role="alert">Could not load AI history.</p>}{reads.current === "error" ? <p role="alert">Could not load Current run.</p> : ui.selectedRunId && (!run || reads.current === "uninitialized" || reads.current === "loading") ? <p role="status">Loading Current run…</p> : reads.page === "uninitialized" || reads.page === "loading" ? <p role="status">Loading AI runs…</p> : null}
+    {run ? <RunCard run={run} summary={selectedSummary} busy={busy} canWrite={canWrite} authorityConfirmed={!failures && reads.current === "loaded"} blockedByPending={Boolean(ui.pendingRequest && ui.pendingRequest.kind !== "apply" || ui.pendingRequest?.kind === "apply" && ui.pendingRequest.runId !== run.id)} pendingApply={ui.pendingRequest?.kind === "apply" && ui.pendingRequest.runId === run.id ? ui.pendingRequest : null}
       pendingControl={ui.pendingRequest && (ui.pendingRequest.kind === "cancel" || ui.pendingRequest.kind === "discard") && ui.pendingRequest.runId === run.id ? ui.pendingRequest : null}
       onCancel={() => void runControl("cancel", run)} onDiscard={() => void runControl("discard", run)} onApply={(request) => void retryApply(request)} onRegenerate={() => regenerate(run)}
-      onRetryControl={() => void runControl(ui.pendingRequest?.kind === "cancel" ? "cancel" : "discard", run, true)} /> : <section className="detail-section ai-empty"><span className="ai-empty-icon"><Icon name="flow" size={22} /></span><h2>Ready for your next idea</h2><p>Describe a flow, or select steps to improve. Review every suggestion before applying it.</p></section>}
-    <RunHistory runs={page.runs} selectedId={ui.selectedRunId} nextCursor={page.nextCursor} loading={loadingMore} onSelect={chooseRun} onMore={() => void loadMore()} />
+      onRetryControl={() => void runControl(ui.pendingRequest?.kind === "cancel" ? "cancel" : "discard", run, true)} /> : reads.page === "loaded" && !page.runs.length && !ui.selectedRunId && <section className="detail-section ai-empty"><h2>Ready for your next idea</h2><p>Describe a flow, or select steps to improve. Review every suggestion before applying it.</p></section>}</>}
+    {runTab === "history" && <>{historyId && (reads.history === "error" ? <p role="alert">Could not load History run.</p> : !historyRun ? <p role="status">Loading History run…</p> : null)}{historyRun ? <><RunCard inspection run={historyRun} summary={page.runs.find(item => item.id === historyRun.id)} busy={false} canWrite={false} blockedByPending={false} pendingApply={null} pendingControl={null} onCancel={() => {}} onDiscard={() => {}} onApply={() => {}} onRegenerate={() => {}} onRetryControl={() => {}} /><button type="button" className="button quiet small" onClick={() => setHistoryId(null)}>Back to history</button></> : !historyId && <p className="muted">Choose a run to inspect its saved history.</p>}
+      {reads.page === "loaded" ? <RunHistory runs={page.runs} selectedId={historyId} nextCursor={page.nextCursor} loading={loadingMore} onSelect={chooseRun} onMore={() => void loadMore()} /> : <p role={reads.page === "error" ? "alert" : "status"}>{reads.page === "error" ? "Could not load AI history." : "Loading AI history…"}</p>}</>}
+    </div>
+    {Object.values(reads).includes("error") && <button type="button" className="button quiet small" onClick={retryReads}>Retry AI reads</button>}
   </div>;
 
   async function loadMore() {
@@ -280,23 +303,25 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
     if (pending?.kind === "apply" && pending.runId !== request.runId) { setMessage("Retry or resolve the pending Apply for the selected run before applying another proposal."); return; }
     const exact = pending?.kind === "apply" ? pending : { kind: "apply" as const, projectId: studio.projectId, draftId: String(request.body.draftId), runId: request.runId, key: request.key, body: request.body };
     const retry = pending?.kind === "apply";
-    update((current) => ({ ...current, pendingRequest: exact }));
+    update((current) => ({ ...current, pendingRequest: exact, selectedRunId: exact.runId, ...(!retry ? { applyPhase: undefined } : {}) }));
     if (!exact.runId || exact.projectId !== studio.projectId) return;
     const input = exact.body as { draftId: string; expectedDocumentRevision: number; expectedParentSnapshotId: string | null; resultHash: string; selectedOperationIds: string[] };
-    const outcome = await studio.applyAiRun(exact.runId, input, exact.key, retry);
+    const outcome = await studio.applyAiRun(exact.runId, input, exact.key, retry, receipt => {
+      if (invocationFence()) update(current => invocationFence() ? retainAiApply(current, exact, receipt) : current);
+    });
     if (!stillCurrent()) return;
     if (outcome.ok && !outcome.result.currentDraft) {
-      update((current) => ({ ...current, pendingRequest: null }));
+      update((current) => ({ ...current, pendingRequest: null, applyPhase: undefined }));
       setMessage("This saved Apply belongs to the previous draft. The current draft was left unchanged.");
     } else if (outcome.ok) {
-      if (outcome.result.adopted) {
-        update((current) => ({ ...current, pendingRequest: null }));
-        setMessage("Selected changes applied to the draft. They are not approved.");
-      } else setMessage("Apply was acknowledged. The saved draft has not caught up yet; Retry checks the same application.");
+      const receipt = outcome.result;
+      update(current => retainAiApply(current, exact, receipt));
+      setMessage("");
     } else if (outcome.uncertain) {
-      setMessage("We couldn’t confirm Apply. Retry will use the same selection, input and key.");
+      update(current => ({ ...current, applyPhase: current.applyPhase?.state === "acknowledged" ? current.applyPhase : { key: exact.key, projectId: exact.projectId, runId: exact.runId!, draftId: exact.draftId, state: "uncertain" } }));
+      setMessage("");
     } else {
-      update((current) => ({ ...current, pendingRequest: null }));
+      update(current => finishAiApply(current, exact));
       setMessage(outcome.message || "This proposal could not be applied. It remains available for review.");
       await revalidate("focus");
     }

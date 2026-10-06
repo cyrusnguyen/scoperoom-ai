@@ -68,7 +68,7 @@ type Studio = {
   importFlow: (previewId: string, input: { draftId: string; previewHash: string }, key: string) => Promise<Outcome<ImportApplyResult>>;
   inspectSavedExport: (saveFirst: boolean) => Promise<Outcome<DraftView>>;
   /** AI Apply uses the Studio's admission, request lock, exact receipt floor and saved-read adoption path. */
-  applyAiRun: (runId: string, input: Omit<ApplyRunInput, "key">, key: string, retry?: boolean) => Promise<Outcome<AppliedRun & { adopted: boolean; currentDraft: boolean }>>;
+  applyAiRun: (runId: string, input: Omit<ApplyRunInput, "key">, key: string, retry?: boolean, onAcknowledged?: (receipt: AppliedRun) => void) => Promise<Outcome<AppliedRun & { adopted: boolean; currentDraft: boolean }>>;
   exportDirty: boolean;
   reload: (fence?: () => boolean) => Promise<DraftView | null>;
   /** The canvas reports a pointer drag in progress, so autosave never sends mid-drag. */
@@ -320,7 +320,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     return { ok: true, result: view };
   }, [admit, draftId, fence, reload, saveChanges]);
 
-  const applyAiRun = useCallback(async (runId: string, input: Omit<ApplyRunInput, "key">, key: string, retry = false): Promise<Outcome<AppliedRun & { adopted: boolean; currentDraft: boolean }>> => {
+  const applyAiRun = useCallback(async (runId: string, input: Omit<ApplyRunInput, "key">, key: string, retry = false, onAcknowledged?: (receipt: AppliedRun) => void): Promise<Outcome<AppliedRun & { adopted: boolean; currentDraft: boolean }>> => {
     const invocation = fence(), current = () => mounted.current && invocation();
     const refused = (code: string, message: string, uncertain = false): Outcome<AppliedRun & { adopted: boolean; currentDraft: boolean }> => ({ ok: false, code, message, uncertain });
     const guard = () => exportSaveBlocker({ ...uiRef.current, outbox: latest.current }, dragging.current);
@@ -358,6 +358,8 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
       update(() => ({ acknowledgedRevisions: acknowledgement.acknowledgedRevisions }));
       if (!acknowledgement.currentDraft) return { ok: true, result: { ...receipt, adopted: false, currentDraft: false } };
       floorRef.current = acknowledgement.currentFloor;
+      // Presentation observes only this exact successful current-draft receipt, before the covering read.
+      onAcknowledged?.(receipt);
       const view = await reload(stillCurrent);
       const adopted = Boolean(view && stillCurrent() && covers(view, floorRef.current));
       return { ok: true, result: { ...receipt, adopted, currentDraft: true } };

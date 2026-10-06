@@ -5,7 +5,7 @@ import { edit, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
 import { acknowledgeExternalWrite, admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
-import { type AiRequest, anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
+import { type AiRequest, currentAiRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
 const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
@@ -210,4 +210,58 @@ test("unsaved changes guard navigation; discard drops them and a refused save, n
     assert.deepEqual(discarded.save, failed);
     assert.equal(dirtyCount(discardDrafts(store, "a"), "a"), 1);
   }
+});
+
+test("pending Apply and control recovery identity beats a conflicting deep link and latest run", async () => {
+  const choose = currentAiRun;
+  for (const kind of ["apply", "cancel", "discard"] as const) {
+    const pendingRequest = {kind,projectId:"a",draftId:"draft",runId:"recover",key:"exact-key",body:Object.freeze({selectedOperationIds:["step"]})};
+    const ai = {...defaultUi.ai,selectedRunId:"old",pendingRequest};
+    assert.equal(choose?.(ai,"conflicting","latest"),"recover"); assert.equal(ai.pendingRequest,pendingRequest);
+  }
+});
+
+test("acknowledged Apply phase survives retained store and clears only a covering saved read", async () => {
+  const covered=acknowledgedApplyCovered;
+  const phase={key:'exact',projectId:'a',state:'acknowledged' as const,runId:'run',draftId:'draft',documentRevision:9,layoutRevision:7};
+  let store=updateUi({},'a',ui=>({ai:{...ui.ai,applyPhase:phase}}));store=setRightTab(setRightTab(store,'a','details'),'b','ai');
+  assert.equal(uiFor(store,'a').ai.applyPhase,phase);
+  assert.equal(covered?.(phase,{id:'draft',documentRevision:9,layoutRevision:7}),true);
+  for(const saved of [{id:'draft',documentRevision:8,layoutRevision:7},{id:'draft',documentRevision:9,layoutRevision:6},{id:'replacement',documentRevision:20,layoutRevision:20}])assert.equal(covered?.(phase,saved),false);
+});
+
+test("only an exact Apply receipt establishes retained acknowledgement", () => {
+  const body=Object.freeze({draftId:'draft',expectedDocumentRevision:5,selectedOperationIds:['step']});
+  const pending:AiRequest={kind:'apply',projectId:'a',draftId:'draft',runId:'run',key:'exact',body};
+  const ai={...defaultUi.ai,pendingRequest:pending};
+  const receipt={applicationId:'application',runId:'run',draftId:'draft',documentRevision:6,layoutRevision:3,eventSequence:1,aiRevision:1,replayed:false};
+  const retained=retainAiApply(ai,pending,receipt);
+  assert.deepEqual(retained.applyPhase,{key:'exact',projectId:'a',runId:'run',draftId:'draft',state:'acknowledged',documentRevision:6,layoutRevision:3});
+  assert.equal(retained.pendingRequest,pending);assert.equal(retained.pendingRequest?.body,body);
+  assert.equal(retainAiApply(ai,pending,{...receipt,runId:'other'}),ai);
+  assert.equal(retainAiApply(ai,pending,{...receipt,draftId:'other'}),ai);
+  for(const changed of [{...pending,key:'other'},{...pending,projectId:'other'},{...pending,runId:'other'},{...pending,draftId:'other'}]) assert.equal(retainAiApply({...ai,pendingRequest:changed},pending,receipt).applyPhase,undefined);
+  assert.equal(retainAiApply(ai,pending,{...receipt,adopted:true}).pendingRequest,null);
+});
+
+test("an unrelated newer Save floor cannot acknowledge a pending Apply", () => {
+  const pending:AiRequest={kind:'apply',projectId:'a',draftId:'draft',runId:'run',key:'exact',body:{draftId:'draft',expectedDocumentRevision:5}};
+  const ai={...defaultUi.ai,pendingRequest:pending};
+  const unrelatedFloor={draft:{documentRevision:99,layoutRevision:99}};
+  assert.equal(retainAiApply(ai,pending),ai);
+  assert.equal(ai.applyPhase,undefined);assert.equal(ai.pendingRequest,pending);
+  assert.equal(acknowledgedApplyCovered({key:'exact',projectId:'a',state:'uncertain',runId:'run',draftId:'draft'}, {id:'draft',...unrelatedFloor.draft}),false);
+});
+
+test("definitive Apply refusal clears only the matching pending attempt and presentation phase", async () => {
+  const finish = finishAiApply;
+  const request:AiRequest={kind:'apply',projectId:'a',draftId:'draft',runId:'run',key:'exact',body:Object.freeze({selectedOperationIds:['step']})};
+  const phase={key:'exact',projectId:'a',draftId:'draft',runId:'run',state:'uncertain' as const};
+  const current={...defaultUi.ai,pendingRequest:request,applyPhase:phase};
+  const finished=finish(current,request);assert.equal(finished.pendingRequest,null);assert.equal(finished.applyPhase,undefined);
+  for(const field of ['key','projectId','draftId','runId'] as const){
+    const pending:AiRequest={...request,[field]:'newer'};const newer:typeof current={...current,pendingRequest:pending};assert.equal(finish(newer,request),newer);
+    const otherPhase={...phase,[field]:'newer'};assert.equal(finish({...current,applyPhase:otherPhase},request).applyPhase,otherPhase);
+  }
+  assert.equal(request.body,current.pendingRequest.body);assert.equal(finish({...current,applyPhase:{...phase,state:'acknowledged'}},request).applyPhase,undefined);
 });

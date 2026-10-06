@@ -8,7 +8,7 @@ export type AiRequest =
   | (AiRequestBase & { kind: "start"; submittedText: string })
   | (AiRequestBase & { kind: "apply"; runId: string })
   | (AiRequestBase & { kind: "discard" | "cancel"; runId: string });
-export type AiUi = { instruction: string; action: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; selectedRunId: string | null; pendingRequest: AiRequest | null };
+export type AiUi = { instruction: string; action: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; selectedRunId: string | null; pendingRequest: AiRequest | null; applyPhase?: { key: string; projectId: string; runId: string; state: "uncertain" | "acknowledged" | "adopted"; draftId: string; documentRevision?: number; layoutRevision?: number } };
 export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: "details" | "ai"; drafts: Record<string, string>; ai: AiUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
@@ -71,4 +71,27 @@ export function dropProject(store: UiStore, projectId: string): UiStore {
   const next = { ...store };
   delete next[projectId];
   return next;
+}
+
+export function currentAiRun(ui: AiUi, requested: string | null, latest?: string): string | null {
+  return ui.pendingRequest && ui.pendingRequest.kind !== "start" ? ui.pendingRequest.runId : requested ?? ui.selectedRunId ?? latest ?? null;
+}
+
+export function acknowledgedApplyCovered(phase: NonNullable<AiUi["applyPhase"]>, saved: Pick<import("../../drafts/contracts/scope-document").DraftView, "id" | "documentRevision" | "layoutRevision">): boolean {
+  return phase.state === "acknowledged" && saved.id === phase.draftId && saved.documentRevision >= (phase.documentRevision ?? Infinity) && saved.layoutRevision >= (phase.layoutRevision ?? Infinity);
+}
+
+/** Retain only the trusted result of this exact Apply invocation, never generic draft floors. */
+export function retainAiApply(current: AiUi, request: AiRequest, receipt?: import("../../proposals/contracts/tasks").AppliedRun & { adopted?: boolean }): AiUi {
+  const pending = current.pendingRequest;
+  if (!receipt || request.kind !== "apply" || pending?.kind !== "apply" || pending.key !== request.key || pending.projectId !== request.projectId || pending.runId !== request.runId || pending.draftId !== request.draftId || receipt.runId !== request.runId || receipt.draftId !== request.draftId) return current;
+  return { ...current, pendingRequest: receipt.adopted ? null : pending, applyPhase: { key: request.key, projectId: request.projectId, runId: receipt.runId, draftId: receipt.draftId, documentRevision: receipt.documentRevision, layoutRevision: receipt.layoutRevision, state: receipt.adopted ? "adopted" : "acknowledged" } };
+}
+
+/** A definitive refusal resolves this attempt only; late results cannot erase newer recovery. */
+export function finishAiApply(current: AiUi, request: AiRequest): AiUi {
+  const pending=current.pendingRequest, phase=current.applyPhase;
+  if (request.kind !== 'apply' || pending?.kind !== 'apply' || pending.key !== request.key || pending.projectId !== request.projectId || pending.draftId !== request.draftId || pending.runId !== request.runId) return current;
+  const matching=phase?.key === request.key && phase.projectId === request.projectId && phase.draftId === request.draftId && phase.runId === request.runId;
+  return {...current,pendingRequest:null,...(matching ? {applyPhase:undefined} : {})};
 }
