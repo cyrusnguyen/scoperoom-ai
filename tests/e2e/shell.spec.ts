@@ -126,6 +126,7 @@ test.describe("project shell", () => {
     await page.getByRole("button", { name: "Specs", exact: true }).click();
     await expect(panel.getByRole("tab", { name: "Specs", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("button", { name: "Specs", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(panel.locator("#right-body-specs")).toBeVisible();
 
     // The right panel was opened last, so the sidebar that no longer fits closes instead of overlaying.
     await page.setViewportSize({ width: 1024, height: 800 });
@@ -240,6 +241,7 @@ test.describe("project shell", () => {
     await page.goto(`/app/projects/${ids.long}`);
     await expect(page.getByRole("heading", { level: 1 })).toHaveAttribute("title", longName);
     expect(await pageFits(page)).toBe(true);
+    await expect(page.getByRole("button", { name: "Specs", exact: true }).locator("svg")).toBeVisible(); // label is visually hidden here
     await page.getByRole("button", { name: "Show projects" }).click();
     await expect(sidebar(page).getByRole("button", { name: longName, exact: true })).toBeVisible();
     expect(await pageFits(page)).toBe(true);

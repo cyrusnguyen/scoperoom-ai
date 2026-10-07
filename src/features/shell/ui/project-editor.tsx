@@ -53,7 +53,7 @@ export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onS
       <SaveChanges />
       <button type="button" className="button small editor-toggle" aria-pressed={panelOpen && activeTab === "details"} aria-controls="right-panel" onClick={toggleInspector}><Icon name="details" size={14} /><span>Inspect</span></button>
       <button type="button" className="button small editor-toggle ai-toggle" aria-pressed={panelOpen && activeTab === "ai"} aria-controls="right-panel" onClick={onOpenAI}><Icon name="ai" size={16} /><span>AI</span></button>
-      <button type="button" className="button small editor-toggle" aria-pressed={panelOpen && activeTab === "specs"} aria-controls="right-panel" onClick={onOpenSpecs}><span>Specs</span></button>
+      <button type="button" className="button small editor-toggle" aria-pressed={panelOpen && activeTab === "specs"} aria-controls="right-panel" onClick={onOpenSpecs}><Icon name="list" size={14} /><span>Specs</span></button>
     </header>
     {archived && <div className="editor-banner">
       <span><Icon name="lock" size={14} />Archived · read-only</span>
