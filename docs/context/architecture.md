@@ -55,6 +55,14 @@ Saved changes by other people reach an admitted reader through the authenticated
 - **Identity.** `ProjectStatusView.viewerId` (the caller's profile id) is compared on every status and bootstrap; a different account tears the shell down and navigates, sending nothing. `readRoute`/`mutationRoute` (`src/server/web/api-request.ts`) classify Supabase Auth failures: a definitive denial is 401, an Auth outage is 503 `UNAVAILABLE`, so an outage never signs anyone out.
 - **Access loss.** A 404 status drops the project (`dropProject`); a 403 shows the error/recovery view without dropping it. Either way late responses cannot repopulate state and unsaved edits are not sent. A downgrade to a role that cannot edit leaves the edits shown for copy or discard.
 
+## Sources (Stage 07a)
+
+Sources are immutable text versions owned by PostgreSQL; the browser never saves them through the draft.
+
+- Routes: `GET`/`POST /api/projects/:id/sources` (paginated list; paste or strict UTF-8 upload), `PATCH .../sources/:sourceId` (archive/restore, nickname), `GET`/`POST .../sources/:sourceId/versions` (paginated versions; correction creates a new version), and `POST D/graph-sources` (saved flow extract bound to the draft, its revision and the flow). Every write is version-checked, keyed and replayable; corrections send the expected record and current version ids.
+- `sources_revision` is a project status cursor advanced by user source writes, so other readers refresh the list through the normal status poll. AI prompt admission does not advance it.
+- Capacity: user documents (`USER_TEXT`, `USER_UPLOAD`, `PROMOTED_GRAPH`) take one of 30 active slots; archiving frees a slot and restore needs one. Every retained version, internal evidence included, counts against 500 versions and 500,000 code points per project. A single submission is at most 50,000 code points.
+
 ## Browser Realtime (Stage 04.3)
 
 Pointer-drop entries carry local-only drag-start position metadata. Wire commands preserve that original guard; optimistic replay may retain attempted geometry after conflict without rewriting the request. An explicit reviewed rebase chooses fresh guards. Inspector coordinate buffers separately retain the position version they were typed against and participate in project dirty/recovery state.

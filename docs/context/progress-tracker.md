@@ -1,5 +1,24 @@
 # Progress tracker
 
+## Stage 07a: sources (2026-10-07)
+
+Branch `feat/stage-7.1-sources` (base `fa4cff0`), local only: no push or PR has been made. Delivered: immutable text sources by paste, strict UTF-8 `.txt`/`.md` upload and saved-flow extract; correction as new versions and archive/restore; a paginated source list and version reads with usage against the limits; the `sources_revision` project status cursor; and a Specs tab in the right panel with a Sources view (list, reader, versions, correction, archive/restore, add by paste, upload or saved flow). Reviewers and viewers read sources without edit controls.
+
+Commits (`git log --oneline fa4cff0..HEAD`): 642c6c1 contracts, citation matching and flow extract; 6b03240 sources revision cursor in status; e317d20 list, paste, correction and archive APIs; ae2916c lowercase ids for receipt replay and cap/role coverage; 1d492fb saved flow as graph source evidence; 04f2f89 Specs tab; dde8562 Specs header icon at narrow widths; 8c34a15 Sources view; e020cd5 keep unconfirmed writes, filter and focus across remounts; then the reviewer browser test and this checkpoint.
+
+Evidence so far (per-task runs on the local isolated stack): units 504/504 at Task 6; `tests/integration/sources.test.ts` 7/7 with `ai-admit-run` 20/20 together; `tests/e2e/scope.spec.ts` 8 passed, 0 skipped, 0 failed (7 owner cases plus the reviewer case), run with `shell.spec.ts` and `ai.spec.ts` at Task 6 for 54 passed, 0 skipped. The full stage gates are run and recorded in the next checkpoint commit.
+
+Limitations:
+- A saved-flow origin binds the draft, revision and flow, not every step id.
+- Capacity refusals name the bound in `details.limit`; the usage line shows retained usage.
+- The reader finds a source's head only in the loaded list (no single-source GET route yet), so the 07b citation picker must carry or fetch the head.
+- AI prompt admission does not advance `sources_revision`, so the Internal list refreshes when its filter is opened, not live.
+- An uncertain source write is kept in the lifted per-project Specs `pending` request and retried with the same key.
+- After Archive and a tab switch with the reader still open, the reader says "isn't in the loaded list" until Back.
+- Sources writes are not draft writes and do not save the canvas first.
+
+Next action: after the user approves this branch, plan and build PR 07b from `docs/superpowers/plans/2026-10-07-stage-07b-requirements.md`.
+
 ## Stage 06.3: Apply-all redesign and manual merge hold (2026-10-06)
 
 The user authorized Stage 06.3 implementation and PR follow-up, accepted the Arrange fix, and then requested the Apply-all redesign. PR [#26](https://github.com/cyrusnguyen/scoperoom-ai/pull/26) remains open with auto-merge disabled. No merge or hosted deployment/configuration is authorized. Human acceptance of Arrange does not establish whole-stage manual testing completion. Keep preview/services through testing and review; after confirmed GitHub merge remove only exact owned containers, preserving volumes, images, twelve older stacks and Atlas.

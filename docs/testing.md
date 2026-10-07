@@ -62,6 +62,12 @@ These tests cover the implemented native format 1 import/export path. Results an
 - `tests/e2e/collaboration-auth-outage.spec.ts`: process-local Auth fault recovery, private route retention, definitive denial, healthy project-store preservation and the local-state cost of a committed unavailable-page unmount.
 - `tests/e2e/studio.spec.ts` with `studio-fixtures.ts`: UI flow creation waits for the matching completed saved CREATE_FLOW receipt before its UI assertions; the held real-success regression covers delayed save completion and fixture cleanup.
 
+## Stage 07a sources verification
+
+- `tests/sources.test.ts`: pure contracts, citation matching and the saved-flow extract text.
+- `tests/integration/sources.test.ts`: real SQL for create, correction, archive/restore, limits, roles, internal evidence, receipt replay and graph-source origin.
+- `tests/e2e/scope.spec.ts`: paste, upload, correction, archive, saved-flow add, unconfirmed-write retry across tab switches, filter and focus persistence, and a reviewer reading sources with no edit controls.
+
 ## Stage 06.3 AI and recovery verification
 
 `tests/e2e/ai.spec.ts` covers real admission, independent Current/History inspection, full saved-workflow preview and one-click Apply all, optional selected Apply, save-first capture and acknowledgement recovery, dependency refusal, stale/expired result handling, readable operation targets, narrow-panel escaping and exact-key control replay after downgrade/archive. Added cases exercise preview keyboard isolation with actual live Save/Undo opportunities, pan/zoom/fit, accessible tabs and expanded-dialog focus, History-only list/detail and Back navigation, composer exclusion from History, controlled input retention, exact lost-Start receipt replay without tab-triggered requests, recovery-cue focus and absence after adopted Apply, retained uncertain/acknowledged Apply across remount, and definite exact-key refusal without orphan recovery. Its SQL completions are explicit fixtures; this automated gate makes no provider call. Actual live Generate/Improve journeys use separate bounded trusted worker execution and retain admitted model/binding/capture and saved Apply evidence.
