@@ -7,7 +7,7 @@ import type { DraftView } from "../src/features/drafts/contracts/scope-document.
 import { acknowledgeExternalWrite, admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
 import { type AiRequest, currentAiRun, recoverUnavailableCurrentRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, defaultSpecsUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
-const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { selected: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
+const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { selected: null, sourceScope: "user" as const, pending: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("discard preserves an uncertain import's original per-project request; dropping access clears it", () => {
@@ -70,6 +70,18 @@ for (const kind of ["start", "apply", "cancel", "discard"] as const) {
     assert.equal(anyDirty(dropProject(store, "a")), false, "dropping that project removes its pending state");
   });
 }
+
+test("an unconfirmed source write protects unload until it is resolved and survives closing the panel", () => {
+  const pending = { key: "k1", path: "/sources", body: { title: "Brief", text: "Text" }, label: "Add source" };
+  let store = updateUi({}, "a", () => ({ specs: { ...defaultSpecsUi, pending } }));
+  assert.equal(dirtyCount(store, "a"), 0, "a pending write is not an unsaved field");
+  assert.equal(anyDirty(store), true);
+  store = setRightOpen(setRightTab(store, "a", "details"), "a", false);
+  assert.equal(uiFor(store, "a").specs.pending, pending, "leaving the Specs tab keeps the exact key and body");
+  assert.equal(anyDirty(store), true);
+  store = updateUi(store, "a", (ui) => ({ specs: { ...ui.specs, pending: null } }));
+  assert.equal(anyDirty(store), false);
+});
 
 test("drafts belong to one project, and undefined clears a draft", () => {
   let store = setDraft({}, "a", "name", "New name");

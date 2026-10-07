@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import { useSync } from "@/features/collaboration/ui/sync-context";
-import type { SpecsUi } from "@/features/shell/ui/project-ui";
+import type { SpecsRequest, SpecsUi } from "@/features/shell/ui/project-ui";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import {
   normalizeEvidence, SOURCE_BODY_LIMIT, SOURCE_LIMITS, SOURCE_TITLE_LIMIT, USER_DOCUMENT_LIMIT, USER_SOURCE_KINDS,
@@ -56,21 +56,21 @@ async function readUtf8(file: File): Promise<string | null> {
 
 type Update = (change: (ui: SpecsUi) => Partial<SpecsUi>) => void;
 type Notice = { text: string; kind: "status" | "alert" };
-/** One source write; `key` is kept so an unconfirmed result is retried as the same request. `done` returns the success message. */
-type Request = { key: string; path: string; body: Record<string, unknown>; method: "POST" | "PATCH"; done: (result: SourceWriteResult) => string };
-type Post = (path: string, body: Record<string, unknown>, method: "POST" | "PATCH", done: Request["done"]) => void;
+type Post = (path: string, body: Record<string, unknown>, method: "POST" | "PATCH", label: string) => void;
 type Shared = { busy: boolean; post: Post; setDraft: (key: string, value: string | undefined) => void; drafts: Record<string, string> };
+const FLOW_TITLE = "specs:flow-source:title";
+const correctKey = (id: string, field: "title" | "text") => `specs:correct:${id}:${field}`;
 
 export default function SourcesView({ ui, update, drafts, setDraft }: {
   ui: SpecsUi; update: Update; drafts: Record<string, string>; setDraft: (key: string, value: string | undefined) => void;
 }) {
   const { status, beforeWrite, revalidate } = useSync();
   const { projectId, savedDraft } = useStudio();
-  const [scope, setScope] = useState<SourceScope>("user");
+  const scope = ui.sourceScope;
   const list = useSourceList(projectId, scope, status.sourcesRevision);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);
-  const [unconfirmed, setUnconfirmed] = useState<Request | null>(null);
+  const [refocus, setRefocus] = useState(0);
   // Heads patched by this session's own writes, so the reader is right before the list is read again (the higher record version wins).
   const [kept, setKept] = useState<SourceHead | null>(null);
   const canEdit = status.status === "ACTIVE" && (status.role === "OWNER" || status.role === "EDITOR");
@@ -78,50 +78,80 @@ export default function SourcesView({ ui, update, drafts, setDraft }: {
   const listed = selected ? list.page?.items.find((item) => item.id === selected.sourceId) : undefined;
   const patched = kept && kept.id === selected?.sourceId ? kept : undefined;
   const head = listed && patched ? (patched.version > listed.version ? patched : listed) : listed ?? patched ?? null;
+  const headRef = useRef(head);
+  useEffect(() => { headRef.current = head; });
+  // Back unmounts the focused button: the card of the source that was open takes focus once the list is on screen. If a refresh
+  // removes that card (it was archived) the active filter takes it; anything else the person focused meanwhile is left alone.
+  const returnTo = useRef<string | null>(null);
+  useEffect(() => {
+    if (!returnTo.current || selected || !list.page) return;
+    const card = document.querySelector<HTMLElement>(`[data-source-id="${returnTo.current}"]`);
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== card) { returnTo.current = null; return; }
+    (card ?? document.querySelector<HTMLElement>('.sources-filter [aria-pressed="true"]'))?.focus();
+    if (!card) returnTo.current = null;
+  }, [selected, list.page]);
 
-  async function send(request: Request, retry: boolean) {
+  /** What a committed write changes locally, derived from the request so a Retry after a remount does the same. Returns the message. */
+  function finish(request: SpecsRequest, result: SourceWriteResult): string {
+    const [, , id] = request.path.split("/");
+    if (request.path === "/sources") { setDraft(NEW_TITLE, undefined); setDraft(NEW_TEXT, undefined); return "Source added."; }
+    if (request.path.endsWith("/graph-sources")) { setDraft(FLOW_TITLE, undefined); return "Saved flow added as a source."; }
+    const known = headRef.current?.id === id ? headRef.current : null;
+    setRefocus((count) => count + 1);
+    if (request.path.endsWith("/versions")) {
+      setDraft(correctKey(id!, "title"), undefined); setDraft(correctKey(id!, "text"), undefined);
+      if (known) setKept({ ...known, title: String(request.body.title), version: result.version, currentVersionId: result.sourceVersionId, currentSequence: result.sequence, versionCount: known.versionCount + 1 });
+      update((current) => current.selected?.kind === "source" && current.selected.sourceId === id ? { selected: { ...current.selected, versionId: null } } : {});
+      return "New version saved.";
+    }
+    const archived = request.body.archived === true;
+    if (known) setKept({ ...known, archived, version: result.version });
+    return archived ? "Source archived." : "Source restored.";
+  }
+  async function send(request: SpecsRequest, retry: boolean) {
     setBusy(true); setNotice(null);
-    const fail = (text: string) => { setBusy(false); setNotice({ text, kind: "alert" }); };
+    // Kept before anything is awaited: a switch of tab or panel mid-flight must still find the exact key to retry.
+    if (!retry) update(() => ({ pending: request }));
+    const fail = (text: string) => { setBusy(false); if (!retry) update(() => ({ pending: null })); setNotice({ text, kind: "alert" }); };
     const authority = await beforeWrite();
     if (authority.kind === "unavailable") return fail("Not saved. We couldn’t reach ScopeRoom.");
     if (authority.kind === "denied") return fail("Checking your access…");
     if (!retry && (authority.status.status !== "ACTIVE" || (authority.status.role !== "OWNER" && authority.status.role !== "EDITOR"))) return fail("Not saved. This project is read-only now.");
-    const result = await apiMutate<SourceWriteResult>(`/api/projects/${projectId}${request.path}`, request.key, request.body, request.method);
+    const result = await apiMutate<SourceWriteResult>(`/api/projects/${projectId}${request.path}`, request.key, request.body, request.method ?? "POST");
     setBusy(false);
     if (sessionEnded(result)) return;
     if (result.ok) {
-      setUnconfirmed(null);
-      setNotice({ text: request.done(result.data), kind: "status" });
+      update(() => ({ pending: null }));
+      setNotice({ text: finish(request, result.data), kind: "status" });
       void revalidate("manual");
-    } else if (result.uncertain) {
-      setUnconfirmed(request);
-      setNotice({ text: "We couldn’t confirm that change. Retry sends the same request.", kind: "alert" });
-    } else {
-      setUnconfirmed(null);
+    } else if (!result.uncertain) {
+      update(() => ({ pending: null }));
       setNotice({ text: result.code === "LIMIT_EXCEEDED" ? LIMIT_TEXT[String(result.details?.limit)] ?? result.message : result.message, kind: "alert" });
       if (result.status === 409) void revalidate("manual"); // someone else saved first: read the current heads
     }
+    // An uncertain result leaves `pending` as it is; the Retry below is derived from it.
   }
-  const post: Post = (path, body, method, done) => void send({ key: crypto.randomUUID(), path, body, method, done }, false);
-  const shared: Shared = { busy: busy || unconfirmed !== null, post, setDraft, drafts };
+  const post: Post = (path, body, method, label) => void send({ key: crypto.randomUUID(), path, body, method, label }, false);
+  const shared: Shared = { busy: busy || ui.pending !== null, post, setDraft, drafts };
   const usage = list.page?.usage;
 
   return <div className="sources-view">
     {usage && <p className="muted">{usage.activeUserDocuments}/{USER_DOCUMENT_LIMIT} documents · {usage.retainedVersions}/{SOURCE_LIMITS.retainedVersions} versions · {usage.codePoints.toLocaleString("en-US")}/{SOURCE_LIMITS.projectCodePoints.toLocaleString("en-US")} characters</p>}
     {notice && <p role={notice.kind === "alert" ? "alert" : "status"}>{notice.text}</p>}
-    {unconfirmed && <button type="button" className="button small" disabled={busy} onClick={() => void send(unconfirmed, true)}>Retry</button>}
-    {selected ? <Reader selected={selected} head={head} listLoaded={list.page !== null} canEdit={canEdit} update={update} setKept={setKept} {...shared} />
+    {ui.pending && !busy && <p role="alert">We couldn’t confirm “{ui.pending.label}”. Retry sends the same request. <button type="button" className="button small" onClick={() => void send(ui.pending!, true)}>Retry</button></p>}
+    {selected ? <Reader selected={selected} head={head} listLoaded={list.page !== null} canEdit={canEdit} update={update} refocus={refocus} onBack={(id) => { returnTo.current = id; }} {...shared} />
       : <>
         {canEdit && <AddSource {...shared} />}
         {canEdit && <FlowSource flows={savedDraft.document.flows} draftId={savedDraft.id} documentRevision={savedDraft.documentRevision} {...shared} />}
         <div role="group" aria-label="Source filter" className="sources-filter">
-          {SCOPES.map(([id, label]) => <button key={id} type="button" className="button small" aria-pressed={scope === id} onClick={() => setScope(id)}>{label}</button>)}
+          {SCOPES.map(([id, label]) => <button key={id} type="button" className="button small" aria-pressed={scope === id} onClick={() => update(() => ({ sourceScope: id }))}>{label}</button>)}
         </div>
         {list.error && <p role="alert">{list.error} <button type="button" className="button small" onClick={list.retry}>Retry</button></p>}
         {!list.page ? !list.error && <p role="status">Loading sources…</p>
           : !list.page.items.length ? <p className="muted">{EMPTY[scope]}</p>
           : <ul className="sources-list">{list.page.items.map((item) => <li key={item.id}>
-            <button type="button" className="specs-card" onClick={() => update(() => ({ selected: { kind: "source", sourceId: item.id, versionId: null, back: ui.selected } }))}>
+            <button type="button" className="specs-card" data-source-id={item.id} onClick={() => update(() => ({ selected: { kind: "source", sourceId: item.id, versionId: null, back: ui.selected } }))}>
               <strong>{item.displayNickname ?? item.title}</strong>
               <span className="specs-badge">{KIND_LABELS[item.kind]} · v{item.currentSequence} · {item.versionCount} {item.versionCount === 1 ? "version" : "versions"}{item.archived ? " · Archived" : ""}</span>
             </button></li>)}
@@ -134,7 +164,9 @@ export default function SourcesView({ ui, update, drafts, setDraft }: {
 function AddSource({ busy, post, drafts, setDraft }: Shared) {
   const title = drafts[NEW_TITLE] ?? "", text = drafts[NEW_TEXT] ?? "";
   const [fileError, setFileError] = useState("");
-  const [uploaded, setUploaded] = useState(false);
+  // The text a file supplied: it is sent as an upload only while the textarea still holds exactly that.
+  const [uploadedText, setUploadedText] = useState<string | null>(null);
+  const uploaded = uploadedText === text;
   const count = codePoints(text);
   const set = (key: string, value: string) => setDraft(key, value || undefined);
   const choose = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -143,16 +175,13 @@ function AddSource({ busy, post, drafts, setDraft }: Shared) {
     const decoded = file.size > SOURCE_BODY_LIMIT ? null : await readUtf8(file);
     input.value = "";
     if (decoded === null) { setFileError("This file isn't valid UTF-8 text."); return; }
-    setFileError(""); setUploaded(true);
+    setFileError(""); setUploadedText(decoded);
     set(NEW_TEXT, decoded);
     if (!title) set(NEW_TITLE, [...file.name].slice(0, SOURCE_TITLE_LIMIT).join(""));
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    post("/sources", { title: title.trim(), text, ...(uploaded ? { uploaded: true } : {}) }, "POST", () => {
-      setDraft(NEW_TITLE, undefined); setDraft(NEW_TEXT, undefined); setUploaded(false);
-      return "Source added.";
-    });
+    post("/sources", { title: title.trim(), text, ...(uploaded ? { uploaded: true } : {}) }, "POST", "Add source");
   };
   return <form className="detail-section" onSubmit={submit}>
     <h3>Add a source</h3>
@@ -165,16 +194,17 @@ function AddSource({ busy, post, drafts, setDraft }: Shared) {
   </form>;
 }
 
-function FlowSource({ flows, draftId, documentRevision, busy, post }: Shared & { flows: Record<string, { title: string }>; draftId: string; documentRevision: number }) {
+function FlowSource({ flows, draftId, documentRevision, busy, post, drafts, setDraft }: Shared & { flows: Record<string, { title: string }>; draftId: string; documentRevision: number }) {
   const [flowId, setFlowId] = useState("");
-  const [name, setName] = useState("");
+  const name = drafts[FLOW_TITLE] ?? "";
+  const setName = (value: string) => setDraft(FLOW_TITLE, value || undefined);
   const ids = Object.keys(flows);
   const chosen = flows[flowId] ? flowId : ids[0] ?? "";
   const title = name || flows[chosen]?.title || "";
   if (!ids.length) return null;
   return <form className="detail-section" onSubmit={(event) => {
     event.preventDefault();
-    post(`/drafts/${draftId}/graph-sources`, { expectedDocumentRevision: documentRevision, flowId: chosen, title: title.trim() }, "POST", () => { setName(""); return "Saved flow added as a source."; });
+    post(`/drafts/${draftId}/graph-sources`, { expectedDocumentRevision: documentRevision, flowId: chosen, title: title.trim() }, "POST", "Add flow as source");
   }}>
     <h3>From saved flow</h3>
     <div className="field"><label htmlFor="flow-source-flow">Flow</label><select id="flow-source-flow" value={chosen} onChange={(event) => { setFlowId(event.target.value); setName(""); }}>{ids.map((id) => <option key={id} value={id}>{flows[id]!.title}</option>)}</select></div>
@@ -184,8 +214,8 @@ function FlowSource({ flows, draftId, documentRevision, busy, post }: Shared & {
   </form>;
 }
 
-function Reader({ selected, head, listLoaded, canEdit, update, setKept, busy, post, drafts, setDraft }: Shared & {
-  selected: NonNullable<Extract<SpecsUi["selected"], { kind: "source" }>>; head: SourceHead | null; listLoaded: boolean; canEdit: boolean; update: Update; setKept: (head: SourceHead) => void;
+function Reader({ selected, head, listLoaded, canEdit, update, refocus, onBack, busy, post, drafts, setDraft }: Shared & {
+  selected: NonNullable<Extract<SpecsUi["selected"], { kind: "source" }>>; head: SourceHead | null; listLoaded: boolean; canEdit: boolean; update: Update; refocus: number; onBack: (sourceId: string) => void;
 }) {
   const { projectId } = useStudio();
   const viewId = selected.versionId ?? head?.currentVersionId ?? null;
@@ -221,33 +251,31 @@ function Reader({ selected, head, listLoaded, canEdit, update, setKept, busy, po
 
   const current = read?.id === viewId ? read : null;
   const view = current?.view;
-  const back = <button type="button" className="button quiet small" autoFocus onClick={() => update(() => ({ selected: selected.back }))}>Back</button>;
+  // After a committed correction, archive or restore, focus moves to the heading once the (new) version is on screen.
+  const heading = useRef<HTMLHeadingElement>(null), focused = useRef(0);
+  useEffect(() => {
+    if (view && refocus !== focused.current) { focused.current = refocus; heading.current?.focus(); }
+  }, [refocus, view]);
+  const goBack = () => { onBack(selected.sourceId); update(() => ({ selected: selected.back })); };
+  const back = <button type="button" className="button quiet small" autoFocus onClick={goBack}>Back</button>;
   if (!head) return <>{back}<p role={listLoaded ? "alert" : "status"}>{listLoaded ? "This source isn't in the loaded list." : "Loading source…"}</p></>;
 
   const editable = canEdit && isUser(head);
   const atHead = view?.id === head.currentVersionId;
-  const titleKey = `specs:correct:${head.id}:title`, textKey = `specs:correct:${head.id}:text`;
+  const titleKey = correctKey(head.id, "title"), textKey = correctKey(head.id, "text");
   const title = drafts[titleKey] ?? view?.title ?? "", text = drafts[textKey] ?? view?.text ?? "";
   const count = codePoints(text);
   const changed = view !== undefined && (title !== view.title || text !== view.text);
   const edit = (key: string, base: string | undefined, value: string) => setDraft(key, value === base ? undefined : value);
   const correct = (event: FormEvent) => {
     event.preventDefault();
-    post(`/sources/${head.id}/versions`, { expectedSourceRecordVersion: head.version, expectedCurrentVersionId: head.currentVersionId, title: title.trim(), text }, "POST", (result) => {
-      setDraft(titleKey, undefined); setDraft(textKey, undefined);
-      setKept({ ...head, title: title.trim(), version: result.version, currentVersionId: result.sourceVersionId, currentSequence: result.sequence, versionCount: head.versionCount + 1 });
-      update(() => ({ selected: { ...selected, versionId: null } }));
-      return "New version saved.";
-    });
+    post(`/sources/${head.id}/versions`, { expectedSourceRecordVersion: head.version, expectedCurrentVersionId: head.currentVersionId, title: title.trim(), text }, "POST", "Save new version");
   };
-  const archive = () => post(`/sources/${head.id}`, { expectedSourceRecordVersion: head.version, archived: !head.archived }, "PATCH", (result) => {
-    setKept({ ...head, archived: !head.archived, version: result.version });
-    return head.archived ? "Source restored." : "Source archived.";
-  });
+  const archive = () => post(`/sources/${head.id}`, { expectedSourceRecordVersion: head.version, archived: !head.archived }, "PATCH", head.archived ? "Restore source" : "Archive source");
 
   return <div className="source-reader">
     {back}
-    <h3>{head.displayNickname ?? view?.title ?? head.title}</h3>
+    <h3 ref={heading} tabIndex={-1}>{head.displayNickname ?? view?.title ?? head.title}</h3>
     <p className="muted">{KIND_LABELS[head.kind]}{head.archived ? " · Archived" : ""}</p>
     {current?.error ? <p role="alert">{current.error}</p> : !view ? <p role="status">Loading version…</p> : <>
       <div className="sources-filter">

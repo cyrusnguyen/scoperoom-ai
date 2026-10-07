@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { test } from "./studio-fixtures";
 import { appUrl, createProjectViaApi, e2eReady, openSpecs, seedStudioChanges } from "./support";
 
@@ -81,4 +81,66 @@ test("a saved flow is added as a source", async ({ page }) => {
   await page.getByRole("button", { name: "Add flow as source" }).click();
   await page.getByRole("button", { name: /Checkout.*Saved flow/ }).click();
   await expect(page.locator(".source-lines")).toContainText("Pay");
+});
+
+const switchTabs = async (page: Page) => {
+  await page.getByRole("tab", { name: "Details", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Details", selected: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Specs", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Specs", selected: true })).toBeVisible();
+};
+
+test("an unconfirmed Add survives a tab switch and Retry creates exactly one source", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Unconfirmed add project");
+  await openSpecs(page, projectId, "Unconfirmed add project");
+  const keys: Array<string | undefined> = [];
+  let first = true;
+  await page.route(`**/api/projects/${projectId}/sources`, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    keys.push(route.request().headers()["idempotency-key"]);
+    if (!first) return route.continue();
+    first = false;
+    await route.fetch(); // the server commits, the answer is lost
+    return route.abort();
+  });
+  await page.getByLabel("Source title").fill("Brief");
+  await page.getByLabel("Source text").fill("Customers pay by card.");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "We couldn’t confirm" })).toBeVisible();
+  await switchTabs(page);
+  await expect(page.getByRole("alert").filter({ hasText: "We couldn’t confirm" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add source" })).toBeDisabled();
+  await expect(page.getByLabel("Source text")).toHaveValue("Customers pay by card.");
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByText("Source added.")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Brief/ })).toHaveCount(1);
+  const listed = await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: unknown[] };
+  expect(listed.items).toHaveLength(1);
+  expect(keys).toHaveLength(2);
+  expect(keys[1]).toBe(keys[0]);
+});
+
+test("the filter and the open source survive a tab switch, and focus returns after saving and after Back", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Scope persists project");
+  await openSpecs(page, projectId, "Scope persists project");
+  await page.getByLabel("Source title").fill("Brief");
+  await page.getByLabel("Source text").fill("Customers pay by card.");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await page.getByRole("button", { name: /Brief/ }).click();
+  await page.getByLabel("Corrected text").fill("Customers pay by card or wallet.");
+  await page.getByRole("button", { name: "Save new version" }).click();
+  await expect(page.getByText("Viewing v2; latest v2")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Brief" })).toBeFocused();
+  await page.getByRole("button", { name: "Archive" }).click();
+  await expect(page.getByRole("button", { name: "Restore" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Brief" })).toBeFocused();
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByRole("button", { name: "Active", exact: true })).toBeFocused(); // the archived source is not in this list
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
+  await page.getByRole("button", { name: /Brief/ }).click();
+  await switchTabs(page);
+  await expect(page.getByRole("button", { name: "Restore" })).toBeVisible();
+  await expect(page.locator(".source-lines li")).toHaveText(["Customers pay by card or wallet."]);
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByRole("button", { name: /Brief/ })).toBeFocused();
 });

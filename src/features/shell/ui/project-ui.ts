@@ -11,12 +11,14 @@ export type AiRequest =
 export type AiUi = { instruction: string; action: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; selectedRunId: string | null; pendingRequest: AiRequest | null; applyPhase?: { key: string; projectId: string; runId: string; state: "uncertain" | "acknowledged" | "adopted"; draftId: string; documentRevision?: number; layoutRevision?: number } };
 export type RightTab = "details" | "ai" | "specs";
 export type SpecsSelection = { kind: "source"; sourceId: string; versionId: string | null; back: SpecsSelection } | null;
-export type SpecsUi = { selected: SpecsSelection; message: string };
+/** A source write that may have committed: its key and body are kept (like AiUi.pendingRequest) so Retry resends the same request. */
+export type SpecsRequest = { key: string; path: string; body: Record<string, unknown>; label: string; method?: "POST" | "PATCH" };
+export type SpecsUi = { selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string };
 export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: RightTab; drafts: Record<string, string>; ai: AiUi; specs: SpecsUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
 export const defaultAiUi: AiUi = { instruction: "", action: "PROPOSE_FLOW", selectedRunId: null, pendingRequest: null };
-export const defaultSpecsUi: SpecsUi = { selected: null, message: "" };
+export const defaultSpecsUi: SpecsUi = { selected: null, sourceScope: "user", pending: null, message: "" };
 export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, rightTab: "details", drafts: {}, ai: defaultAiUi, specs: defaultSpecsUi, ...defaultStudioUi };
 
 export function uiFor(store: UiStore, projectId: string | undefined): ProjectUi {
@@ -55,9 +57,9 @@ export function dirtyCount(store: UiStore, projectId: string | undefined): numbe
   return Object.keys(ui.drafts).length + studioDirtyCount(ui);
 }
 
-/** Reload or close also protects pending AI receipts retained only in memory. */
+/** Reload or close also protects pending AI and source-write receipts retained only in memory. */
 export function anyDirty(store: UiStore): boolean {
-  return Object.keys(store).some((projectId) => dirtyCount(store, projectId) > 0 || store[projectId].ai.pendingRequest !== null);
+  return Object.keys(store).some((projectId) => dirtyCount(store, projectId) > 0 || store[projectId].ai.pendingRequest !== null || store[projectId].specs.pending !== null);
 }
 
 /**
