@@ -535,14 +535,31 @@ test("a requirement cites immutable source text, preserves local input through i
   ]);
   await openSpecs(page, projectId, "Requirement scope project");
   await page.getByLabel("Source title", { exact: true }).fill("Brief");
-  await page.getByLabel("Source text").fill("Customers pay by card.\nReceipts remain available.");
+  await page.getByLabel("Source text").fill("Customers pay by card.\nReceipts remain available.\n");
   await page.getByRole("button", { name: "Add source" }).click();
   await page.getByRole("tab", { name: "Scope" }).click();
   await page.getByRole("button", { name: "New requirement" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("😀".repeat(120));
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeEnabled();
+  await page.getByLabel("Title", { exact: true }).fill("😀".repeat(121));
+  await expect(page.getByRole("alert").filter({ hasText: "Title must be 120 characters or fewer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
   await page.getByLabel("Title", { exact: true }).fill("Pay by card");
   await page.getByLabel("Inclusion", { exact: true }).selectOption("INCLUDED");
+  await page.getByLabel("Statement", { exact: true }).fill("😀".repeat(4_001));
+  await expect(page.getByRole("alert").filter({ hasText: "Statement must be 4,000 characters or fewer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  await page.getByLabel("Statement", { exact: true }).fill("");
   await expect(page.getByRole("button", { name: "Save requirement" })).toBeEnabled(); // an empty verification method is valid
+  await page.getByLabel("Verification description").fill("😀".repeat(4_001));
+  await page.getByLabel("Responsible role").fill("QA");
+  await expect(page.getByRole("alert").filter({ hasText: "Verification description must be 4,000 characters or fewer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
   await page.getByLabel("Verification description").fill("Card payment completes successfully.");
+  await page.getByLabel("Responsible role").fill("😀".repeat(121));
+  await expect(page.getByRole("alert").filter({ hasText: "Responsible role must be 120 characters or fewer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  await page.getByLabel("Responsible role").fill("");
   await expect(page.getByRole("alert").filter({ hasText: "Verification description and responsible role" })).toBeVisible();
   await expect(page.getByLabel("Verification description")).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByLabel("Responsible role")).toHaveAttribute("aria-invalid", "true");
@@ -569,7 +586,21 @@ test("a requirement cites immutable source text, preserves local input through i
   await page.getByLabel("Start line").fill("1");
   await page.getByLabel("End line").fill("1");
   await expect(page.getByLabel("Excerpt")).toHaveValue("Customers pay by card.");
-  for (const [start, end] of [["1.5", "2"], ["1", "1.5"], ["0", "1"], ["2", "1"], ["1", "3"], ["9007199254740992", "9007199254740992"]]) {
+  await page.getByLabel("Start line").fill("3");
+  await page.getByLabel("End line").fill("3");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("");
+  await expect(page.getByRole("button", { name: "Add citation" })).toBeDisabled();
+  await page.getByLabel("Start line").fill("1");
+  await page.getByLabel("End line").fill("1");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("Customers pay by card.");
+  await page.getByLabel("Excerpt").fill("Not quoted evidence.");
+  await expect(page.getByRole("alert").filter({ hasText: "Excerpt must be text from the selected lines" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add citation" })).toBeDisabled();
+  await page.getByLabel("Excerpt").fill("😀".repeat(2_001));
+  await expect(page.getByRole("alert").filter({ hasText: "Excerpt must be 2,000 characters or fewer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add citation" })).toBeDisabled();
+  await page.getByLabel("Excerpt").fill("Customers pay by card.");
+  for (const [start, end] of [["1.5", "2"], ["1", "1.5"], ["0", "1"], ["2", "1"], ["1", "4"], ["9007199254740992", "9007199254740992"]]) {
     await page.getByLabel("Start line").fill(start!);
     await page.getByLabel("End line").fill(end!);
     await page.getByLabel("Excerpt").fill("Customers pay by card.");
@@ -584,6 +615,12 @@ test("a requirement cites immutable source text, preserves local input through i
   await expect(page.getByRole("alert").filter({ hasText: "Choose whole line numbers" })).toHaveCount(0);
   await page.getByRole("button", { name: "Add citation" }).click();
   await expect(page.getByRole("button", { name: /Brief v1, lines 1-1/ })).toBeVisible();
+  await page.getByLabel("Cite source").selectOption({ label: "Brief" });
+  await page.getByLabel("Start line").fill("1");
+  await page.getByLabel("End line").fill("1");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("Customers pay by card.");
+  await expect(page.getByRole("alert").filter({ hasText: "This exact citation is already added" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add citation" })).toBeDisabled();
   const source = (await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: Array<{ id: string; version: number; currentVersionId: string }> }).items[0]!;
   const newerSource = await page.request.post(`/api/projects/${projectId}/sources/${source.id}/versions`, {
     headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
@@ -594,7 +631,7 @@ test("a requirement cites immutable source text, preserves local input through i
   await expect(page.getByRole("button", { name: "Confirm requirement" })).toBeDisabled();
   await page.getByRole("button", { name: /Brief v1, lines 1-1/ }).click();
   await expect(page.getByText("Viewing v1; latest v2")).toBeVisible();
-  await expect(page.locator(".source-lines li")).toHaveText(["Customers pay by card.", "Receipts remain available."]);
+  await expect(page.locator(".source-lines li")).toHaveText(["Customers pay by card.", "Receipts remain available.", ""]);
   await expect(page.locator('.source-lines li[data-cited="true"]')).toHaveCount(1);
   await page.getByRole("button", { name: "Latest", exact: true }).click();
   await expect(page.getByText("Viewing v2; latest v2")).toBeVisible();
@@ -606,10 +643,28 @@ test("a requirement cites immutable source text, preserves local input through i
   await included.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
   await page.getByLabel("Link to step").selectOption(nodeId);
   await page.locator("#link-explanation").fill("Supports payment");
-  await page.getByRole("button", { name: "Add link" }).click();
+  const linkDraft = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; documentRevision: number; document: { requirements: Record<string, { id: string }> } } }).draft;
+  const remoteLink = await page.request.post(`/api/projects/${projectId}/drafts/${linkDraft.id}/commands`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { commandSchemaVersion: 1, command: "ADD_TRACE_LINK", expectedDocumentRevision: linkDraft.documentRevision, payload: { requirementId: Object.values(linkDraft.document.requirements)[0]!.id, nodeId, explanation: "Supports payment" } },
+  });
+  expect(remoteLink.status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("button", { name: "Edit explanation" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add link" })).toBeDisabled();
+  await expect(page.locator("#link-step option", { hasText: "Checkout / Pay" })).toHaveCount(0);
+  await expect(page.locator("#link-explanation")).toHaveValue("Supports payment");
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await included.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByRole("button", { name: "Add link" })).toBeDisabled();
+  await expect(page.locator("#link-step option", { hasText: "Checkout / Pay" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Edit explanation" })).toBeVisible();
   const savedWithLink = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { traceLinks: Record<string, { explanation: string }> } } }).draft;
   expect(Object.values(savedWithLink.document.traceLinks).map((link) => link.explanation)).toEqual(["Supports payment"]);
+  await page.getByLabel("Explanation", { exact: true }).first().fill("😀".repeat(4_001));
+  await expect(page.getByRole("alert").filter({ hasText: "Explanation must be 4,000 characters or fewer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit explanation" })).toBeDisabled();
   await page.getByLabel("Explanation", { exact: true }).first().fill("");
   await expect(page.getByRole("button", { name: "Confirm link" })).toBeDisabled();
   await page.getByRole("button", { name: "Edit explanation" }).click();
@@ -833,6 +888,8 @@ test("trace explanation conflicts offer explicit reconciliation and removed link
   await page.getByRole("button", { name: "Save requirement" }).click();
   await page.getByRole("button", { name: /REQ-001 Payment/ }).click();
   await page.getByLabel("Link to step").selectOption(nodeId);
+  await page.locator("#link-explanation").fill("😀".repeat(4_001));
+  await expect(page.getByRole("button", { name: "Add link" })).toBeDisabled();
   await page.locator("#link-explanation").fill("Original explanation");
   await page.getByRole("button", { name: "Add link" }).click();
   await expect(page.getByRole("button", { name: "Edit explanation" })).toBeVisible();
