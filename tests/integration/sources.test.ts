@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { executeGraphCommand, getDraft } from "../../src/features/drafts/server/execute-command.ts";
 import { ProjectError } from "../../src/features/projects/server/errors.ts";
-import { getProjectStatus } from "../../src/features/projects/server/projects.ts";
+import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { readSourceVersion } from "../../src/features/sources/server/source-versions.ts";
-import { correctSource, createSource, listSources, listSourceVersions, updateSource } from "../../src/features/sources/server/sources.ts";
+import { correctSource, createGraphSource, createSource, listSources, listSourceVersions, updateSource } from "../../src/features/sources/server/sources.ts";
 import { canRun, withFixture } from "./support/fixture.ts";
 
 const refused = (code: string) => (error: unknown) => error instanceof ProjectError && error.code === code;
@@ -131,5 +132,27 @@ test("internal evidence is read-only: no correction, archive or rename", { skip:
     await assert.rejects(updateSource(owner, projectId, sourceId, { key: key(), expectedSourceRecordVersion: 1, archived: true }), refused("FORBIDDEN"));
     await assert.rejects(updateSource(owner, projectId, sourceId, { key: key(), expectedSourceRecordVersion: 1, displayNickname: "x" }), refused("FORBIDDEN"));
     assert.deepEqual(await row(), before);
+  });
+});
+
+test("a saved flow becomes attributed PROMOTED_GRAPH evidence bound to its revision", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user("graph owner");
+    const projectId = await project(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const flow = await executeGraphCommand(owner, projectId, draftId, { key: key(), commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision: 1, payload: { title: "Checkout", purpose: "", classification: "USER_JOURNEY", inclusion: "INCLUDED" } });
+    const flowId = flow.createdIds[0]!;
+    await assert.rejects(createGraphSource(owner, projectId, draftId, { key: key(), expectedDocumentRevision: 1, flowId, title: "Checkout flow" }), refused("STALE_DOCUMENT_REVISION"));
+    const body = { key: key(), expectedDocumentRevision: flow.documentRevision, flowId, title: "Checkout flow" };
+    const source = await createGraphSource(owner, projectId, draftId, body);
+    const version = await readSourceVersion(owner, projectId, source.sourceVersionId);
+    assert.equal(version.kind, "PROMOTED_GRAPH");
+    assert.match(version.text, /^Flow: Checkout\n/);
+    assert.deepEqual(version.origin, { type: "GRAPH", draftId, documentRevision: flow.documentRevision, flowId, copiedTextHash: version.contentHash, promotedBy: version.createdBy });
+    assert.equal((await getDraft(owner, projectId, draftId)).documentRevision, flow.documentRevision, "the draft is not changed");
+    const { rows } = await database.query("select count(*)::int n from app.source_document where project_id = $1 and kind = 'PROMOTED_GRAPH'", [projectId]);
+    assert.equal(rows[0].n, 1);
+    // Ids are case-insensitive on the wire: the same write with uppercase ids replays instead of failing.
+    assert.deepEqual(await createGraphSource(owner, projectId.toUpperCase(), draftId.toUpperCase(), body), { ...source, replayed: true });
   });
 });

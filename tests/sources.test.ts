@@ -45,4 +45,8 @@ test("a saved-flow extract is deterministic and independent of record order", ()
   const reordered = structuredClone(document);
   reordered.nodes = { [a]: document.nodes[a]!, [b]: document.nodes[b]! };
   assert.equal(graphExtract(reordered, flowId), text);
+  document.nodes[b] = node(b, "ACTION", "Pay\r\nnow\rlater");
+  const single = graphExtract(document, flowId);
+  assert.ok(single.includes("- ACTION Pay now later"), "CR and CRLF in a label stay on one line");
+  assert.equal(single, normalizeEvidence(single), "the extract is already normalized");
 });

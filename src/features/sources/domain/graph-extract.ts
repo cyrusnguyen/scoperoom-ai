@@ -2,7 +2,7 @@ import type { ScopeDocument } from "../../drafts/contracts/scope-document.ts";
 
 // Deterministic plain-text design evidence from one saved flow (Data01 "Graph promotion"). Stable order: steps by label then id,
 // connections by endpoint labels then id. Line breaks inside a field become spaces so every record keeps one line.
-const oneLine = (value: string) => value.replace(/\n/g, " ");
+const oneLine = (value: string) => value.replace(/\r\n?|\n/g, " ");
 const order = (a: [string, string], b: [string, string]) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
 
 export function graphExtract(document: ScopeDocument, flowId: string): string {

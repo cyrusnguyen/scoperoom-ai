@@ -5,11 +5,13 @@ import {
   checkReceipt, findReceipt, lockActor, lockProject, profileFor, readAsMember, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
   withDatabase, type ProjectRow, type Transaction,
 } from "../../projects/server/access.ts";
+import { draftMutation } from "../../drafts/server/execute-command.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import {
-  parseCorrectSource, parseCreateSource, parseSourceWriteResult, parseUpdateSource, SOURCE_LIMITS, SOURCE_PAGE_SIZE, USER_DOCUMENT_LIMIT, USER_SOURCE_KINDS,
+  parseCorrectSource, parseCreateSource, parseGraphSource, parseSourceWriteResult, parseUpdateSource, SOURCE_LIMITS, SOURCE_PAGE_SIZE, USER_DOCUMENT_LIMIT, USER_SOURCE_KINDS,
   type SourceHead, type SourceKind, type SourcePage, type SourceVersionPage, type SourceWriteResult,
 } from "../contracts/source-version.ts";
+import { graphExtract } from "../domain/graph-extract.ts";
 import { assertSourceCapacity, insertSource } from "./source-versions.ts";
 
 type Write = SourceWriteResult & { replayed: boolean };
@@ -79,6 +81,28 @@ export async function createSource(identity: ProjectIdentity, projectId: string,
     await assertUserDocumentSlot(tx, project.id);
     await assertSourceCapacity(tx, project.id, evidence.codePointCount);
     const { sourceId, versionId } = await insertSource(tx, project.id, actorId, parsed.uploaded ? "USER_UPLOAD" : "USER_TEXT", parsed.title, evidence);
+    return written(sourceId, versionId, 1, 1, await advanceSources(tx, project, actorId, "SOURCE_CREATED", sourceId));
+  });
+}
+
+/** POST D/graph-sources: the exact saved flow at an inspected revision, never unsaved canvas state. */
+export async function createGraphSource(identity: ProjectIdentity, projectId: string, draftId: string, input: Record<string, unknown>): Promise<Write> {
+  projectId = projectId.toLowerCase(); draftId = draftId.toLowerCase();
+  const { key, ...raw } = input;
+  let parsed: ReturnType<typeof parseGraphSource>;
+  try {
+    if (typeof key !== "string" || !keyPattern.test(key)) throw new Error("INVALID_INPUT");
+    parsed = parseGraphSource(raw);
+  } catch { throw new ProjectError("INVALID_INPUT"); }
+  const operation = "CREATE_GRAPH_SOURCE_V1";
+  return draftMutation(identity, projectId, draftId, key, operation, requestHash(operation, { projectId, draftId, ...parsed }), parseSourceWriteResult, async (tx, project, draft, actorId) => {
+    if (draft.documentRevision !== parsed.expectedDocumentRevision) throw new ProjectError("STALE_DOCUMENT_REVISION", { documentRevision: draft.documentRevision });
+    if (!draft.draft.document.flows[parsed.flowId]) throw new ProjectError("INVALID_INPUT");
+    const evidence = measured(graphExtract(draft.draft.document, parsed.flowId));
+    await assertUserDocumentSlot(tx, project.id);
+    await assertSourceCapacity(tx, project.id, evidence.codePointCount);
+    const origin = { type: "GRAPH", draftId: draft.id, documentRevision: draft.documentRevision, flowId: parsed.flowId, copiedTextHash: evidence.contentHash, promotedBy: actorId };
+    const { sourceId, versionId } = await insertSource(tx, project.id, actorId, "PROMOTED_GRAPH", parsed.title, evidence, origin);
     return written(sourceId, versionId, 1, 1, await advanceSources(tx, project, actorId, "SOURCE_CREATED", sourceId));
   });
 }
