@@ -6,14 +6,21 @@ import { appUrl, createProjectViaApi, e2eReady, openSpecs, seedStudioChanges } f
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
+const pageFits = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+
 test("paste, read, correct and archive a source", async ({ page }) => {
   const projectId = await createProjectViaApi(page, "Sources project");
   await openSpecs(page, projectId, "Sources project");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByLabel("Source title")).toBeVisible();
+  await expect.poll(() => pageFits(page)).toBe(true); // the add form
   await page.getByLabel("Source title").fill("Brief");
   await page.getByLabel("Source text").fill("Customers pay by card.\r\nRefunds take 5 days.");
   await page.getByRole("button", { name: "Add source" }).click();
   await page.getByRole("button", { name: /Brief/ }).click();
   await expect(page.locator(".source-lines li")).toHaveText(["Customers pay by card.", "Refunds take 5 days."]);
+  await expect(page.getByLabel("Corrected text")).toBeVisible();
+  await expect.poll(() => pageFits(page)).toBe(true); // the reader with its correction form
   await page.getByLabel("Corrected text").fill("Customers pay by card or wallet.");
   await page.getByRole("button", { name: "Save new version" }).click();
   await expect(page.getByText("Viewing v2; latest v2")).toBeVisible();
@@ -32,6 +39,9 @@ test("an invalid UTF-8 upload is refused before sending", async ({ page }) => {
   await page.getByLabel("Source text").fill("typed text stays");
   await page.getByLabel("Upload .txt or .md").setInputFiles({ name: "bad.txt", mimeType: "text/plain", buffer: Buffer.from([0xff, 0xfe, 0x00]) });
   await expect(page.getByText("This file isn't valid UTF-8 text.")).toBeVisible();
+  await expect(page.getByLabel("Source text")).toHaveValue("typed text stays");
+  await page.getByLabel("Upload .txt or .md").setInputFiles({ name: "big.txt", mimeType: "text/plain", buffer: Buffer.alloc(320 * 1024 + 1, "a") });
+  await expect(page.getByText("This file is too large to add as a source.")).toBeVisible();
   await expect(page.getByLabel("Source text")).toHaveValue("typed text stays");
 });
 
@@ -112,8 +122,10 @@ test("an unconfirmed Add survives a tab switch and Retry creates exactly one sou
   await expect(page.getByRole("alert").filter({ hasText: "We couldn’t confirm" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add source" })).toBeDisabled();
   await expect(page.getByLabel("Source text")).toHaveValue("Customers pay by card.");
+  await expect(page.getByLabel("Source text")).not.toBeEditable(); // locked while the request is unconfirmed, so a retry cannot lose later edits
   await page.getByRole("button", { name: "Retry" }).click();
   await expect(page.getByText("Source added.")).toBeVisible();
+  await expect(page.getByLabel("Source text")).toBeEditable();
   await expect(page.getByRole("button", { name: /Brief/ })).toHaveCount(1);
   const listed = await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: unknown[] };
   expect(listed.items).toHaveLength(1);
@@ -139,7 +151,14 @@ test("the filter and the open source survive a tab switch, and focus returns aft
   await expect(page.getByRole("button", { name: "Active", exact: true })).toBeFocused(); // the archived source is not in this list
   await page.getByRole("button", { name: "Archived", exact: true }).click();
   await page.getByRole("button", { name: /Brief/ }).click();
+  await expect(page.getByRole("heading", { name: "Brief" })).toBeFocused(); // opened by the person, so focus follows once it loads
   await switchTabs(page);
+  const specsTab = page.getByRole("tab", { name: "Specs", exact: true });
+  await expect(specsTab).toBeFocused();
+  await page.getByRole("tab", { name: "Details", exact: true }).focus();
+  await page.keyboard.press("ArrowLeft"); // the Reader must not take focus from the tablist
+  await expect(specsTab).toBeFocused();
+  await expect(specsTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("button", { name: "Restore" })).toBeVisible();
   await expect(page.locator(".source-lines li")).toHaveText(["Customers pay by card or wallet."]);
   await page.getByRole("button", { name: "Back" }).click();

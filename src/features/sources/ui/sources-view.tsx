@@ -151,7 +151,7 @@ export default function SourcesView({ ui, update, drafts, setDraft }: {
         {!list.page ? !list.error && <p role="status">Loading sources…</p>
           : !list.page.items.length ? <p className="muted">{EMPTY[scope]}</p>
           : <ul className="sources-list">{list.page.items.map((item) => <li key={item.id}>
-            <button type="button" className="specs-card" data-source-id={item.id} onClick={() => update(() => ({ selected: { kind: "source", sourceId: item.id, versionId: null, back: ui.selected } }))}>
+            <button type="button" className="specs-card" data-source-id={item.id} onClick={() => { setRefocus((count) => count + 1); update(() => ({ selected: { kind: "source", sourceId: item.id, versionId: null, back: ui.selected } })); }}>
               <strong>{item.displayNickname ?? item.title}</strong>
               <span className="specs-badge">{KIND_LABELS[item.kind]} · v{item.currentSequence} · {item.versionCount} {item.versionCount === 1 ? "version" : "versions"}{item.archived ? " · Archived" : ""}</span>
             </button></li>)}
@@ -172,9 +172,10 @@ function AddSource({ busy, post, drafts, setDraft }: Shared) {
   const choose = async (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.target, file = input.files?.[0];
     if (!file) return;
-    const decoded = file.size > SOURCE_BODY_LIMIT ? null : await readUtf8(file);
+    const tooLarge = file.size > SOURCE_BODY_LIMIT;
+    const decoded = tooLarge ? null : await readUtf8(file);
     input.value = "";
-    if (decoded === null) { setFileError("This file isn't valid UTF-8 text."); return; }
+    if (decoded === null) { setFileError(tooLarge ? "This file is too large to add as a source." : "This file isn't valid UTF-8 text."); return; }
     setFileError(""); setUploadedText(decoded);
     set(NEW_TEXT, decoded);
     if (!title) set(NEW_TITLE, [...file.name].slice(0, SOURCE_TITLE_LIMIT).join(""));
@@ -185,11 +186,11 @@ function AddSource({ busy, post, drafts, setDraft }: Shared) {
   };
   return <form className="detail-section" onSubmit={submit}>
     <h3>Add a source</h3>
-    <div className="field"><label htmlFor="new-source-title">Source title</label><input id="new-source-title" value={title} maxLength={SOURCE_TITLE_LIMIT} onChange={(event) => set(NEW_TITLE, event.target.value)} /></div>
-    <div className="field"><label htmlFor="new-source-text">Source text</label><textarea id="new-source-text" rows={6} value={text} onChange={(event) => set(NEW_TEXT, event.target.value)} /></div>
-    <div className="field"><label htmlFor="new-source-file">Upload .txt or .md</label><input id="new-source-file" type="file" accept=".txt,.md,text/plain,text/markdown" onChange={(event) => void choose(event)} /></div>
+    <div className="field"><label htmlFor="new-source-title">Source title</label><input id="new-source-title" value={title} readOnly={busy} maxLength={SOURCE_TITLE_LIMIT} onChange={(event) => set(NEW_TITLE, event.target.value)} /></div>
+    <div className="field"><label htmlFor="new-source-text">Source text</label><textarea id="new-source-text" rows={6} value={text} readOnly={busy} onChange={(event) => set(NEW_TEXT, event.target.value)} /></div>
+    <div className="field"><label htmlFor="new-source-file">Upload .txt or .md</label><input id="new-source-file" type="file" disabled={busy} accept=".txt,.md,text/plain,text/markdown" onChange={(event) => void choose(event)} /></div>
     {fileError && <p role="alert">{fileError}</p>}
-    <p className="muted" aria-live="polite" data-over={count > SOURCE_LIMITS.submissionCodePoints}>{count.toLocaleString("en-US")}/{SOURCE_LIMITS.submissionCodePoints.toLocaleString("en-US")} characters</p>
+    <p className="muted" data-over={count > SOURCE_LIMITS.submissionCodePoints}>{count.toLocaleString("en-US")}/{SOURCE_LIMITS.submissionCodePoints.toLocaleString("en-US")} characters</p>
     <button type="submit" className="button primary" disabled={busy || !title.trim() || !text.trim() || count > SOURCE_LIMITS.submissionCodePoints}>Add source</button>
   </form>;
 }
@@ -207,8 +208,8 @@ function FlowSource({ flows, draftId, documentRevision, busy, post, drafts, setD
     post(`/drafts/${draftId}/graph-sources`, { expectedDocumentRevision: documentRevision, flowId: chosen, title: title.trim() }, "POST", "Add flow as source");
   }}>
     <h3>From saved flow</h3>
-    <div className="field"><label htmlFor="flow-source-flow">Flow</label><select id="flow-source-flow" value={chosen} onChange={(event) => { setFlowId(event.target.value); setName(""); }}>{ids.map((id) => <option key={id} value={id}>{flows[id]!.title}</option>)}</select></div>
-    <div className="field"><label htmlFor="flow-source-title">Flow source title</label><input id="flow-source-title" value={title} maxLength={SOURCE_TITLE_LIMIT} onChange={(event) => setName(event.target.value)} /></div>
+    <div className="field"><label htmlFor="flow-source-flow">Flow</label><select id="flow-source-flow" value={chosen} disabled={busy} onChange={(event) => { setFlowId(event.target.value); setName(""); }}>{ids.map((id) => <option key={id} value={id}>{flows[id]!.title}</option>)}</select></div>
+    <div className="field"><label htmlFor="flow-source-title">Flow source title</label><input id="flow-source-title" value={title} readOnly={busy} maxLength={SOURCE_TITLE_LIMIT} onChange={(event) => setName(event.target.value)} /></div>
     <p className="muted">Uses the last saved version of the flow.</p>
     <button type="submit" className="button" disabled={busy || !title.trim()}>Add flow as source</button>
   </form>;
@@ -251,13 +252,13 @@ function Reader({ selected, head, listLoaded, canEdit, update, refocus, onBack, 
 
   const current = read?.id === viewId ? read : null;
   const view = current?.view;
-  // After a committed correction, archive or restore, focus moves to the heading once the (new) version is on screen.
+  // After the person opens a source or commits a correction, archive or restore, focus moves to the heading once the (new) version is on screen.
   const heading = useRef<HTMLHeadingElement>(null), focused = useRef(0);
   useEffect(() => {
     if (view && refocus !== focused.current) { focused.current = refocus; heading.current?.focus(); }
   }, [refocus, view]);
   const goBack = () => { onBack(selected.sourceId); update(() => ({ selected: selected.back })); };
-  const back = <button type="button" className="button quiet small" autoFocus onClick={goBack}>Back</button>;
+  const back = <button type="button" className="button quiet small" onClick={goBack}>Back</button>;
   if (!head) return <>{back}<p role={listLoaded ? "alert" : "status"}>{listLoaded ? "This source isn't in the loaded list." : "Loading source…"}</p></>;
 
   const editable = canEdit && isUser(head);
@@ -295,9 +296,9 @@ function Reader({ selected, head, listLoaded, canEdit, update, refocus, onBack, 
     {editable && !head.archived && view && (atHead
       ? <form className="detail-section" onSubmit={correct}>
         <h3>Correct this source</h3>
-        <div className="field"><label htmlFor="corrected-title">Corrected title</label><input id="corrected-title" value={title} maxLength={SOURCE_TITLE_LIMIT} onChange={(event) => edit(titleKey, view.title, event.target.value)} /></div>
-        <div className="field"><label htmlFor="corrected-text">Corrected text</label><textarea id="corrected-text" rows={8} value={text} onChange={(event) => edit(textKey, view.text, event.target.value)} /></div>
-        <p className="muted" aria-live="polite">{count.toLocaleString("en-US")}/{SOURCE_LIMITS.submissionCodePoints.toLocaleString("en-US")} characters</p>
+        <div className="field"><label htmlFor="corrected-title">Corrected title</label><input id="corrected-title" value={title} readOnly={busy} maxLength={SOURCE_TITLE_LIMIT} onChange={(event) => edit(titleKey, view.title, event.target.value)} /></div>
+        <div className="field"><label htmlFor="corrected-text">Corrected text</label><textarea id="corrected-text" rows={8} value={text} readOnly={busy} onChange={(event) => edit(textKey, view.text, event.target.value)} /></div>
+        <p className="muted">{count.toLocaleString("en-US")}/{SOURCE_LIMITS.submissionCodePoints.toLocaleString("en-US")} characters</p>
         <button type="submit" className="button primary" disabled={busy || !changed || !title.trim() || !text.trim() || count > SOURCE_LIMITS.submissionCodePoints}>Save new version</button>
       </form>
       : <p className="muted">Open the latest version to correct it.</p>)}
