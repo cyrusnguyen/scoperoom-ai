@@ -159,3 +159,11 @@ export async function saveStudio(page: Page) {
   await headerSave(page).click();
   await expect(page.locator(".studio-status")).toContainText("All changes saved");
 }
+
+/** Opens a project and its Specs tab. */
+export async function openSpecs(page: Page, projectId: string, name: string) {
+  await page.goto(`/app/projects/${projectId}`);
+  await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+  await page.getByRole("button", { name: "Specs", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Specs", selected: true })).toBeVisible();
+}
