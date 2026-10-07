@@ -4,8 +4,26 @@ import { emptyDraft } from "../src/features/drafts/contracts/scope-document.ts";
 import { citationMatches, lineStarts, normalizeEvidence, parseCorrectSource, parseCreateSource, parseUpdateSource } from "../src/features/sources/contracts/source-version.ts";
 import { graphExtract } from "../src/features/sources/domain/graph-extract.ts";
 import { acceptFirstPage, appendSourcePage, appendVersionPage, canLoadMore, listKey, startSourceList } from "../src/features/sources/ui/source-pages.ts";
+import { editSourceCorrection, reconcileSourceCorrection, sourceCorrectionBody } from "../src/features/sources/ui/source-correction.ts";
 
 const ID = "11111111-1111-4111-8111-111111111111";
+
+test("a correction pins both original fields and guards, and only explicit review merges changed fields", () => {
+  const head = { version: 1, currentVersionId: "v1" }, view = { id: "v1", sequence: 1, title: "Original title", text: "Original text" };
+  const newerHead = { version: 2, currentVersionId: "v2" }, newerView = { id: "v2", sequence: 2, title: "Remote title", text: "Remote text" };
+  const titleOnly = editSourceCorrection(undefined, head, view, "title", "Local title")!;
+  assert.deepEqual(sourceCorrectionBody(titleOnly), { expectedSourceRecordVersion: 1, expectedCurrentVersionId: "v1", title: "Local title", text: "Original text" });
+  const typedAfterRefresh = editSourceCorrection(titleOnly, newerHead, newerView, "title", "Local title continued")!;
+  assert.equal(typedAfterRefresh.base, titleOnly.base);
+  assert.equal(typedAfterRefresh.text, "Original text");
+  assert.equal(editSourceCorrection(undefined, newerHead, view, "title", "No mixed baseline"), undefined);
+  const reviewed = reconcileSourceCorrection(typedAfterRefresh, newerHead, newerView)!;
+  assert.deepEqual(sourceCorrectionBody(reviewed), { expectedSourceRecordVersion: 2, expectedCurrentVersionId: "v2", title: "Local title continued", text: "Remote text" });
+  const textOnly = editSourceCorrection(undefined, head, view, "text", "Local text")!;
+  assert.deepEqual(sourceCorrectionBody(reconcileSourceCorrection(textOnly, newerHead, newerView)!), { expectedSourceRecordVersion: 2, expectedCurrentVersionId: "v2", title: "Remote title", text: "Local text" });
+  assert.equal(reconcileSourceCorrection(textOnly, newerHead, view), textOnly, "the reviewed body must belong to the selected head");
+  assert.equal(editSourceCorrection(titleOnly, newerHead, newerView, "title", "Original title"), undefined, "undoing local edits releases the baseline");
+});
 
 test("version paging rejects held pages after a source change, head refresh or duplicate reply", () => {
   const item = (sequence: number) => ({ id: String(sequence), sequence, title: "Version", contentHash: "hash", codePointCount: 1, createdBy: ID, createdAt: "2026-10-07T10:00:00Z" });

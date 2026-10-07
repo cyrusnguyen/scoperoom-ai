@@ -5,6 +5,7 @@ export function finishSourceWrite(ui: ProjectUi, request: SpecsRequest): Project
   if (ui.specs.pending?.key !== request.key) return ui;
   const drafts = { ...ui.drafts };
   let selected = ui.specs.selected;
+  let sourceCorrections = ui.specs.sourceCorrections;
   const [, id] = request.path.split("/");
   if (request.path === "sources") {
     delete drafts["specs:new-source:title"]; delete drafts["specs:new-source:text"]; delete drafts["specs:new-source:uploaded"];
@@ -12,8 +13,9 @@ export function finishSourceWrite(ui: ProjectUi, request: SpecsRequest): Project
     delete drafts["specs:flow-source:title"]; delete drafts["specs:flow-source:id"];
   }
   else if (request.path.endsWith("/versions")) {
-    delete drafts[`specs:correct:${id}:title`]; delete drafts[`specs:correct:${id}:text`];
+    sourceCorrections = { ...sourceCorrections };
+    delete sourceCorrections[id!];
     if (selected?.kind === "source" && selected.sourceId === id) selected = { ...selected, versionId: null };
   }
-  return { ...ui, drafts, specs: { ...ui.specs, selected, pending: null, message: `${request.label}: saved.` } };
+  return { ...ui, drafts, specs: { ...ui.specs, ...(sourceCorrections ? { sourceCorrections } : {}), selected, pending: null, message: `${request.label}: saved.` } };
 }

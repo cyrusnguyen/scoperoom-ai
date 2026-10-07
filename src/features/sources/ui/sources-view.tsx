@@ -11,6 +11,7 @@ import {
   type SourceHead, type SourcePage, type SourceScope, type SourceVersionPage, type SourceVersionView, type SourceWriteResult,
 } from "../contracts/source-version";
 import { acceptFirstPage, appendSourcePage, appendVersionPage, canLoadMore, listKey, startSourceList, type SourceList, type VersionList } from "./source-pages";
+import { editSourceCorrection, reconcileSourceCorrection, sourceCorrectionBody, type SourceCorrection } from "./source-correction";
 
 const KIND_LABELS: Record<SourceHead["kind"], string> = { USER_TEXT: "Pasted", USER_UPLOAD: "Uploaded", PROMOTED_GRAPH: "Saved flow", QUESTION_ANSWER: "Answer", AI_PROMPT: "AI instruction" };
 const SCOPES: Array<[SourceScope, string]> = [["user", "Active"], ["archived", "Archived"], ["internal", "Internal"]];
@@ -69,7 +70,6 @@ type Write = ReturnType<typeof useSpecsWrite>;
 type Post = (method: "POST" | "PATCH", path: string, body: Record<string, unknown>, label: string) => void;
 type Shared = { busy: boolean; post: Post; setDraft: (key: string, value: string | undefined) => void; drafts: Record<string, string> };
 const FLOW_TITLE = "specs:flow-source:title";
-const correctKey = (id: string, field: "title" | "text") => `specs:correct:${id}:${field}`;
 
 export default function SourcesView({ ui, update, drafts, setDraft, write, saved }: {
   ui: SpecsUi; update: Update; drafts: Record<string, string>; setDraft: (key: string, value: string | undefined) => void; write: Write;
@@ -133,7 +133,7 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
     {usage && <p className="muted">{usage.activeUserDocuments}/{USER_DOCUMENT_LIMIT} documents · {usage.retainedVersions}/{SOURCE_LIMITS.retainedVersions} versions · {usage.codePoints.toLocaleString("en-US")}/{SOURCE_LIMITS.projectCodePoints.toLocaleString("en-US")} characters</p>}
     {selected ? <>
       {exact?.error && <p role="alert">{exact.error} <button type="button" className="button small" onClick={() => setHeadAttempt((value) => value + 1)}>Retry source</button></p>}
-      <Reader selected={selected} head={head} headFailed={Boolean(exact?.error)} canEdit={canEdit} update={update} refocus={refocus} onBack={(id) => { returnTo.current = id; }} {...shared} />
+      <Reader selected={selected} correction={ui.sourceCorrections?.[selected.sourceId]} head={head} headFailed={Boolean(exact?.error)} canEdit={canEdit} update={update} refocus={refocus} onBack={(id) => { returnTo.current = id; }} {...shared} />
     </>
       : <>
         {canEdit && <AddSource {...shared} />}
@@ -208,8 +208,9 @@ function FlowSource({ flows, draftId, documentRevision, busy, post, drafts, setD
   </form>;
 }
 
-function Reader({ selected, head, headFailed, canEdit, update, refocus, onBack, busy, post, drafts, setDraft }: Shared & {
+function Reader({ selected, correction, head, headFailed, canEdit, update, refocus, onBack, busy, post }: Shared & {
   selected: NonNullable<Extract<SpecsUi["selected"], { kind: "source" }>>; head: SourceHead | null; headFailed: boolean; canEdit: boolean; update: Update; refocus: number; onBack: (sourceId: string) => void;
+  correction?: SourceCorrection;
 }) {
   const { projectId } = useStudio();
   const viewId = selected.versionId ?? head?.currentVersionId ?? null;
@@ -268,14 +269,19 @@ function Reader({ selected, head, headFailed, canEdit, update, refocus, onBack, 
 
   const editable = canEdit && isUser(head);
   const atHead = view?.id === head.currentVersionId;
-  const titleKey = correctKey(head.id, "title"), textKey = correctKey(head.id, "text");
-  const title = drafts[titleKey] ?? view?.title ?? "", text = drafts[textKey] ?? view?.text ?? "";
+  const title = correction?.title ?? view?.title ?? "", text = correction?.text ?? view?.text ?? "";
   const count = codePoints(text);
-  const changed = view !== undefined && (title !== view.title || text !== view.text);
-  const edit = (key: string, base: string | undefined, value: string) => setDraft(key, value === base ? undefined : value);
+  const stale = correction && (correction.base.recordVersion !== head.version || correction.base.id !== head.currentVersionId);
+  const changeCorrection = (change: (current: SourceCorrection | undefined) => SourceCorrection | undefined) => update((current) => {
+    if (current.pending) return {};
+    const sourceCorrections = { ...current.sourceCorrections }, next = change(sourceCorrections[head.id]);
+    if (next) sourceCorrections[head.id] = next; else delete sourceCorrections[head.id];
+    return { sourceCorrections };
+  });
+  const edit = (field: "title" | "text", value: string) => { if (view) changeCorrection((current) => editSourceCorrection(current, head, view, field, value)); };
   const correct = (event: FormEvent) => {
     event.preventDefault();
-    post("POST", `sources/${head.id}/versions`, { expectedSourceRecordVersion: head.version, expectedCurrentVersionId: head.currentVersionId, title: title.trim(), text }, "Save new version");
+    if (correction) post("POST", `sources/${head.id}/versions`, sourceCorrectionBody(correction), "Save new version");
   };
   const archive = () => post("PATCH", `sources/${head.id}`, { expectedSourceRecordVersion: head.version, archived: !head.archived }, head.archived ? "Restore" : "Archive");
 
@@ -302,10 +308,17 @@ function Reader({ selected, head, headFailed, canEdit, update, refocus, onBack, 
     {editable && !head.archived && view && (atHead
       ? <form className="detail-section" onSubmit={correct}>
         <h3>Correct this source</h3>
-        <div className="field"><label htmlFor="corrected-title">Corrected title</label><input id="corrected-title" value={title} readOnly={busy} maxLength={SOURCE_TITLE_LIMIT} onChange={(event) => edit(titleKey, view.title, event.target.value)} /></div>
-        <div className="field"><label htmlFor="corrected-text">Corrected text</label><textarea id="corrected-text" rows={8} value={text} readOnly={busy} onChange={(event) => edit(textKey, view.text, event.target.value)} /></div>
+        {stale && <section aria-label="Review newer source" className="detail-section">
+          <p role="alert">This source changed while you were editing. Your correction is based on v{correction.base.sequence}. Review the current saved source before using your edits on it.</p>
+          <h4>Current saved title</h4><p>{view.title}</p>
+          <h4>Current saved text</h4><p style={{ whiteSpace: "pre-wrap" }}>{view.text}</p>
+          <button type="button" className="button" disabled={busy} onClick={() => changeCorrection((current) => current && reconcileSourceCorrection(current, head, view))}>Use my edits on latest version</button>
+        </section>}
+        <div className="field"><label htmlFor="corrected-title">Corrected title</label><input id="corrected-title" value={title} readOnly={busy} maxLength={SOURCE_TITLE_LIMIT} onChange={(event) => edit("title", event.target.value)} /></div>
+        <div className="field"><label htmlFor="corrected-text">Corrected text</label><textarea id="corrected-text" rows={8} value={text} readOnly={busy} onChange={(event) => edit("text", event.target.value)} /></div>
         <p className="muted">{count.toLocaleString("en-US")}/{SOURCE_LIMITS.submissionCodePoints.toLocaleString("en-US")} characters</p>
-        <button type="submit" className="button primary" disabled={busy || !changed || !title.trim() || !text.trim() || count > SOURCE_LIMITS.submissionCodePoints}>Save new version</button>
+        <button type="submit" className="button primary" disabled={busy || !correction || !title.trim() || !text.trim() || count > SOURCE_LIMITS.submissionCodePoints}>Save new version</button>
+        {correction && <button type="button" className="button" disabled={busy} onClick={() => changeCorrection(() => undefined)}>Discard my correction</button>}
       </form>
       : <p className="muted">Open the latest version to correct it.</p>)}
     {editable && <button type="button" className="button" disabled={busy} onClick={archive}>{head.archived ? "Restore" : "Archive"}</button>}

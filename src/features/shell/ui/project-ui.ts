@@ -2,6 +2,7 @@
 // Unsaved field values live here, so closing the panel or navigating away never drops them silently.
 import { discardOutbox } from "../../studio/ui/outbox.ts";
 import { defaultStudioUi, studioDirtyCount, type StudioUi } from "../../studio/ui/studio-ui.ts";
+import type { SourceCorrection } from "../../sources/ui/source-correction.ts";
 
 type AiRequestBase = { projectId: string; draftId: string; key: string; body: Record<string, unknown>; };
 export type AiRequest =
@@ -13,7 +14,7 @@ export type RightTab = "details" | "ai" | "specs";
 export type SpecsSelection = { kind: "source"; sourceId: string; versionId: string | null; back: SpecsSelection } | null;
 /** One Specs write at a time per project, kept in this store so a lost response survives tab switches and remounts. `path` is relative to `/api/projects/:projectId/`. */
 export type SpecsRequest = { key: string; method: "POST" | "PATCH"; path: string; body: Record<string, unknown>; label: string };
-export type SpecsUi = { selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string };
+export type SpecsUi = { selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string; sourceCorrections?: Record<string, SourceCorrection> };
 export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: RightTab; drafts: Record<string, string>; ai: AiUi; specs: SpecsUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
@@ -65,7 +66,7 @@ export function updateUi(store: UiStore, projectId: string, change: (ui: Project
 /** Unsaved Details fields plus unsaved Studio fields and changes (an unconfirmed or refused save still counts). */
 export function dirtyCount(store: UiStore, projectId: string | undefined): number {
   const ui = uiFor(store, projectId);
-  return Object.keys(ui.drafts).length + studioDirtyCount(ui);
+  return Object.keys(ui.drafts).length + Object.keys(ui.specs.sourceCorrections ?? {}).length + studioDirtyCount(ui);
 }
 
 /** Reload or close also protects pending AI and source-write receipts retained only in memory. */
@@ -80,7 +81,10 @@ export function anyDirty(store: UiStore): boolean {
 export function discardDrafts(store: UiStore, projectId: string): UiStore {
   const current = uiFor(store, projectId);
   const outbox = discardOutbox(current.outbox);
-  return { ...store, [projectId]: { ...current, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox, save: outbox.sending ? current.save : { state: "idle", message: "" } } };
+  const pendingSource = current.specs.pending?.path.match(/^sources\/([^/]+)\/versions$/)?.[1];
+  const pendingCorrection = pendingSource && current.specs.sourceCorrections?.[pendingSource];
+  const specs = current.specs.sourceCorrections ? { ...current.specs, sourceCorrections: pendingCorrection ? { [pendingSource]: pendingCorrection } : {} } : current.specs;
+  return { ...store, [projectId]: { ...current, specs, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox, save: outbox.sending ? current.save : { state: "idle", message: "" } } };
 }
 
 /** Access loss or leaving: forget everything held for that project. */

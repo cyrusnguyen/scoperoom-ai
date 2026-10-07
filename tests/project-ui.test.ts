@@ -7,6 +7,28 @@ import type { DraftView } from "../src/features/drafts/contracts/scope-document.
 import { acknowledgeExternalWrite, admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
 import { type AiRequest, currentAiRun, recoverUnavailableCurrentRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, defaultSpecsUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, settleSpecsRequest, startSpecsRequest, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 import { finishSourceWrite } from "../src/features/sources/ui/source-write.ts";
+import { editSourceCorrection, sourceCorrectionBody } from "../src/features/sources/ui/source-correction.ts";
+
+test("correction snapshots protect navigation, survive tabs and pending discard, and only their ACK clears them", () => {
+  const correction = editSourceCorrection(undefined, { version: 1, currentVersionId: "v1" }, { id: "v1", sequence: 1, title: "Original", text: "Text" }, "title", "Local")!;
+  const initial = updateUi({}, "a", () => ({ specs: { ...defaultSpecsUi, sourceCorrections: { source: correction, other: correction } } }));
+  assert.equal(dirtyCount(initial, "a"), 2);
+  assert.equal(anyDirty(initial), true);
+  assert.equal(uiFor(setRightTab(setRightOpen(initial, "a", false), "a", "specs"), "a").specs.sourceCorrections?.source, correction);
+  assert.deepEqual(uiFor(discardDrafts(initial, "a"), "a").specs.sourceCorrections, {});
+  const pending = { key: "correction-key", method: "POST" as const, path: "sources/source/versions", label: "Save new version", body: sourceCorrectionBody(correction) };
+  const store = updateUi(initial, "a", (ui) => ({ specs: { ...ui.specs, pending } }));
+  const discarded = uiFor(discardDrafts(store, "a"), "a");
+  assert.equal(discarded.specs.pending, pending);
+  assert.deepEqual(discarded.specs.sourceCorrections, { source: correction }, "only the unresolved correction survives explicit discard");
+  const before = uiFor(store, "a"), saved = finishSourceWrite(before, pending);
+  assert.deepEqual(saved.specs.sourceCorrections, { other: correction });
+  assert.equal(saved.specs.pending, null);
+  const newer = { ...saved, specs: { ...saved.specs, sourceCorrections: { source: correction, other: correction } } };
+  assert.equal(finishSourceWrite(newer, pending), newer, "a duplicate ACK never erases later input");
+  const refused = { ...before, specs: settleSpecsRequest(before.specs, pending.key, "refused", "Stale") };
+  assert.equal(refused.specs.sourceCorrections?.source, correction, "a stale refusal preserves the captured baseline and fields");
+});
 
 test("source acknowledgement clears matching input atomically and a duplicate keeps newer text and selection", () => {
   const request = { key: "first", method: "POST" as const, path: "sources", body: { title: "First", text: "Submitted" }, label: "Add source" };

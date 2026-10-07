@@ -83,18 +83,98 @@ test("a correction against a newer version keeps the unsent text for retry", asy
   await page.getByRole("button", { name: /Policy/ }).click();
   await expect(page.locator(".source-lines li")).toHaveText(["Original."]);
   const head = (await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: Array<{ id: string; version: number; currentVersionId: string }> }).items[0]!;
+  await page.getByLabel("Corrected text").fill("My unsent correction.");
   const other = await page.request.post(`/api/projects/${projectId}/sources/${head.id}/versions`, {
     headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
     data: { expectedSourceRecordVersion: head.version, expectedCurrentVersionId: head.currentVersionId, title: "Policy", text: "Changed elsewhere." },
   });
   expect(other.status()).toBe(201);
-  await page.getByLabel("Corrected text").fill("My unsent correction.");
   await page.getByRole("button", { name: "Save new version" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Someone saved this item first" })).toBeVisible();
   await expect(page.locator(".source-lines li")).toHaveText(["Changed elsewhere."]); // the newer head has been read
   await expect(page.getByLabel("Corrected text")).toHaveValue("My unsent correction.");
+  await page.getByRole("button", { name: "Use my edits on latest version" }).click();
   await page.getByRole("button", { name: "Save new version" }).click();
   await expect(page.getByText("Viewing v3; latest v3")).toBeVisible();
+});
+
+for (const field of ["title", "text"] as const) test(`a ${field}-only correction keeps its inspected baseline after refresh and remount`, async ({ page }) => {
+  const projectId = await createProjectViaApi(page, `Pinned ${field} correction`);
+  const created = await (await page.request.post(`/api/projects/${projectId}/sources`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { title: "Original title", text: "Original text" },
+  })).json();
+  const path = `/api/projects/${projectId}/sources/${created.sourceId}/versions`;
+  await openSpecs(page, projectId, `Pinned ${field} correction`);
+  await page.getByRole("button", { name: /Original title/ }).click();
+  await page.getByLabel(field === "title" ? "Corrected title" : "Corrected text").fill(`My ${field}`);
+  const latest = await (await page.request.post(path, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { expectedSourceRecordVersion: created.version, expectedCurrentVersionId: created.sourceVersionId, title: "Remote title", text: "Remote text" },
+  })).json();
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByText("Viewing v2; latest v2")).toBeVisible();
+  await expect(page.locator(".source-lines li")).toHaveText(["Remote text"]);
+  await switchTabs(page);
+  await expect(page.getByText("Viewing v2; latest v2")).toBeVisible();
+  const refused = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith(path));
+  await page.getByRole("button", { name: "Save new version" }).click();
+  const response = await refused;
+  expect(response.status()).toBe(409);
+  expect(response.request().postDataJSON()).toEqual({
+    expectedSourceRecordVersion: created.version, expectedCurrentVersionId: created.sourceVersionId,
+    title: field === "title" ? "My title" : "Original title", text: field === "text" ? "My text" : "Original text",
+  });
+  await expect(page.getByLabel("Corrected title")).toHaveValue(field === "title" ? "My title" : "Original title");
+  await expect(page.getByLabel("Corrected text")).toHaveValue(field === "text" ? "My text" : "Original text");
+  await page.getByRole("button", { name: "Use my edits on latest version" }).click();
+  await expect(page.getByLabel("Corrected title")).toHaveValue(field === "title" ? "My title" : "Remote title");
+  await expect(page.getByLabel("Corrected text")).toHaveValue(field === "text" ? "My text" : "Remote text");
+  const accepted = page.waitForResponse((result) => result.request().method() === "POST" && result.url().endsWith(path));
+  await page.getByRole("button", { name: "Save new version" }).click();
+  const saved = await accepted;
+  expect(saved.status()).toBe(201);
+  expect(saved.request().postDataJSON().expectedCurrentVersionId).toBe(latest.sourceVersionId);
+  await expect(page.getByText("Viewing v3; latest v3")).toBeVisible();
+  await page.getByLabel("Corrected title").fill("Another unsent edit");
+  await page.getByRole("button", { name: "Discard my correction" }).click();
+  await expect(page.getByLabel("Corrected title")).toHaveValue(field === "title" ? "My title" : "Remote title");
+  await expect(page.getByRole("button", { name: "Save new version" })).toBeDisabled();
+});
+
+test("an unconfirmed correction keeps its snapshot and exact request across a project switch", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Unconfirmed correction"), otherProject = await createProjectViaApi(page, "Other correction project");
+  const created = await (await page.request.post(`/api/projects/${projectId}/sources`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { title: "Original title", text: "Original text" },
+  })).json();
+  const path = `/api/projects/${projectId}/sources/${created.sourceId}/versions`;
+  const sent: Array<{ key: string | undefined; body: string | null }> = [];
+  await page.route(`**${path}`, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    sent.push({ key: route.request().headers()["idempotency-key"], body: route.request().postData() });
+    if (sent.length > 1) return route.continue();
+    await route.fetch();
+    return route.abort();
+  });
+  await openSpecs(page, projectId, "Unconfirmed correction");
+  await page.getByRole("button", { name: /Original title/ }).click();
+  await page.getByLabel("Corrected text").fill("My correction");
+  await page.getByRole("button", { name: "Save new version" }).click();
+  await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+  await page.locator("#projects-nav .project-row", { hasText: "Other correction project" }).click();
+  await page.getByRole("button", { name: "Discard changes", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Other correction project" })).toBeVisible();
+  expect(page.url()).toContain(otherProject);
+  await page.locator("#projects-nav .project-row", { hasText: "Unconfirmed correction" }).click();
+  await expect(page.getByLabel("Corrected text")).toHaveValue("My correction");
+  await expect(page.getByLabel("Corrected text")).not.toBeEditable();
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByText("Save new version: saved.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save new version" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Discard my correction" })).toHaveCount(0);
+  expect(sent).toHaveLength(2); expect(sent[1]).toEqual(sent[0]);
+  expect(JSON.parse(sent[0]!.body!).expectedCurrentVersionId).toBe(created.sourceVersionId);
+  const versions = await (await page.request.get(path)).json();
+  expect(versions.items).toHaveLength(2);
 });
 
 test("a saved flow is added as a source", async ({ page }) => {
