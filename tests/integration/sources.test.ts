@@ -37,6 +37,20 @@ test("paste, correct and archive keep every immutable version", { skip: !canRun 
   });
 });
 
+test("paste and upload normalize identically; a second leading BOM is refused", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project }) => {
+    const owner = await user("bom owner");
+    const projectId = await project(owner);
+    // The browser decodes uploads with ignoreBOM: true, so an upload reaches the server with its BOM, exactly like a paste.
+    const pasted = await createSource(owner, projectId, { key: key(), title: "Pasted", text: "﻿a\r\nb\rc" });
+    const uploaded = await createSource(owner, projectId, { key: key(), title: "Uploaded", text: "﻿a\r\nb\rc", uploaded: true });
+    const [left, right] = [await readSourceVersion(owner, projectId, pasted.sourceVersionId), await readSourceVersion(owner, projectId, uploaded.sourceVersionId)];
+    assert.deepEqual([left.text, left.contentHash, left.lineStarts], [right.text, right.contentHash, right.lineStarts]);
+    assert.deepEqual([left.kind, right.kind], ["USER_TEXT", "USER_UPLOAD"]);
+    await assert.rejects(createSource(owner, projectId, { key: key(), title: "Two BOMs", text: "﻿﻿a" }), refused("INVALID_INPUT"));
+  });
+});
+
 test("receipts replay; viewers and other projects are refused", { skip: !canRun }, async () => {
   await withFixture(async ({ user, project, join }) => {
     const owner = await user("source owner"), viewer = await user("source viewer"), stranger = await user("stranger");
@@ -143,18 +157,41 @@ test("a saved flow becomes attributed PROMOTED_GRAPH evidence bound to its revis
     const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
     const flow = await executeGraphCommand(owner, projectId, draftId, { key: key(), commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision: 1, payload: { title: "Checkout", purpose: "", classification: "USER_JOURNEY", inclusion: "INCLUDED" } });
     const flowId = flow.createdIds[0]!;
+    const addStep = (expectedDocumentRevision: number) => executeGraphCommand(owner, projectId, draftId, { key: key(), commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision, payload: { flowId, kind: "ACTION", label: "Pay", description: "", actorLabel: "" } });
+    const first = await addStep(flow.documentRevision);
+    const twin = await addStep(first.documentRevision); // same label: only the stored ids tell the two steps apart
     await assert.rejects(createGraphSource(owner, projectId, draftId, { key: key(), expectedDocumentRevision: 1, flowId, title: "Checkout flow" }), refused("STALE_DOCUMENT_REVISION"));
-    const body = { key: key(), expectedDocumentRevision: flow.documentRevision, flowId, title: "Checkout flow" };
+    const body = { key: key(), expectedDocumentRevision: twin.documentRevision, flowId, title: "Checkout flow" };
     const source = await createGraphSource(owner, projectId, draftId, body);
     const version = await readSourceVersion(owner, projectId, source.sourceVersionId);
     assert.equal(version.kind, "PROMOTED_GRAPH");
     assert.match(version.text, /^Flow: Checkout\n/);
-    assert.deepEqual(version.origin, { type: "GRAPH", draftId, documentRevision: flow.documentRevision, flowId, copiedTextHash: version.contentHash, promotedBy: version.createdBy });
-    assert.equal((await getDraft(owner, projectId, draftId)).documentRevision, flow.documentRevision, "the draft is not changed");
-    const { rows } = await database.query("select count(*)::int n from app.source_document where project_id = $1 and kind = 'PROMOTED_GRAPH'", [projectId]);
-    assert.equal(rows[0].n, 1);
+    const nodeIds = [first.createdIds[0]!, twin.createdIds[0]!].sort();
+    assert.deepEqual(version.origin, { type: "GRAPH", draftId, documentRevision: twin.documentRevision, flowId, nodeIds, edgeIds: [], copiedTextHash: version.contentHash, promotedBy: version.createdBy });
+    assert.equal((await getDraft(owner, projectId, draftId)).documentRevision, twin.documentRevision, "the draft is not changed");
     // Ids are case-insensitive on the wire: the same write with uppercase ids replays instead of failing.
     assert.deepEqual(await createGraphSource(owner, projectId.toUpperCase(), draftId.toUpperCase(), body), { ...source, replayed: true });
+
+    // Later edits never touch the stored evidence or its provenance.
+    await executeGraphCommand(owner, projectId, draftId, { key: key(), commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId: nodeIds[0], label: "Pay now" } });
+    assert.deepEqual(await readSourceVersion(owner, projectId, source.sourceVersionId), version);
+
+    // The database binds the origin to the version's own hash and author and to its exact shape.
+    const copyWith = (originSql: string, draftSql = "origin_draft_id") => database.query(`insert into app.source_version (id, project_id, source_id, sequence, title, text, code_point_count, utf8_byte_count, content_hash, created_by, origin, origin_draft_id)
+      select gen_random_uuid(), project_id, source_id, 2, title, text, code_point_count, utf8_byte_count, content_hash, created_by, ${originSql}, ${draftSql}
+      from app.source_version where id = $1`, [source.sourceVersionId]);
+    for (const [originSql, draftSql, why] of [
+      [`jsonb_set(origin, '{promotedBy}', to_jsonb(gen_random_uuid()::text))`, undefined, "wrong promoter"],
+      [`origin - 'promotedBy'`, undefined, "missing promoter"],
+      [`origin - 'copiedTextHash'`, undefined, "missing hash"],
+      [`origin - 'nodeIds'`, undefined, "missing selected ids"],
+      [`jsonb_set(origin, '{nodeIds}', '"all"')`, undefined, "ids not an array"],
+      [`origin || '{"note": "x"}'`, undefined, "unknown key"],
+      [`origin`, "null", "origin without its draft FK"],
+      [`null`, "origin_draft_id", "draft FK without an origin"],
+    ] as const) await assert.rejects(copyWith(originSql, draftSql), /source_version_origin_binding/, why);
+    const { rows } = await database.query("select count(*)::int n from app.source_document where project_id = $1 and kind = 'PROMOTED_GRAPH'", [projectId]);
+    assert.equal(rows[0].n, 1);
   });
 });
 

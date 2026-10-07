@@ -5,7 +5,9 @@ import type { ScopeDocument } from "../../drafts/contracts/scope-document.ts";
 const oneLine = (value: string) => value.replace(/\r\n?|\n/g, " ");
 const order = (a: [string, string], b: [string, string]) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
 
-export function graphExtract(document: ScopeDocument, flowId: string): string {
+export type GraphExtract = { text: string; nodeIds: string[]; edgeIds: string[] };
+
+export function graphExtract(document: ScopeDocument, flowId: string): GraphExtract {
   const flow = document.flows[flowId];
   if (!flow) throw new Error("INVALID_INPUT");
   const nodes = Object.values(document.nodes).filter((node) => node.flowId === flowId)
@@ -22,5 +24,5 @@ export function graphExtract(document: ScopeDocument, flowId: string): string {
   }
   lines.push("Connections:");
   for (const edge of edges) lines.push(`- ${label(edge.fromId)} -> ${label(edge.toId)}${edge.condition ? ` [${oneLine(edge.condition)}]` : ""}`);
-  return lines.join("\n");
+  return { text: lines.join("\n"), nodeIds: nodes.map((node) => node.id), edgeIds: edges.map((edge) => edge.id) };
 }

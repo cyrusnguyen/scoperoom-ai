@@ -19,7 +19,8 @@ type Write = SourceWriteResult & { replayed: boolean };
 /** Normalized, measured evidence; an over-long submission is a capacity refusal that keeps the person's text. */
 export function measured(raw: string) {
   const evidence = evidenceStats(raw);
-  if (evidence.codePointCount === 0) throw new ProjectError("INVALID_INPUT");
+  // Normalization removes exactly one leading BOM; a second one would fail the stored-text CHECK, so it is a clear input refusal.
+  if (evidence.codePointCount === 0 || evidence.text.startsWith("﻿")) throw new ProjectError("INVALID_INPUT");
   if (evidence.codePointCount > SOURCE_LIMITS.submissionCodePoints) throw new ProjectError("LIMIT_EXCEEDED", { limit: "SOURCE_SUBMISSION" });
   return evidence;
 }
@@ -98,11 +99,13 @@ export async function createGraphSource(identity: ProjectIdentity, projectId: st
   return draftMutation(identity, projectId, draftId, key, operation, requestHash(operation, { projectId, draftId, ...parsed }), parseSourceWriteResult, async (tx, project, draft, actorId) => {
     if (draft.documentRevision !== parsed.expectedDocumentRevision) throw new ProjectError("STALE_DOCUMENT_REVISION", { documentRevision: draft.documentRevision });
     if (!draft.draft.document.flows[parsed.flowId]) throw new ProjectError("INVALID_INPUT");
-    const evidence = measured(graphExtract(draft.draft.document, parsed.flowId));
+    const extract = graphExtract(draft.draft.document, parsed.flowId);
+    const evidence = measured(extract.text);
     await assertUserDocumentSlot(tx, project.id);
     await assertSourceCapacity(tx, project.id, evidence.codePointCount);
-    const origin = { type: "GRAPH", draftId: draft.id, documentRevision: draft.documentRevision, flowId: parsed.flowId, copiedTextHash: evidence.contentHash, promotedBy: actorId };
-    const { sourceId, versionId } = await insertSource(tx, project.id, actorId, "PROMOTED_GRAPH", parsed.title, evidence, origin);
+    // The draft row is overwritten in place, so the selected ids are stored here rather than derived from the revision later.
+    const origin = { type: "GRAPH", draftId: draft.id, documentRevision: draft.documentRevision, flowId: parsed.flowId, nodeIds: extract.nodeIds, edgeIds: extract.edgeIds, copiedTextHash: evidence.contentHash, promotedBy: actorId };
+    const { sourceId, versionId } = await insertSource(tx, project.id, actorId, "PROMOTED_GRAPH", parsed.title, evidence, { draftId: draft.id, value: origin });
     return written(sourceId, versionId, 1, 1, await advanceSources(tx, project, actorId, "SOURCE_CREATED", sourceId));
   });
 }

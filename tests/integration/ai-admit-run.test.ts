@@ -157,6 +157,9 @@ test("one key admits once: one run, prompt evidence, reservation, audit event an
     const after = await footprint(database, projectId, owner.profile);
     assert.deepEqual([after.runs, after.documents, after.versions, after.audits - baseline.audits, after.receipts, after.reserved], [1, 1, 1, 1, 1, 1]);
     assert.equal(after.cursors, `${first.aiRevision}/${first.aiRevision}`);
+    // The same event also moves the sources cursor and stamps the prompt source, so another tab's Internal list refreshes.
+    const { rows: [sources] } = await database.query("select p.sources_revision::int sr, d.last_event_sequence::int stamped from app.project p, app.source_document d where p.id = $1 and d.project_id = $1", [projectId]);
+    assert.deepEqual([sources.sr, sources.stamped], [first.aiRevision, first.aiRevision]);
     await assert.rejects(admitRun(owner.identity, projectId, { ...input, prompt: "Different" }, CONFIG), refused("KEY_REUSED"));
     assert.deepEqual(await footprint(database, projectId, owner.profile), after);
   });

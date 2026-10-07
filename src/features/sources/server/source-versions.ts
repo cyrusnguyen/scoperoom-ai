@@ -18,7 +18,8 @@ export async function assertSourceCapacity(tx: Transaction, projectId: string, a
 
 /** A new immutable source and its first (head) version. The head key is deferred, so both rows are written ids-first in one transaction. */
 export async function insertSource(
-  tx: Transaction, projectId: string, actorId: string, kind: SourceKind, title: string, evidence: PromptEvidence, origin: Record<string, unknown> | null = null,
+  tx: Transaction, projectId: string, actorId: string, kind: SourceKind, title: string, evidence: PromptEvidence,
+  origin: { draftId: string; value: Record<string, unknown> } | null = null,
 ): Promise<{ sourceId: string; versionId: string }> {
   const sourceId = randomUUID();
   const versionId = randomUUID();
@@ -26,8 +27,9 @@ export async function insertSource(
     INSERT INTO app.source_document (id, project_id, kind, current_version_id, created_by)
     VALUES (${sourceId}::uuid, ${projectId}::uuid, ${kind}::app.source_kind, ${versionId}::uuid, ${actorId}::uuid)`;
   await tx.$executeRaw`
-    INSERT INTO app.source_version (id, project_id, source_id, sequence, title, text, code_point_count, utf8_byte_count, content_hash, created_by, origin)
-    VALUES (${versionId}::uuid, ${projectId}::uuid, ${sourceId}::uuid, 1, ${title}, ${evidence.text}, ${evidence.codePointCount}, ${evidence.utf8ByteCount}, ${evidence.contentHash}, ${actorId}::uuid, ${origin === null ? null : JSON.stringify(origin)}::jsonb)`;
+    INSERT INTO app.source_version (id, project_id, source_id, sequence, title, text, code_point_count, utf8_byte_count, content_hash, created_by, origin, origin_draft_id)
+    VALUES (${versionId}::uuid, ${projectId}::uuid, ${sourceId}::uuid, 1, ${title}, ${evidence.text}, ${evidence.codePointCount}, ${evidence.utf8ByteCount}, ${evidence.contentHash}, ${actorId}::uuid,
+      ${origin === null ? null : JSON.stringify(origin.value)}::jsonb, ${origin?.draftId ?? null}::uuid)`;
   return { sourceId, versionId };
 }
 

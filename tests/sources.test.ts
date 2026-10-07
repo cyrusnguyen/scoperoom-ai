@@ -7,6 +7,7 @@ import { graphExtract } from "../src/features/sources/domain/graph-extract.ts";
 const ID = "11111111-1111-4111-8111-111111111111";
 
 test("normalization drops one BOM and turns CRLF/CR into LF only", () => {
+  // A second leading BOM survives normalization; the server then refuses it (the stored-text CHECK forbids a leading BOM).
   assert.equal(normalizeEvidence("\uFEFF\uFEFFa\r\nb\rc\n"), "\uFEFFa\nb\nc\n");
   assert.deepEqual(lineStarts(normalizeEvidence("a\r\nbb\r\nc")), [0, 2, 5]);
 });
@@ -40,13 +41,19 @@ test("a saved-flow extract is deterministic and independent of record order", ()
   document.nodes[b] = node(b, "ACTION", "Pay");
   document.nodes[a] = node(a, "START", "Cart");
   document.edges[e] = { id: e, flowId, version: 1, fromId: a, toId: b, condition: "has items", origin: "HUMAN", sourceRefs: [] };
-  const text = graphExtract(document, flowId);
-  assert.equal(text, "Flow: Checkout\nPurpose: Pay\nSteps:\n- START Cart\n- ACTION Pay\nConnections:\n- Cart -> Pay [has items]");
+  const extract = graphExtract(document, flowId);
+  assert.equal(extract.text, "Flow: Checkout\nPurpose: Pay\nSteps:\n- START Cart\n- ACTION Pay\nConnections:\n- Cart -> Pay [has items]");
+  assert.deepEqual([extract.nodeIds, extract.edgeIds], [[a, b], [e]], "ids follow the extract lines");
   const reordered = structuredClone(document);
   reordered.nodes = { [a]: document.nodes[a]!, [b]: document.nodes[b]! };
-  assert.equal(graphExtract(reordered, flowId), text);
+  assert.deepEqual(graphExtract(reordered, flowId), extract);
+  // Duplicate labels: the lines read the same, the ids tell them apart.
+  const twin = "55555555-5555-4555-8555-555555555555";
+  document.nodes[twin] = node(twin, "ACTION", "Pay");
+  assert.deepEqual(graphExtract(document, flowId).nodeIds, [a, b, twin]);
+  delete document.nodes[twin];
   document.nodes[b] = node(b, "ACTION", "Pay\r\nnow\rlater");
-  const single = graphExtract(document, flowId);
+  const single = graphExtract(document, flowId).text;
   assert.ok(single.includes("- ACTION Pay now later"), "CR and CRLF in a label stay on one line");
   assert.equal(single, normalizeEvidence(single), "the extract is already normalized");
 });
