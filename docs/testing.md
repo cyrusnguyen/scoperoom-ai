@@ -64,9 +64,9 @@ These tests cover the implemented native format 1 import/export path. Results an
 
 ## Stage 07a sources verification
 
-- `tests/sources.test.ts`: pure contracts, citation matching and the saved-flow extract text.
-- `tests/integration/sources.test.ts`: real SQL for create, correction, archive/restore, limits, roles, internal evidence, receipt replay and graph-source origin.
-- `tests/e2e/scope.spec.ts`: paste, upload, correction, archive, saved-flow add, unconfirmed-write retry across tab switches, filter and focus persistence, and a reviewer reading sources with no edit controls.
+- `tests/sources.test.ts`: pure contracts, one-BOM normalization, citation matching, the saved-flow extract text and ids, and the paging helpers ("a later page joins only the list, load and cursor it was asked for"). `tests/project-ui.test.ts` covers the Specs request helpers (`startSpecsRequest`, `settleSpecsRequest`).
+- `tests/integration/sources.test.ts`: real SQL for create, correction, archive/restore, limits, roles, internal evidence, receipt replay, cross-project and archived-project refusals, "paste and upload normalize identically; a second leading BOM is refused", and the saved-flow origin (selected ids in extract order; raw inserts with a wrong or missing promoter, hash or ids, an unknown key, or a mismatched origin and draft FK are refused by `source_version_origin_binding`). `tests/integration/ai-admit-run.test.ts` checks that admission advances `sources_revision`.
+- `tests/e2e/scope.spec.ts`: paste, upload (BOM kept for the server, BOM plus CRLF upload read as normalized lines, invalid UTF-8 refused before sending), correction, archive, saved-flow add, a lost source acknowledgement replayed with its exact request after a tab switch, filter and focus persistence, a late 401 after a project switch with no effect on the new project, and a reviewer reading sources with no edit controls.
 
 ## Stage 06.3 AI and recovery verification
 

@@ -2,29 +2,50 @@
 
 ## Stage 07a: sources (2026-10-07)
 
-Branch `feat/stage-7.1-sources` (base `fa4cff0`), local only: no push or PR has been made. Delivered: immutable text sources by paste, strict UTF-8 `.txt`/`.md` upload and saved-flow extract; correction as new versions and archive/restore; a paginated source list and version reads with usage against the limits; the `sources_revision` project status cursor; and a Specs tab in the right panel with a Sources view (list, reader, versions, correction, archive/restore, add by paste, upload or saved flow). Reviewers (browser-tested) and viewers (same gate, server FORBIDDEN covered by integration) read sources without edit controls.
+Branch `feat/stage-7.1-sources` (base `fa4cff0`), local only: no push or PR has been made. Delivered: immutable text sources by paste, strict UTF-8 `.txt`/`.md` upload and saved-flow extract; correction as new versions and archive/restore; a paginated source list and version reads with usage against the limits; the `sources_revision` project status cursor; and a Specs tab in the right panel with a Sources view (list, reader, versions, correction, archive/restore, add by paste, upload or saved flow). Reviewers (browser-tested) and viewers (same gate, server FORBIDDEN covered by integration) read sources without edit controls. A saved-flow origin now stores the selected step and connection ids and is tied by a same-project draft FK (`origin_draft_id`) and the `source_version_origin_binding` CHECK to the version's own content hash and author; the origin is capped at 32 KiB. Normalization drops one leading BOM; a second leading BOM is a clear `INVALID_INPUT`. AI prompt admission now advances `sources_revision` and stamps the prompt source's cursor. Specs writes are one persisted single-flight request per project (`useSpecsWrite`), fenced against project switches, and source list paging is fenced to its list, load and cursor (`source-pages.ts`).
 
-Commits (`git log --oneline fa4cff0..HEAD`): 642c6c1 contracts, citation matching and flow extract; 6b03240 sources revision cursor in status; e317d20 list, paste, correction and archive APIs; ae2916c lowercase ids for receipt replay and cap/role coverage; 1d492fb saved flow as graph source evidence; 04f2f89 Specs tab; dde8562 Specs header icon at narrow widths; 8c34a15 Sources view; e020cd5 keep unconfirmed writes, filter and focus across remounts; 494bd50 reviewer reads sources without edit controls (browser test); 1bb0538 sources checkpoint; then this gate record.
+Commits (`git log --oneline fa4cff0..HEAD`, oldest first):
+- 642c6c1 feat: add source contracts, citation matching and flow extract
+- 6b03240 feat: add sources revision cursor to project status
+- e317d20 feat: add source list, paste, correction and archive APIs
+- ae2916c fix: lowercase source ids for receipt replay and cover restore cap, internal evidence and roles
+- 1d492fb feat: save a saved flow as graph source evidence
+- 04f2f89 feat: add Specs tab to the right panel
+- dde8562 fix: show an icon on the Specs header button at narrow widths
+- 8c34a15 feat: add Sources view to the Specs panel
+- e020cd5 fix: keep unconfirmed source writes, filter and focus across panel remounts
+- 494bd50 test: reviewer reads sources without edit controls
+- 1bb0538 docs: record Stage 07a sources checkpoint
+- 587d3ab docs: record Stage 07a gate results
+- abd4d6f fix: keep tablist focus, lock source forms while a write is unconfirmed, split file-size message
+- ba595e1 test: pin cross-project and archived-project source write refusals
+- 8285df7 feat: bind saved-flow origin to its draft, ids and hash
+- ba0ec6c feat: persist the single-flight Specs write, keep BOM uploads and fence source paging
+- f4f6cff test: pin form clearing after a retried source write and spell the BOM as an escape
+- then this gate record.
 
-Gate results (2026-10-07, local isolated stack, source HEAD `1bb0538`, run serially one suite at a time):
-- `corepack pnpm db:generate`, `db:migrate` (Realtime `apply-ok`, `verify-ok`) and `db:guard` (`target=verified-local`): all exit 0.
-- `corepack pnpm lint` (import boundaries and ESLint) exit 0, 14 s; `corepack pnpm typecheck` exit 0.
-- `corepack pnpm test:unit`: 504/504 passed, 0 skipped, 0 failed, exit 0, 17.6 s.
-- `corepack pnpm build`: exit 0, 20 s.
-- `corepack pnpm test:integration` (default concurrency): 269/269 passed, 0 skipped, 0 failed, exit 0, 135.7 s; all seven `tests/integration/sources.test.ts` cases ran.
-- `corepack pnpm test:workers`: 30/30 passed, 0 skipped, exit 0, 22.2 s.
-- `corepack pnpm test:realtime` (serial, alone on the stack): 13/13 passed, 0 skipped, exit 0, 454.6 s.
-- `PLAYWRIGHT_PORT=3107 PLAYWRIGHT_WORKERS=2 corepack pnpm test:e2e:production` (full, unfiltered, zero retries): 417 of 418 distinct cases passed (404 Chromium, 14 recovery-fault), 0 skipped, 0 flaky, 0 retries, 0 global errors, 1 failed; exit 1; build/test/total 18.4/971.6/990.0 s. `scope.spec.ts` 8/8, `shell.spec.ts` 10/10 and `ai.spec.ts` 37/37 passed. The failure is `collaboration-auth-outage.spec.ts` "an Auth outage keeps entries and inspector text..." (line 137: expected 503, received 200). The trace shows a status read started by the Realtime join before the test switched the Auth fault on; it completed after the switch and was the response the test awaited. That spec and the status read path are unchanged by this branch, so it is recorded as a pre-existing timing race, not fixed here. The spec rerun alone passed 13/13 (0 skipped, 0 flaky, exit 0, build/test/total 9.5/56.5/66.0 s). The full browser gate therefore did not pass in one run.
+Gate results (2026-10-07, local isolated stack, source HEAD `f4f6cff`, clean tree, run serially one suite at a time):
+- `corepack pnpm db:generate`, `db:migrate` (no pending migrations; Realtime `apply-ok`, `verify-ok`) and `db:guard` (`target=verified-local`): all exit 0. The applied `20261007000000_stage07_sources` checksum matches the edited file.
+- `corepack pnpm lint` (import boundaries and ESLint) exit 0, 14 s; `corepack pnpm typecheck` exit 0, 3 s.
+- `corepack pnpm test:unit`: 506/506 passed, 0 skipped, 0 failed, exit 0, 18.4 s.
+- `corepack pnpm build`: exit 0, 15 s.
+- `corepack pnpm test:integration` (default concurrency): 272/272 passed, 0 skipped, 0 failed, exit 0, 134.1 s; all ten `tests/integration/sources.test.ts` cases ran.
+- `corepack pnpm test:workers`: 30/30 passed, 0 skipped, exit 0, 22.7 s.
+- `corepack pnpm test:realtime` (serial, alone on the stack): 13/13 passed, 0 skipped, exit 0, 447.8 s.
+- `PLAYWRIGHT_PORT=3107 PLAYWRIGHT_WORKERS=2 corepack pnpm test:e2e:production` (full, unfiltered, zero retries): 419/419 distinct cases passed (405 Chromium, 14 recovery-fault), 0 skipped, 0 flaky, 0 retries, 0 failed, 0 global errors; exit 0; build/test/total 8.6/1069.0/1077.6 s. `scope.spec.ts` 9/9, `shell.spec.ts` 10/10, `ai.spec.ts` 37/37 and `collaboration-auth-outage.spec.ts` 13/13 passed.
+- History: the first pass at `1bb0538` passed 417 of 418 browser cases; the single failure was the pre-existing `collaboration-auth-outage.spec.ts` status-read race, which passed 13/13 alone. It did not recur in this run, so that race is unfixed, not proven gone.
 - No code or test fix was made in this verification. These local results do not establish hosted CI.
 
 Limitations:
-- A saved-flow origin binds the draft, revision and flow, not every step id.
 - Capacity refusals name the bound in `details.limit`; the usage line shows retained usage.
 - The reader finds a source's head only in the loaded list (no single-source GET route yet), so the 07b citation picker must carry or fetch the head.
-- AI prompt admission does not advance `sources_revision`, so the Internal list refreshes when its filter is opened, not live.
 - An uncertain source write is kept in the lifted per-project Specs `pending` request and retried with the same key.
 - After Archive and a tab switch with the reader still open, the reader says "isn't in the loaded list" until Back.
 - Sources writes are not draft writes and do not save the canvas first.
+- The origin draft FK is `DEFERRABLE INITIALLY DEFERRED` so a project delete cascades; a lone draft delete with a promoted source is still refused.
+- Migration `20261007000000_stage07_sources` was edited in place before merge. Any local database that applied the earlier version must be reset or hand-reverted; CI applies every migration to a fresh database.
+- Pre-existing, outside this PR: an AI prompt that starts with two BOMs hits the stored-text CHECK in admission instead of a clean `INVALID_INPUT`.
+- Deferred minors: after a list refresh a stale Load more can send one extra page request (no duplicate rows); a remounted panel can show Retry while an earlier mount's retry with the same key is in flight (no duplicate write); the Specs message region switches between alert and status roles in place, so announcements may be unreliable; focus after a confirmation can land on another reader heading if a different source was opened meanwhile; the scope feature imports `sources/ui/limit-text.ts` (07b should move or parametrize it); there is no browser case for Load more across a refresh, and the late-401 case uses a fixed 1 s wait.
 
 Next action: after the user approves this branch, plan and build PR 07b from `docs/superpowers/plans/2026-10-07-stage-07b-requirements.md`.
 
