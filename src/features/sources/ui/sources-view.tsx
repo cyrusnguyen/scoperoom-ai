@@ -4,20 +4,21 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "r
 import { apiRead, sessionEnded } from "@/client/api";
 import { useSync } from "@/features/collaboration/ui/sync-context";
 import type { useSpecsWrite } from "@/features/scope/ui/use-specs-write";
+import { Icon } from "@/features/shell/ui/icon";
 import type { SpecsRequest, SpecsUi } from "@/features/shell/ui/project-ui";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import {
   normalizeEvidence, SOURCE_BODY_LIMIT, SOURCE_LIMITS, SOURCE_TITLE_LIMIT, USER_DOCUMENT_LIMIT, USER_SOURCE_KINDS,
   type SourceHead, type SourcePage, type SourceScope, type SourceVersionPage, type SourceVersionView, type SourceWriteResult,
 } from "../contracts/source-version";
-import { acceptFirstPage, appendSourcePage, appendVersionPage, canLoadMore, listKey, startSourceList, type SourceList, type VersionList } from "./source-pages";
+import { acceptFirstPage, appendSourcePage, appendVersionPage, canLoadMore, listKey, type SourceList, type VersionList } from "./source-pages";
 import { editSourceCorrection, reconcileSourceCorrection, sourceCorrectionBody, type SourceCorrection } from "./source-correction";
 import SourceLines from "./source-lines";
 
 const KIND_LABELS: Record<SourceHead["kind"], string> = { USER_TEXT: "Pasted", USER_UPLOAD: "Uploaded", PROMOTED_GRAPH: "Saved flow", QUESTION_ANSWER: "Answer", AI_PROMPT: "AI instruction" };
 const SCOPES: Array<[SourceScope, string]> = [["user", "Active"], ["archived", "Archived"], ["internal", "Internal"]];
 const EMPTY: Record<SourceScope, string> = { user: "No active sources", archived: "No archived sources", internal: "No internal evidence yet" };
-const NEW_TITLE = "specs:new-source:title", NEW_TEXT = "specs:new-source:text";
+const NEW_TITLE = "specs:new-source:title", NEW_TEXT = "specs:new-source:text", NEW_UPLOAD_NAME = "specs:new-source:upload-name";
 const codePoints = (value: string) => [...normalizeEvidence(value)].length;
 const isUser = (head: SourceHead) => USER_SOURCE_KINDS.includes(head.kind);
 
@@ -30,10 +31,10 @@ export function useSourceList(projectId: string, scope: SourceScope, revision: n
   const loadingMore = useRef(false);
   const pageLifetime = useRef<AbortController | null>(null);
   // Every first-page load (a new project, filter, revision or retry) gets a ticket; only the list that load produced can be paged further.
-  // A new load clears another project's or filter's list but keeps this one's rows, so Load more waits for its first page.
+  // Retaining rows until the new page is accepted keeps the panel's scroll range stable between scoped requests.
   const load = `${key}:${revision}:${attempt}`;
   const [started, setStarted] = useState({ load, ticket: 1 });
-  if (started.load !== load) { setStarted({ load, ticket: started.ticket + 1 }); setList((current) => startSourceList(current, key)); }
+  if (started.load !== load) setStarted({ load, ticket: started.ticket + 1 });
   const { ticket } = started;
   useEffect(() => {
     const controller = new AbortController();
@@ -57,8 +58,8 @@ export function useSourceList(projectId: string, scope: SourceScope, revision: n
       else if (!sessionEnded(result)) setFailed({ key, message: result.message });
     });
   };
-  // A page or error from another project or filter is never shown under this one.
-  return { page: list?.key === key ? list.page : null, error: failed?.key === key ? failed.message : "", more, canLoadMore: canLoadMore(list, key, ticket), retry: () => setAttempt((count) => count + 1) };
+  // Only a matching page is current; the caller may retain same-project rows while its next filter is loading.
+  return { page: list?.key === key ? list.page : null, retainedPage: list?.key.startsWith(`${projectId}:`) ? list.page : null, error: failed?.key === key ? failed.message : "", more, canLoadMore: canLoadMore(list, key, ticket), retry: () => setAttempt((count) => count + 1) };
 }
 
 /** Reads a file as strict UTF-8 and keeps a leading BOM, so the server normalizes uploads and pastes identically. */
@@ -81,6 +82,9 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
   const { projectId, savedDraft } = useStudio();
   const scope = ui.sourceScope;
   const list = useSourceList(projectId, scope, status.sourcesRevision);
+  const page = list.error ? list.page : list.page ?? list.retainedPage;
+  const results = useRef<HTMLDivElement>(null);
+  const [resultsMinHeight, setResultsMinHeight] = useState(0);
   const [refocus, setRefocus] = useState(0);
   // Heads patched by this session's own writes, so the reader is right before the list is read again (the higher record version wins).
   const [kept, setKept] = useState<SourceHead | null>(null);
@@ -98,7 +102,7 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
     });
     return () => controller.abort();
   }, [projectId, selectedId, status.sourcesRevision, saved, headAttempt]);
-  const listed = selected ? list.page?.items.find((item) => item.id === selected.sourceId) : undefined;
+  const listed = selected ? page?.items.find((item) => item.id === selected.sourceId) : undefined;
   const patched = kept && kept.id === selected?.sourceId ? kept : undefined;
   const exact = headRead?.id === selectedId ? headRead : null;
   const head = [listed, patched, exact?.head].reduce<SourceHead | null>((latest, item) => item && (!latest || item.version > latest.version) ? item : latest, null);
@@ -118,17 +122,22 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
   const [handled, setHandled] = useState(saved);
   if (saved !== handled) {
     setHandled(saved);
-    const request = saved?.request, result = saved?.data as SourceWriteResult;
-    if (request && request.path.startsWith("sources/")) {
+    const request = saved?.request, body = request?.body, result = saved?.data as SourceWriteResult;
+    if (request && body && request.path.startsWith("sources/")) {
       setRefocus((count) => count + 1);
       if (head && head.id === request.path.split("/")[1] && result.version > head.version) setKept(request.path.endsWith("/versions")
-        ? { ...head, title: String(request.body.title), version: result.version, currentVersionId: result.sourceVersionId, currentSequence: result.sequence, versionCount: head.versionCount + 1 }
-        : { ...head, archived: request.body.archived === true, version: result.version });
+        ? { ...head, title: String(body.title), version: result.version, currentVersionId: result.sourceVersionId, currentSequence: result.sequence, versionCount: head.versionCount + 1 }
+        : { ...head, archived: body.archived === true, version: result.version });
     }
   }
   const post: Post = (method, path, body, label) => void write.send(method, path, body, label);
   const shared: Shared = { busy: write.busy || ui.pending !== null, post, setDraft, drafts };
-  const usage = list.page?.usage;
+  const usage = (list.page ?? list.retainedPage)?.usage;
+  const changeScope = (next: SourceScope) => {
+    const height = results.current?.getBoundingClientRect().height ?? 0;
+    if (height > resultsMinHeight) setResultsMinHeight(height);
+    update(() => ({ sourceScope: next }));
+  };
 
   return <div className="sources-view">
     {usage && <p className="muted">{usage.activeUserDocuments}/{USER_DOCUMENT_LIMIT} documents · {usage.retainedVersions}/{SOURCE_LIMITS.retainedVersions} versions · {usage.codePoints.toLocaleString("en-US")}/{SOURCE_LIMITS.projectCodePoints.toLocaleString("en-US")} characters</p>}
@@ -140,18 +149,21 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
         {canEdit && <AddSource {...shared} />}
         {canEdit && <FlowSource flows={savedDraft.document.flows} draftId={savedDraft.id} documentRevision={savedDraft.documentRevision} {...shared} />}
         <div role="group" aria-label="Source filter" className="sources-filter">
-          {SCOPES.map(([id, label]) => <button key={id} type="button" className="button small" aria-pressed={scope === id} onClick={() => update(() => ({ sourceScope: id }))}>{label}</button>)}
+          {SCOPES.map(([id, label]) => <button key={id} type="button" className="button small" aria-pressed={scope === id} onClick={() => changeScope(id)}>{label}</button>)}
         </div>
-        {list.error && <p role="alert">{list.error} <button type="button" className="button small" onClick={list.retry}>Retry</button></p>}
-        {!list.page ? !list.error && <p role="status">Loading sources…</p>
-          : !list.page.items.length ? <p className="muted">{EMPTY[scope]}</p>
-          : <ul className="sources-list">{list.page.items.map((item) => <li key={item.id}>
-            <button type="button" className="specs-card" data-source-id={item.id} onClick={() => { setRefocus((count) => count + 1); update(() => ({ selected: { kind: "source", sourceId: item.id, versionId: null, back: ui.selected } })); }}>
-              <strong>{item.displayNickname ?? item.title}</strong>
-              <span className="specs-badge">{KIND_LABELS[item.kind]} · v{item.currentSequence} · {item.versionCount} {item.versionCount === 1 ? "version" : "versions"}{item.archived ? " · Archived" : ""}</span>
-            </button></li>)}
-          </ul>}
-        {list.canLoadMore && <button type="button" className="button small" onClick={list.more}>Load more</button>}
+        <div ref={results} className="sources-results" style={resultsMinHeight ? { minHeight: resultsMinHeight } : undefined}>
+          {list.error && <p role="alert">{list.error} <button type="button" className="button small" onClick={list.retry}>Retry</button></p>}
+          {!list.page && page && !list.error && <p role="status">Loading {SCOPES.find(([id]) => id === scope)?.[1].toLowerCase()} sources…</p>}
+          {!page ? !list.error && <p role="status">Loading sources…</p>
+            : !page.items.length ? <p className="muted">{EMPTY[scope]}</p>
+            : <ul className="sources-list">{page.items.map((item) => <li key={item.id}>
+              <button type="button" className="specs-card" data-source-id={item.id} onClick={() => { setRefocus((count) => count + 1); update(() => ({ selected: { kind: "source", sourceId: item.id, versionId: null, back: ui.selected } })); }}>
+                <strong>{item.displayNickname ?? item.title}</strong>
+                <span className="specs-badge">{KIND_LABELS[item.kind]} · v{item.currentSequence} · {item.versionCount} {item.versionCount === 1 ? "version" : "versions"}{item.archived ? " · Archived" : ""}</span>
+              </button></li>)}
+            </ul>}
+          {list.canLoadMore && <button type="button" className="button small" onClick={list.more}>Load more</button>}
+        </div>
       </>}
   </div>;
 }
@@ -159,6 +171,7 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
 function AddSource({ busy, post, drafts, setDraft }: Shared) {
   const title = drafts[NEW_TITLE] ?? "", text = drafts[NEW_TEXT] ?? "";
   const [fileError, setFileError] = useState("");
+  const fileName = drafts[NEW_UPLOAD_NAME] ?? "";
   const uploaded = drafts["specs:new-source:uploaded"] === "true";
   const count = codePoints(text);
   const set = (key: string, value: string) => setDraft(key, value || undefined);
@@ -169,7 +182,7 @@ function AddSource({ busy, post, drafts, setDraft }: Shared) {
     const decoded = tooLarge ? null : await readUtf8(file);
     input.value = "";
     if (decoded === null) { setFileError(tooLarge ? "This file is too large to add as a source." : "This file isn't valid UTF-8 text."); return; }
-    setFileError(""); setDraft("specs:new-source:uploaded", "true");
+    setFileError(""); setDraft(NEW_UPLOAD_NAME, file.name); setDraft("specs:new-source:uploaded", "true");
     set(NEW_TEXT, decoded);
     if (!title) set(NEW_TITLE, [...file.name].slice(0, SOURCE_TITLE_LIMIT).join(""));
   };
@@ -180,8 +193,8 @@ function AddSource({ busy, post, drafts, setDraft }: Shared) {
   return <form className="detail-section" onSubmit={submit}>
     <h3>Add a source</h3>
     <div className="field"><label htmlFor="new-source-title">Source title</label><input id="new-source-title" value={title} readOnly={busy} maxLength={SOURCE_TITLE_LIMIT} onChange={(event) => set(NEW_TITLE, event.target.value)} /></div>
-    <div className="field"><label htmlFor="new-source-text">Source text</label><textarea id="new-source-text" rows={6} value={text} readOnly={busy} onChange={(event) => { setDraft("specs:new-source:uploaded", undefined); set(NEW_TEXT, event.target.value); }} /></div>
-    <div className="field"><label htmlFor="new-source-file">Upload .txt or .md</label><input id="new-source-file" type="file" disabled={busy} accept=".txt,.md,text/plain,text/markdown" onChange={(event) => void choose(event)} /></div>
+    <div className="field"><label htmlFor="new-source-text">Source text</label><textarea id="new-source-text" rows={6} value={text} readOnly={busy} onChange={(event) => { setDraft(NEW_UPLOAD_NAME, undefined); setDraft("specs:new-source:uploaded", undefined); set(NEW_TEXT, event.target.value); }} /></div>
+    <div className="field"><span id="new-source-file-label" className="source-upload-label">Upload .txt or .md</span><label className="source-upload" htmlFor="new-source-file"><Icon name="importFlow" size={16} /><span>Choose file</span><span className="source-upload-name">{fileName || "No file selected"}</span><input id="new-source-file" aria-labelledby="new-source-file-label" type="file" disabled={busy} accept=".txt,.md,text/plain,text/markdown" onChange={(event) => void choose(event)} /></label></div>
     {fileError && <p role="alert">{fileError}</p>}
     <p className="muted" data-over={count > SOURCE_LIMITS.submissionCodePoints}>{count.toLocaleString("en-US")}/{SOURCE_LIMITS.submissionCodePoints.toLocaleString("en-US")} characters</p>
     <button type="submit" className="button primary" disabled={busy || !title.trim() || !text.trim() || count > SOURCE_LIMITS.submissionCodePoints}>Add source</button>
@@ -264,8 +277,8 @@ function Reader({ selected, correction, head, headFailed, canEdit, update, refoc
   useEffect(() => {
     if (view && refocus !== focused.current) { focused.current = refocus; heading.current?.focus(); }
   }, [refocus, view]);
-  const goBack = () => { onBack(selected.sourceId); update(() => ({ selected: selected.back })); };
-  const back = <button type="button" className="button quiet small" onClick={goBack}>Back</button>;
+  const goBack = () => { onBack(selected.sourceId); update(() => selected.back?.kind === "requirement" ? { section: "scope", selected: selected.back } : { selected: selected.back }); };
+  const back = <button type="button" className="button quiet small" onClick={goBack}><Icon name="back" size={14} /><span>Back</span></button>;
   if (!head) return <>{back}{!headFailed && <p role="status">Loading source…</p>}</>;
 
   const editable = canEdit && isUser(head);
@@ -293,15 +306,15 @@ function Reader({ selected, correction, head, headFailed, canEdit, update, refoc
     {current?.error ? <p role="alert">{current.error} <button type="button" className="button small" onClick={() => setReadAttempt((value) => value + 1)}>Retry version</button></p> : !view ? <p role="status">Loading version…</p> : <>
       <div className="sources-filter">
         <p className="muted">Viewing v{view.sequence}; latest v{head.currentSequence}</p>
-        {!atHead && <button type="button" className="button small" onClick={() => update(() => ({ selected: { ...selected, versionId: null } }))}>Latest</button>}
+        {!atHead && <button type="button" className="button small" onClick={() => update(() => ({ selected: { ...selected, versionId: null, range: undefined } }))}>Latest</button>}
       </div>
-      <SourceLines key={view.id} text={view.text} />
+      <SourceLines key={`${view.id}:${selected.range?.startLine ?? ""}:${selected.range?.endLine ?? ""}`} text={view.text} range={selected.range} />
     </>}
     {versionError?.key === versionsKey && <p role="alert">{versionError.message} <button type="button" className="button small" onClick={() => setReadAttempt((value) => value + 1)}>Retry versions</button></p>}
     {versions?.key === versionsKey && <section aria-label="Versions">
       <h3>Versions</h3>
       <ul className="sources-list">{versions.page.items.map((item) => <li key={item.id}>
-        <button type="button" className="button quiet small" aria-pressed={item.id === viewId} onClick={() => update(() => ({ selected: { ...selected, versionId: item.id } }))}>v{item.sequence}</button>{" "}
+        <button type="button" className="button quiet small" aria-pressed={item.id === viewId} onClick={() => update(() => ({ selected: { ...selected, versionId: item.id, range: item.id === selected.versionId ? selected.range : undefined } }))}>v{item.sequence}</button>{" "}
         <span className="muted">{item.codePointCount.toLocaleString("en-US")} characters</span>
       </li>)}</ul>
       {versions.page.nextCursor && <button type="button" className="button small" onClick={moreVersions}>Load more versions</button>}

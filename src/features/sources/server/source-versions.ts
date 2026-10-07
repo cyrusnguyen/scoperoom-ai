@@ -1,11 +1,25 @@
 import { randomUUID } from "node:crypto";
+import type { SourceRef } from "../../drafts/contracts/scope-document.ts";
 import { uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { readAsMember, type Transaction } from "../../projects/server/access.ts";
-import { lineStarts, SOURCE_LIMITS, type SourceKind, type SourceVersionView } from "../contracts/source-version.ts";
+import { citationMatches, lineStarts, SOURCE_LIMITS, type SourceKind, type SourceVersionView } from "../contracts/source-version.ts";
 
 /** Normalized evidence measures (see `evidenceStats`); the database recomputes and rejects any disagreement. */
 export type PromptEvidence = { text: string; codePointCount: number; utf8ByteCount: number; contentHash: string };
+
+/** Every citation names an immutable version of this project and quotes its own line range exactly (SCP-002, SCP-003). */
+export async function checkSourceRefs(tx: Transaction, projectId: string, refs: SourceRef[]) {
+  if (!refs.length) return;
+  const versionIds = [...new Set(refs.map((ref) => ref.sourceVersionId))];
+  const rows = await tx.$queryRaw<Array<{ id: string; text: string }>>`
+    SELECT id, text FROM app.source_version WHERE project_id = ${projectId}::uuid AND id = ANY(${versionIds}::uuid[])`;
+  const texts = new Map(rows.map((row) => [row.id, row.text]));
+  for (const ref of refs) {
+    const text = texts.get(ref.sourceVersionId);
+    if (text === undefined || !citationMatches(text, ref)) throw new ProjectError("INVALID_SOURCE_REFERENCE");
+  }
+}
 
 /** Under the project lock: every retained version, archived and internal prompts included, counts against project capacity. */
 export async function assertSourceCapacity(tx: Transaction, projectId: string, addedCodePoints: number) {

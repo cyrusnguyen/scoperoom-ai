@@ -11,15 +11,23 @@ export type AiRequest =
   | (AiRequestBase & { kind: "discard" | "cancel"; runId: string });
 export type AiUi = { instruction: string; action: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; selectedRunId: string | null; pendingRequest: AiRequest | null; applyPhase?: { key: string; projectId: string; runId: string; state: "uncertain" | "acknowledged" | "adopted"; draftId: string; documentRevision?: number; layoutRevision?: number } };
 export type RightTab = "details" | "ai" | "specs";
-export type SpecsSelection = { kind: "source"; sourceId: string; versionId: string | null; back: SpecsSelection } | null;
+export type SpecsSelection =
+  | { kind: "source"; sourceId: string; versionId: string | null; back: SpecsSelection; range?: { startLine: number; endLine: number } }
+  | { kind: "requirement"; id: string }
+  | null;
 /** One Specs write at a time per project, kept in this store so a lost response survives tab switches and remounts. `path` is relative to `/api/projects/:projectId/`. */
-export type SpecsRequest = { key: string; method: "POST" | "PATCH"; path: string; body: Record<string, unknown>; label: string };
-export type SpecsUi = { selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string; sourceCorrections?: Record<string, SourceCorrection> };
+export type SpecsRequest = { key: string; method: "POST" | "PATCH"; path: string; body: Record<string, unknown> | null; label: string; draft?: true };
+export type SpecsUi = { section: "sources" | "scope"; selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string; sourceCorrections?: Record<string, SourceCorrection> };
 export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: RightTab; drafts: Record<string, string>; ai: AiUi; specs: SpecsUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
 export const defaultAiUi: AiUi = { instruction: "", action: "PROPOSE_FLOW", selectedRunId: null, pendingRequest: null };
-export const defaultSpecsUi: SpecsUi = { selected: null, sourceScope: "user", pending: null, message: "" };
+export const defaultSpecsUi: SpecsUi = { section: "sources", selected: null, sourceScope: "user", pending: null, message: "" };
+
+/** Records the frozen body only for the reservation that owns it. */
+export function fillSpecsRequest(specs: SpecsUi, key: string, body: Record<string, unknown>): SpecsUi {
+  return specs.pending?.key === key ? { ...specs, pending: { ...specs.pending, body } } : specs;
+}
 
 /** Starts a request only when no other one is unresolved (null means refused). */
 export function startSpecsRequest(specs: SpecsUi, request: SpecsRequest): SpecsUi | null {

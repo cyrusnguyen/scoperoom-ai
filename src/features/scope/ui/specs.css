@@ -11,3 +11,13 @@
 .sources-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .sources-list .specs-card { min-height: 44px; overflow-wrap: anywhere; }
 .sources-view > .button, .source-reader > .button { justify-self: start; }
+.specs-tabs { display: flex; gap: 16px; border-bottom: 1px solid var(--border); }
+.specs-tabs [role="tab"] { min-height: 44px; border: 0; background: none; color: var(--foreground-muted); border-bottom: 2px solid transparent; }
+.specs-tabs [role="tab"][data-active="true"] { color: var(--foreground); border-bottom-color: var(--accent); }
+.specs-tabs [role="tab"]:hover { color: var(--foreground); }
+.specs-badge[data-state="NEEDS_REVIEW"] { color: var(--scope-needs-review); }
+.scope-board, .requirement-form { display: grid; gap: 12px; min-width: 0; }
+.scope-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.scope-toolbar .field { flex: 1 1 14rem; margin: 0; }
+.requirement-form > h3, .requirement-form h4 { margin: 0; }
+.requirement-form .detail-section { margin: 0; }

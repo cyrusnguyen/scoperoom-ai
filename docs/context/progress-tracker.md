@@ -1,4 +1,51 @@
-# Progress tracker
+﻿# Progress tracker
+
+## Stage 7.2: requirements and trace links (2026-10-07 to 2026-10-08)
+
+Implementation and independent reviews are complete in .worktrees/stage-7.2-requirements, branch feat/stage-7.2-requirements, based on merged main 6d49e98. The user authorized committing, publishing a PR and monitoring its comments and CI on 2026-10-08, after review of the local verification limits below. Final acceptance still needs a complete passing browser gate. Merge and Stage 7.3 implementation are not authorized.
+
+Delivered scope follows docs/superpowers/plans/2026-10-07-stage-07b-requirements.md: requirements with inclusion, owners, verification definitions, immutable source citations and confirmation; requirement-to-step trace links and review freshness; Scope board/forms, source and step navigation, and link-removal disclosures for step, flow and AI reviews. Labels are monotonic and never reused. Scoped commands use D/commands after save-first, with exact request/key recovery, first-edit guards, retained unsent fields and explicit conflict or removed-record recovery. Member removal/leave clears current editable requirement owners transactionally; a downgrade to viewer preserves existing assignments but blocks new assignments.
+
+The requested UI supplement is implemented: removed the top Specs button in favor of Inspect, styled the native source upload control, added a Back icon, and retained scroll position across Active/Archived/Internal loading, empty and retry states. No dependencies or CI configuration changed.
+
+Independent task and final reviews fixed confirmed in-scope issues: receipt replay after draft replacement, UUID-case member unassignment, acknowledgement cleanup that could lose newer fields, stale/removed link explanation recovery, false unsaved state after reverting fields, citation paging/range recovery, and a save-first race where the covering saved read was admitted before its reference advanced. Regression evidence is retained. No substantiated product blocker remains in the reviewed stage scope; this does not establish hosted or manual acceptance.
+
+Local verification on the final frozen implementation:
+
+| Gate | Result |
+| --- | --- |
+| Frozen install, Prisma generation, local bootstrap/migrate/guard | Passed; 26 migrations, no pending migrations, private Realtime apply/verify passed |
+| Lint/import boundaries, TypeScript, production build | Passed, exit 0 |
+| Full unit suite | 539/539, zero skips/failures; 18.274 s |
+| Full integration suite | 279/279, zero skips/failures; 139.588 s |
+| Strengthened scope concurrency regression | 7/7 after test-only held-lock barrier correction; 5.603 s |
+| Full worker suite | 30/30, zero skips/failures; 23.652 s |
+| Complete serial-alone Realtime suite | 13/13, zero skips/failures; 406.045 s |
+| Focused runtime-recovery browsers | 81/81, zero skips/retries/flakes/failures/global errors; two workers |
+| Latest complete production browser suite | **Failed: 433/434**, Chromium 419/420 and recovery-fault 14/14; two workers, zero skips/retries/flakes/global errors |
+
+The latest unfiltered browser run built successfully and exited 1 for tests; build/test/total 8.428/967.246/975.674 s. Scope 24/24, shell 10/10 and AI 37/37 passed. Its sole failure was export-flows.spec.ts:114: the first setup POST /api/projects failed with connect ETIMEDOUT before graph setup, export, held-401 or navigation behavior executed. All seven report/failure files were copied outside test-results and hash-verified. All 435 frozen source/config/test hashes still match the static/unit/build and browser inputs. This is not a passing full gate.
+
+Failure history and diagnostic limits: the first full run was 418/434 because the dedicated runtime omitted the existing Auth email-template configuration, plus two setup availability failures. Matching the repository templates/settings produced an 81/81 focused recovery pass. Subsequent full results were 433/434 and 432/434 at two workers, then 433/434 at one worker. Independent traces locate their failures in connection setup, Auth availability or an unresolved prerequisite read. A safe ignored observer captured ordinary-server Auth TypeError with ECONNRESET during the one-worker run; no evidence supports changing feature code, assertions, retries or deadlines. Rate limits and container restarts did not explain it. A bounded direct Auth comparison completed 300/300 pooled and 300/300 Connection: close requests without errors and removed its disposable account; it did not reproduce or fix the cause. Restarting only the verified owned gateway left the latest full run at 433/434. Underlying local transport instability remains unresolved. Passing isolated reruns are recorded separately, not combined into a claimed full pass.
+
+The first Realtime run also failed its Storage positive control with 503 because local Storage was disabled; enabling Storage and rerunning the complete suite resolved that prerequisite, with all 211 backend hashes unchanged. Original failed logs, traces, diagnostic scripts and reports remain ignored under .superpowers/sdd/2026-10-07-stage-07b-requirements/ and .tmp/stage-07b-runtime/. The seven-service local stack stays available with loopback-only published ports. Main and unrelated worktrees remain preserved. No paid provider calls were made.
+
+Limitations and next action: hosted CI and manual NVDA are unverified. Publish the authorized PR, monitor review comments and all CI gates, and fix confirmed in-scope findings. Record hosted results separately from the unresolved local transport condition. Do not repeat full runs without a new diagnostic or corrective basis, and do not weaken assertions to hide setup failures. Questions/answers/decisions/activity remain Stage 7.3; dependencies and separate search remain deferred; flow confirmation and verification-method review remain Stage 08. Keep plans and evidence out of commits.
+
+### Coverage-preserving test cleanup (2026-10-08)
+
+The user separately authorized delegated test pruning after implementation. An E2E audit, bounded implementation and independent review consolidated three repeated fixture setups: flow Inspect plus empty-filter navigation, responsive shell plus a fresh long-name project, and the same REVIEWER reading Sources plus requirements. All original assertions remain, including actual role restrictions, focus, reload, hit areas and layout. Named steps retain diagnosis, though merged journeys have less independent failure isolation. Independent review found no missing expectation or test-control expressions and no lost workflow. Distinct fault, session, membership, concurrency and recovery cases remain separate.
+
+Browser discovery decreased from 434 to 431 cases across 40 files. The 539 unit cases remain: the suite takes 18.274 s, and an AST screen of 531 literal-title callbacks found no identical bodies. This screen is not a complete semantic audit of generated cases. The audit found no supported basis for deleting unique coverage to meet an arbitrary count.
+
+Matched production runs used the same isolated stack and two workers, with no skips, retries, flakes, failures or global errors:
+
+| Affected three-file corpus | Cases passed | Build | Test phase | Total |
+| --- | ---: | ---: | ---: | ---: |
+| Original tests | 36/36 | 8.174 s | 87.236 s | 95.410 s |
+| Consolidated tests | 33/33 | 8.715 s | 84.048 s | 92.763 s |
+
+The observed saving is 3.188 s in the test phase and 2.647 s overall in one paired comparison, not a demonstrated full-suite or CI speedup. Scoped ESLint, TypeScript and diff checks pass. Reports were archived and hash-verified under ignored .superpowers/sdd/2026-10-08-test-consolidation/. Only these three specs differ from the earlier 435 frozen source/config/test inputs; all other 149 baseline test files and all production inputs remain unchanged. The original full-stage results above predate this test-only cleanup. No complete 431-case run is claimed, and the earlier local transport blocker remains unresolved. At the cleanup checkpoint no commit, push or PR had been made. The subsequent user request authorizes publication and CI/review follow-up; it does not establish a passing full gate.
 
 ## Stage 07a: sources (2026-10-07)
 

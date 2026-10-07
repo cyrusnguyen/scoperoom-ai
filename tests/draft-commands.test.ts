@@ -87,8 +87,11 @@ test("a stored result replays only when it has the result shape", () => {
 });
 
 test("a stored result rejects more versions than active records", () => {
-  const versions = Object.fromEntries(Array.from({ length: 606 }, (_, index) => [generatedId(index), 1]));
-  assert.throws(() => parseCommandResult({ draftId: flowId, documentRevision: 1, layoutRevision: 1, eventSequence: 0, createdIds: [], versions, retiredIds: [] }), /INVALID_INPUT/);
+  // 5 flows + 200 steps + 400 connections + 150 requirements + 400 trace links.
+  const versions = Object.fromEntries(Array.from({ length: 1155 }, (_, index) => [generatedId(index), 1]));
+  const result = { draftId: flowId, documentRevision: 1, layoutRevision: 1, eventSequence: 0, createdIds: [], versions, retiredIds: [] };
+  assert.deepEqual(parseCommandResult(result), result);
+  assert.throws(() => parseCommandResult({ ...result, versions: { ...versions, [generatedId(1155)]: 1 } }), /INVALID_INPUT/);
 });
 
 test("a stored result rejects values larger than the safe receipt limit", () => {

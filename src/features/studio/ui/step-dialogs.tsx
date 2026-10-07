@@ -3,7 +3,7 @@
 import { useState, type SubmitEvent } from "react";
 import { MAX_DELETE_NODES } from "@/features/drafts/contracts/commands";
 import { NODE_KINDS, type NodeKind } from "@/features/drafts/contracts/scope-document";
-import { dependencyPlan } from "@/features/drafts/domain/graph";
+import { dependencyPlan, incidentTraceLinks } from "@/features/drafts/domain/graph";
 import Dialog, { CancelFocus } from "@/features/shell/ui/dialog";
 import { fieldErrors, KIND_LABELS } from "./fields";
 import { stepName, stepsInOrder } from "./graph-view";
@@ -119,6 +119,7 @@ export function DeleteStepsDialog({ flowId, nodeIds, onClose, onDeleted }: { flo
   const [message, setMessage] = useState("");
   const existing = nodeIds.filter((id) => draft.document.nodes[id]?.flowId === flowId);
   const plan = dependencyPlan(draft.document, flowId, existing);
+  const linkCount = incidentTraceLinks(draft.document, plan.nodeIds).length;
   const tooMany = plan.nodeIds.length > MAX_DELETE_NODES;
   const confirm = async () => {
     if (!editable || !plan.nodeIds.length || tooMany) return;
@@ -138,6 +139,7 @@ export function DeleteStepsDialog({ flowId, nodeIds, onClose, onDeleted }: { flo
         ? <><p>{plan.edgeIds.length === 1 ? "This also removes 1 connection:" : `This also removes ${plan.edgeIds.length} connections:`}</p>
           <ul className="plain-list">{plan.edgeIds.map((id) => { const edge = draft.document.edges[id]!; return <li key={id}>{stepName(draft.document, edge.fromId)} {"\u2192"} {stepName(draft.document, edge.toId)}</li>; })}</ul></>
         : <p className="muted">No connections are affected.</p>}
+      {linkCount > 0 && <p>Also removes {linkCount} requirement link{linkCount === 1 ? "" : "s"}.</p>}
       {tooMany && <p className="error-message" role="alert">Delete up to {MAX_DELETE_NODES} steps at a time.</p>}
     </>}
     {message && <p className="error-message" role="alert">{message}</p>}

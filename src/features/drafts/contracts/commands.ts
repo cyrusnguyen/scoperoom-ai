@@ -12,9 +12,9 @@ export const MAX_DELETE_NODES = 20;
 export type FlowFields = { title: string; purpose: string; classification: Classification; inclusion: Inclusion };
 export type NodeFields = { kind: NodeKind; label: string; description: string; actorLabel: string; assumptionNotes: string[] };
 
-type Command<Name extends string, Guard, Payload> = { commandSchemaVersion: 1; command: Name; payload: Payload } & Guard;
-type ByDocument = { expectedDocumentRevision: number };
-type ByEntity = { expectedEntityVersion: number };
+export type Command<Name extends string, Guard, Payload> = { commandSchemaVersion: 1; command: Name; payload: Payload } & Guard;
+export type ByDocument = { expectedDocumentRevision: number };
+export type ByEntity = { expectedEntityVersion: number };
 
 export type GraphCommand =
   | Command<"CREATE_FLOW", ByDocument, FlowFields>
@@ -49,7 +49,7 @@ function notes(value: unknown): string[] {
 }
 
 /** Parses `payload[key]` only when the key is present, so an update carries just the fields it changes. */
-function optional<K extends string, T>(payload: Record<string, unknown>, key: K, parse: (value: unknown) => T): { [P in K]?: T } {
+export function optional<K extends string, T>(payload: Record<string, unknown>, key: K, parse: (value: unknown) => T): { [P in K]?: T } {
   return (Object.hasOwn(payload, key) ? { [key]: parse(payload[key]) } : {}) as { [P in K]?: T };
 }
 
@@ -60,7 +60,7 @@ function sides(payload: Record<string, unknown>): { fromSide?: Side; toSide?: Si
   return hasFrom ? { fromSide: oneOf(payload.fromSide, SIDES), toSide: oneOf(payload.toSide, SIDES) } : {};
 }
 
-function envelope(body: Record<string, unknown>, guard: keyof ByDocument | keyof ByEntity, required: readonly string[], updatable: readonly string[] = [], extra: readonly string[] = []) {
+export function envelope(body: Record<string, unknown>, guard: keyof ByDocument | keyof ByEntity, required: readonly string[], updatable: readonly string[] = [], extra: readonly string[] = []) {
   keys(body, ["commandSchemaVersion", "command", guard, "payload"]);
   const payload = object(body.payload);
   keys(payload, required, [...updatable, ...extra]);
@@ -150,7 +150,7 @@ export function parseGraphCommand(raw: unknown): GraphCommand {
   }
 }
 
-const MAX_RESULT_IDS = LIMITS.flows + LIMITS.nodes + LIMITS.edges;
+const MAX_RESULT_IDS = LIMITS.flows + LIMITS.nodes + LIMITS.edges + LIMITS.requirements + LIMITS.traceLinks;
 
 /** Validates a stored receipt result before it is replayed. */
 export function parseCommandResult(value: unknown): Omit<CommandResult, "replayed"> {

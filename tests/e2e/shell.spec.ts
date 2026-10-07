@@ -110,7 +110,7 @@ test.describe("project shell", () => {
     await expect(page.getByText("Choose a project or create one.")).toBeVisible();
   });
 
-  test("docking keeps the editor at least min(W, 560) wide and closed panels reserve no width", async ({ page }) => {
+  test("docking keeps the editor at least min(W, 560) wide, closed panels reserve no width, and long names fit at 390 px", async ({ page }) => {
     await mockShell(page);
     const slot = page.locator(".sidebar-slot");
     const panel = page.locator("#right-panel");
@@ -123,9 +123,9 @@ test.describe("project shell", () => {
     await expect(panel).toHaveAttribute("data-dock", "docked");
     await expect(slot).toHaveAttribute("data-mode", "docked");
     expect(await editorWidth(page)).toBe(780);
-    await page.getByRole("button", { name: "Specs", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Specs", exact: true })).toHaveCount(0);
+    await panel.getByRole("tab", { name: "Specs", exact: true }).click();
     await expect(panel.getByRole("tab", { name: "Specs", exact: true })).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByRole("button", { name: "Specs", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(panel.locator("#right-body-specs")).toBeVisible();
 
     // The right panel was opened last, so the sidebar that no longer fits closes instead of overlaying.
@@ -159,6 +159,17 @@ test.describe("project shell", () => {
     await page.reload();
     await expect(page.getByRole("heading", { level: 1, name: "Alpha plan" })).toBeVisible();
     await expect(slot).toHaveAttribute("data-mode", "closed");
+
+    await test.step("a fresh long project stays within the 390 px viewport", async () => {
+      await page.goto(`/app/projects/${ids.long}`);
+      await expect(page.getByRole("heading", { level: 1 })).toHaveAttribute("title", longName);
+      expect(await pageFits(page)).toBe(true);
+      await expect(page.getByRole("button", { name: "Specs", exact: true })).toHaveCount(0);
+      await page.getByRole("button", { name: "Show projects" }).click();
+      await expect(sidebar(page).getByRole("button", { name: longName, exact: true })).toBeVisible();
+      expect(await pageFits(page)).toBe(true);
+      expect((await sidebar(page).getByLabel("Filter owned projects").boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    });
   });
 
   test("a late response for the previous project never renders in the next one", async ({ page }) => {
@@ -233,19 +244,6 @@ test.describe("project shell", () => {
     await expect(page).toHaveURL(/\/login$/);
     await expect(page.getByLabel("Email address")).toBeVisible();
     await expect(page.getByText("Projects couldn’t load.")).toHaveCount(0);
-  });
-
-  test("long names never widen the page at 390 px", async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    await mockShell(page);
-    await page.goto(`/app/projects/${ids.long}`);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveAttribute("title", longName);
-    expect(await pageFits(page)).toBe(true);
-    await expect(page.getByRole("button", { name: "Specs", exact: true }).locator("svg")).toBeVisible(); // label is visually hidden here
-    await page.getByRole("button", { name: "Show projects" }).click();
-    await expect(sidebar(page).getByRole("button", { name: longName, exact: true })).toBeVisible();
-    expect(await pageFits(page)).toBe(true);
-    expect((await sidebar(page).getByLabel("Filter owned projects").boundingBox())!.height).toBeGreaterThanOrEqual(44);
   });
 
   test("a delayed manual reload of a closed project never clobbers the next open one", async ({ page }) => {

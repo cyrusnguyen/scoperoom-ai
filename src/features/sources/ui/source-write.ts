@@ -8,7 +8,7 @@ export function finishSourceWrite(ui: ProjectUi, request: SpecsRequest): Project
   let sourceCorrections = ui.specs.sourceCorrections;
   const [, id] = request.path.split("/");
   if (request.path === "sources") {
-    delete drafts["specs:new-source:title"]; delete drafts["specs:new-source:text"]; delete drafts["specs:new-source:uploaded"];
+    delete drafts["specs:new-source:title"]; delete drafts["specs:new-source:text"]; delete drafts["specs:new-source:uploaded"]; delete drafts["specs:new-source:upload-name"];
   } else if (request.path.endsWith("/graph-sources")) {
     delete drafts["specs:flow-source:title"]; delete drafts["specs:flow-source:id"];
   }

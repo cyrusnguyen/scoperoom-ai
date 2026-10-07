@@ -15,6 +15,20 @@ Keep the local test stack available for manual testing while the PR is open. Aft
 
 Arrange direction coverage in `tests/e2e/studio-positions.spec.ts` checks the actual SVG path against the chosen handle outer face in preview and after in-place Apply, in both TB/LR directions. It also checks reload, preserved explicit connection sides and zero writes on Cancel. Stored direction and node coordinates alone cannot catch cached handle-order routing. Keep the real pointer connection coverage in `studio-canvas.spec.ts` alongside this regression.
 
+## Consolidating tests without losing workflows
+
+Combine short browser journeys only when they use the same fixture and authority, retaining their behavior assertions in named steps. Keep fresh navigation where a scenario requires a clean page. Do not merge independent fault, concurrency, session or membership cases merely because their setup looks alike. Test count alone is not a performance target; compare the full affected files before and after with the same production runner and workers.
+
+The Stage 7.2 cleanup combines these existing journeys:
+
+| Spec | Combined coverage | Isolation retained |
+| --- | --- | --- |
+| flow-dialogs.spec.ts | Inspect current flow and project details; restore an empty Flows filter | Same seeded graph, no intervening writes |
+| shell.spec.ts | Responsive sidebar docking, focus and reload; 390 px long-name layout and touch controls | Full navigation to the distinct long-name project |
+| scope.spec.ts | REVIEWER reads Sources and requirements with no authoring controls | Both records prepared before the same real membership downgrade |
+
+These merges retain all original assertions. Dedicated authority, recovery and fault cases stay separate. Qualification and measured timings are recorded in the [progress tracker](context/progress-tracker.md).
+
 ## Private Realtime socket suite
 
 `corepack pnpm test:workers` runs `tests/workers/*.test.ts`: the AI dispatch, claim and settlement services and the scheduled maintenance tick (`maintenance.test.ts`) against the real local database through the restricted worker role, with injected fake model and dispatcher ports only. It runs in the CI database job after the integration suite. No test composes a real provider; automated servers and suites blank `GOOGLE_GENERATIVE_AI_API_KEY`, `TRIGGER_SECRET_KEY` and `TRIGGER_ACCESS_TOKEN`, and the live provider probe is a separate, explicitly authorized step.

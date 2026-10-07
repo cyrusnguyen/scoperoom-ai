@@ -1,20 +1,23 @@
 import { LAYOUT_BYTE_LIMIT, parseLayout, type DraftLayout } from "./draft-layout.ts";
-import { id, invalid, keys, object, oneOf, records, text, utf8Bytes, version } from "./strict.ts";
+import { id, idList, invalid, keys, object, oneOf, records, text, utf8Bytes, version } from "./strict.ts";
 
-// ScopeDocument storage schema v3 (Data02). Stage 03 activates flows, nodes and edges only: the other collections
+// ScopeDocument storage schema v3 (Data02). Stage 07 activates requirements and trace links; other collections
 // must stay empty, and confirmation and verification stay unset until the stages whose
 // validators own them (07–09) widen this parser.
 export const NODE_KINDS = ["START", "ACTION", "DECISION", "OUTCOME", "DATA_STORE"] as const;
 export const CLASSIFICATIONS = ["USER_JOURNEY", "BUSINESS_PROCESS"] as const;
 export const INCLUSIONS = ["INCLUDED", "EXCLUDED", "UNDECIDED"] as const;
 export const ORIGINS = ["HUMAN", "AI_EXTRACTED", "AI_SUGGESTED", "IMPORTED"] as const;
+export const REQUIREMENT_CATEGORIES = ["FUNCTIONAL", "NON_FUNCTIONAL", "CONSTRAINT"] as const;
 export type NodeKind = (typeof NODE_KINDS)[number];
 export type Classification = (typeof CLASSIFICATIONS)[number];
 export type Inclusion = (typeof INCLUSIONS)[number];
 export type Origin = (typeof ORIGINS)[number];
+export type RequirementCategory = (typeof REQUIREMENT_CATEGORIES)[number];
 
 export const LIMITS = {
-  flows: 5, nodes: 200, edges: 400, documentBytes: 2 * 1024 * 1024, layoutBytes: LAYOUT_BYTE_LIMIT,
+  flows: 5, nodes: 200, edges: 400, requirements: 150, traceLinks: 400, documentBytes: 2 * 1024 * 1024, layoutBytes: LAYOUT_BYTE_LIMIT,
+  role: 120,
   title: 120, label: 160, actorLabel: 100, condition: 240, longText: 4_000, notes: 20, note: 500, projectGoal: 8_000,
 } as const;
 
@@ -27,11 +30,23 @@ export type NodeRecord = {
   actorLabel: string; origin: Origin; sourceRefs: SourceRef[]; assumptionNotes: string[];
 };
 export type EdgeRecord = { id: string; flowId: string; version: number; fromId: string; toId: string; condition: string; origin: Origin; sourceRefs: SourceRef[] };
+export type ConfirmationStamp = { behaviourVersion: number; actorId: string; confirmedAt: string } | null;
+export type VerificationMethod = { description: string; responsibleRole: string; reviewedBehaviourVersion: number | null; reviewedBy: string | null; reviewedAt: string | null } | null;
+export type RequirementRecord = {
+  id: string; displayId: string; version: number; behaviourVersion: number; title: string; statement: string;
+  category: RequirementCategory; inclusion: Inclusion; origin: Origin; sourceRefs: SourceRef[]; decisionIds: string[];
+  ownerId: string | null; confirmation: ConfirmationStamp; verificationMethod: VerificationMethod;
+};
+export type TraceLinkRecord = {
+  id: string; version: number; requirementId: string; nodeId: string; explanation: string;
+  reviewedRequirementBehaviourVersion: number | null; reviewedNodeBehaviourVersion: number | null; reviewedBy: string | null; reviewedAt: string | null;
+};
 
-const LATER = ["requirements", "traceLinks", "scenarios", "questions", "decisions", "dependencies", "waivers"] as const;
+const LATER = ["scenarios", "questions", "decisions", "dependencies", "waivers"] as const;
 export type ScopeDocument = {
   schemaVersion: 3; projectGoal: string;
   flows: Record<string, FlowRecord>; nodes: Record<string, NodeRecord>; edges: Record<string, EdgeRecord>;
+  requirements: Record<string, RequirementRecord>; traceLinks: Record<string, TraceLinkRecord>;
   retiredEntityIds: string[];
 } & Record<(typeof LATER)[number], Record<string, never>>;
 
@@ -85,9 +100,63 @@ function parseEdge(entry: unknown): EdgeRecord {
   };
 }
 
+const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+export function parseTime(value: unknown): string {
+  if (typeof value !== "string" || !TIME.test(value) || Number.isNaN(Date.parse(value)) || new Date(value).toISOString() !== value) invalid();
+  return value;
+}
+const DISPLAY_ID = /^REQ-\d{3,9}$/;
+const nullableVersion = (value: unknown) => (value === null ? null : version(value));
+const nullableId = (value: unknown) => (value === null ? null : id(value));
+
+function parseConfirmation(value: unknown): ConfirmationStamp {
+  if (value === null) return null;
+  const stamp = object(value);
+  keys(stamp, ["behaviourVersion", "actorId", "confirmedAt"]);
+  return { behaviourVersion: version(stamp.behaviourVersion), actorId: id(stamp.actorId), confirmedAt: parseTime(stamp.confirmedAt) };
+}
+
+function parseVerification(value: unknown): VerificationMethod {
+  if (value === null) return null;
+  const method = object(value);
+  keys(method, ["description", "responsibleRole", "reviewedBehaviourVersion", "reviewedBy", "reviewedAt"]);
+  const review = [method.reviewedBehaviourVersion, method.reviewedBy, method.reviewedAt];
+  if (review.some((entry) => entry === null) && review.some((entry) => entry !== null)) invalid();
+  return {
+    description: text(method.description, LIMITS.longText, true), responsibleRole: text(method.responsibleRole, LIMITS.role, true),
+    reviewedBehaviourVersion: nullableVersion(method.reviewedBehaviourVersion), reviewedBy: nullableId(method.reviewedBy),
+    reviewedAt: method.reviewedAt === null ? null : parseTime(method.reviewedAt),
+  };
+}
+
+function parseRequirement(entry: unknown): RequirementRecord {
+  const requirement = object(entry);
+  keys(requirement, ["id", "displayId", "version", "behaviourVersion", "title", "statement", "category", "inclusion", "origin", "sourceRefs", "decisionIds", "ownerId", "confirmation", "verificationMethod"]);
+  if (typeof requirement.displayId !== "string" || !DISPLAY_ID.test(requirement.displayId)) invalid();
+  return {
+    id: id(requirement.id), displayId: requirement.displayId, version: version(requirement.version), behaviourVersion: version(requirement.behaviourVersion),
+    title: text(requirement.title, LIMITS.title, true), statement: text(requirement.statement, LIMITS.longText), category: oneOf(requirement.category, REQUIREMENT_CATEGORIES),
+    inclusion: oneOf(requirement.inclusion, INCLUSIONS), origin: oneOf(requirement.origin, ORIGINS), sourceRefs: parseSourceRefs(requirement.sourceRefs),
+    decisionIds: idList(requirement.decisionIds, 200), ownerId: nullableId(requirement.ownerId),
+    confirmation: parseConfirmation(requirement.confirmation), verificationMethod: parseVerification(requirement.verificationMethod),
+  };
+}
+
+function parseTraceLink(entry: unknown): TraceLinkRecord {
+  const link = object(entry);
+  keys(link, ["id", "version", "requirementId", "nodeId", "explanation", "reviewedRequirementBehaviourVersion", "reviewedNodeBehaviourVersion", "reviewedBy", "reviewedAt"]);
+  const review = [link.reviewedRequirementBehaviourVersion, link.reviewedNodeBehaviourVersion, link.reviewedBy, link.reviewedAt];
+  if (review.some((entry) => entry === null) && review.some((entry) => entry !== null)) invalid();
+  return {
+    id: id(link.id), version: version(link.version), requirementId: id(link.requirementId), nodeId: id(link.nodeId), explanation: text(link.explanation, LIMITS.longText),
+    reviewedRequirementBehaviourVersion: nullableVersion(link.reviewedRequirementBehaviourVersion), reviewedNodeBehaviourVersion: nullableVersion(link.reviewedNodeBehaviourVersion),
+    reviewedBy: nullableId(link.reviewedBy), reviewedAt: link.reviewedAt === null ? null : parseTime(link.reviewedAt),
+  };
+}
+
 export function parseDocument(value: unknown): ScopeDocument {
   const document = object(value);
-  keys(document, ["schemaVersion", "projectGoal", "flows", "nodes", "edges", ...LATER, "retiredEntityIds"]);
+  keys(document, ["schemaVersion", "projectGoal", "flows", "nodes", "edges", "requirements", "traceLinks", ...LATER, "retiredEntityIds"]);
   if (document.schemaVersion !== 3) invalid();
   const flows = records(document.flows, LIMITS.flows, parseFlow);
   const nodes = records(document.nodes, LIMITS.nodes, parseNode);
@@ -97,7 +166,18 @@ export function parseDocument(value: unknown): ScopeDocument {
   for (const edge of Object.values(edges)) {
     if (!flows[edge.flowId] || nodes[edge.fromId]?.flowId !== edge.flowId || nodes[edge.toId]?.flowId !== edge.flowId) invalid();
   }
-  const active = [...Object.keys(flows), ...Object.keys(nodes), ...Object.keys(edges)];
+  const requirements = records(document.requirements, LIMITS.requirements, parseRequirement);
+  const traceLinks = records(document.traceLinks, LIMITS.traceLinks, parseTraceLink);
+  const decisions = object(document.decisions);
+  if (new Set(Object.values(requirements).map((entry) => entry.displayId)).size !== Object.keys(requirements).length) invalid();
+  for (const requirement of Object.values(requirements)) if (requirement.decisionIds.some((decisionId) => !Object.hasOwn(decisions, decisionId))) invalid();
+  const pairs = new Set<string>();
+  for (const link of Object.values(traceLinks)) {
+    const pair = `${link.requirementId}:${link.nodeId}`;
+    if (!requirements[link.requirementId] || !nodes[link.nodeId] || pairs.has(pair)) invalid();
+    pairs.add(pair);
+  }
+  const active = [...Object.keys(flows), ...Object.keys(nodes), ...Object.keys(edges), ...Object.keys(requirements), ...Object.keys(traceLinks)];
   const activeIds = new Set(active);
   if (activeIds.size !== active.length) invalid();
   for (const name of LATER) if (Object.keys(object(document[name])).length) invalid();
@@ -107,7 +187,7 @@ export function parseDocument(value: unknown): ScopeDocument {
   if (retiredEntityIds.some((retired, index) => (index > 0 && retiredEntityIds[index - 1]! >= retired) || activeIds.has(retired))) invalid();
   return {
     schemaVersion: 3, projectGoal: text(document.projectGoal, LIMITS.projectGoal), flows, nodes, edges,
-    requirements: {}, traceLinks: {}, scenarios: {}, questions: {}, decisions: {}, dependencies: {}, waivers: {}, retiredEntityIds,
+    requirements, traceLinks, scenarios: {}, questions: {}, decisions: {}, dependencies: {}, waivers: {}, retiredEntityIds,
   };
 }
 

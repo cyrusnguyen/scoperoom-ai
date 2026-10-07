@@ -4,7 +4,7 @@ import { useState, type SubmitEvent } from "react";
 import { flushSync } from "react-dom";
 import type { GraphCommand } from "@/features/drafts/contracts/commands";
 import { CLASSIFICATIONS, INCLUSIONS, LIMITS, type Classification, type Inclusion } from "@/features/drafts/contracts/scope-document";
-import { dependencyPlan } from "@/features/drafts/domain/graph";
+import { dependencyPlan, incidentTraceLinks } from "@/features/drafts/domain/graph";
 import Dialog from "@/features/shell/ui/dialog";
 import { Icon } from "@/features/shell/ui/icon";
 import { NativeExportDialog } from "@/features/exports/ui/flow-export";
@@ -149,11 +149,13 @@ export function FlowsDialog({ onClose, creating = false }: { onClose: () => void
 
   if (editable && mode === "delete" && current) {
     const plan = dependencyPlan(document, current.id);
+    const linkCount = incidentTraceLinks(document, plan.nodeIds).length;
     return <Dialog title={`Delete ${current.title}?`} onClose={() => setMode("list")} footer={<>
       <button type="button" className="button quiet" onClick={() => setMode("list")}>Cancel</button>
       <button type="button" className="button danger" onClick={() => void remove()}>Delete flow</button>
     </>}>
       <p>This removes the flow, its {plan.nodeIds.length} {plan.nodeIds.length === 1 ? "step" : "steps"} and {plan.edgeIds.length} {plan.edgeIds.length === 1 ? "connection" : "connections"} from the draft.</p>
+      {linkCount > 0 && <p>Also removes {linkCount} requirement link{linkCount === 1 ? "" : "s"}.</p>}
       {message && <p className="error-message" role="alert">{message}</p>}
     </Dialog>;
   }

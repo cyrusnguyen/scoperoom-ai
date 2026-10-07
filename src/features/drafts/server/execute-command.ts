@@ -1,18 +1,23 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma } from "../../../../prisma/generated/client.ts";
-import { keyPattern, uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
+import { keyPattern, uuid, type ProjectAccessRole, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import {
-  checkReceipt, findReceipt, lockActor, lockProject, profileFor, readProject, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
+  checkReceipt, findReceipt, lockActor, lockProject, profileFor, projectRole, readProject, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
   withDatabase, withReadSnapshot, type ProjectRow, type Transaction,
 } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
-import { parseCommandResult, parseGraphCommand, type CommandResult, type GraphCommand } from "../contracts/commands.ts";
+import { parseCommandResult, type CommandResult } from "../contracts/commands.ts";
 import { LIMITS, parseDraftPair, type DraftView } from "../contracts/scope-document.ts";
 import { MAX_VERSION } from "../contracts/strict.ts";
 import { applyGraphCommand, GraphError, type Applied, type Draft } from "../domain/graph.ts";
+import { isScopeCommand, parseDraftCommand, type DraftCommand } from "../../scope/contracts/scope-commands.ts";
+import { applyScopeCommand, commandMembers, commandSourceRefs, formatDisplayId } from "../../scope/domain/scope.ts";
+import { checkSourceRefs } from "../../sources/server/source-versions.ts";
 
 // The one semantic dispatcher (Data03 "Shared mutation primitives"). Routes only adapt identity and transport.
 const COMMAND_OPERATION = "DRAFT_COMMAND_V1";
+const MAX_REQUIREMENT_DISPLAY_SEQUENCE = 999_999_999;
+export const ASSIGNABLE_ROLES: readonly ProjectAccessRole[] = ["OWNER", "EDITOR", "REVIEWER"];
 
 export type LockedDraft = { id: string; documentRevision: number; layoutRevision: number; draft: Draft };
 
@@ -106,15 +111,36 @@ export function auditRefs(applied: Applied, extra: string[] = []) {
 
 export async function executeGraphCommand(identity: ProjectIdentity, projectId: string, draftId: string, input: Record<string, unknown>): Promise<CommandResult> {
   const { key, ...raw } = input;
-  let command: GraphCommand;
+  let command: DraftCommand;
   try {
     if (typeof key !== "string" || !keyPattern.test(key)) throw new Error("INVALID_INPUT");
-    command = parseGraphCommand(raw);
+    command = parseDraftCommand(raw);
   } catch { throw new ProjectError("INVALID_INPUT"); }
   const hash = requestHash(COMMAND_OPERATION, { projectId, draftId, command });
   return draftMutation(identity, projectId, draftId, key, COMMAND_OPERATION, hash, parseCommandResult, async (tx, project, draft, actorId) => {
+    // The project row is already locked FOR UPDATE, so the next label is serialized with every other creation.
+    let label: number | null = null;
+    if (command.command === "CREATE_REQUIREMENT") {
+      const [row] = await tx.$queryRaw<Array<{ sequence: number }>>`
+        SELECT requirement_display_sequence AS sequence FROM app.project WHERE id = ${project.id}::uuid`;
+      if (!row) throw new ProjectError("UNAVAILABLE");
+      if (row.sequence >= MAX_REQUIREMENT_DISPLAY_SEQUENCE) throw new ProjectError("VERSION_EXHAUSTED");
+      label = row.sequence + 1;
+    }
     let applied: Applied;
-    try { applied = applyGraphCommand(draft.draft, draft.documentRevision, command, randomUUID); } catch (error) { graphFailure(error); }
+    try {
+      applied = isScopeCommand(command)
+        ? applyScopeCommand(draft.draft, draft.documentRevision, command, randomUUID, { actorId, now: new Date().toISOString(), ...(label === null ? {} : { displayId: formatDisplayId(label) }) })
+        : applyGraphCommand(draft.draft, draft.documentRevision, command, randomUUID);
+    } catch (error) { graphFailure(error); }
+    if (isScopeCommand(command) && applied.documentChanged) {
+      await checkSourceRefs(tx, project.id, commandSourceRefs(command));
+      for (const member of commandMembers(command)) {
+        const role = await projectRole(tx, project, member);
+        if (!role || !ASSIGNABLE_ROLES.includes(role)) throw new ProjectError("INVALID_INPUT");
+      }
+      if (label !== null) await tx.$executeRaw`UPDATE app.project SET requirement_display_sequence = ${label} WHERE id = ${project.id}::uuid`;
+    }
     // An effective no-op keeps every counter; only its receipt is saved. A layout-only effect (Task 13's side-only
     // RECONNECT_EDGE) still writes and advances layoutRevision, just never documentRevision or a record version.
     if (!applied.documentChanged && !applied.layoutChanged) {

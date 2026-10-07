@@ -1,6 +1,6 @@
 import type { GraphCommand } from "../../drafts/contracts/commands.ts";
 import { emptyDraft } from "../../drafts/contracts/scope-document.ts";
-import { applyGraphGroup, byId, type Applied, type Draft } from "../../drafts/domain/graph.ts";
+import { applyGraphGroup, byId, usedIds, type Applied, type Draft } from "../../drafts/domain/graph.ts";
 import { LOCAL_REF, type CapturedInput, type ProposalDiff, type ValidatedProposal } from "../contracts/tasks.ts";
 import { selectOperations } from "./select-operations.ts";
 import { ResultError, validateResult } from "./validate-result.ts";
@@ -77,7 +77,7 @@ function capturedDraft(capture: CapturedInput): Draft {
 
 export function proposalDiff(capture: CapturedInput, proposal: ValidatedProposal, selectedIds: readonly string[]): ProposalDiff {
   const before = capturedDraft(capture);
-  const used = new Set([...Object.keys(before.document.flows), ...Object.keys(before.document.nodes), ...Object.keys(before.document.edges)]);
+  const used = usedIds(before.document);
   let index = 0;
   const temporaryId = () => {
     let id: string;

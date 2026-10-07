@@ -169,7 +169,7 @@ test("retired IDs are never allocated again", () => {
     state.revision + 1,
     addNode("Again")({ draft: removed, revision: state.revision + 1 }),
     () => nodeId,
-  ), /ID_COLLISION/);
+  ), (error: unknown) => error instanceof GraphError && error.code === "INVALID_INPUT");
 });
 
 test("duplicating a flow allocates fresh identities and copies topology, positions and direction", () => {
