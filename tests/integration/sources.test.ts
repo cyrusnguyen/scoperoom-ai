@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { executeGraphCommand, getDraft } from "../../src/features/drafts/server/execute-command.ts";
 import { ProjectError } from "../../src/features/projects/server/errors.ts";
+import { archiveProject } from "../../src/features/projects/server/management.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { readSourceVersion } from "../../src/features/sources/server/source-versions.ts";
 import { correctSource, createGraphSource, createSource, listSources, listSourceVersions, updateSource } from "../../src/features/sources/server/sources.ts";
@@ -154,5 +155,42 @@ test("a saved flow becomes attributed PROMOTED_GRAPH evidence bound to its revis
     assert.equal(rows[0].n, 1);
     // Ids are case-insensitive on the wire: the same write with uppercase ids replays instead of failing.
     assert.deepEqual(await createGraphSource(owner, projectId.toUpperCase(), draftId.toUpperCase(), body), { ...source, replayed: true });
+  });
+});
+
+test("another project's source id is NOT_FOUND for correct and update, and writes change nothing", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user("scope owner");
+    const own = await project(owner), other = await project(owner);
+    const foreign = await createSource(owner, other, { key: key(), title: "Foreign", text: "a" });
+    const counts = () => database.query(
+      "select (select count(*)::int from app.source_document where project_id = any($1)) documents, (select count(*)::int from app.source_version where project_id = any($1)) versions, (select count(*)::int from app.audit_event where project_id = any($1)) events, (select count(*)::int from app.mutation_receipt where scope_id = any($1)) receipts, (select version from app.source_document where id = $2) version",
+      [[own, other], foreign.sourceId],
+    ).then((result) => result.rows[0]);
+    const before = await counts();
+    await assert.rejects(correctSource(owner, own, foreign.sourceId, { key: key(), expectedSourceRecordVersion: 1, expectedCurrentVersionId: foreign.sourceVersionId, title: "T", text: "b" }), refused("NOT_FOUND"));
+    await assert.rejects(updateSource(owner, own, foreign.sourceId, { key: key(), expectedSourceRecordVersion: 1, archived: true }), refused("NOT_FOUND"));
+    assert.deepEqual(await counts(), before);
+  });
+});
+
+test("an archived project refuses new, corrected and flow sources and writes nothing", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user("archived owner");
+    const projectId = await project(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const flow = await executeGraphCommand(owner, projectId, draftId, { key: key(), commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision: 1, payload: { title: "Checkout", purpose: "", classification: "USER_JOURNEY", inclusion: "INCLUDED" } });
+    const created = await createSource(owner, projectId, { key: key(), title: "Brief", text: "a" });
+    await archiveProject(owner, projectId, { expectedProjectVersion: (await getProjectStatus(owner, projectId)).version, reason: "Done", key: key() });
+    const counts = () => database.query(
+      "select (select count(*)::int from app.source_document where project_id = $1) documents, (select count(*)::int from app.source_version where project_id = $1) versions, (select count(*)::int from app.mutation_receipt where scope_id = $1) receipts",
+      [projectId],
+    ).then((result) => result.rows[0]);
+    const before = await counts();
+    await assert.rejects(createSource(owner, projectId, { key: key(), title: "Late", text: "a" }), refused("CONFLICT"));
+    await assert.rejects(correctSource(owner, projectId, created.sourceId, { key: key(), expectedSourceRecordVersion: 1, expectedCurrentVersionId: created.sourceVersionId, title: "T", text: "b" }), refused("CONFLICT"));
+    await assert.rejects(createGraphSource(owner, projectId, draftId, { key: key(), expectedDocumentRevision: flow.documentRevision, flowId: flow.createdIds[0]!, title: "Checkout flow" }), refused("CONFLICT"));
+    assert.deepEqual(await counts(), before);
+    assert.equal((await listSources(owner, projectId, {})).items.length, 1, "the archived project's sources stay readable");
   });
 });
