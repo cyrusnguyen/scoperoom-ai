@@ -2,11 +2,20 @@
 
 ## Stage 07a: sources (2026-10-07)
 
-Branch `feat/stage-7.1-sources` (base `fa4cff0`), local only: no push or PR has been made. Delivered: immutable text sources by paste, strict UTF-8 `.txt`/`.md` upload and saved-flow extract; correction as new versions and archive/restore; a paginated source list and version reads with usage against the limits; the `sources_revision` project status cursor; and a Specs tab in the right panel with a Sources view (list, reader, versions, correction, archive/restore, add by paste, upload or saved flow). Reviewers and viewers read sources without edit controls.
+Branch `feat/stage-7.1-sources` (base `fa4cff0`), local only: no push or PR has been made. Delivered: immutable text sources by paste, strict UTF-8 `.txt`/`.md` upload and saved-flow extract; correction as new versions and archive/restore; a paginated source list and version reads with usage against the limits; the `sources_revision` project status cursor; and a Specs tab in the right panel with a Sources view (list, reader, versions, correction, archive/restore, add by paste, upload or saved flow). Reviewers (browser-tested) and viewers (same gate, server FORBIDDEN covered by integration) read sources without edit controls.
 
-Commits (`git log --oneline fa4cff0..HEAD`): 642c6c1 contracts, citation matching and flow extract; 6b03240 sources revision cursor in status; e317d20 list, paste, correction and archive APIs; ae2916c lowercase ids for receipt replay and cap/role coverage; 1d492fb saved flow as graph source evidence; 04f2f89 Specs tab; dde8562 Specs header icon at narrow widths; 8c34a15 Sources view; e020cd5 keep unconfirmed writes, filter and focus across remounts; then the reviewer browser test and this checkpoint.
+Commits (`git log --oneline fa4cff0..HEAD`): 642c6c1 contracts, citation matching and flow extract; 6b03240 sources revision cursor in status; e317d20 list, paste, correction and archive APIs; ae2916c lowercase ids for receipt replay and cap/role coverage; 1d492fb saved flow as graph source evidence; 04f2f89 Specs tab; dde8562 Specs header icon at narrow widths; 8c34a15 Sources view; e020cd5 keep unconfirmed writes, filter and focus across remounts; 494bd50 reviewer reads sources without edit controls (browser test); 1bb0538 sources checkpoint; then this gate record.
 
-Evidence so far (per-task runs on the local isolated stack): units 504/504 at Task 6; `tests/integration/sources.test.ts` 7/7 with `ai-admit-run` 20/20 together; `tests/e2e/scope.spec.ts` 8 passed, 0 skipped, 0 failed (7 owner cases plus the reviewer case), run with `shell.spec.ts` and `ai.spec.ts` at Task 6 for 54 passed, 0 skipped. The full stage gates are run and recorded in the next checkpoint commit.
+Gate results (2026-10-07, local isolated stack, source HEAD `1bb0538`, run serially one suite at a time):
+- `corepack pnpm db:generate`, `db:migrate` (Realtime `apply-ok`, `verify-ok`) and `db:guard` (`target=verified-local`): all exit 0.
+- `corepack pnpm lint` (import boundaries and ESLint) exit 0, 14 s; `corepack pnpm typecheck` exit 0.
+- `corepack pnpm test:unit`: 504/504 passed, 0 skipped, 0 failed, exit 0, 17.6 s.
+- `corepack pnpm build`: exit 0, 20 s.
+- `corepack pnpm test:integration` (default concurrency): 269/269 passed, 0 skipped, 0 failed, exit 0, 135.7 s; all seven `tests/integration/sources.test.ts` cases ran.
+- `corepack pnpm test:workers`: 30/30 passed, 0 skipped, exit 0, 22.2 s.
+- `corepack pnpm test:realtime` (serial, alone on the stack): 13/13 passed, 0 skipped, exit 0, 454.6 s.
+- `PLAYWRIGHT_PORT=3107 PLAYWRIGHT_WORKERS=2 corepack pnpm test:e2e:production` (full, unfiltered, zero retries): 417 of 418 distinct cases passed (404 Chromium, 14 recovery-fault), 0 skipped, 0 flaky, 0 retries, 0 global errors, 1 failed; exit 1; build/test/total 18.4/971.6/990.0 s. `scope.spec.ts` 8/8, `shell.spec.ts` 10/10 and `ai.spec.ts` 37/37 passed. The failure is `collaboration-auth-outage.spec.ts` "an Auth outage keeps entries and inspector text..." (line 137: expected 503, received 200). The trace shows a status read started by the Realtime join before the test switched the Auth fault on; it completed after the switch and was the response the test awaited. That spec and the status read path are unchanged by this branch, so it is recorded as a pre-existing timing race, not fixed here. The spec rerun alone passed 13/13 (0 skipped, 0 flaky, exit 0, build/test/total 9.5/56.5/66.0 s). The full browser gate therefore did not pass in one run.
+- No code or test fix was made in this verification. These local results do not establish hosted CI.
 
 Limitations:
 - A saved-flow origin binds the draft, revision and flow, not every step id.

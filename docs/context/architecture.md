@@ -59,7 +59,7 @@ Saved changes by other people reach an admitted reader through the authenticated
 
 Sources are immutable text versions owned by PostgreSQL; the browser never saves them through the draft.
 
-- Routes: `GET`/`POST /api/projects/:id/sources` (paginated list; paste or strict UTF-8 upload), `PATCH .../sources/:sourceId` (archive/restore, nickname), `GET`/`POST .../sources/:sourceId/versions` (paginated versions; correction creates a new version), and `POST D/graph-sources` (saved flow extract bound to the draft, its revision and the flow). Every write is version-checked, keyed and replayable; corrections send the expected record and current version ids.
+- Routes: `GET`/`POST /api/projects/:id/sources` (paginated list; paste or strict UTF-8 upload), `PATCH .../sources/:sourceId` (archive/restore, nickname), `GET`/`POST .../sources/:sourceId/versions` (paginated versions; correction creates a new version), and `POST D/graph-sources` (saved flow extract bound to the draft, its revision and the flow). Every write is keyed and replayable; correction and archive/restore check the expected record version, and the flow extract checks the draft revision; corrections send the expected record and current version ids.
 - `sources_revision` is a project status cursor advanced by user source writes, so other readers refresh the list through the normal status poll. AI prompt admission does not advance it.
 - Capacity: user documents (`USER_TEXT`, `USER_UPLOAD`, `PROMOTED_GRAPH`) take one of 30 active slots; archiving frees a slot and restore needs one. Every retained version, internal evidence included, counts against 500 versions and 500,000 code points per project. A single submission is at most 50,000 code points.
 
