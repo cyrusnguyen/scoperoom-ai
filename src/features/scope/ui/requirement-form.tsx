@@ -52,34 +52,45 @@ export default function RequirementForm({ requirement, ui, update, drafts, setDr
   const edited = Object.keys(saved).some((field) => drafts[`${prefix}${field}`] !== undefined);
   const guard = Number(drafts[guardKey] ?? requirement?.version ?? 0);
   const stale = ui.message.includes("Someone saved this item first");
+  const verificationIncomplete = Boolean(get("verificationDescription").trim()) !== Boolean(get("responsibleRole").trim());
   const verification = () => {
     const description = get("verificationDescription").trim(), responsibleRole = get("responsibleRole").trim();
-    return description || responsibleRole ? { description, responsibleRole } : null;
+    return description && responsibleRole ? { description, responsibleRole } : null;
   };
   const send = (label: string, build: (saved: typeof savedDraft) => Record<string, unknown> | null) => void write.sendDraft(`drafts/${savedDraft.id}/commands`, build, label);
-  const save = () => send("Save requirement", (current) => {
+  const save = () => {
+    if (verificationIncomplete) return;
+    send("Save requirement", (current) => {
     const next = { title: get("title").trim(), statement: get("statement"), category: get("category") as RequirementCategory, inclusion: get("inclusion") as RequirementRecord["inclusion"], ownerId: get("ownerId") || null, verification: verification() };
     if (!requirement) return { commandSchemaVersion: 1, command: "CREATE_REQUIREMENT", expectedDocumentRevision: current.documentRevision, payload: { ...next, sourceRefs: [] } };
     const changed = Object.fromEntries(Object.entries(next).filter(([key]) => key === "verification"
       ? drafts[`${prefix}verificationDescription`] !== undefined || drafts[`${prefix}responsibleRole`] !== undefined
       : drafts[`${prefix}${key}`] !== undefined));
     return Object.keys(changed).length ? { commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: guard, payload: { requirementId: requirement.id, ...changed } } : null;
-  });
+    });
+  };
   const useSaved = () => { for (const key of [baseKey, guardKey, ...Object.keys(saved).map((field) => `${prefix}${field}`)]) setDraft(key, undefined); };
-  const field = <K extends keyof Values>(key: K, label: string, control: "input" | "textarea" | "select", options?: readonly [string, string][]) => <div className="field">
+  const useMineOnLatest = () => {
+    if (!requirement || requirement.version <= guard) return;
+    setDraft(baseKey, JSON.stringify(saved));
+    setDraft(guardKey, String(requirement.version));
+    update((current) => current.message.includes("Someone saved this item first") ? { message: "" } : {});
+  };
+  const field = <K extends keyof Values>(key: K, label: string, control: "input" | "textarea" | "select", options?: readonly [string, string][], invalid = false) => <div className="field">
     <label htmlFor={`requirement-${key}`}>{label}</label>
-    {control === "textarea" ? <textarea id={`requirement-${key}`} rows={key === "statement" ? 4 : 3} readOnly={!canEdit || locked} value={get(key)} onChange={(event) => set(key, event.target.value)} />
+    {control === "textarea" ? <textarea id={`requirement-${key}`} rows={key === "statement" ? 4 : 3} readOnly={!canEdit || locked} value={get(key)} aria-invalid={invalid || undefined} aria-describedby={invalid ? "verification-method-error" : undefined} onChange={(event) => set(key, event.target.value)} />
       : control === "select" ? <select id={`requirement-${key}`} disabled={!canEdit || locked} value={get(key)} onChange={(event) => set(key, event.target.value)}>{options?.map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select>
-        : <input id={`requirement-${key}`} readOnly={!canEdit || locked} value={get(key)} onChange={(event) => set(key, event.target.value)} />}
+        : <input id={`requirement-${key}`} readOnly={!canEdit || locked} value={get(key)} aria-invalid={invalid || undefined} aria-describedby={invalid ? "verification-method-error" : undefined} onChange={(event) => set(key, event.target.value)} />}
   </div>;
   return <div className="requirement-form">
     <button type="button" className="button quiet small" onClick={onClose}>Back to requirements</button>
     <h3>{requirement ? `${requirement.displayId} ${requirement.title}` : "New requirement"}</h3>
-    {stale && <section className="inline-note" role="alert"><p>Someone saved this requirement first. Your text is kept; review the saved values, then save again.</p><button type="button" className="button small" onClick={useSaved}>Use saved values</button></section>}
+    {stale && <section className="inline-note" role="alert"><p>Someone saved this requirement first. Your text is kept; review the saved values, then save again.</p><div className="view-actions"><button type="button" className="button small" disabled={locked || !requirement || requirement.version <= guard} onClick={useMineOnLatest}>Use my edits on latest version</button><button type="button" className="button quiet small" disabled={locked} onClick={useSaved}>Use saved values</button></div></section>}
     {field("title", "Title", "input")}{field("statement", "Statement", "textarea")}{field("category", "Category", "select", categories)}{field("inclusion", "Inclusion", "select", inclusions)}
     <div className="field"><label htmlFor="requirement-owner">Owner</label><select id="requirement-owner" disabled={!canEdit || locked} value={get("ownerId")} onChange={(event) => set("ownerId", event.target.value)}><option value="">Unassigned</option>{directory?.filter((member) => member.role !== "VIEWER").map((member) => <option key={member.profileId} value={member.profileId}>{member.displayName}</option>)}{get("ownerId") && !directory?.some((member) => member.profileId === get("ownerId") && member.role !== "VIEWER") && <option value={get("ownerId")}>{directory?.find((member) => member.profileId === get("ownerId"))?.displayName ?? "Former member"}</option>}</select></div>
-    {field("verificationDescription", "Verification description", "textarea")}{field("responsibleRole", "Responsible role", "input")}
-    {canEdit && <div className="view-actions"><button type="button" className="button primary" disabled={locked || !get("title").trim()} onClick={save}>Save requirement</button>{requirement && <button type="button" className="button" disabled={locked || edited || confirmationCurrent(requirement)} onClick={() => send("Confirm requirement", () => ({ commandSchemaVersion: 1, command: "CONFIRM_REQUIREMENT", expectedEntityVersion: guard, payload: { requirementId: requirement.id } }))}>{!edited && confirmationCurrent(requirement) ? "Confirmed for this wording" : "Confirm requirement"}</button>}</div>}
+    {field("verificationDescription", "Verification description", "textarea", undefined, verificationIncomplete)}{field("responsibleRole", "Responsible role", "input", undefined, verificationIncomplete)}
+    {verificationIncomplete && <p id="verification-method-error" role="alert">Verification description and responsible role must both be filled or both be blank.</p>}
+    {canEdit && <div className="view-actions"><button type="button" className="button primary" disabled={locked || verificationIncomplete || !get("title").trim()} onClick={save}>Save requirement</button>{requirement && <button type="button" className="button" disabled={locked || edited || confirmationCurrent(requirement)} onClick={() => send("Confirm requirement", () => ({ commandSchemaVersion: 1, command: "CONFIRM_REQUIREMENT", expectedEntityVersion: guard, payload: { requirementId: requirement.id } }))}>{!edited && confirmationCurrent(requirement) ? "Confirmed for this wording" : "Confirm requirement"}</button>}</div>}
     {canEdit && requirement && edited && <p className="muted">Save changes before confirming.</p>}
     {requirement && <RequirementActions requirement={requirement} update={update} drafts={drafts} setDraft={setDraft} canEdit={canEdit} locked={locked} send={send} />}
   </div>;

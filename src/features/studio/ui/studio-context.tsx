@@ -26,7 +26,7 @@ import { acknowledgeExternalWrite, advanceOnRead, afterDraftRead, AUTOSAVE_MS, c
 
 export type Outcome<T> =
   | { ok: true; result: T }
-  | { ok: false; code: string; message: string; uncertain: boolean; details?: ErrorDetails };
+  | { ok: false; code: string; message: string; uncertain: boolean; acknowledged?: true; details?: ErrorDetails };
 /** A change applied locally and queued: the ids it created (final: the save proposes them) and the versions it set. */
 export type Queued = { createdIds: string[]; versions: Record<string, number>; retiredIds: string[]; documentRevision: number };
 export type RunOutcome = Outcome<Queued>;
@@ -412,10 +412,15 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
         if (accessCodes.has(result.code)) onAccessChanged(); else await reload(stillCurrent);
         return { ok: false, code: result.code, message: result.message, uncertain: false, ...(result.details ? { details: result.details } : {}) };
       }
+      if (result.data.draftId !== saved.current.id) return refused("DRAFT_REPLACED", "This change was saved to the previous draft. Your input is kept. Review the current draft before saving again.");
       if (result.data.draftId === saved.current.id) {
         floorRef.current = requireDraftRevision(floorRef.current ? { [result.data.draftId]: floorRef.current } : {}, result.data)[result.data.draftId];
         update((value) => ({ acknowledgedRevisions: requireDraftRevision(value.acknowledgedRevisions, result.data) }));
         await reload(stillCurrent);
+        // The mutation is known to have committed, but Specs cannot clear its frozen request or fields until the
+        // saved view proves it covers this exact receipt. A later exact-key replay only refreshes that receipt.
+        if (saved.current.id !== result.data.draftId) return refused("DRAFT_REPLACED", "This change was saved to the previous draft. Your input is kept. Review the current draft before saving again.");
+        if (!current() || !stillCurrent() || !covers(saved.current, result.data) || !covers(saved.current, floorRef.current)) return { ok: false, code: "ACKNOWLEDGED", message: "Save acknowledged. Refresh saved changes to finish.", uncertain: false, acknowledged: true };
       }
       return { ok: true, result: result.data };
     } finally {

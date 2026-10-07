@@ -25,7 +25,7 @@ export default function SpecsPanel({ ui, update, drafts, setDraft, onSaved }: {
         data-active={ui.section === id} onClick={() => update(() => ({ section: id, selected: null }))} onKeyDown={(event) => tabListKeyDown(event, SECTIONS, index, (section) => update(() => ({ section, selected: null })))}>{LABELS[id]}</button>)}
     </div>
     {ui.pending?.body === null && <p className="specs-message" role="status">Saving…</p>}
-    {ui.message && <p className="specs-message" role={calm ? "status" : "alert"}>{ui.message}{ui.pending?.body && !write.busy && <> <button type="button" className="button small" onClick={() => void write.retry()}>Retry</button></>}</p>}
+    {ui.message && <p className="specs-message" role={calm ? "status" : "alert"}>{ui.message}{ui.pending?.body && !write.busy && <> <button type="button" className="button small" onClick={() => void write.retry()}>{ui.pending.acknowledged ? "Refresh" : "Retry"}</button></>}</p>}
     <div id={`specs-body-${ui.section}`} role="tabpanel" aria-labelledby={`specs-tab-${ui.section}`}>
       {ui.section === "sources"
         ? <SourcesView ui={ui} update={update} drafts={drafts} setDraft={setDraft} write={write} saved={saved} />

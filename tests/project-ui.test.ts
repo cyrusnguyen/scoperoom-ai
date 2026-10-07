@@ -223,6 +223,20 @@ test("one unresolved Specs request at a time, settled only by its own key", () =
   assert.equal(anyDirty(updateUi({}, "p1", () => ({ specs: uncertain }))), true, "reload protection covers it");
 });
 
+test("an acknowledged requirement receipt keeps its exact recovery request until a covering read finishes it", () => {
+  const request = { key: "a".repeat(16), method: "POST" as const, path: "drafts/d/commands", body: { command: "CREATE_REQUIREMENT", expectedDocumentRevision: 7 }, label: "Save requirement", draft: true as const };
+  const started = startSpecsRequest(defaultSpecsUi, request)!;
+  const acknowledged = settleSpecsRequest(started, request.key, "acknowledged", "Save requirement was acknowledged. Refresh saved changes to finish.");
+  assert.deepEqual(acknowledged.pending, { ...request, acknowledged: true }, "the acknowledged receipt remains recoverable by its exact key and body");
+  assert.equal(anyDirty(updateUi({}, "p1", () => ({ specs: acknowledged }))), true, "an uncovered acknowledgement still protects unload");
+  assert.equal(startSpecsRequest(acknowledged, { ...request, key: "b".repeat(16) }), null, "a later write cannot replace the acknowledged receipt");
+  const interrupted = settleSpecsRequest(acknowledged, request.key, "uncertain", "We could not confirm this save.");
+  assert.deepEqual(interrupted.pending, acknowledged.pending);
+  assert.equal(interrupted.message, acknowledged.message, "a refresh failure cannot unconfirm a known committed receipt");
+  const finished = settleSpecsRequest(interrupted, request.key, "saved", "Save requirement: saved.");
+  assert.equal(finished.pending, null);
+});
+
 test("a draft write holds the reservation through save-first, then records its exact body", () => {
   const reserved = { key: "d".repeat(16), method: "POST" as const, path: "drafts/d/commands", body: null, label: "Save requirement", draft: true as const };
   const preparing = startSpecsRequest(defaultSpecsUi, reserved)!;

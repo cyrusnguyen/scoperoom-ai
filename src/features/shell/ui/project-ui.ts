@@ -16,7 +16,7 @@ export type SpecsSelection =
   | { kind: "requirement"; id: string }
   | null;
 /** One Specs write at a time per project, kept in this store so a lost response survives tab switches and remounts. `path` is relative to `/api/projects/:projectId/`. */
-export type SpecsRequest = { key: string; method: "POST" | "PATCH"; path: string; body: Record<string, unknown> | null; label: string; draft?: true };
+export type SpecsRequest = { key: string; method: "POST" | "PATCH"; path: string; body: Record<string, unknown> | null; label: string; draft?: true; acknowledged?: true };
 export type SpecsUi = { section: "sources" | "scope"; selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string; sourceCorrections?: Record<string, SourceCorrection> };
 export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: RightTab; drafts: Record<string, string>; ai: AiUi; specs: SpecsUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
@@ -34,10 +34,12 @@ export function startSpecsRequest(specs: SpecsUi, request: SpecsRequest): SpecsU
   return specs.pending ? null : { ...specs, pending: request, message: "" };
 }
 
-/** Settles exactly one request: an unconfirmed one keeps its key and body for Retry; any other key's late result is ignored. */
-export function settleSpecsRequest(specs: SpecsUi, key: string, outcome: "saved" | "uncertain" | "refused", message: string): SpecsUi {
+/** Settles exactly one request: an unconfirmed or acknowledged one keeps its key and body for recovery; any other key's late result is ignored. */
+export function settleSpecsRequest(specs: SpecsUi, key: string, outcome: "saved" | "uncertain" | "acknowledged" | "refused", message: string): SpecsUi {
   if (specs.pending?.key !== key) return specs;
-  return outcome === "uncertain" ? { ...specs, message } : { ...specs, pending: null, message };
+  if (outcome === "uncertain") return { ...specs, message: specs.pending.acknowledged ? `${specs.pending.label} was acknowledged. Refresh saved changes to finish.` : message };
+  if (outcome === "acknowledged") return { ...specs, pending: { ...specs.pending, acknowledged: true }, message };
+  return { ...specs, pending: null, message };
 }
 export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, rightTab: "details", drafts: {}, ai: defaultAiUi, specs: defaultSpecsUi, ...defaultStudioUi };
 

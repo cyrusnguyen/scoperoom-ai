@@ -541,10 +541,30 @@ test("a requirement cites immutable source text, preserves local input through i
   await page.getByRole("button", { name: "New requirement" }).click();
   await page.getByLabel("Title", { exact: true }).fill("Pay by card");
   await page.getByLabel("Inclusion", { exact: true }).selectOption("INCLUDED");
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeEnabled(); // an empty verification method is valid
+  await page.getByLabel("Verification description").fill("Card payment completes successfully.");
+  await expect(page.getByRole("alert").filter({ hasText: "Verification description and responsible role" })).toBeVisible();
+  await expect(page.getByLabel("Verification description")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("Responsible role")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  await page.getByLabel("Responsible role").fill("QA");
+  await expect(page.getByRole("alert").filter({ hasText: "Verification description and responsible role" })).toHaveCount(0);
   await page.getByRole("button", { name: "Save requirement" }).click();
   const included = page.getByRole("region", { name: "Included" });
   await expect(included.getByRole("button", { name: /REQ-001 Pay by card/ })).toBeVisible();
   await included.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByLabel("Verification description")).toHaveValue("Card payment completes successfully.");
+  await page.getByLabel("Verification description").fill("");
+  await expect(page.getByRole("alert").filter({ hasText: "Verification description and responsible role" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  await page.getByLabel("Responsible role").fill("");
+  await expect(page.getByRole("alert").filter({ hasText: "Verification description and responsible role" })).toHaveCount(0);
+  const clearedVerification = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/commands") && response.request().postDataJSON().command === "UPDATE_REQUIREMENT");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  expect((await clearedVerification).request().postDataJSON()).toMatchObject({ payload: { verification: null } });
+  await included.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByLabel("Verification description")).toHaveValue("");
+  await expect(page.getByLabel("Responsible role")).toHaveValue("");
   await page.getByLabel("Cite source").selectOption({ label: "Brief" });
   await page.getByLabel("Start line").fill("1");
   await page.getByLabel("End line").fill("1");
@@ -720,7 +740,7 @@ test("a held save-first keeps its reservation across a panel switch and replays 
   expect(Object.keys(draft.document.requirements)).toHaveLength(1);
 });
 
-test("a first title edit keeps its inspected guard after a remote update and remount", async ({ page }) => {
+test("a stale requirement edit is explicitly rebased after remount without overwriting remote fields", async ({ page }) => {
   const projectId = await createProjectViaApi(page, "Requirement edit guard project");
   await openSpecs(page, projectId, "Requirement edit guard project");
   await page.getByRole("tab", { name: "Scope" }).click();
@@ -755,6 +775,36 @@ test("a first title edit keeps its inspected guard after a remote update and rem
   await expect(page.getByRole("alert").filter({ hasText: "Someone saved this requirement first" })).toBeVisible();
   await expect(page.getByLabel("Title", { exact: true })).toHaveValue("My title");
   await expect(page.getByLabel("Statement", { exact: true })).toHaveValue("Remote statement");
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Someone saved this requirement first" })).toBeVisible();
+  await page.getByRole("button", { name: "Use my edits on latest version" }).click();
+  const raced = await page.request.post(path, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: requirement!.version + 1, payload: { requirementId: requirement!.id, statement: "Remote statement after rebase" } },
+  });
+  expect(raced.status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("My title");
+  await expect(page.getByLabel("Statement", { exact: true })).toHaveValue("Remote statement after rebase");
+  const refusedAgain = page.waitForResponse((item) => item.request().method() === "POST" && item.url().endsWith("/commands") && item.request().postDataJSON().command === "UPDATE_REQUIREMENT");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  const secondResponse = await refusedAgain;
+  expect(secondResponse.status()).toBe(409);
+  expect(secondResponse.request().postDataJSON()).toEqual({ commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: requirement!.version + 1, payload: { requirementId: requirement!.id, title: "My title" } });
+  await expect(page.getByRole("alert").filter({ hasText: "Someone saved this requirement first" })).toBeVisible();
+  await page.getByRole("button", { name: "Use my edits on latest version" }).click();
+  const accepted = page.waitForResponse((item) => item.request().method() === "POST" && item.url().endsWith("/commands") && item.request().postDataJSON().command === "UPDATE_REQUIREMENT");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  const finalResponse = await accepted;
+  expect(finalResponse.status()).toBe(200);
+  expect(finalResponse.request().postDataJSON()).toEqual({ commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: requirement!.version + 2, payload: { requirementId: requirement!.id, title: "My title" } });
+  const final = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { requirements: Record<string, { statement: string; title: string }> } } }).draft;
+  expect(Object.values(final.document.requirements).map(({ title, statement }) => ({ title, statement }))).toEqual([{ title: "My title", statement: "Remote statement after rebase" }]);
 });
 
 test("trace explanation conflicts offer explicit reconciliation and removed links retain copyable input", async ({ page }) => {

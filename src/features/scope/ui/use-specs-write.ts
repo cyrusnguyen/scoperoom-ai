@@ -21,7 +21,7 @@ export function useSpecsWrite(ui: SpecsUi, update: (change: (ui: SpecsUi) => Par
   const { projectId, writeDraft } = useStudio();
   const sending = useRef(false); // synchronous guard against double clicks within this mount
   const [busy, setBusy] = useState(false);
-  const settle = (key: string, outcome: "saved" | "uncertain" | "refused", message: string) => update((specs) => settleSpecsRequest(specs, key, outcome, message));
+  const settle = (key: string, outcome: "saved" | "uncertain" | "acknowledged" | "refused", message: string) => update((specs) => settleSpecsRequest(specs, key, outcome, message));
 
   async function run(request: SentSpecsRequest, retry: boolean): Promise<boolean> {
     if (sending.current) return false;
@@ -67,6 +67,10 @@ export function useSpecsWrite(ui: SpecsUi, update: (change: (ui: SpecsUi) => Par
         if (sent) onSaved?.({ key, method: "POST", path, body: sent, label, draft: true }, outcome.result);
         settle(key, "saved", `${label}: saved.`);
         return true;
+      }
+      if (outcome.acknowledged) {
+        settle(key, "acknowledged", `${label} was acknowledged. Refresh saved changes to finish.`);
+        return false;
       }
       settle(key, outcome.uncertain ? "uncertain" : "refused", outcome.uncertain ? UNCONFIRMED(label) : outcome.message);
       return false;
