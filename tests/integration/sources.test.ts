@@ -42,12 +42,12 @@ test("paste and upload normalize identically; a second leading BOM is refused", 
     const owner = await user("bom owner");
     const projectId = await project(owner);
     // The browser decodes uploads with ignoreBOM: true, so an upload reaches the server with its BOM, exactly like a paste.
-    const pasted = await createSource(owner, projectId, { key: key(), title: "Pasted", text: "﻿a\r\nb\rc" });
-    const uploaded = await createSource(owner, projectId, { key: key(), title: "Uploaded", text: "﻿a\r\nb\rc", uploaded: true });
+    const pasted = await createSource(owner, projectId, { key: key(), title: "Pasted", text: "\uFEFFa\r\nb\rc" });
+    const uploaded = await createSource(owner, projectId, { key: key(), title: "Uploaded", text: "\uFEFFa\r\nb\rc", uploaded: true });
     const [left, right] = [await readSourceVersion(owner, projectId, pasted.sourceVersionId), await readSourceVersion(owner, projectId, uploaded.sourceVersionId)];
     assert.deepEqual([left.text, left.contentHash, left.lineStarts], [right.text, right.contentHash, right.lineStarts]);
     assert.deepEqual([left.kind, right.kind], ["USER_TEXT", "USER_UPLOAD"]);
-    await assert.rejects(createSource(owner, projectId, { key: key(), title: "Two BOMs", text: "﻿﻿a" }), refused("INVALID_INPUT"));
+    await assert.rejects(createSource(owner, projectId, { key: key(), title: "Two BOMs", text: "\uFEFF\uFEFFa" }), refused("INVALID_INPUT"));
   });
 });
 

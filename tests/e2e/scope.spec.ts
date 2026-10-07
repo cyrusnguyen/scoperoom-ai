@@ -134,6 +134,8 @@ test("a lost source acknowledgement survives a tab switch and replays its exact 
   await page.getByRole("button", { name: "Retry" }).click();
   await expect(page.getByText("Add source: saved.")).toBeVisible();
   await expect(page.getByLabel("Source text")).toBeEditable();
+  await expect(page.getByLabel("Source text")).toHaveValue(""); // a retried success clears the form, so one more click cannot add a duplicate
+  await expect(page.getByLabel("Source title")).toHaveValue("");
   await expect(page.getByRole("button", { name: /Brief/ })).toHaveCount(1);
   const listed = await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: unknown[] };
   expect(listed.items).toHaveLength(1);

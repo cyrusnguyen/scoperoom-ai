@@ -20,7 +20,7 @@ type Write = SourceWriteResult & { replayed: boolean };
 export function measured(raw: string) {
   const evidence = evidenceStats(raw);
   // Normalization removes exactly one leading BOM; a second one would fail the stored-text CHECK, so it is a clear input refusal.
-  if (evidence.codePointCount === 0 || evidence.text.startsWith("﻿")) throw new ProjectError("INVALID_INPUT");
+  if (evidence.codePointCount === 0 || evidence.text.startsWith("\uFEFF")) throw new ProjectError("INVALID_INPUT");
   if (evidence.codePointCount > SOURCE_LIMITS.submissionCodePoints) throw new ProjectError("LIMIT_EXCEEDED", { limit: "SOURCE_SUBMISSION" });
   return evidence;
 }
