@@ -11,14 +11,25 @@ export type AiRequest =
 export type AiUi = { instruction: string; action: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; selectedRunId: string | null; pendingRequest: AiRequest | null; applyPhase?: { key: string; projectId: string; runId: string; state: "uncertain" | "acknowledged" | "adopted"; draftId: string; documentRevision?: number; layoutRevision?: number } };
 export type RightTab = "details" | "ai" | "specs";
 export type SpecsSelection = { kind: "source"; sourceId: string; versionId: string | null; back: SpecsSelection } | null;
-/** A source write that may have committed: its key and body are kept (like AiUi.pendingRequest) so Retry resends the same request. */
-export type SpecsRequest = { key: string; path: string; body: Record<string, unknown>; label: string; method?: "POST" | "PATCH" };
+/** One Specs write at a time per project, kept in this store so a lost response survives tab switches and remounts. `path` is relative to `/api/projects/:projectId/`. */
+export type SpecsRequest = { key: string; method: "POST" | "PATCH"; path: string; body: Record<string, unknown>; label: string };
 export type SpecsUi = { selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string };
 export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: RightTab; drafts: Record<string, string>; ai: AiUi; specs: SpecsUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
 export const defaultAiUi: AiUi = { instruction: "", action: "PROPOSE_FLOW", selectedRunId: null, pendingRequest: null };
 export const defaultSpecsUi: SpecsUi = { selected: null, sourceScope: "user", pending: null, message: "" };
+
+/** Starts a request only when no other one is unresolved (null means refused). */
+export function startSpecsRequest(specs: SpecsUi, request: SpecsRequest): SpecsUi | null {
+  return specs.pending ? null : { ...specs, pending: request, message: "" };
+}
+
+/** Settles exactly one request: an unconfirmed one keeps its key and body for Retry; any other key's late result is ignored. */
+export function settleSpecsRequest(specs: SpecsUi, key: string, outcome: "saved" | "uncertain" | "refused", message: string): SpecsUi {
+  if (specs.pending?.key !== key) return specs;
+  return outcome === "uncertain" ? { ...specs, message } : { ...specs, pending: null, message };
+}
 export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, rightTab: "details", drafts: {}, ai: defaultAiUi, specs: defaultSpecsUi, ...defaultStudioUi };
 
 export function uiFor(store: UiStore, projectId: string | undefined): ProjectUi {

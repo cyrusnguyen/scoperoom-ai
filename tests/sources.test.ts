@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { emptyDraft } from "../src/features/drafts/contracts/scope-document.ts";
 import { citationMatches, lineStarts, normalizeEvidence, parseCorrectSource, parseCreateSource, parseUpdateSource } from "../src/features/sources/contracts/source-version.ts";
 import { graphExtract } from "../src/features/sources/domain/graph-extract.ts";
+import { acceptFirstPage, appendSourcePage, canLoadMore, listKey, startSourceList } from "../src/features/sources/ui/source-pages.ts";
 
 const ID = "11111111-1111-4111-8111-111111111111";
 
@@ -56,4 +57,25 @@ test("a saved-flow extract is deterministic and independent of record order", ()
   const single = graphExtract(document, flowId).text;
   assert.ok(single.includes("- ACTION Pay now later"), "CR and CRLF in a label stay on one line");
   assert.equal(single, normalizeEvidence(single), "the extract is already normalized");
+});
+
+test("a later page joins only the list, load and cursor it was asked for", () => {
+  const head = (id: string) => ({ id, kind: "USER_TEXT" as const, title: id, displayNickname: null, archived: false, version: 1, currentVersionId: id, currentSequence: 1, versionCount: 1, createdBy: id, createdAt: "2026-10-07T10:00:00.000Z" });
+  const usage = { activeUserDocuments: 2, retainedVersions: 2, codePoints: 2 };
+  const user = listKey("p1", "user"), archived = listKey("p1", "archived");
+  const first = acceptFirstPage(user, 1, { items: [head("a")], nextCursor: "a", usage, sourcesRevision: 4 });
+  const next = { items: [head("b")], nextCursor: null, usage, sourcesRevision: 4 };
+  assert.deepEqual(appendSourcePage(first, user, 1, "a", next)?.page.items.map((item) => item.id), ["a", "b"]);
+  assert.equal(appendSourcePage(first, user, 1, "z", next), first, "a page for another cursor is dropped");
+  assert.equal(appendSourcePage(appendSourcePage(first, user, 1, "a", next), user, 1, "a", next)?.page.items.length, 2, "a page is never appended twice");
+
+  // Filter change: the old list is cleared, so its cursor can never be sent under the new filter.
+  assert.equal(startSourceList(first, archived), null);
+  assert.equal(canLoadMore(startSourceList(first, archived), archived, 2), false);
+  // Revision refresh on the same filter: rows stay visible, but More waits for the matching first page (held or failed).
+  const refreshing = startSourceList(first, user);
+  assert.equal(refreshing, first);
+  assert.equal(canLoadMore(refreshing, user, 2), false, "ticket 2's first page has not been accepted");
+  assert.equal(appendSourcePage(refreshing, user, 2, "a", next), refreshing, "an old cursor sent under the new load is dropped");
+  assert.equal(canLoadMore(acceptFirstPage(user, 2, { ...first!.page }), user, 2), true);
 });

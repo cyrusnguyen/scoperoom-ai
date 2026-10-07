@@ -33,7 +33,7 @@ test("paste, read, correct and archive a source", async ({ page }) => {
   await expect(page.getByRole("button", { name: /Brief/ })).toBeVisible();
 });
 
-test("an invalid UTF-8 upload is refused before sending", async ({ page }) => {
+test("uploads keep their BOM for the server; invalid UTF-8 is refused before sending", async ({ page }) => {
   const projectId = await createProjectViaApi(page, "Upload project");
   await openSpecs(page, projectId, "Upload project");
   await page.getByLabel("Source text").fill("typed text stays");
@@ -43,6 +43,14 @@ test("an invalid UTF-8 upload is refused before sending", async ({ page }) => {
   await page.getByLabel("Upload .txt or .md").setInputFiles({ name: "big.txt", mimeType: "text/plain", buffer: Buffer.alloc(320 * 1024 + 1, "a") });
   await expect(page.getByText("This file is too large to add as a source.")).toBeVisible();
   await expect(page.getByLabel("Source text")).toHaveValue("typed text stays");
+
+  const bodies: string[] = [];
+  page.on("request", (request) => { if (request.method() === "POST" && request.url().endsWith(`/api/projects/${projectId}/sources`)) bodies.push(request.postData() ?? ""); });
+  await page.getByLabel("Upload .txt or .md").setInputFiles({ name: "bom.txt", mimeType: "text/plain", buffer: Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("a\r\nb")]) });
+  await page.getByRole("button", { name: "Add source" }).click();
+  await page.getByRole("button", { name: /bom/ }).click();
+  await expect(page.locator(".source-lines li")).toHaveText(["a", "b"]);
+  expect(JSON.parse(bodies[0]!).text.startsWith("\uFEFF")).toBe(true);
 });
 
 test("an upload with a BOM and CRLF counts and reads normalized lines", async ({ page }) => {
@@ -101,14 +109,14 @@ const switchTabs = async (page: Page) => {
   await expect(page.getByRole("tab", { name: "Specs", selected: true })).toBeVisible();
 };
 
-test("an unconfirmed Add survives a tab switch and Retry creates exactly one source", async ({ page }) => {
+test("a lost source acknowledgement survives a tab switch and replays its exact request", async ({ page }) => {
   const projectId = await createProjectViaApi(page, "Unconfirmed add project");
   await openSpecs(page, projectId, "Unconfirmed add project");
-  const keys: Array<string | undefined> = [];
+  const sent: Array<{ key: string | undefined; body: string }> = [];
   let first = true;
   await page.route(`**/api/projects/${projectId}/sources`, async (route) => {
     if (route.request().method() !== "POST") return route.continue();
-    keys.push(route.request().headers()["idempotency-key"]);
+    sent.push({ key: route.request().headers()["idempotency-key"], body: route.request().postData() ?? "" });
     if (!first) return route.continue();
     first = false;
     await route.fetch(); // the server commits, the answer is lost
@@ -124,13 +132,13 @@ test("an unconfirmed Add survives a tab switch and Retry creates exactly one sou
   await expect(page.getByLabel("Source text")).toHaveValue("Customers pay by card.");
   await expect(page.getByLabel("Source text")).not.toBeEditable(); // locked while the request is unconfirmed, so a retry cannot lose later edits
   await page.getByRole("button", { name: "Retry" }).click();
-  await expect(page.getByText("Source added.")).toBeVisible();
+  await expect(page.getByText("Add source: saved.")).toBeVisible();
   await expect(page.getByLabel("Source text")).toBeEditable();
   await expect(page.getByRole("button", { name: /Brief/ })).toHaveCount(1);
   const listed = await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: unknown[] };
   expect(listed.items).toHaveLength(1);
-  expect(keys).toHaveLength(2);
-  expect(keys[1]).toBe(keys[0]);
+  expect(sent).toHaveLength(2);
+  expect(sent[1]).toEqual(sent[0]); // the identical key and body
 });
 
 test("the filter and the open source survive a tab switch, and focus returns after saving and after Back", async ({ page }) => {
@@ -182,4 +190,33 @@ collaborationTest("a reviewer reads sources without edit controls", async ({ col
   await expect(editorPage.getByRole("button", { name: "Save new version" })).toHaveCount(0);
   await expect(editorPage.getByLabel("Corrected text")).toHaveCount(0);
   await expect(editorPage.getByRole("button", { name: "Archive" })).toHaveCount(0);
+});
+
+test("a source response that arrives after a project switch has no effect on the new project", async ({ page }) => {
+  const first = await createProjectViaApi(page, "Old project"), second = await createProjectViaApi(page, "New project");
+  await openSpecs(page, first, "Old project");
+  let release: (() => void) | undefined;
+  await page.route(`**/api/projects/${first}/sources`, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    await new Promise<void>((resolve) => { release = resolve; });
+    await route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: { code: "UNAUTHENTICATED", message: "Sign in again.", requestId: "test", retryable: false } }) });
+  });
+  await page.getByLabel("Source title").fill("Late");
+  await page.getByLabel("Source text").fill("Held");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await expect.poll(() => Boolean(release)).toBe(true);
+  // Switch in place through the Projects sidebar: a full navigation would drop the held request and test nothing.
+  await page.locator("#projects-nav .project-row", { hasText: "New project" }).click();
+  const discard = page.getByRole("button", { name: /Discard/ });
+  if (await discard.isVisible()) await discard.click(); // the typed source text still counts as unsaved input
+  await expect(page.getByRole("heading", { level: 1, name: "New project" })).toBeVisible();
+  release!();
+  await page.waitForTimeout(1_000); // give the late 401 time to run any effect it (wrongly) still had
+  expect(page.url()).toContain(`/app/projects/${second}`);
+  await expect(page.getByRole("heading", { level: 1, name: "New project" })).toBeVisible();
+  // The old project kept its request unresolved: back there it is still retryable.
+  await page.locator("#projects-nav .project-row", { hasText: "Old project" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Old project" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "We couldn’t confirm" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
 });

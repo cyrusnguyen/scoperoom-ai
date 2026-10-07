@@ -1,75 +1,91 @@
 "use client";
 
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { apiMutate, apiRead, sessionEnded } from "@/client/api";
+import { apiRead, sessionEnded } from "@/client/api";
 import { useSync } from "@/features/collaboration/ui/sync-context";
+import type { useSpecsWrite } from "@/features/scope/ui/use-specs-write";
 import type { SpecsRequest, SpecsUi } from "@/features/shell/ui/project-ui";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import {
   normalizeEvidence, SOURCE_BODY_LIMIT, SOURCE_LIMITS, SOURCE_TITLE_LIMIT, USER_DOCUMENT_LIMIT, USER_SOURCE_KINDS,
   type SourceHead, type SourcePage, type SourceScope, type SourceVersionPage, type SourceVersionView, type SourceWriteResult,
 } from "../contracts/source-version";
+import { acceptFirstPage, appendSourcePage, canLoadMore, listKey, startSourceList, type SourceList } from "./source-pages";
 
 const KIND_LABELS: Record<SourceHead["kind"], string> = { USER_TEXT: "Pasted", USER_UPLOAD: "Uploaded", PROMOTED_GRAPH: "Saved flow", QUESTION_ANSWER: "Answer", AI_PROMPT: "AI instruction" };
 const SCOPES: Array<[SourceScope, string]> = [["user", "Active"], ["archived", "Archived"], ["internal", "Internal"]];
 const EMPTY: Record<SourceScope, string> = { user: "No active sources", archived: "No archived sources", internal: "No internal evidence yet" };
-const LIMIT_TEXT: Record<string, string> = {
-  SOURCE_SUBMISSION: `A source can hold at most ${SOURCE_LIMITS.submissionCodePoints.toLocaleString("en-US")} characters.`,
-  SOURCE_BODY_BYTES: "This source is too large to send.",
-  SOURCE_DOCUMENTS: `The project already has ${USER_DOCUMENT_LIMIT} active documents. Archive one first.`,
-  SOURCE_VERSIONS: `The project has reached ${SOURCE_LIMITS.retainedVersions} retained versions.`,
-  SOURCE_CODE_POINTS: `The project has reached ${SOURCE_LIMITS.projectCodePoints.toLocaleString("en-US")} characters of source text.`,
-};
 const NEW_TITLE = "specs:new-source:title", NEW_TEXT = "specs:new-source:text";
 const codePoints = (value: string) => [...normalizeEvidence(value)].length;
 const isUser = (head: SourceHead) => USER_SOURCE_KINDS.includes(head.kind);
 
 /** Source heads for one scope, reloaded whenever the project's sources cursor moves (and when the scope or `retry` changes). */
 export function useSourceList(projectId: string, scope: SourceScope, revision: number) {
-  const [loaded, setLoaded] = useState<{ scope: SourceScope; page: SourcePage } | null>(null);
-  const [failed, setFailed] = useState<{ scope: SourceScope; message: string } | null>(null);
+  const key = listKey(projectId, scope);
+  const [list, setList] = useState<SourceList>(null);
+  const [failed, setFailed] = useState<{ key: string; message: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const loadingMore = useRef(false);
+  // Every first-page load (a new project, filter, revision or retry) gets a ticket; only the list that load produced can be paged further.
+  // A new load clears another project's or filter's list but keeps this one's rows, so Load more waits for its first page.
+  const load = `${key}:${revision}:${attempt}`;
+  const [started, setStarted] = useState({ load, ticket: 1 });
+  if (started.load !== load) { setStarted({ load, ticket: started.ticket + 1 }); setList((current) => startSourceList(current, key)); }
+  const { ticket } = started;
   useEffect(() => {
     const controller = new AbortController();
     void apiRead<SourcePage>(`/api/projects/${projectId}/sources?scope=${scope}`, controller.signal).then((result) => {
       if (controller.signal.aborted || sessionEnded(result)) return;
-      if (result.ok) { setLoaded({ scope, page: result.data }); setFailed(null); } else setFailed({ scope, message: result.message });
+      if (result.ok) { setList(acceptFirstPage(key, ticket, result.data)); setFailed(null); } else setFailed({ key, message: result.message });
     });
-    return () => controller.abort();
-  }, [projectId, scope, revision, attempt]);
+    return () => { controller.abort(); loadingMore.current = false; };
+  }, [projectId, scope, revision, attempt, key, ticket]);
   const more = () => {
-    const cursor = loaded?.page.nextCursor;
-    if (loaded?.scope !== scope || !cursor) return;
+    const cursor = list?.page.nextCursor;
+    if (!cursor || !canLoadMore(list, key, ticket) || loadingMore.current) return;
+    loadingMore.current = true;
     void apiRead<SourcePage>(`/api/projects/${projectId}/sources?scope=${scope}&cursor=${cursor}`).then((result) => {
-      if (result.ok) setLoaded((current) => current && current.scope === scope ? { scope, page: { ...result.data, items: [...current.page.items, ...result.data.items] } } : current);
-      else if (!sessionEnded(result)) setFailed({ scope, message: result.message });
+      loadingMore.current = false;
+      if (result.ok) setList((current) => appendSourcePage(current, key, ticket, cursor, result.data));
+      else if (!sessionEnded(result)) setFailed({ key, message: result.message });
     });
   };
-  // A page or error from another scope is never shown under this one's filter.
-  return { page: loaded?.scope === scope ? loaded.page : null, error: failed?.scope === scope ? failed.message : "", more, retry: () => setAttempt((count) => count + 1) };
+  // A page or error from another project or filter is never shown under this one.
+  return { page: list?.key === key ? list.page : null, error: failed?.key === key ? failed.message : "", more, canLoadMore: canLoadMore(list, key, ticket), retry: () => setAttempt((count) => count + 1) };
 }
 
-/** Reads a file as strict UTF-8; null means it is not valid UTF-8 text. */
+/** Reads a file as strict UTF-8 and keeps a leading BOM, so the server normalizes uploads and pastes identically. */
 async function readUtf8(file: File): Promise<string | null> {
-  try { return new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer()); } catch { return null; }
+  try { return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await file.arrayBuffer()); } catch { return null; }
 }
 
 type Update = (change: (ui: SpecsUi) => Partial<SpecsUi>) => void;
-type Notice = { text: string; kind: "status" | "alert" };
-type Post = (path: string, body: Record<string, unknown>, method: "POST" | "PATCH", label: string) => void;
+type Write = ReturnType<typeof useSpecsWrite>;
+type Post = (method: "POST" | "PATCH", path: string, body: Record<string, unknown>, label: string) => void;
 type Shared = { busy: boolean; post: Post; setDraft: (key: string, value: string | undefined) => void; drafts: Record<string, string> };
 const FLOW_TITLE = "specs:flow-source:title";
 const correctKey = (id: string, field: "title" | "text") => `specs:correct:${id}:${field}`;
 
-export default function SourcesView({ ui, update, drafts, setDraft }: {
-  ui: SpecsUi; update: Update; drafts: Record<string, string>; setDraft: (key: string, value: string | undefined) => void;
+/** What a committed write changes in the store, derived from the request so a Retry (or a late answer) does the same. */
+export function finishSourceWrite(request: SpecsRequest, update: Update, setDraft: (key: string, value: string | undefined) => void) {
+  const [, id] = request.path.split("/");
+  if (request.path === "sources") { setDraft(NEW_TITLE, undefined); setDraft(NEW_TEXT, undefined); }
+  else if (request.path.endsWith("/graph-sources")) setDraft(FLOW_TITLE, undefined);
+  else if (request.path.endsWith("/versions")) {
+    setDraft(correctKey(id!, "title"), undefined); setDraft(correctKey(id!, "text"), undefined);
+    update((current) => current.selected?.kind === "source" && current.selected.sourceId === id ? { selected: { ...current.selected, versionId: null } } : {});
+  }
+}
+
+export default function SourcesView({ ui, update, drafts, setDraft, write, saved }: {
+  ui: SpecsUi; update: Update; drafts: Record<string, string>; setDraft: (key: string, value: string | undefined) => void; write: Write;
+  /** The last committed write of this panel, for what only this view shows (the patched head, focus). */
+  saved: { request: SpecsRequest; data: unknown } | null;
 }) {
-  const { status, beforeWrite, revalidate } = useSync();
+  const { status } = useSync();
   const { projectId, savedDraft } = useStudio();
   const scope = ui.sourceScope;
   const list = useSourceList(projectId, scope, status.sourcesRevision);
-  const [notice, setNotice] = useState<Notice | null>(null);
-  const [busy, setBusy] = useState(false);
   const [refocus, setRefocus] = useState(0);
   // Heads patched by this session's own writes, so the reader is right before the list is read again (the higher record version wins).
   const [kept, setKept] = useState<SourceHead | null>(null);
@@ -78,8 +94,6 @@ export default function SourcesView({ ui, update, drafts, setDraft }: {
   const listed = selected ? list.page?.items.find((item) => item.id === selected.sourceId) : undefined;
   const patched = kept && kept.id === selected?.sourceId ? kept : undefined;
   const head = listed && patched ? (patched.version > listed.version ? patched : listed) : listed ?? patched ?? null;
-  const headRef = useRef(head);
-  useEffect(() => { headRef.current = head; });
   // Back unmounts the focused button: the card of the source that was open takes focus once the list is on screen. If a refresh
   // removes that card (it was archived) the active filter takes it; anything else the person focused meanwhile is left alone.
   const returnTo = useRef<string | null>(null);
@@ -92,54 +106,24 @@ export default function SourcesView({ ui, update, drafts, setDraft }: {
     if (!card) returnTo.current = null;
   }, [selected, list.page]);
 
-  /** What a committed write changes locally, derived from the request so a Retry after a remount does the same. Returns the message. */
-  function finish(request: SpecsRequest, result: SourceWriteResult): string {
-    const [, , id] = request.path.split("/");
-    if (request.path === "/sources") { setDraft(NEW_TITLE, undefined); setDraft(NEW_TEXT, undefined); return "Source added."; }
-    if (request.path.endsWith("/graph-sources")) { setDraft(FLOW_TITLE, undefined); return "Saved flow added as a source."; }
-    const known = headRef.current?.id === id ? headRef.current : null;
-    setRefocus((count) => count + 1);
-    if (request.path.endsWith("/versions")) {
-      setDraft(correctKey(id!, "title"), undefined); setDraft(correctKey(id!, "text"), undefined);
-      if (known) setKept({ ...known, title: String(request.body.title), version: result.version, currentVersionId: result.sourceVersionId, currentSequence: result.sequence, versionCount: known.versionCount + 1 });
-      update((current) => current.selected?.kind === "source" && current.selected.sourceId === id ? { selected: { ...current.selected, versionId: null } } : {});
-      return "New version saved.";
+  // A committed correction, archive or restore: patch the head until the list is read again, and move focus to the reader heading.
+  const [handled, setHandled] = useState(saved);
+  if (saved !== handled) {
+    setHandled(saved);
+    const request = saved?.request, result = saved?.data as SourceWriteResult;
+    if (request && request.path.startsWith("sources/")) {
+      setRefocus((count) => count + 1);
+      if (head && head.id === request.path.split("/")[1]) setKept(request.path.endsWith("/versions")
+        ? { ...head, title: String(request.body.title), version: result.version, currentVersionId: result.sourceVersionId, currentSequence: result.sequence, versionCount: head.versionCount + 1 }
+        : { ...head, archived: request.body.archived === true, version: result.version });
     }
-    const archived = request.body.archived === true;
-    if (known) setKept({ ...known, archived, version: result.version });
-    return archived ? "Source archived." : "Source restored.";
   }
-  async function send(request: SpecsRequest, retry: boolean) {
-    setBusy(true); setNotice(null);
-    // Kept before anything is awaited: a switch of tab or panel mid-flight must still find the exact key to retry.
-    if (!retry) update(() => ({ pending: request }));
-    const fail = (text: string) => { setBusy(false); if (!retry) update(() => ({ pending: null })); setNotice({ text, kind: "alert" }); };
-    const authority = await beforeWrite();
-    if (authority.kind === "unavailable") return fail("Not saved. We couldn’t reach ScopeRoom.");
-    if (authority.kind === "denied") return fail("Checking your access…");
-    if (!retry && (authority.status.status !== "ACTIVE" || (authority.status.role !== "OWNER" && authority.status.role !== "EDITOR"))) return fail("Not saved. This project is read-only now.");
-    const result = await apiMutate<SourceWriteResult>(`/api/projects/${projectId}${request.path}`, request.key, request.body, request.method ?? "POST");
-    setBusy(false);
-    if (sessionEnded(result)) return;
-    if (result.ok) {
-      update(() => ({ pending: null }));
-      setNotice({ text: finish(request, result.data), kind: "status" });
-      void revalidate("manual");
-    } else if (!result.uncertain) {
-      update(() => ({ pending: null }));
-      setNotice({ text: result.code === "LIMIT_EXCEEDED" ? LIMIT_TEXT[String(result.details?.limit)] ?? result.message : result.message, kind: "alert" });
-      if (result.status === 409) void revalidate("manual"); // someone else saved first: read the current heads
-    }
-    // An uncertain result leaves `pending` as it is; the Retry below is derived from it.
-  }
-  const post: Post = (path, body, method, label) => void send({ key: crypto.randomUUID(), path, body, method, label }, false);
-  const shared: Shared = { busy: busy || ui.pending !== null, post, setDraft, drafts };
+  const post: Post = (method, path, body, label) => void write.send(method, path, body, label);
+  const shared: Shared = { busy: write.busy || ui.pending !== null, post, setDraft, drafts };
   const usage = list.page?.usage;
 
   return <div className="sources-view">
     {usage && <p className="muted">{usage.activeUserDocuments}/{USER_DOCUMENT_LIMIT} documents · {usage.retainedVersions}/{SOURCE_LIMITS.retainedVersions} versions · {usage.codePoints.toLocaleString("en-US")}/{SOURCE_LIMITS.projectCodePoints.toLocaleString("en-US")} characters</p>}
-    {notice && <p role={notice.kind === "alert" ? "alert" : "status"}>{notice.text}</p>}
-    {ui.pending && !busy && <p role="alert">We couldn’t confirm “{ui.pending.label}”. Retry sends the same request. <button type="button" className="button small" onClick={() => void send(ui.pending!, true)}>Retry</button></p>}
     {selected ? <Reader selected={selected} head={head} listLoaded={list.page !== null} canEdit={canEdit} update={update} refocus={refocus} onBack={(id) => { returnTo.current = id; }} {...shared} />
       : <>
         {canEdit && <AddSource {...shared} />}
@@ -156,7 +140,7 @@ export default function SourcesView({ ui, update, drafts, setDraft }: {
               <span className="specs-badge">{KIND_LABELS[item.kind]} · v{item.currentSequence} · {item.versionCount} {item.versionCount === 1 ? "version" : "versions"}{item.archived ? " · Archived" : ""}</span>
             </button></li>)}
           </ul>}
-        {list.page?.nextCursor && <button type="button" className="button small" onClick={list.more}>Load more</button>}
+        {list.canLoadMore && <button type="button" className="button small" onClick={list.more}>Load more</button>}
       </>}
   </div>;
 }
@@ -182,7 +166,7 @@ function AddSource({ busy, post, drafts, setDraft }: Shared) {
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    post("/sources", { title: title.trim(), text, ...(uploaded ? { uploaded: true } : {}) }, "POST", "Add source");
+    post("POST", "sources", { title: title.trim(), text, ...(uploaded ? { uploaded: true } : {}) }, "Add source");
   };
   return <form className="detail-section" onSubmit={submit}>
     <h3>Add a source</h3>
@@ -205,7 +189,7 @@ function FlowSource({ flows, draftId, documentRevision, busy, post, drafts, setD
   if (!ids.length) return null;
   return <form className="detail-section" onSubmit={(event) => {
     event.preventDefault();
-    post(`/drafts/${draftId}/graph-sources`, { expectedDocumentRevision: documentRevision, flowId: chosen, title: title.trim() }, "POST", "Add flow as source");
+    post("POST", `drafts/${draftId}/graph-sources`, { expectedDocumentRevision: documentRevision, flowId: chosen, title: title.trim() }, "Save flow as source");
   }}>
     <h3>From saved flow</h3>
     <div className="field"><label htmlFor="flow-source-flow">Flow</label><select id="flow-source-flow" value={chosen} disabled={busy} onChange={(event) => { setFlowId(event.target.value); setName(""); }}>{ids.map((id) => <option key={id} value={id}>{flows[id]!.title}</option>)}</select></div>
@@ -270,9 +254,9 @@ function Reader({ selected, head, listLoaded, canEdit, update, refocus, onBack, 
   const edit = (key: string, base: string | undefined, value: string) => setDraft(key, value === base ? undefined : value);
   const correct = (event: FormEvent) => {
     event.preventDefault();
-    post(`/sources/${head.id}/versions`, { expectedSourceRecordVersion: head.version, expectedCurrentVersionId: head.currentVersionId, title: title.trim(), text }, "POST", "Save new version");
+    post("POST", `sources/${head.id}/versions`, { expectedSourceRecordVersion: head.version, expectedCurrentVersionId: head.currentVersionId, title: title.trim(), text }, "Save new version");
   };
-  const archive = () => post(`/sources/${head.id}`, { expectedSourceRecordVersion: head.version, archived: !head.archived }, "PATCH", head.archived ? "Restore source" : "Archive source");
+  const archive = () => post("PATCH", `sources/${head.id}`, { expectedSourceRecordVersion: head.version, archived: !head.archived }, head.archived ? "Restore" : "Archive");
 
   return <div className="source-reader">
     {back}

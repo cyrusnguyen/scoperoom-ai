@@ -5,7 +5,7 @@ import { edit, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
 import { acknowledgeExternalWrite, admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
-import { type AiRequest, currentAiRun, recoverUnavailableCurrentRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, defaultSpecsUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
+import { type AiRequest, currentAiRun, recoverUnavailableCurrentRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, defaultSpecsUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, settleSpecsRequest, startSpecsRequest, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
 const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { selected: null, sourceScope: "user" as const, pending: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
@@ -72,7 +72,7 @@ for (const kind of ["start", "apply", "cancel", "discard"] as const) {
 }
 
 test("an unconfirmed source write protects unload until it is resolved and survives closing the panel", () => {
-  const pending = { key: "k1", path: "/sources", body: { title: "Brief", text: "Text" }, label: "Add source" };
+  const pending = { key: "k1", method: "POST" as const, path: "sources", body: { title: "Brief", text: "Text" }, label: "Add source" };
   let store = updateUi({}, "a", () => ({ specs: { ...defaultSpecsUi, pending } }));
   assert.equal(dirtyCount(store, "a"), 0, "a pending write is not an unsaved field");
   assert.equal(anyDirty(store), true);
@@ -81,6 +81,18 @@ test("an unconfirmed source write protects unload until it is resolved and survi
   assert.equal(anyDirty(store), true);
   store = updateUi(store, "a", (ui) => ({ specs: { ...ui.specs, pending: null } }));
   assert.equal(anyDirty(store), false);
+});
+
+test("one unresolved Specs request at a time, settled only by its own key", () => {
+  const first = { key: "a".repeat(16), method: "POST" as const, path: "sources", body: { title: "Brief", text: "x" }, label: "Add source" };
+  const second = { ...first, key: "b".repeat(16) };
+  const started = startSpecsRequest(defaultSpecsUi, first)!;
+  assert.equal(startSpecsRequest(started, second), null, "a second save cannot replace an unresolved one");
+  const uncertain = settleSpecsRequest(started, first.key, "uncertain", "We couldn’t confirm it.");
+  assert.deepEqual(uncertain.pending, first, "an unconfirmed request keeps its exact key and body");
+  assert.equal(settleSpecsRequest(uncertain, second.key, "saved", "late").pending, first, "another key's late result changes nothing");
+  assert.equal(settleSpecsRequest(uncertain, first.key, "saved", "Saved.").pending, null);
+  assert.equal(anyDirty(updateUi({}, "p1", () => ({ specs: uncertain }))), true, "reload protection covers it");
 });
 
 test("drafts belong to one project, and undefined clears a draft", () => {
