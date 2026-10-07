@@ -23,7 +23,7 @@ export function withStatus<T extends { project: { status: string; role: string }
     ...bootstrap,
     status: {
       viewerId: MOCK_VIEWER_ID, status: project.status, role: project.role, version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null,
-      currentDraftId: draft.id, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, realtimeEpoch: "77777777-7777-4777-8777-777777777777", eventSequence: 1, aiRevision: 0, approvedSnapshotId: null,
+      currentDraftId: draft.id, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, realtimeEpoch: "77777777-7777-4777-8777-777777777777", eventSequence: 1, aiRevision: 0, sourcesRevision: 0, approvedSnapshotId: null,
     },
   };
 }

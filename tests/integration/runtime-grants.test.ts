@@ -74,7 +74,7 @@ test("AI storage grants are column- and function-exact for the web and worker ru
       "ai_owner_allowance:INSERT", "ai_owner_allowance:SELECT", "ai_owner_allowance:UPDATE(created_at)",
       "ai_run:INSERT", "ai_run:SELECT", "ai_run:UPDATE(cancel_requested_at)", "ai_run:UPDATE(disposition)", "ai_run:UPDATE(last_event_sequence)",
       "ai_run_attempt:SELECT",
-      "source_document:INSERT", "source_document:SELECT", "source_document:UPDATE(current_version_id)", "source_document:UPDATE(last_event_sequence)", "source_document:UPDATE(updated_at)", "source_document:UPDATE(version)",
+      "source_document:INSERT", "source_document:SELECT", "source_document:UPDATE(archived)", "source_document:UPDATE(current_version_id)", "source_document:UPDATE(display_nickname)", "source_document:UPDATE(last_event_sequence)", "source_document:UPDATE(updated_at)", "source_document:UPDATE(version)",
       "source_version:INSERT", "source_version:SELECT",
       "rate_limit_bucket:DELETE", "rate_limit_bucket:INSERT", "rate_limit_bucket:SELECT", "rate_limit_bucket:UPDATE(count)",
     ];
@@ -96,8 +96,8 @@ test("AI storage grants are column- and function-exact for the web and worker ru
     for (const role of ["app_web_runtime", "app_worker_runtime"]) assert.deepEqual(callable(role), [], role);
     assert.deepEqual(callable("app_web"), ["ack_ai_dispatch", "lease_ai_dispatch", "settle_overdue_ai_runs"]); // web settles only overdue runs and delivers the first dispatch; it never claims, settles attempts or finishes
     assert.deepEqual(callable("app_worker"), ["ack_ai_dispatch", "begin_ai_validation", "claim_ai_attempt", "finish_ai_run", "lease_ai_dispatch", "lease_ai_dispatches", "run_worker_cleanup", "settle_ai_attempt"]); // the worker reaches expiry and cleanup only through the environment-validated wrapper
-    const { rows: [project] } = await admin.query<{ web: boolean; worker: boolean }>("select has_column_privilege('app_web', 'app.project', 'ai_revision', 'UPDATE') as web, has_column_privilege('app_worker', 'app.project', 'ai_revision', 'UPDATE') as worker");
-    assert.deepEqual(project, { web: true, worker: false });
+    const { rows: [project] } = await admin.query<{ web: boolean; worker: boolean; sources_web: boolean; sources_worker: boolean }>("select has_column_privilege('app_web', 'app.project', 'ai_revision', 'UPDATE') as web, has_column_privilege('app_worker', 'app.project', 'ai_revision', 'UPDATE') as worker, has_column_privilege('app_web', 'app.project', 'sources_revision', 'UPDATE') as sources_web, has_column_privilege('app_worker', 'app.project', 'sources_revision', 'UPDATE') as sources_worker");
+    assert.deepEqual(project, { web: true, worker: false, sources_web: true, sources_worker: false });
   } finally {
     await admin.end();
   }
