@@ -535,7 +535,7 @@ test("a requirement cites immutable source text, preserves local input through i
   ]);
   await openSpecs(page, projectId, "Requirement scope project");
   await page.getByLabel("Source title", { exact: true }).fill("Brief");
-  await page.getByLabel("Source text").fill("Customers pay by card.");
+  await page.getByLabel("Source text").fill("Customers pay by card.\nReceipts remain available.");
   await page.getByRole("button", { name: "Add source" }).click();
   await page.getByRole("tab", { name: "Scope" }).click();
   await page.getByRole("button", { name: "New requirement" }).click();
@@ -569,6 +569,19 @@ test("a requirement cites immutable source text, preserves local input through i
   await page.getByLabel("Start line").fill("1");
   await page.getByLabel("End line").fill("1");
   await expect(page.getByLabel("Excerpt")).toHaveValue("Customers pay by card.");
+  for (const [start, end] of [["1.5", "2"], ["1", "1.5"], ["0", "1"], ["2", "1"], ["1", "3"], ["9007199254740992", "9007199254740992"]]) {
+    await page.getByLabel("Start line").fill(start!);
+    await page.getByLabel("End line").fill(end!);
+    await page.getByLabel("Excerpt").fill("Customers pay by card.");
+    await expect(page.getByRole("button", { name: "Add citation" })).toBeDisabled();
+    await expect(page.getByRole("alert").filter({ hasText: "Choose whole line numbers" })).toBeVisible();
+    await expect(page.getByLabel("Start line")).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByLabel("End line")).toHaveAttribute("aria-invalid", "true");
+  }
+  await page.getByLabel("Start line").fill("1");
+  await page.getByLabel("End line").fill("1");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("Customers pay by card.");
+  await expect(page.getByRole("alert").filter({ hasText: "Choose whole line numbers" })).toHaveCount(0);
   await page.getByRole("button", { name: "Add citation" }).click();
   await expect(page.getByRole("button", { name: /Brief v1, lines 1-1/ })).toBeVisible();
   const source = (await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: Array<{ id: string; version: number; currentVersionId: string }> }).items[0]!;
@@ -581,7 +594,7 @@ test("a requirement cites immutable source text, preserves local input through i
   await expect(page.getByRole("button", { name: "Confirm requirement" })).toBeDisabled();
   await page.getByRole("button", { name: /Brief v1, lines 1-1/ }).click();
   await expect(page.getByText("Viewing v1; latest v2")).toBeVisible();
-  await expect(page.locator(".source-lines li")).toHaveText(["Customers pay by card."]);
+  await expect(page.locator(".source-lines li")).toHaveText(["Customers pay by card.", "Receipts remain available."]);
   await expect(page.locator('.source-lines li[data-cited="true"]')).toHaveCount(1);
   await page.getByRole("button", { name: "Latest", exact: true }).click();
   await expect(page.getByText("Viewing v2; latest v2")).toBeVisible();
