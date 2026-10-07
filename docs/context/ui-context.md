@@ -10,6 +10,8 @@ Source readers fetch their selected head independently of the list, so archive a
 
 A source correction captures its inspected title, text, version ID and record-version guard on first edit. Background refreshes and panel remounts retain that baseline and both fields. If the source advances, saving remains guarded by the original version; the reader offers an explicit review of the latest content before applying locally edited fields to it, or discarding the correction. Correction snapshots participate in navigation protection, and an unconfirmed correction keeps its snapshot and exact request through project switches and draft discard.
 
+Exact source text renders in pages of at most 100 logical lines with absolute numbering and First, Previous, Next and Last controls. Trailing empty lines remain accessible, and changing immutable versions resets to the first page. The newer-source comparison uses a labelled, fixed-height read-only textarea to keep maximum-line sources bounded there too.
+
 The shell (`src/features/shell/ui/project-shell.tsx`) lives in the `/app` layout and survives project switches. It holds a per-project in-memory UI store (panel state and unsaved field values); the editor and right panel under it are keyed by project, so a switch unmounts the previous project's UI observation, and a switch with unsaved values asks Stay or Discard. Only presentation preferences (sidebar open, list tab) are kept in sessionStorage. Tokens live in `src/styles/tokens.css`, and no other stylesheet writes a colour literal. [UI foundations](../../.codex/docs/implementation/v1.6/ui/00-interface-foundations.md) owns the component inventory, docking and responsive checks.
 
 ## Incremental integration

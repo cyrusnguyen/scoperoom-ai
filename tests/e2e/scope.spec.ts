@@ -41,6 +41,58 @@ test("paste, read, correct and archive a source", async ({ page }) => {
   await expect(page.getByRole("button", { name: /Brief/ })).toBeVisible();
 });
 
+test("long source readers render bounded pages with exact absolute line numbers", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Long source project");
+  const text = `a${"\n".repeat(49_999)}`;
+  const created = await (await page.request.post(`/api/projects/${projectId}/sources`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { title: "Many lines", text },
+  })).json();
+  expect(created.sourceId).toBeTruthy();
+  await openSpecs(page, projectId, "Long source project");
+  await page.getByRole("button", { name: /Many lines/ }).click();
+  await expect(page.locator(".source-lines li")).toHaveCount(100);
+  await expect(page.locator(".source-lines")).toHaveAttribute("start", "1");
+  await expect(page.locator(".source-lines li").first()).toHaveText("a");
+  await expect(page.getByText("Lines 1-100 of 50,000", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Next lines" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".source-lines")).toHaveAttribute("start", "101");
+  await expect(page.getByRole("button", { name: "Next lines" })).toBeFocused();
+  await page.getByRole("button", { name: "Last lines" }).click();
+  await expect(page.locator(".source-lines")).toHaveAttribute("start", "49901");
+  await expect(page.locator(".source-lines li")).toHaveCount(100);
+  await expect(page.locator(".source-lines li").last()).toHaveText("");
+  await expect(page.getByText("Lines 49,901-50,000 of 50,000", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Next lines" })).toBeDisabled();
+  await page.getByRole("button", { name: "Previous lines" }).click();
+  await expect(page.locator(".source-lines")).toHaveAttribute("start", "49801");
+  await page.getByRole("button", { name: "First lines" }).click();
+  await expect(page.locator(".source-lines li").first()).toHaveText("a");
+  await expect(page.getByLabel("Corrected text")).toHaveValue(text);
+
+  // A newer exact version resets the page without rebasing the retained correction; comparison stays bounded too.
+  await page.getByLabel("Corrected title").fill("My title");
+  await page.getByRole("button", { name: "Last lines" }).click();
+  const remoteText = `b${"\n".repeat(49_999)}`;
+  const corrected = await page.request.post(`/api/projects/${projectId}/sources/${created.sourceId}/versions`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { expectedSourceRecordVersion: created.version, expectedCurrentVersionId: created.sourceVersionId, title: "Remote title", text: remoteText },
+  });
+  expect(corrected.status()).toBe(201);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByText("Viewing v2; latest v2")).toBeVisible();
+  await expect(page.locator(".source-lines")).toHaveAttribute("start", "1");
+  await expect(page.locator(".source-lines li").first()).toHaveText("b");
+  await expect(page.getByLabel("Current saved text")).toHaveValue(remoteText);
+  await expect(page.getByLabel("Current saved text")).not.toBeEditable();
+  expect(await page.getByLabel("Current saved text").evaluate((element) => element.getBoundingClientRect().height)).toBeLessThan(300);
+  await expect(page.getByLabel("Corrected text")).toHaveValue(text);
+  await page.getByRole("button", { name: "Next lines" }).click();
+  await page.getByRole("button", { name: "v1", exact: true }).click();
+  await expect(page.locator(".source-lines")).toHaveAttribute("start", "1");
+  await expect(page.locator(".source-lines li").first()).toHaveText("a");
+});
+
 test("uploads keep their BOM for the server; invalid UTF-8 is refused before sending", async ({ page }) => {
   const projectId = await createProjectViaApi(page, "Upload project");
   await openSpecs(page, projectId, "Upload project");

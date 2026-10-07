@@ -5,8 +5,22 @@ import { citationMatches, lineStarts, normalizeEvidence, parseCorrectSource, par
 import { graphExtract } from "../src/features/sources/domain/graph-extract.ts";
 import { acceptFirstPage, appendSourcePage, appendVersionPage, canLoadMore, listKey, startSourceList } from "../src/features/sources/ui/source-pages.ts";
 import { editSourceCorrection, reconcileSourceCorrection, sourceCorrectionBody } from "../src/features/sources/ui/source-correction.ts";
+import { sourceLinePage, SOURCE_LINES_PER_PAGE } from "../src/features/sources/ui/source-line-pages.ts";
 
 const ID = "11111111-1111-4111-8111-111111111111";
+
+test("source line pages bound DOM rows while retaining every character and trailing empty line", () => {
+  const text = `a${"\n".repeat(49_999)}`;
+  const first = sourceLinePage(text, 0), last = sourceLinePage(text, 499);
+  assert.equal(SOURCE_LINES_PER_PAGE, 100);
+  assert.deepEqual([first.firstLine, first.lastLine, first.totalLines, first.lines.length], [1, 100, 50_000, 100]);
+  assert.deepEqual([last.firstLine, last.lastLine, last.totalLines, last.lines.length, last.lines.at(-1)], [49_901, 50_000, 50_000, 100, ""]);
+  assert.equal(Array.from({ length: first.lastPage + 1 }, (_, page) => sourceLinePage(text, page).lines).flat().join("\n"), text);
+  assert.equal(sourceLinePage("\n".repeat(50_000), 500).lines.length, 1, "all-newline input has one final empty line");
+  assert.deepEqual(sourceLinePage("a\n", 20).lines, ["a", ""]);
+  assert.equal(sourceLinePage(text, -1).firstLine, 1);
+  assert.equal(sourceLinePage(text, Infinity).firstLine, 1);
+});
 
 test("a correction pins both original fields and guards, and only explicit review merges changed fields", () => {
   const head = { version: 1, currentVersionId: "v1" }, view = { id: "v1", sequence: 1, title: "Original title", text: "Original text" };

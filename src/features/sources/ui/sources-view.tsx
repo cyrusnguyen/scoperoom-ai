@@ -12,6 +12,7 @@ import {
 } from "../contracts/source-version";
 import { acceptFirstPage, appendSourcePage, appendVersionPage, canLoadMore, listKey, startSourceList, type SourceList, type VersionList } from "./source-pages";
 import { editSourceCorrection, reconcileSourceCorrection, sourceCorrectionBody, type SourceCorrection } from "./source-correction";
+import SourceLines from "./source-lines";
 
 const KIND_LABELS: Record<SourceHead["kind"], string> = { USER_TEXT: "Pasted", USER_UPLOAD: "Uploaded", PROMOTED_GRAPH: "Saved flow", QUESTION_ANSWER: "Answer", AI_PROMPT: "AI instruction" };
 const SCOPES: Array<[SourceScope, string]> = [["user", "Active"], ["archived", "Archived"], ["internal", "Internal"]];
@@ -294,7 +295,7 @@ function Reader({ selected, correction, head, headFailed, canEdit, update, refoc
         <p className="muted">Viewing v{view.sequence}; latest v{head.currentSequence}</p>
         {!atHead && <button type="button" className="button small" onClick={() => update(() => ({ selected: { ...selected, versionId: null } }))}>Latest</button>}
       </div>
-      <ol className="source-lines" aria-label="Source lines">{view.text.split("\n").map((line, index) => <li key={index}>{line}</li>)}</ol>
+      <SourceLines key={view.id} text={view.text} />
     </>}
     {versionError?.key === versionsKey && <p role="alert">{versionError.message} <button type="button" className="button small" onClick={() => setReadAttempt((value) => value + 1)}>Retry versions</button></p>}
     {versions?.key === versionsKey && <section aria-label="Versions">
@@ -311,7 +312,7 @@ function Reader({ selected, correction, head, headFailed, canEdit, update, refoc
         {stale && <section aria-label="Review newer source" className="detail-section">
           <p role="alert">This source changed while you were editing. Your correction is based on v{correction.base.sequence}. Review the current saved source before using your edits on it.</p>
           <h4>Current saved title</h4><p>{view.title}</p>
-          <h4>Current saved text</h4><p style={{ whiteSpace: "pre-wrap" }}>{view.text}</p>
+          <div className="field"><label htmlFor="current-saved-source-text">Current saved text</label><textarea id="current-saved-source-text" rows={8} readOnly value={view.text} /></div>
           <button type="button" className="button" disabled={busy} onClick={() => changeCorrection((current) => current && reconcileSourceCorrection(current, head, view))}>Use my edits on latest version</button>
         </section>}
         <div className="field"><label htmlFor="corrected-title">Corrected title</label><input id="corrected-title" value={title} readOnly={busy} maxLength={SOURCE_TITLE_LIMIT} onChange={(event) => edit("title", event.target.value)} /></div>
