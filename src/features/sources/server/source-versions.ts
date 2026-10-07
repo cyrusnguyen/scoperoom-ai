@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { readAsMember, type Transaction } from "../../projects/server/access.ts";
-import { lineStarts, SOURCE_LIMITS, type SourceVersionView } from "../contracts/source-version.ts";
+import { lineStarts, SOURCE_LIMITS, type SourceKind, type SourceVersionView } from "../contracts/source-version.ts";
 
 /** Normalized evidence measures (see `evidenceStats`); the database recomputes and rejects any disagreement. */
 export type PromptEvidence = { text: string; codePointCount: number; utf8ByteCount: number; contentHash: string };
@@ -16,17 +16,24 @@ export async function assertSourceCapacity(tx: Transaction, projectId: string, a
   if (usage.code_points + addedCodePoints > SOURCE_LIMITS.projectCodePoints) throw new ProjectError("LIMIT_EXCEEDED", { limit: "SOURCE_CODE_POINTS" });
 }
 
-/** The immutable AI_PROMPT source and its first (head) version. The head key is deferred, so both rows are written ids-first in one transaction. */
-export async function insertPromptEvidence(tx: Transaction, projectId: string, actorId: string, evidence: PromptEvidence): Promise<string> {
+/** A new immutable source and its first (head) version. The head key is deferred, so both rows are written ids-first in one transaction. */
+export async function insertSource(
+  tx: Transaction, projectId: string, actorId: string, kind: SourceKind, title: string, evidence: PromptEvidence, origin: Record<string, unknown> | null = null,
+): Promise<{ sourceId: string; versionId: string }> {
   const sourceId = randomUUID();
   const versionId = randomUUID();
   await tx.$executeRaw`
     INSERT INTO app.source_document (id, project_id, kind, current_version_id, created_by)
-    VALUES (${sourceId}::uuid, ${projectId}::uuid, 'AI_PROMPT'::app.source_kind, ${versionId}::uuid, ${actorId}::uuid)`;
+    VALUES (${sourceId}::uuid, ${projectId}::uuid, ${kind}::app.source_kind, ${versionId}::uuid, ${actorId}::uuid)`;
   await tx.$executeRaw`
-    INSERT INTO app.source_version (id, project_id, source_id, sequence, title, text, code_point_count, utf8_byte_count, content_hash, created_by)
-    VALUES (${versionId}::uuid, ${projectId}::uuid, ${sourceId}::uuid, 1, 'AI instruction', ${evidence.text}, ${evidence.codePointCount}, ${evidence.utf8ByteCount}, ${evidence.contentHash}, ${actorId}::uuid)`;
-  return versionId;
+    INSERT INTO app.source_version (id, project_id, source_id, sequence, title, text, code_point_count, utf8_byte_count, content_hash, created_by, origin)
+    VALUES (${versionId}::uuid, ${projectId}::uuid, ${sourceId}::uuid, 1, ${title}, ${evidence.text}, ${evidence.codePointCount}, ${evidence.utf8ByteCount}, ${evidence.contentHash}, ${actorId}::uuid, ${origin === null ? null : JSON.stringify(origin)}::jsonb)`;
+  return { sourceId, versionId };
+}
+
+/** The immutable AI_PROMPT source of one run. */
+export async function insertPromptEvidence(tx: Transaction, projectId: string, actorId: string, evidence: PromptEvidence): Promise<string> {
+  return (await insertSource(tx, projectId, actorId, "AI_PROMPT", "AI instruction", evidence)).versionId;
 }
 
 /** The one immutable version asked for, inside this exact project and for any current reader. Never the document's current head. */
