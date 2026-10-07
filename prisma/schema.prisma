@@ -219,6 +219,7 @@ model Project {
   realtimeEpoch         String              @default(dbgenerated("gen_random_uuid()")) @map("realtime_epoch") @db.Uuid
   eventSequence         BigInt              @default(0) @map("event_sequence") @db.BigInt
   aiRevision            BigInt              @default(0) @map("ai_revision") @db.BigInt
+  sourcesRevision       BigInt              @default(0) @map("sources_revision") @db.BigInt
   approvedSnapshotId    String?             @map("approved_snapshot_id") @db.Uuid
   createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt             DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -301,6 +302,7 @@ model ScopeDraft {
   flowImportPreviews FlowImportPreview[] @relation("flow_import_draft")
   aiRuns           AiRun[]
   aiApplications   AiSuggestionApplication[]
+  promotedSources  SourceVersion[]  @relation("source_version_origin_draft")
 
   @@unique([projectId, id])
   @@map("scope_draft")
@@ -372,6 +374,8 @@ model SourceVersion {
   createdBy      String           @map("created_by") @db.Uuid
   createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   origin         Json?
+  originDraftId  String?          @map("origin_draft_id") @db.Uuid
+  originDraft    ScopeDraft?      @relation("source_version_origin_draft", fields: [projectId, originDraftId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "source_version_origin_draft_fkey")
   source         SourceDocument   @relation("source_document_versions", fields: [projectId, sourceId], references: [projectId, id], onDelete: Cascade, onUpdate: NoAction, map: "source_version_source_fkey")
   creator        UserProfile      @relation("source_version_creator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
   headOf         SourceDocument[] @relation("source_document_head")

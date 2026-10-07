@@ -55,6 +55,16 @@ Saved changes by other people reach an admitted reader through the authenticated
 - **Identity.** `ProjectStatusView.viewerId` (the caller's profile id) is compared on every status and bootstrap; a different account tears the shell down and navigates, sending nothing. `readRoute`/`mutationRoute` (`src/server/web/api-request.ts`) classify Supabase Auth failures: a definitive denial is 401, an Auth outage is 503 `UNAVAILABLE`, so an outage never signs anyone out.
 - **Access loss.** A 404 status drops the project (`dropProject`); a 403 shows the error/recovery view without dropping it. Either way late responses cannot repopulate state and unsaved edits are not sent. A downgrade to a role that cannot edit leaves the edits shown for copy or discard.
 
+## Sources (Stage 07a)
+
+Sources are immutable text versions owned by PostgreSQL; the browser never saves them through the draft.
+
+- Routes: `GET`/`POST /api/projects/:id/sources` (paginated list; paste or strict UTF-8 upload), `GET`/`PATCH .../sources/:sourceId` (one authorized head independent of list/filter; archive/restore, nickname), `GET`/`POST .../sources/:sourceId/versions` (paginated versions; correction creates a new version), and `POST D/graph-sources` (saved flow extract bound to the draft, its revision and the flow). Every write is keyed and replayable; correction and archive/restore check the expected record version, and the flow extract checks the draft revision; corrections send the expected record and current version ids.
+- A saved-flow origin stores the draft, revision, flow and the selected step and connection ids (extract order). `origin_draft_id` is a same-project FK to the draft (`DEFERRABLE INITIALLY DEFERRED`, so a project delete cascades), and the `source_version_origin_binding` CHECK ties the origin's `copiedTextHash` and `promotedBy` to the version's own `content_hash` and `created_by`. The origin is capped at 32 KiB.
+- Normalization drops exactly one leading BOM; text that still starts with a BOM is refused as `INVALID_INPUT`.
+- `sources_revision` is a project status cursor advanced by user source writes and by AI prompt admission (which also stamps the prompt source's `last_event_sequence`), so other readers refresh the list through the normal status poll.
+- Capacity: user documents (`USER_TEXT`, `USER_UPLOAD`, `PROMOTED_GRAPH`) take one of 30 active slots; archiving frees a slot and restore needs one. Every retained version, internal evidence included, counts against 500 versions and 500,000 code points per project. A single submission is at most 50,000 code points.
+
 ## Browser Realtime (Stage 04.3)
 
 Pointer-drop entries carry local-only drag-start position metadata. Wire commands preserve that original guard; optimistic replay may retain attempted geometry after conflict without rewriting the request. An explicit reviewed rebase chooses fresh guards. Inspector coordinate buffers separately retain the position version they were typed against and participate in project dirty/recovery state.

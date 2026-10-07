@@ -5,9 +5,44 @@ import { edit, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
 import { acknowledgeExternalWrite, admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
-import { type AiRequest, currentAiRun, recoverUnavailableCurrentRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
+import { type AiRequest, currentAiRun, recoverUnavailableCurrentRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, defaultSpecsUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, settleSpecsRequest, startSpecsRequest, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
+import { finishSourceWrite } from "../src/features/sources/ui/source-write.ts";
+import { editSourceCorrection, sourceCorrectionBody } from "../src/features/sources/ui/source-correction.ts";
 
-const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
+test("correction snapshots protect navigation, survive tabs and pending discard, and only their ACK clears them", () => {
+  const correction = editSourceCorrection(undefined, { version: 1, currentVersionId: "v1" }, { id: "v1", sequence: 1, title: "Original", text: "Text" }, "title", "Local")!;
+  const initial = updateUi({}, "a", () => ({ specs: { ...defaultSpecsUi, sourceCorrections: { source: correction, other: correction } } }));
+  assert.equal(dirtyCount(initial, "a"), 2);
+  assert.equal(anyDirty(initial), true);
+  assert.equal(uiFor(setRightTab(setRightOpen(initial, "a", false), "a", "specs"), "a").specs.sourceCorrections?.source, correction);
+  assert.deepEqual(uiFor(discardDrafts(initial, "a"), "a").specs.sourceCorrections, {});
+  const pending = { key: "correction-key", method: "POST" as const, path: "sources/source/versions", label: "Save new version", body: sourceCorrectionBody(correction) };
+  const store = updateUi(initial, "a", (ui) => ({ specs: { ...ui.specs, pending } }));
+  const discarded = uiFor(discardDrafts(store, "a"), "a");
+  assert.equal(discarded.specs.pending, pending);
+  assert.deepEqual(discarded.specs.sourceCorrections, { source: correction }, "only the unresolved correction survives explicit discard");
+  const before = uiFor(store, "a"), saved = finishSourceWrite(before, pending);
+  assert.deepEqual(saved.specs.sourceCorrections, { other: correction });
+  assert.equal(saved.specs.pending, null);
+  const newer = { ...saved, specs: { ...saved.specs, sourceCorrections: { source: correction, other: correction } } };
+  assert.equal(finishSourceWrite(newer, pending), newer, "a duplicate ACK never erases later input");
+  const refused = { ...before, specs: settleSpecsRequest(before.specs, pending.key, "refused", "Stale") };
+  assert.equal(refused.specs.sourceCorrections?.source, correction, "a stale refusal preserves the captured baseline and fields");
+});
+
+test("source acknowledgement clears matching input atomically and a duplicate keeps newer text and selection", () => {
+  const request = { key: "first", method: "POST" as const, path: "sources", body: { title: "First", text: "Submitted" }, label: "Add source" };
+  const current = { ...defaultUi, drafts: { "specs:new-source:title": "First", "specs:new-source:text": "Submitted", "specs:new-source:uploaded": "true" }, specs: { ...defaultSpecsUi, pending: request } };
+  const saved = finishSourceWrite(current, request);
+  assert.deepEqual(saved.drafts, {});
+  assert.equal(saved.specs.pending, null);
+  assert.equal(saved.specs.message, "Add source: saved.");
+  const newer = { ...saved, drafts: { "specs:new-source:text": "New text" }, specs: { ...saved.specs, pending: { ...request, key: "second" } } };
+  assert.equal(finishSourceWrite(newer, request), newer, "old ACK never affects a newer request or its drafts");
+  assert.equal(finishSourceWrite({ ...newer, specs: saved.specs }, request).drafts["specs:new-source:text"], "New text", "even without a newer request");
+});
+
+const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { selected: null, sourceScope: "user" as const, pending: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("discard preserves an uncertain import's original per-project request; dropping access clears it", () => {
@@ -70,6 +105,30 @@ for (const kind of ["start", "apply", "cancel", "discard"] as const) {
     assert.equal(anyDirty(dropProject(store, "a")), false, "dropping that project removes its pending state");
   });
 }
+
+test("an unconfirmed source write protects unload until it is resolved and survives closing the panel", () => {
+  const pending = { key: "k1", method: "POST" as const, path: "sources", body: { title: "Brief", text: "Text" }, label: "Add source" };
+  let store = updateUi({}, "a", () => ({ specs: { ...defaultSpecsUi, pending } }));
+  assert.equal(dirtyCount(store, "a"), 0, "a pending write is not an unsaved field");
+  assert.equal(anyDirty(store), true);
+  store = setRightOpen(setRightTab(store, "a", "details"), "a", false);
+  assert.equal(uiFor(store, "a").specs.pending, pending, "leaving the Specs tab keeps the exact key and body");
+  assert.equal(anyDirty(store), true);
+  store = updateUi(store, "a", (ui) => ({ specs: { ...ui.specs, pending: null } }));
+  assert.equal(anyDirty(store), false);
+});
+
+test("one unresolved Specs request at a time, settled only by its own key", () => {
+  const first = { key: "a".repeat(16), method: "POST" as const, path: "sources", body: { title: "Brief", text: "x" }, label: "Add source" };
+  const second = { ...first, key: "b".repeat(16) };
+  const started = startSpecsRequest(defaultSpecsUi, first)!;
+  assert.equal(startSpecsRequest(started, second), null, "a second save cannot replace an unresolved one");
+  const uncertain = settleSpecsRequest(started, first.key, "uncertain", "We couldn’t confirm it.");
+  assert.deepEqual(uncertain.pending, first, "an unconfirmed request keeps its exact key and body");
+  assert.equal(settleSpecsRequest(uncertain, second.key, "saved", "late").pending, first, "another key's late result changes nothing");
+  assert.equal(settleSpecsRequest(uncertain, first.key, "saved", "Saved.").pending, null);
+  assert.equal(anyDirty(updateUi({}, "p1", () => ({ specs: uncertain }))), true, "reload protection covers it");
+});
 
 test("drafts belong to one project, and undefined clears a draft", () => {
   let store = setDraft({}, "a", "name", "New name");
@@ -285,4 +344,11 @@ test("definitive Apply refusal clears only the matching pending attempt and pres
     const otherPhase={...phase,[field]:'newer'};assert.equal(finish({...current,applyPhase:otherPhase},request).applyPhase,otherPhase);
   }
   assert.equal(request.body,current.pendingRequest.body);assert.equal(finish({...current,applyPhase:{...phase,state:'acknowledged'}},request).applyPhase,undefined);
+});
+
+test("opening Specs mounts the panel on that tab with empty Specs state", () => {
+  const store = setRightTab({}, "p1", "specs");
+  assert.equal(uiFor(store, "p1").rightTab, "specs");
+  assert.equal(uiFor(store, "p1").rightOpen, true);
+  assert.deepEqual(uiFor(store, "p1").specs, defaultSpecsUi);
 });

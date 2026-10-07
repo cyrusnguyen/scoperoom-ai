@@ -104,7 +104,8 @@ async function admitLocked(tx: Transaction, project: ProjectRow, actorId: string
   });
   const sequence = await recordEvent(tx, project, actorId, "AI_RUN_ADMITTED", [{ kind: "AI_RUN", id: runId }, { kind: "DRAFT", id: capture.draftId }],
     { taskType: capture.taskType, draftId: capture.draftId, documentRevision: capture.documentRevision, sourceCount: capture.sources.length, model: configuration.model });
-  await tx.$executeRaw`UPDATE app.project SET ai_revision = ${sequence}::bigint WHERE id = ${project.id}::uuid`;
+  await tx.$executeRaw`UPDATE app.project SET ai_revision = ${sequence}::bigint, sources_revision = ${sequence}::bigint WHERE id = ${project.id}::uuid`;
+  await tx.$executeRaw`UPDATE app.source_document SET last_event_sequence = ${sequence}::bigint WHERE project_id = ${project.id}::uuid AND current_version_id = ${promptVersionId}::uuid`;
   await tx.$executeRaw`UPDATE app.ai_run SET last_event_sequence = ${sequence}::bigint WHERE id = ${runId}::uuid`;
   const manifest: RunManifest = { taskType: capture.taskType, draftId: capture.draftId, documentRevision: capture.documentRevision, parentSnapshotId: capture.parentSnapshotId,
     sourceVersionIds: capture.sources.map((source) => source.sourceVersionId), captureHash };

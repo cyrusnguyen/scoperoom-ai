@@ -1,0 +1,13 @@
+.specs-panel { display: grid; gap: 12px; }
+.specs-message { margin: 0; color: var(--foreground-muted); }
+.specs-group h3 { margin: 12px 0 4px; font-size: 0.85rem; color: var(--foreground-muted); }
+.specs-card { display: grid; width: 100%; gap: 2px; padding: 8px; text-align: left; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--foreground); }
+.specs-badge { font-size: 0.75rem; color: var(--foreground-muted); }
+.source-lines { margin: 0; padding-left: 4.5em; font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.source-lines li[data-cited="true"] { background: var(--accent-soft); }
+.sources-view, .source-reader, .source-text { display: grid; gap: 12px; min-width: 0; }
+.sources-view p, .source-reader p, .source-reader h3 { margin: 0; overflow-wrap: anywhere; }
+.sources-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sources-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.sources-list .specs-card { min-height: 44px; overflow-wrap: anywhere; }
+.sources-view > .button, .source-reader > .button { justify-self: start; }

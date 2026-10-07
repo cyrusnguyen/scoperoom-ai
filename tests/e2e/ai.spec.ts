@@ -112,6 +112,10 @@ test("Generate from an empty project and restore the exact queued run from its U
   await expect(detailsTab).toBeFocused();
   await expect(detailsTab).toHaveAttribute("aria-selected", "true");
   await detailsTab.press("End");
+  const specsTab = panel(page).getByRole("tab", { name: "Specs", exact: true });
+  await expect(specsTab).toBeFocused();
+  await expect(specsTab).toHaveAttribute("aria-selected", "true");
+  await specsTab.press("ArrowLeft");
   await expect(aiTab).toBeFocused();
   await expect(aiTab).toHaveAttribute("aria-selected", "true");
 });

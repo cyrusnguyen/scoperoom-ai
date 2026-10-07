@@ -1,14 +1,13 @@
 import { createHash } from "node:crypto";
 import { LIMITS, type ScopeDocument } from "../../drafts/contracts/scope-document.ts";
 import { byId } from "../../drafts/domain/graph.ts";
-import { SOURCE_LIMITS } from "../../sources/contracts/source-version.ts";
+import { normalizeEvidence, SOURCE_LIMITS } from "../../sources/contracts/source-version.ts";
 import {
   AI_LIMITS, CAPTURE_SCHEMA_VERSION, PROMPT_VERSION, RESULT_SCHEMA_VERSION,
   type CapturedEdge, type CapturedFlow, type CapturedInput, type CapturedNode, type CapturedSource, type StartRunInput,
 } from "../contracts/tasks.ts";
 
-/** Evidence is UTF-8 normalized once: drop a leading BOM and turn CRLF/CR into LF. Everything else is preserved. */
-export const normalizeEvidence = (text: string): string => text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+export { normalizeEvidence };
 
 export const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 

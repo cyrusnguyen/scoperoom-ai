@@ -23,7 +23,7 @@ export function withStatus<T extends { project: { status: string; role: string }
     ...bootstrap,
     status: {
       viewerId: MOCK_VIEWER_ID, status: project.status, role: project.role, version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null,
-      currentDraftId: draft.id, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, realtimeEpoch: "77777777-7777-4777-8777-777777777777", eventSequence: 1, aiRevision: 0, approvedSnapshotId: null,
+      currentDraftId: draft.id, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, realtimeEpoch: "77777777-7777-4777-8777-777777777777", eventSequence: 1, aiRevision: 0, sourcesRevision: 0, approvedSnapshotId: null,
     },
   };
 }
@@ -158,4 +158,12 @@ export const headerSave = (page: Page) => page.locator(".editor-header").getByRo
 export async function saveStudio(page: Page) {
   await headerSave(page).click();
   await expect(page.locator(".studio-status")).toContainText("All changes saved");
+}
+
+/** Opens a project and its Specs tab. */
+export async function openSpecs(page: Page, projectId: string, name: string) {
+  await page.goto(`/app/projects/${projectId}`);
+  await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+  await page.getByRole("button", { name: "Specs", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Specs", selected: true })).toBeVisible();
 }

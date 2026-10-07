@@ -87,7 +87,7 @@ function statusOf(project: ProjectRow, draft: DraftCounters & { id: string }, ro
     viewerId, status: project.status, role, version: project.version, settingsVersion: project.settingsVersion, approvalPolicyVersion: project.approvalPolicyVersion,
     membershipVersion: project.membershipVersion, designatedApproverId: project.designatedApproverId, currentDraftId: draft.id,
     documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, realtimeEpoch: project.realtimeEpoch, eventSequence: Number(project.eventSequence),
-    aiRevision: project.aiRevision, approvedSnapshotId: project.approvedSnapshotId,
+    aiRevision: project.aiRevision, sourcesRevision: project.sourcesRevision, approvedSnapshotId: project.approvedSnapshotId,
   };
 }
 

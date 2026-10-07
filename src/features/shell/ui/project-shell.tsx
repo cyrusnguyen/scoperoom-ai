@@ -22,10 +22,12 @@ import { Icon } from "./icon";
 import LifecycleDialog, { type LifecycleKind } from "./lifecycle-dialog";
 import NewProjectDialog from "./new-project-dialog";
 import ProjectEditor, { NoProjectOpen, ProjectUnavailable } from "./project-editor";
-import { currentAiRun, anyDirty, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi, type UiStore } from "./project-ui";
+import { currentAiRun, anyDirty, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi, type RightTab, type UiStore } from "./project-ui";
 import ProjectsSidebar, { LIST_TABS, type InviteRow, type ListTab } from "./projects-sidebar";
 import RightPanel from "./right-panel";
 import AiActions from "@/features/proposals/ui/ai-actions";
+import SpecsPanel from "@/features/scope/ui/specs-panel";
+import { finishSourceWrite } from "@/features/sources/ui/source-write";
 
 type Prefs = { leftOpen: boolean; listTab: ListTab };
 type Opened = { projectId: string; bootstrap?: ProjectBootstrap; missing?: boolean; error?: string };
@@ -230,7 +232,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (open) setLastOpened("right");
     else requestAnimationFrame(() => document.querySelector<HTMLElement>('[aria-controls="right-panel"]')?.focus());
   }
-  function openRightTab(tab: "details" | "ai") {
+  function openRightTab(tab: RightTab) {
     if (!projectId) return;
     setStore((previous) => setRightTab(previous, projectId, tab));
     setLastOpened("right");
@@ -313,7 +315,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     ? <NoProjectOpen autoFocus={focusTarget === ""} sidebarClosed={sidebarClosed} capacity={capacity} hasInvites={Boolean(invites?.items.length)} onShowProjects={() => showProjects()} onCreate={() => setDialog({ kind: "create" })} onViewInvites={() => showProjects("invites")} />
     : !current ? <div className="empty-state" aria-busy="true"><p>Loading project…</p></div>
     : bootstrap ? <ProjectEditor key={projectId} bootstrap={bootstrap} autoFocus={focusTarget === projectId} sidebarClosed={sidebarClosed} onShowProjects={() => showProjects()}
-        panelOpen={dock.right !== "closed"} activeTab={ui.rightTab} onOpenDetails={() => openRightTab("details")} onOpenAI={() => openRightTab("ai")}
+        panelOpen={dock.right !== "closed"} activeTab={ui.rightTab} onOpenDetails={() => openRightTab("details")} onOpenAI={() => openRightTab("ai")} onOpenSpecs={() => openRightTab("specs")}
         restoreNote={restoreNote} onRestore={() => setDialog({ kind: "restore", project: { id: projectId, name: bootstrap.project.name } })} />
     : <ProjectUnavailable missing={Boolean(current.missing)} message={current.error ?? ""} sidebarClosed={sidebarClosed} onShowProjects={() => showProjects()} onRetry={() => void loadProject(projectId)} />;
 
@@ -321,6 +323,9 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const panel = projectId && bootstrap && ui.rightMounted
     ? <RightPanel key={projectId} mode={dock.right} tab={ui.rightTab} onTabChange={(tab) => openRightTab(tab)} onClose={() => setPanel(false)}>
       {ui.rightTab === "ai" ? dock.right !== "closed" ? <AiActions ui={ui.ai} update={(change) => setStore((previous) => updateUi(previous, projectId, (current) => ({ ai: change(current.ai) })))} /> : null
+        : ui.rightTab === "specs" ? dock.right !== "closed" ? <SpecsPanel ui={ui.specs} update={(change) => setStore((previous) => updateUi(previous, projectId, (current) => ({ specs: { ...current.specs, ...change(current.specs) } })))}
+            drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))}
+            onSaved={(request) => setStore((previous) => updateUi(previous, projectId, (current) => finishSourceWrite(current, request)))} /> : null
         : ui.selection ? <Inspector onBack={() => { updateStudio(() => ({ selection: null })); requestAnimationFrame(() => document.getElementById("right-tab-details")?.focus()); }} />
           : <ProjectDetails bootstrap={bootstrap} drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))}
             onChanged={projectChanged} onLifecycle={(kind) => setDialog({ kind, project: { id: projectId, name: bootstrap.project.name } })} />}

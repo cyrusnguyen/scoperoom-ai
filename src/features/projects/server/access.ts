@@ -22,6 +22,7 @@ export type ProjectRow = {
   realtimeEpoch: string;
   eventSequence: bigint;
   aiRevision: number;
+  sourcesRevision: number;
   approvedSnapshotId: string | null;
   role: ProjectAccessRole | null;
 };
@@ -29,7 +30,7 @@ export type ProjectRow = {
 type RawProject = {
   id: string; owner_id: string; name: string; status: string; version: number; settings_version: number;
   approval_policy_version: number; membership_version: number; designated_approver_id: string | null;
-  current_draft_id: string | null; realtime_epoch: string; event_sequence: bigint; ai_revision: bigint; approved_snapshot_id: string | null;
+  current_draft_id: string | null; realtime_epoch: string; event_sequence: bigint; ai_revision: bigint; sources_revision: bigint; approved_snapshot_id: string | null;
 };
 
 export function requestHash(operation: string, input: unknown) {
@@ -92,7 +93,7 @@ function projectQuery(projectId: string, lock: boolean) {
   return Prisma.sql`
     SELECT project.id, project.owner_id, project.name, project.status::text AS status, project.version, project.settings_version,
       project.approval_policy_version, project.membership_version, project.designated_approver_id, project.current_draft_id,
-      project.realtime_epoch::text AS realtime_epoch, project.event_sequence, project.ai_revision, project.approved_snapshot_id
+      project.realtime_epoch::text AS realtime_epoch, project.event_sequence, project.ai_revision, project.sources_revision, project.approved_snapshot_id
     FROM app.project project
     WHERE project.id = ${projectId}::uuid AND project.status IN ('ACTIVE'::app.project_status, 'ARCHIVED'::app.project_status)
     ${lock ? Prisma.sql`FOR UPDATE OF project` : Prisma.empty}`;
@@ -102,7 +103,7 @@ function accessRole(role: string | undefined): ProjectAccessRole | null {
   return role === "OWNER" || role === "EDITOR" || role === "REVIEWER" || role === "VIEWER" ? role : null;
 }
 
-async function projectRole(tx: Transaction, project: Pick<ProjectRow, "id" | "ownerId">, profileId: string): Promise<ProjectAccessRole | null> {
+export async function projectRole(tx: Transaction, project: Pick<ProjectRow, "id" | "ownerId">, profileId: string): Promise<ProjectAccessRole | null> {
   if (project.ownerId === profileId) return "OWNER";
   const [membership] = await tx.$queryRaw<{ role: string }[]>`
     SELECT role::text AS role FROM app.project_membership
@@ -116,7 +117,7 @@ function toProjectRow(row: RawProject | undefined, role: ProjectAccessRole | nul
     id: row.id, ownerId: row.owner_id, name: row.name, status: row.status, version: row.version, settingsVersion: row.settings_version,
     approvalPolicyVersion: row.approval_policy_version, membershipVersion: row.membership_version, designatedApproverId: row.designated_approver_id,
     currentDraftId: row.current_draft_id, realtimeEpoch: row.realtime_epoch, eventSequence: row.event_sequence,
-    aiRevision: Number(row.ai_revision), approvedSnapshotId: row.approved_snapshot_id, role,
+    aiRevision: Number(row.ai_revision), sourcesRevision: Number(row.sources_revision), approvedSnapshotId: row.approved_snapshot_id, role,
   };
 }
 

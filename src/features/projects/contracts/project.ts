@@ -25,7 +25,10 @@ export type ProjectStatusView = {
   viewerId: string; status: "ACTIVE" | "ARCHIVED"; role: ProjectAccessRole; version: number; settingsVersion: number; approvalPolicyVersion: number; membershipVersion: number;
   designatedApproverId: string | null; currentDraftId: string; documentRevision: number; layoutRevision: number; realtimeEpoch: string; eventSequence: number;
   /** Resource cursor derived from eventSequence (Data 04): the sequence of the last committed AI run change. */
-  aiRevision: number; approvedSnapshotId: string | null;
+  aiRevision: number;
+  /** Resource cursor derived from eventSequence: the sequence of the last committed source change (Stage 07). */
+  sourcesRevision: number;
+  approvedSnapshotId: string | null;
 };
 
 export const PROJECT_LIST_LIMIT = 100;
