@@ -9,11 +9,15 @@ export type AiRequest =
   | (AiRequestBase & { kind: "apply"; runId: string })
   | (AiRequestBase & { kind: "discard" | "cancel"; runId: string });
 export type AiUi = { instruction: string; action: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; selectedRunId: string | null; pendingRequest: AiRequest | null; applyPhase?: { key: string; projectId: string; runId: string; state: "uncertain" | "acknowledged" | "adopted"; draftId: string; documentRevision?: number; layoutRevision?: number } };
-export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: "details" | "ai"; drafts: Record<string, string>; ai: AiUi } & StudioUi;
+export type RightTab = "details" | "ai" | "specs";
+export type SpecsSelection = { kind: "source"; sourceId: string; versionId: string | null; back: SpecsSelection } | null;
+export type SpecsUi = { selected: SpecsSelection; message: string };
+export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: RightTab; drafts: Record<string, string>; ai: AiUi; specs: SpecsUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
 export const defaultAiUi: AiUi = { instruction: "", action: "PROPOSE_FLOW", selectedRunId: null, pendingRequest: null };
-export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, rightTab: "details", drafts: {}, ai: defaultAiUi, ...defaultStudioUi };
+export const defaultSpecsUi: SpecsUi = { selected: null, message: "" };
+export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, rightTab: "details", drafts: {}, ai: defaultAiUi, specs: defaultSpecsUi, ...defaultStudioUi };
 
 export function uiFor(store: UiStore, projectId: string | undefined): ProjectUi {
   return (projectId && store[projectId]) || defaultUi;
@@ -25,7 +29,7 @@ export function setRightOpen(store: UiStore, projectId: string, open: boolean): 
   return { ...store, [projectId]: { ...current, rightOpen: open, rightMounted: current.rightMounted || open } };
 }
 
-export function setRightTab(store: UiStore, projectId: string, rightTab: ProjectUi["rightTab"]): UiStore {
+export function setRightTab(store: UiStore, projectId: string, rightTab: RightTab): UiStore {
   const current = uiFor(store, projectId);
   return { ...store, [projectId]: { ...current, rightOpen: true, rightMounted: true, rightTab } };
 }

@@ -8,6 +8,7 @@ import { currentFlow } from "@/features/studio/ui/graph-view";
 import Studio from "@/features/studio/ui/studio";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import { Icon } from "./icon";
+import type { RightTab } from "./project-ui";
 
 /**
  * Saves every unsaved change now instead of at the next autosave (editors only). Enabled whenever something is unsaved
@@ -26,8 +27,8 @@ function ShowProjects({ onClick }: { onClick: () => void }) {
 }
 
 /** Keyed by project id in the shell: switching projects unmounts this project's editor state. Renders inside the StudioProvider. */
-export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onShowProjects, panelOpen, activeTab, onOpenDetails, onOpenAI, restoreNote, onRestore }: {
-  bootstrap: ProjectBootstrap; autoFocus: boolean; sidebarClosed: boolean; onShowProjects: () => void; panelOpen: boolean; activeTab: "details" | "ai"; onOpenDetails: () => void; onOpenAI: () => void;
+export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onShowProjects, panelOpen, activeTab, onOpenDetails, onOpenAI, onOpenSpecs, restoreNote, onRestore }: {
+  bootstrap: ProjectBootstrap; autoFocus: boolean; sidebarClosed: boolean; onShowProjects: () => void; panelOpen: boolean; activeTab: RightTab; onOpenDetails: () => void; onOpenAI: () => void; onOpenSpecs: () => void;
   restoreNote?: string; onRestore: () => void;
 }) {
   const { project } = bootstrap;
@@ -52,6 +53,7 @@ export default function ProjectEditor({ bootstrap, autoFocus, sidebarClosed, onS
       <SaveChanges />
       <button type="button" className="button small editor-toggle" aria-pressed={panelOpen && activeTab === "details"} aria-controls="right-panel" onClick={toggleInspector}><Icon name="details" size={14} /><span>Inspect</span></button>
       <button type="button" className="button small editor-toggle ai-toggle" aria-pressed={panelOpen && activeTab === "ai"} aria-controls="right-panel" onClick={onOpenAI}><Icon name="ai" size={16} /><span>AI</span></button>
+      <button type="button" className="button small editor-toggle" aria-pressed={panelOpen && activeTab === "specs"} aria-controls="right-panel" onClick={onOpenSpecs}><span>Specs</span></button>
     </header>
     {archived && <div className="editor-banner">
       <span><Icon name="lock" size={14} />Archived · read-only</span>

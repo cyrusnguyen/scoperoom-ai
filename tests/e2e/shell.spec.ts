@@ -123,6 +123,9 @@ test.describe("project shell", () => {
     await expect(panel).toHaveAttribute("data-dock", "docked");
     await expect(slot).toHaveAttribute("data-mode", "docked");
     expect(await editorWidth(page)).toBe(780);
+    await page.getByRole("button", { name: "Specs", exact: true }).click();
+    await expect(panel.getByRole("tab", { name: "Specs", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("button", { name: "Specs", exact: true })).toHaveAttribute("aria-pressed", "true");
 
     // The right panel was opened last, so the sidebar that no longer fits closes instead of overlaying.
     await page.setViewportSize({ width: 1024, height: 800 });

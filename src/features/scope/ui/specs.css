@@ -1,0 +1,7 @@
+.specs-panel { display: grid; gap: 12px; }
+.specs-message { margin: 0; color: var(--foreground-muted); }
+.specs-group h3 { margin: 12px 0 4px; font-size: 0.85rem; color: var(--foreground-muted); }
+.specs-card { display: grid; width: 100%; gap: 2px; padding: 8px; text-align: left; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--foreground); }
+.specs-badge { font-size: 0.75rem; color: var(--foreground-muted); }
+.source-lines { margin: 0; padding-left: 3.5em; font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.source-lines li[data-cited="true"] { background: var(--accent-soft); }

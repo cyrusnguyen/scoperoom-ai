@@ -5,9 +5,9 @@ import { edit, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
 import { acknowledgeExternalWrite, admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
-import { type AiRequest, currentAiRun, recoverUnavailableCurrentRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
+import { type AiRequest, currentAiRun, recoverUnavailableCurrentRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, defaultSpecsUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 
-const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
+const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { selected: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("discard preserves an uncertain import's original per-project request; dropping access clears it", () => {
@@ -285,4 +285,11 @@ test("definitive Apply refusal clears only the matching pending attempt and pres
     const otherPhase={...phase,[field]:'newer'};assert.equal(finish({...current,applyPhase:otherPhase},request).applyPhase,otherPhase);
   }
   assert.equal(request.body,current.pendingRequest.body);assert.equal(finish({...current,applyPhase:{...phase,state:'acknowledged'}},request).applyPhase,undefined);
+});
+
+test("opening Specs mounts the panel on that tab with empty Specs state", () => {
+  const store = setRightTab({}, "p1", "specs");
+  assert.equal(uiFor(store, "p1").rightTab, "specs");
+  assert.equal(uiFor(store, "p1").rightOpen, true);
+  assert.deepEqual(uiFor(store, "p1").specs, defaultSpecsUi);
 });
