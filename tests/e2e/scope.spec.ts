@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Request as BrowserRequest } from "@playwright/test";
 import { test as collaborationTest } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
 import { appUrl, createProjectViaApi, e2eReady, openSpecs, seedStudioChanges } from "./support";
@@ -7,6 +7,14 @@ import { appUrl, createProjectViaApi, e2eReady, openSpecs, seedStudioChanges } f
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
 const pageFits = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+const requestSettled = (page: Page, target: BrowserRequest) => new Promise<void>((resolve) => {
+  const done = (request: BrowserRequest) => {
+    if (request !== target) return;
+    page.off("requestfinished", done); page.off("requestfailed", done); resolve();
+  };
+  page.on("requestfinished", done); page.on("requestfailed", done);
+});
+const browserFrames = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 
 test("paste, read, correct and archive a source", async ({ page }) => {
   const projectId = await createProjectViaApi(page, "Sources project");
@@ -57,9 +65,11 @@ test("an upload with a BOM and CRLF counts and reads normalized lines", async ({
   const projectId = await createProjectViaApi(page, "Upload lines project");
   await openSpecs(page, projectId, "Upload lines project");
   await page.getByLabel("Upload .txt or .md").setInputFiles({ name: "notes.md", mimeType: "text/markdown", buffer: Buffer.from("\uFEFFfirst\r\nsecond", "utf8") });
+  await switchTabs(page);
   await expect(page.getByLabel("Source title")).toHaveValue("notes.md");
   await expect(page.getByText("12/50,000 characters")).toBeVisible();
   await page.getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByRole("button", { name: /notes\.md.*Uploaded/ })).toBeVisible();
   await page.getByRole("button", { name: /notes\.md/ }).click();
   await expect(page.locator(".source-lines li")).toHaveText(["first", "second"]);
 });
@@ -89,17 +99,26 @@ test("a correction against a newer version keeps the unsent text for retry", asy
 
 test("a saved flow is added as a source", async ({ page }) => {
   const projectId = await createProjectViaApi(page, "Flow source project");
-  const flowId = randomUUID(), nodeId = randomUUID();
+  const flowId = randomUUID(), nodeId = randomUUID(), otherFlowId = randomUUID();
   await seedStudioChanges(page, projectId, [
     { command: "CREATE_FLOW", payload: { title: "Checkout", purpose: "Manual saved flow", classification: "USER_JOURNEY", inclusion: "INCLUDED" }, proposedIds: [flowId] },
     { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Pay", description: "Take payment", actorLabel: "Customer" }, proposedIds: [nodeId] },
+    { command: "CREATE_FLOW", payload: { title: "Returns", purpose: "Return goods", classification: "USER_JOURNEY", inclusion: "INCLUDED" }, proposedIds: [otherFlowId] },
   ]);
   await openSpecs(page, projectId, "Flow source project");
-  await expect(page.getByLabel("Flow source title")).toHaveValue("Checkout");
+  const chosen = await page.getByLabel("Flow", { exact: true }).inputValue() === flowId ? otherFlowId : flowId;
+  const chosenTitle = chosen === otherFlowId ? "Returns" : "Checkout";
+  await page.getByLabel("Flow", { exact: true }).selectOption(chosen);
+  await page.getByLabel("Flow source title").fill("Selected flow evidence");
+  await switchTabs(page);
+  await expect(page.getByLabel("Flow", { exact: true })).toHaveValue(chosen);
+  await expect(page.getByLabel("Flow source title")).toHaveValue("Selected flow evidence");
   await expect(page.getByText("Uses the last saved version of the flow.")).toBeVisible();
   await page.getByRole("button", { name: "Add flow as source" }).click();
-  await page.getByRole("button", { name: /Checkout.*Saved flow/ }).click();
-  await expect(page.locator(".source-lines")).toContainText("Pay");
+  await page.getByRole("button", { name: /Selected flow evidence.*Saved flow/ }).click();
+  await expect(page.locator(".source-lines")).toContainText(`Flow: ${chosenTitle}`);
+  if (chosen === flowId) await expect(page.locator(".source-lines")).toContainText("Pay");
+  else await expect(page.locator(".source-lines")).not.toContainText("Pay");
 });
 
 const switchTabs = async (page: Page) => {
@@ -157,6 +176,10 @@ test("the filter and the open source survive a tab switch, and focus returns aft
   await page.getByRole("button", { name: "Archive" }).click();
   await expect(page.getByRole("button", { name: "Restore" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Brief" })).toBeFocused();
+  // The active list no longer includes this source, but its exact reader survives a remount.
+  await switchTabs(page);
+  await expect(page.getByRole("button", { name: "Restore" })).toBeVisible();
+  await expect(page.locator(".source-lines li")).toHaveText(["Customers pay by card or wallet."]);
   await page.getByRole("button", { name: "Back" }).click();
   await expect(page.getByRole("button", { name: "Active", exact: true })).toBeFocused(); // the archived source is not in this list
   await page.getByRole("button", { name: "Archived", exact: true }).click();
@@ -221,4 +244,95 @@ test("a source response that arrives after a project switch has no effect on the
   await expect(page.getByRole("heading", { level: 1, name: "Old project" })).toBeVisible();
   await expect(page.getByRole("alert").filter({ hasText: "We couldn’t confirm" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+});
+
+test("a duplicate retry acknowledgement cannot erase newer source input", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Duplicate acknowledgement project");
+  await openSpecs(page, projectId, "Duplicate acknowledgement project");
+  let attempts = 0, release: (() => void) | undefined, settled: Promise<void> | undefined;
+  const sent: Array<{ key: string | undefined; body: string | null }> = [];
+  await page.route(`**/api/projects/${projectId}/sources`, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    sent.push({ key: route.request().headers()["idempotency-key"], body: route.request().postData() });
+    const attempt = ++attempts, response = await route.fetch();
+    if (attempt === 1) return route.abort();
+    if (attempt === 2) {
+      settled = requestSettled(page, route.request());
+      await new Promise<void>((resolve) => { release = resolve; });
+    }
+    return route.fulfill({ response });
+  });
+  await page.getByLabel("Source title").fill("First");
+  await page.getByLabel("Source text").fill("Submitted text");
+  await page.getByRole("button", { name: "Add source", exact: true }).click();
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect.poll(() => Boolean(release)).toBe(true);
+  await switchTabs(page);
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByText("Add source: saved.")).toBeVisible();
+  await page.getByLabel("Source title").fill("New title");
+  await page.getByLabel("Source text").fill("New unsent text");
+  release!();
+  await settled;
+  await browserFrames(page);
+  await expect(page.getByLabel("Source title")).toHaveValue("New title");
+  await expect(page.getByLabel("Source text")).toHaveValue("New unsent text");
+  expect(sent).toHaveLength(3);
+  expect(sent[1]).toEqual(sent[0]); expect(sent[2]).toEqual(sent[0]);
+});
+
+test("a held source page cannot end the session after a project switch", async ({ page }) => {
+  const first = await createProjectViaApi(page, "Paged old project"), second = await createProjectViaApi(page, "Paged new project");
+  await page.request.post(`/api/projects/${first}/sources`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { title: "Brief", text: "Source" } });
+  let release: (() => void) | undefined, settled: Promise<void> | undefined;
+  await page.route(`**/api/projects/${first}/sources?*`, async (route) => {
+    if (new URL(route.request().url()).searchParams.has("cursor")) {
+      settled = requestSettled(page, route.request());
+      await new Promise<void>((resolve) => { release = resolve; });
+      return route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: { code: "UNAUTHENTICATED", message: "Sign in again." } }) });
+    }
+    const response = await route.fetch(), body = await response.json();
+    return route.fulfill({ response, json: { ...body, nextCursor: body.items[0].id } });
+  });
+  await openSpecs(page, first, "Paged old project");
+  await page.getByRole("button", { name: "Load more", exact: true }).click();
+  await expect.poll(() => Boolean(release)).toBe(true);
+  await page.locator("#projects-nav .project-row", { hasText: "Paged new project" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Paged new project" })).toBeVisible();
+  release!();
+  await settled;
+  await browserFrames(page);
+  expect(page.url()).toContain(`/app/projects/${second}`);
+  await expect(page.getByRole("heading", { level: 1, name: "Paged new project" })).toBeVisible();
+});
+
+test("version paging is single-flight and a held page cannot join a newer head", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Paged versions project");
+  const created = await (await page.request.post(`/api/projects/${projectId}/sources`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { title: "Brief", text: "Original" } })).json();
+  const versionPath = `/api/projects/${projectId}/sources/${created.sourceId}/versions`;
+  let release: (() => void) | undefined, pageCalls = 0, settled: Promise<void> | undefined;
+  await page.route(`**${versionPath}*`, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    if (new URL(route.request().url()).searchParams.has("cursor")) {
+      pageCalls += 1;
+      settled = requestSettled(page, route.request());
+      await new Promise<void>((resolve) => { release = resolve; });
+      return route.fulfill({ json: { items: [{ id: randomUUID(), sequence: 0, codePointCount: 1 }], nextCursor: null } });
+    }
+    const response = await route.fetch(), body = await response.json();
+    return route.fulfill({ response, json: { ...body, nextCursor: 1 } });
+  });
+  await openSpecs(page, projectId, "Paged versions project");
+  await page.getByRole("button", { name: /Brief/ }).click();
+  await page.getByRole("button", { name: "Load more versions", exact: true }).dblclick();
+  await expect.poll(() => pageCalls).toBe(1);
+  await page.getByLabel("Corrected text").fill("Corrected");
+  await page.getByRole("button", { name: "Save new version" }).click();
+  await expect(page.getByText("Viewing v2; latest v2")).toBeVisible();
+  await expect(page.getByRole("button", { name: "v2", exact: true })).toBeVisible();
+  release!();
+  await settled;
+  await browserFrames(page);
+  await expect(page.getByRole("button", { name: "v0", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "v1", exact: true })).toHaveCount(1);
 });

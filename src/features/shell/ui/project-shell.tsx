@@ -27,6 +27,7 @@ import ProjectsSidebar, { LIST_TABS, type InviteRow, type ListTab } from "./proj
 import RightPanel from "./right-panel";
 import AiActions from "@/features/proposals/ui/ai-actions";
 import SpecsPanel from "@/features/scope/ui/specs-panel";
+import { finishSourceWrite } from "@/features/sources/ui/source-write";
 
 type Prefs = { leftOpen: boolean; listTab: ListTab };
 type Opened = { projectId: string; bootstrap?: ProjectBootstrap; missing?: boolean; error?: string };
@@ -323,7 +324,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     ? <RightPanel key={projectId} mode={dock.right} tab={ui.rightTab} onTabChange={(tab) => openRightTab(tab)} onClose={() => setPanel(false)}>
       {ui.rightTab === "ai" ? dock.right !== "closed" ? <AiActions ui={ui.ai} update={(change) => setStore((previous) => updateUi(previous, projectId, (current) => ({ ai: change(current.ai) })))} /> : null
         : ui.rightTab === "specs" ? dock.right !== "closed" ? <SpecsPanel ui={ui.specs} update={(change) => setStore((previous) => updateUi(previous, projectId, (current) => ({ specs: { ...current.specs, ...change(current.specs) } })))}
-            drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))} /> : null
+            drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))}
+            onSaved={(request) => setStore((previous) => updateUi(previous, projectId, (current) => finishSourceWrite(current, request)))} /> : null
         : ui.selection ? <Inspector onBack={() => { updateStudio(() => ({ selection: null })); requestAnimationFrame(() => document.getElementById("right-tab-details")?.focus()); }} />
           : <ProjectDetails bootstrap={bootstrap} drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))}
             onChanged={projectChanged} onLifecycle={(kind) => setDialog({ kind, project: { id: projectId, name: bootstrap.project.name } })} />}

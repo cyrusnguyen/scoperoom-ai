@@ -10,7 +10,7 @@ import {
   normalizeEvidence, SOURCE_BODY_LIMIT, SOURCE_LIMITS, SOURCE_TITLE_LIMIT, USER_DOCUMENT_LIMIT, USER_SOURCE_KINDS,
   type SourceHead, type SourcePage, type SourceScope, type SourceVersionPage, type SourceVersionView, type SourceWriteResult,
 } from "../contracts/source-version";
-import { acceptFirstPage, appendSourcePage, canLoadMore, listKey, startSourceList, type SourceList } from "./source-pages";
+import { acceptFirstPage, appendSourcePage, appendVersionPage, canLoadMore, listKey, startSourceList, type SourceList, type VersionList } from "./source-pages";
 
 const KIND_LABELS: Record<SourceHead["kind"], string> = { USER_TEXT: "Pasted", USER_UPLOAD: "Uploaded", PROMOTED_GRAPH: "Saved flow", QUESTION_ANSWER: "Answer", AI_PROMPT: "AI instruction" };
 const SCOPES: Array<[SourceScope, string]> = [["user", "Active"], ["archived", "Archived"], ["internal", "Internal"]];
@@ -26,6 +26,7 @@ export function useSourceList(projectId: string, scope: SourceScope, revision: n
   const [failed, setFailed] = useState<{ key: string; message: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const loadingMore = useRef(false);
+  const pageLifetime = useRef<AbortController | null>(null);
   // Every first-page load (a new project, filter, revision or retry) gets a ticket; only the list that load produced can be paged further.
   // A new load clears another project's or filter's list but keeps this one's rows, so Load more waits for its first page.
   const load = `${key}:${revision}:${attempt}`;
@@ -34,6 +35,7 @@ export function useSourceList(projectId: string, scope: SourceScope, revision: n
   const { ticket } = started;
   useEffect(() => {
     const controller = new AbortController();
+    pageLifetime.current = controller;
     void apiRead<SourcePage>(`/api/projects/${projectId}/sources?scope=${scope}`, controller.signal).then((result) => {
       if (controller.signal.aborted || sessionEnded(result)) return;
       if (result.ok) { setList(acceptFirstPage(key, ticket, result.data)); setFailed(null); } else setFailed({ key, message: result.message });
@@ -44,7 +46,10 @@ export function useSourceList(projectId: string, scope: SourceScope, revision: n
     const cursor = list?.page.nextCursor;
     if (!cursor || !canLoadMore(list, key, ticket) || loadingMore.current) return;
     loadingMore.current = true;
-    void apiRead<SourcePage>(`/api/projects/${projectId}/sources?scope=${scope}&cursor=${cursor}`).then((result) => {
+    const controller = pageLifetime.current;
+    if (!controller || controller.signal.aborted) { loadingMore.current = false; return; }
+    void apiRead<SourcePage>(`/api/projects/${projectId}/sources?scope=${scope}&cursor=${cursor}`, controller.signal).then((result) => {
+      if (controller.signal.aborted) return;
       loadingMore.current = false;
       if (result.ok) setList((current) => appendSourcePage(current, key, ticket, cursor, result.data));
       else if (!sessionEnded(result)) setFailed({ key, message: result.message });
@@ -66,17 +71,6 @@ type Shared = { busy: boolean; post: Post; setDraft: (key: string, value: string
 const FLOW_TITLE = "specs:flow-source:title";
 const correctKey = (id: string, field: "title" | "text") => `specs:correct:${id}:${field}`;
 
-/** What a committed write changes in the store, derived from the request so a Retry (or a late answer) does the same. */
-export function finishSourceWrite(request: SpecsRequest, update: Update, setDraft: (key: string, value: string | undefined) => void) {
-  const [, id] = request.path.split("/");
-  if (request.path === "sources") { setDraft(NEW_TITLE, undefined); setDraft(NEW_TEXT, undefined); }
-  else if (request.path.endsWith("/graph-sources")) setDraft(FLOW_TITLE, undefined);
-  else if (request.path.endsWith("/versions")) {
-    setDraft(correctKey(id!, "title"), undefined); setDraft(correctKey(id!, "text"), undefined);
-    update((current) => current.selected?.kind === "source" && current.selected.sourceId === id ? { selected: { ...current.selected, versionId: null } } : {});
-  }
-}
-
 export default function SourcesView({ ui, update, drafts, setDraft, write, saved }: {
   ui: SpecsUi; update: Update; drafts: Record<string, string>; setDraft: (key: string, value: string | undefined) => void; write: Write;
   /** The last committed write of this panel, for what only this view shows (the patched head, focus). */
@@ -91,9 +85,22 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
   const [kept, setKept] = useState<SourceHead | null>(null);
   const canEdit = status.status === "ACTIVE" && (status.role === "OWNER" || status.role === "EDITOR");
   const selected = ui.selected?.kind === "source" ? ui.selected : null;
+  const selectedId = selected?.sourceId;
+  const [headRead, setHeadRead] = useState<{ id: string; head?: SourceHead; error?: string } | null>(null);
+  const [headAttempt, setHeadAttempt] = useState(0);
+  useEffect(() => {
+    if (!selectedId) return;
+    const controller = new AbortController();
+    void apiRead<SourceHead>(`/api/projects/${projectId}/sources/${selectedId}`, controller.signal).then((result) => {
+      if (controller.signal.aborted || sessionEnded(result)) return;
+      setHeadRead(result.ok ? { id: selectedId, head: result.data } : { id: selectedId, error: result.message });
+    });
+    return () => controller.abort();
+  }, [projectId, selectedId, status.sourcesRevision, saved, headAttempt]);
   const listed = selected ? list.page?.items.find((item) => item.id === selected.sourceId) : undefined;
   const patched = kept && kept.id === selected?.sourceId ? kept : undefined;
-  const head = listed && patched ? (patched.version > listed.version ? patched : listed) : listed ?? patched ?? null;
+  const exact = headRead?.id === selectedId ? headRead : null;
+  const head = [listed, patched, exact?.head].reduce<SourceHead | null>((latest, item) => item && (!latest || item.version > latest.version) ? item : latest, null);
   // Back unmounts the focused button: the card of the source that was open takes focus once the list is on screen. If a refresh
   // removes that card (it was archived) the active filter takes it; anything else the person focused meanwhile is left alone.
   const returnTo = useRef<string | null>(null);
@@ -113,7 +120,7 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
     const request = saved?.request, result = saved?.data as SourceWriteResult;
     if (request && request.path.startsWith("sources/")) {
       setRefocus((count) => count + 1);
-      if (head && head.id === request.path.split("/")[1]) setKept(request.path.endsWith("/versions")
+      if (head && head.id === request.path.split("/")[1] && result.version > head.version) setKept(request.path.endsWith("/versions")
         ? { ...head, title: String(request.body.title), version: result.version, currentVersionId: result.sourceVersionId, currentSequence: result.sequence, versionCount: head.versionCount + 1 }
         : { ...head, archived: request.body.archived === true, version: result.version });
     }
@@ -124,7 +131,10 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
 
   return <div className="sources-view">
     {usage && <p className="muted">{usage.activeUserDocuments}/{USER_DOCUMENT_LIMIT} documents · {usage.retainedVersions}/{SOURCE_LIMITS.retainedVersions} versions · {usage.codePoints.toLocaleString("en-US")}/{SOURCE_LIMITS.projectCodePoints.toLocaleString("en-US")} characters</p>}
-    {selected ? <Reader selected={selected} head={head} listLoaded={list.page !== null} canEdit={canEdit} update={update} refocus={refocus} onBack={(id) => { returnTo.current = id; }} {...shared} />
+    {selected ? <>
+      {exact?.error && <p role="alert">{exact.error} <button type="button" className="button small" onClick={() => setHeadAttempt((value) => value + 1)}>Retry source</button></p>}
+      <Reader selected={selected} head={head} headFailed={Boolean(exact?.error)} canEdit={canEdit} update={update} refocus={refocus} onBack={(id) => { returnTo.current = id; }} {...shared} />
+    </>
       : <>
         {canEdit && <AddSource {...shared} />}
         {canEdit && <FlowSource flows={savedDraft.document.flows} draftId={savedDraft.id} documentRevision={savedDraft.documentRevision} {...shared} />}
@@ -148,9 +158,7 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
 function AddSource({ busy, post, drafts, setDraft }: Shared) {
   const title = drafts[NEW_TITLE] ?? "", text = drafts[NEW_TEXT] ?? "";
   const [fileError, setFileError] = useState("");
-  // The text a file supplied: it is sent as an upload only while the textarea still holds exactly that.
-  const [uploadedText, setUploadedText] = useState<string | null>(null);
-  const uploaded = uploadedText === text;
+  const uploaded = drafts["specs:new-source:uploaded"] === "true";
   const count = codePoints(text);
   const set = (key: string, value: string) => setDraft(key, value || undefined);
   const choose = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -160,7 +168,7 @@ function AddSource({ busy, post, drafts, setDraft }: Shared) {
     const decoded = tooLarge ? null : await readUtf8(file);
     input.value = "";
     if (decoded === null) { setFileError(tooLarge ? "This file is too large to add as a source." : "This file isn't valid UTF-8 text."); return; }
-    setFileError(""); setUploadedText(decoded);
+    setFileError(""); setDraft("specs:new-source:uploaded", "true");
     set(NEW_TEXT, decoded);
     if (!title) set(NEW_TITLE, [...file.name].slice(0, SOURCE_TITLE_LIMIT).join(""));
   };
@@ -171,7 +179,7 @@ function AddSource({ busy, post, drafts, setDraft }: Shared) {
   return <form className="detail-section" onSubmit={submit}>
     <h3>Add a source</h3>
     <div className="field"><label htmlFor="new-source-title">Source title</label><input id="new-source-title" value={title} readOnly={busy} maxLength={SOURCE_TITLE_LIMIT} onChange={(event) => set(NEW_TITLE, event.target.value)} /></div>
-    <div className="field"><label htmlFor="new-source-text">Source text</label><textarea id="new-source-text" rows={6} value={text} readOnly={busy} onChange={(event) => set(NEW_TEXT, event.target.value)} /></div>
+    <div className="field"><label htmlFor="new-source-text">Source text</label><textarea id="new-source-text" rows={6} value={text} readOnly={busy} onChange={(event) => { setDraft("specs:new-source:uploaded", undefined); set(NEW_TEXT, event.target.value); }} /></div>
     <div className="field"><label htmlFor="new-source-file">Upload .txt or .md</label><input id="new-source-file" type="file" disabled={busy} accept=".txt,.md,text/plain,text/markdown" onChange={(event) => void choose(event)} /></div>
     {fileError && <p role="alert">{fileError}</p>}
     <p className="muted" data-over={count > SOURCE_LIMITS.submissionCodePoints}>{count.toLocaleString("en-US")}/{SOURCE_LIMITS.submissionCodePoints.toLocaleString("en-US")} characters</p>
@@ -180,7 +188,8 @@ function AddSource({ busy, post, drafts, setDraft }: Shared) {
 }
 
 function FlowSource({ flows, draftId, documentRevision, busy, post, drafts, setDraft }: Shared & { flows: Record<string, { title: string }>; draftId: string; documentRevision: number }) {
-  const [flowId, setFlowId] = useState("");
+  const flowId = drafts["specs:flow-source:id"] ?? "";
+  const setFlowId = (value: string) => setDraft("specs:flow-source:id", value || undefined);
   const name = drafts[FLOW_TITLE] ?? "";
   const setName = (value: string) => setDraft(FLOW_TITLE, value || undefined);
   const ids = Object.keys(flows);
@@ -199,14 +208,17 @@ function FlowSource({ flows, draftId, documentRevision, busy, post, drafts, setD
   </form>;
 }
 
-function Reader({ selected, head, listLoaded, canEdit, update, refocus, onBack, busy, post, drafts, setDraft }: Shared & {
-  selected: NonNullable<Extract<SpecsUi["selected"], { kind: "source" }>>; head: SourceHead | null; listLoaded: boolean; canEdit: boolean; update: Update; refocus: number; onBack: (sourceId: string) => void;
+function Reader({ selected, head, headFailed, canEdit, update, refocus, onBack, busy, post, drafts, setDraft }: Shared & {
+  selected: NonNullable<Extract<SpecsUi["selected"], { kind: "source" }>>; head: SourceHead | null; headFailed: boolean; canEdit: boolean; update: Update; refocus: number; onBack: (sourceId: string) => void;
 }) {
   const { projectId } = useStudio();
   const viewId = selected.versionId ?? head?.currentVersionId ?? null;
   const [read, setRead] = useState<{ id: string; view?: SourceVersionView; error?: string } | null>(null);
-  const [versions, setVersions] = useState<{ key: string; page: SourceVersionPage } | null>(null);
-  const versionsKey = head ? `${head.id}:${head.currentVersionId}` : "";
+  const [versions, setVersions] = useState<VersionList>(null);
+  const [readAttempt, setReadAttempt] = useState(0);
+  const [versionError, setVersionError] = useState<{ key: string; message: string } | null>(null);
+  const versionLifetime = useRef<AbortController | null>(null), loadingVersions = useRef(false);
+  const versionsKey = head ? `${projectId}:${head.id}:${head.currentVersionId}:${readAttempt}` : "";
   useEffect(() => {
     if (!viewId) return;
     const controller = new AbortController();
@@ -215,22 +227,31 @@ function Reader({ selected, head, listLoaded, canEdit, update, refocus, onBack, 
       setRead(result.ok ? { id: viewId, view: result.data } : { id: viewId, error: result.message });
     });
     return () => controller.abort();
-  }, [projectId, viewId]);
+  }, [projectId, viewId, readAttempt]);
   useEffect(() => {
     if (!head) return;
     const controller = new AbortController();
+    versionLifetime.current = controller;
     void apiRead<SourceVersionPage>(`/api/projects/${projectId}/sources/${head.id}/versions`, controller.signal).then((result) => {
-      if (!controller.signal.aborted && !sessionEnded(result) && result.ok) setVersions({ key: versionsKey, page: result.data });
+      if (controller.signal.aborted || sessionEnded(result)) return;
+      if (result.ok) { setVersions({ key: versionsKey, page: result.data }); setVersionError(null); }
+      else setVersionError({ key: versionsKey, message: result.message });
     });
-    return () => controller.abort();
+    return () => { controller.abort(); loadingVersions.current = false; };
     // The head's id and current version are what the list depends on; the head object itself changes more often.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, versionsKey]);
   const moreVersions = () => {
     const cursor = versions?.page.nextCursor;
-    if (!head || !cursor) return;
-    void apiRead<SourceVersionPage>(`/api/projects/${projectId}/sources/${head.id}/versions?cursor=${cursor}`).then((result) => {
-      if (result.ok) setVersions((current) => current && { key: current.key, page: { ...result.data, items: [...current.page.items, ...result.data.items] } });
+    const controller = versionLifetime.current;
+    if (!head || !cursor || versions?.key !== versionsKey || loadingVersions.current || !controller || controller.signal.aborted) return;
+    loadingVersions.current = true;
+    void apiRead<SourceVersionPage>(`/api/projects/${projectId}/sources/${head.id}/versions?cursor=${cursor}`, controller.signal).then((result) => {
+      if (controller.signal.aborted) return;
+      loadingVersions.current = false;
+      if (sessionEnded(result)) return;
+      if (result.ok) { setVersions((current) => appendVersionPage(current, versionsKey, cursor, result.data)); setVersionError(null); }
+      else setVersionError({ key: versionsKey, message: result.message });
     });
   };
 
@@ -243,7 +264,7 @@ function Reader({ selected, head, listLoaded, canEdit, update, refocus, onBack, 
   }, [refocus, view]);
   const goBack = () => { onBack(selected.sourceId); update(() => ({ selected: selected.back })); };
   const back = <button type="button" className="button quiet small" onClick={goBack}>Back</button>;
-  if (!head) return <>{back}<p role={listLoaded ? "alert" : "status"}>{listLoaded ? "This source isn't in the loaded list." : "Loading source…"}</p></>;
+  if (!head) return <>{back}{!headFailed && <p role="status">Loading source…</p>}</>;
 
   const editable = canEdit && isUser(head);
   const atHead = view?.id === head.currentVersionId;
@@ -262,13 +283,14 @@ function Reader({ selected, head, listLoaded, canEdit, update, refocus, onBack, 
     {back}
     <h3 ref={heading} tabIndex={-1}>{head.displayNickname ?? view?.title ?? head.title}</h3>
     <p className="muted">{KIND_LABELS[head.kind]}{head.archived ? " · Archived" : ""}</p>
-    {current?.error ? <p role="alert">{current.error}</p> : !view ? <p role="status">Loading version…</p> : <>
+    {current?.error ? <p role="alert">{current.error} <button type="button" className="button small" onClick={() => setReadAttempt((value) => value + 1)}>Retry version</button></p> : !view ? <p role="status">Loading version…</p> : <>
       <div className="sources-filter">
         <p className="muted">Viewing v{view.sequence}; latest v{head.currentSequence}</p>
         {!atHead && <button type="button" className="button small" onClick={() => update(() => ({ selected: { ...selected, versionId: null } }))}>Latest</button>}
       </div>
       <ol className="source-lines" aria-label="Source lines">{view.text.split("\n").map((line, index) => <li key={index}>{line}</li>)}</ol>
     </>}
+    {versionError?.key === versionsKey && <p role="alert">{versionError.message} <button type="button" className="button small" onClick={() => setReadAttempt((value) => value + 1)}>Retry versions</button></p>}
     {versions?.key === versionsKey && <section aria-label="Versions">
       <h3>Versions</h3>
       <ul className="sources-list">{versions.page.items.map((item) => <li key={item.id}>

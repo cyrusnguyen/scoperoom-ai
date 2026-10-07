@@ -6,7 +6,7 @@ import { ProjectError } from "../../src/features/projects/server/errors.ts";
 import { archiveProject } from "../../src/features/projects/server/management.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { readSourceVersion } from "../../src/features/sources/server/source-versions.ts";
-import { correctSource, createGraphSource, createSource, listSources, listSourceVersions, updateSource } from "../../src/features/sources/server/sources.ts";
+import { correctSource, createGraphSource, createSource, listSources, listSourceVersions, readSource, updateSource } from "../../src/features/sources/server/sources.ts";
 import { canRun, withFixture } from "./support/fixture.ts";
 
 const refused = (code: string) => (error: unknown) => error instanceof ProjectError && error.code === code;
@@ -29,10 +29,14 @@ test("paste, correct and archive keep every immutable version", { skip: !canRun 
 
     const versions = await listSourceVersions(owner, projectId, created.sourceId);
     assert.deepEqual(versions.items.map((item) => item.sequence), [2, 1]);
+    await assert.rejects(listSourceVersions(owner, projectId, created.sourceId, "2147483648"), refused("INVALID_INPUT"));
 
     await updateSource(owner, projectId, created.sourceId, { key: key(), expectedSourceRecordVersion: 2, archived: true });
     assert.equal((await listSources(owner, projectId, {})).items.length, 0);
     assert.equal((await listSources(owner, projectId, { scope: "archived" })).items[0]?.title, "Brief v2");
+    const head = await readSource(owner, projectId.toUpperCase(), created.sourceId.toUpperCase());
+    assert.equal(head.archived, true);
+    assert.equal(head.currentVersionId, corrected.sourceVersionId);
     assert.equal((await readSourceVersion(owner, projectId, created.sourceVersionId)).text, "one\ntwo", "archived evidence stays readable");
   });
 });
@@ -62,8 +66,11 @@ test("receipts replay; viewers and other projects are refused", { skip: !canRun 
     await assert.rejects(createSource(owner, projectId, { key: same, title: "Other", text: "a" }), refused("KEY_REUSED"));
     await assert.rejects(createSource(viewer, projectId, { key: key(), title: "Brief", text: "a" }), refused("FORBIDDEN"));
     assert.equal((await listSources(viewer, projectId, {})).items.length, 1, "readers list sources");
+    assert.equal((await readSource(viewer, projectId, created.sourceId)).id, created.sourceId);
     const otherProject = await project(stranger);
     await assert.rejects(readSourceVersion(stranger, otherProject, created.sourceVersionId), refused("NOT_FOUND"));
+    await assert.rejects(readSource(stranger, otherProject, created.sourceId), refused("NOT_FOUND"));
+    await assert.rejects(readSource(stranger, projectId, created.sourceId), refused("NOT_FOUND"));
     await assert.rejects(listSourceVersions(stranger, otherProject, created.sourceId), refused("NOT_FOUND"));
   });
 });

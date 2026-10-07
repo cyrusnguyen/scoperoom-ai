@@ -3,9 +3,22 @@ import { test } from "node:test";
 import { emptyDraft } from "../src/features/drafts/contracts/scope-document.ts";
 import { citationMatches, lineStarts, normalizeEvidence, parseCorrectSource, parseCreateSource, parseUpdateSource } from "../src/features/sources/contracts/source-version.ts";
 import { graphExtract } from "../src/features/sources/domain/graph-extract.ts";
-import { acceptFirstPage, appendSourcePage, canLoadMore, listKey, startSourceList } from "../src/features/sources/ui/source-pages.ts";
+import { acceptFirstPage, appendSourcePage, appendVersionPage, canLoadMore, listKey, startSourceList } from "../src/features/sources/ui/source-pages.ts";
 
 const ID = "11111111-1111-4111-8111-111111111111";
+
+test("version paging rejects held pages after a source change, head refresh or duplicate reply", () => {
+  const item = (sequence: number) => ({ id: String(sequence), sequence, title: "Version", contentHash: "hash", codePointCount: 1, createdBy: ID, createdAt: "2026-10-07T10:00:00Z" });
+  const first = { key: "project:source:head1:0", page: { items: [item(51)], nextCursor: 51 } };
+  const next = { items: [item(50)], nextCursor: 50 };
+  const joined = appendVersionPage(first, first.key, 51, next);
+  assert.deepEqual(joined?.page.items.map((value) => value.sequence), [51, 50]);
+  assert.equal(appendVersionPage(joined, first.key, 51, next), joined);
+  for (const key of ["project:other:head1:0", "project:source:head2:0", "project:source:head1:1"]) {
+    const refreshed = { ...first, key };
+    assert.equal(appendVersionPage(refreshed, first.key, 51, next), refreshed);
+  }
+});
 
 test("normalization drops one BOM and turns CRLF/CR into LF only", () => {
   // A second leading BOM survives normalization; the server then refuses it (the stored-text CHECK forbids a leading BOM).

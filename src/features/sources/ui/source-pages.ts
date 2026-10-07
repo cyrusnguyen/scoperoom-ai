@@ -1,4 +1,4 @@
-import type { SourcePage, SourceScope } from "../contracts/source-version.ts";
+import type { SourcePage, SourceScope, SourceVersionPage } from "../contracts/source-version.ts";
 
 /** One loaded list: which project and filter it belongs to, and which first-page load produced it. */
 export type SourceList = { key: string; ticket: number; page: SourcePage } | null;
@@ -17,4 +17,11 @@ export const canLoadMore = (list: SourceList, key: string, ticket: number) => Bo
 export function appendSourcePage(list: SourceList, key: string, ticket: number, cursor: string, next: SourcePage): SourceList {
   if (!list || list.key !== key || list.ticket !== ticket || list.page.nextCursor !== cursor) return list;
   return { key, ticket, page: { ...next, items: [...list.page.items, ...next.items] } };
+}
+
+export type VersionList = { key: string; page: SourceVersionPage } | null;
+/** The key includes the source, current head and read attempt; a cursor may be appended once only. */
+export function appendVersionPage(list: VersionList, key: string, cursor: number, next: SourceVersionPage): VersionList {
+  if (!list || list.key !== key || list.page.nextCursor !== cursor) return list;
+  return { key, page: { ...next, items: [...list.page.items, ...next.items] } };
 }

@@ -2,7 +2,7 @@
 
 ## Stage 07a: sources (2026-10-07)
 
-Branch `feat/stage-7.1-sources` (base `fa4cff0`), local only: no push or PR has been made. Delivered: immutable text sources by paste, strict UTF-8 `.txt`/`.md` upload and saved-flow extract; correction as new versions and archive/restore; a paginated source list and version reads with usage against the limits; the `sources_revision` project status cursor; and a Specs tab in the right panel with a Sources view (list, reader, versions, correction, archive/restore, add by paste, upload or saved flow). Reviewers (browser-tested) and viewers (same gate, server FORBIDDEN covered by integration) read sources without edit controls. A saved-flow origin now stores the selected step and connection ids and is tied by a same-project draft FK (`origin_draft_id`) and the `source_version_origin_binding` CHECK to the version's own content hash and author; the origin is capped at 32 KiB. Normalization drops one leading BOM; a second leading BOM is a clear `INVALID_INPUT`. AI prompt admission now advances `sources_revision` and stamps the prompt source's cursor. Specs writes are one persisted single-flight request per project (`useSpecsWrite`), fenced against project switches, and source list paging is fenced to its list, load and cursor (`source-pages.ts`).
+Branch `feat/stage-7.1-sources` (base `fa4cff0`). The user authorized committing the reviewed corrections, pushing the branch and opening a new Stage 7.1 PR on 2026-10-07. Publication is in progress; merge is not authorized. Delivered: immutable text sources by paste, strict UTF-8 `.txt`/`.md` upload and saved-flow extract; correction as new versions and archive/restore; a paginated source list and version reads with usage against the limits; the `sources_revision` project status cursor; and a Specs tab in the right panel with a Sources view (list, reader, versions, correction, archive/restore, add by paste, upload or saved flow). Reviewers (browser-tested) and viewers (same gate, server FORBIDDEN covered by integration) read sources without edit controls. A saved-flow origin now stores the selected step and connection ids and is tied by a same-project draft FK (`origin_draft_id`) and the `source_version_origin_binding` CHECK to the version's own content hash and author; the origin is capped at 32 KiB. Normalization drops one leading BOM; a second leading BOM is a clear `INVALID_INPUT`. AI prompt admission now advances `sources_revision` and stamps the prompt source's cursor. Specs writes are one persisted single-flight request per project (`useSpecsWrite`), fenced against project switches, and source list paging is fenced to its list, load and cursor (`source-pages.ts`).
 
 Commits (`git log --oneline fa4cff0..HEAD`, oldest first):
 - 642c6c1 feat: add source contracts, citation matching and flow extract
@@ -22,7 +22,7 @@ Commits (`git log --oneline fa4cff0..HEAD`, oldest first):
 - 8285df7 feat: bind saved-flow origin to its draft, ids and hash
 - ba0ec6c feat: persist the single-flight Specs write, keep BOM uploads and fence source paging
 - f4f6cff test: pin form clearing after a retried source write and spell the BOM as an escape
-- then this gate record.
+- 990ada3 docs: record Stage 07a gate results and revised plan.
 
 Gate results (2026-10-07, local isolated stack, source HEAD `f4f6cff`, clean tree, run serially one suite at a time):
 - `corepack pnpm db:generate`, `db:migrate` (no pending migrations; Realtime `apply-ok`, `verify-ok`) and `db:guard` (`target=verified-local`): all exit 0. The applied `20261007000000_stage07_sources` checksum matches the edited file.
@@ -36,18 +36,28 @@ Gate results (2026-10-07, local isolated stack, source HEAD `f4f6cff`, clean tre
 - History: the first pass at `1bb0538` passed 417 of 418 browser cases; the single failure was the pre-existing `collaboration-auth-outage.spec.ts` status-read race, which passed 13/13 alone. It did not recur in this run, so that race is unfixed, not proven gone.
 - No code or test fix was made in this verification. These local results do not establish hosted CI.
 
+Review corrections (2026-10-07, following `990ada3`):
+- Reviewed the complete `fa4cff0..990ada3` change against the revised 07a plan, SHA-256 `ba66650b8289a8f96590b6acb3be67353f31da7e4979c192b92ef0bba06ba6fc`. An independent reviewer and lead integration review found seven in-scope issues and fixed them locally. The review changed no migration; the subsequent publication request authorizes committing and publishing these corrections.
+- P1: duplicate same-key acknowledgements could clear newer unsent source fields. `finishSourceWrite` now checks the pending key and clears fields plus settles the request in one pure project-store transition.
+- P2: archive/remount lost the reader; `GET .../sources/:sourceId` now reads an authorized head independently of the loaded list. Source/version paging now aborts with its originating view, rejects stale or duplicate pages and keeps late source-page 401 responses from redirecting a different project. Upload attribution and saved-flow selection now survive panel remounts.
+- P3: an oversized version cursor previously reached a PostgreSQL integer cast and returned `UNAVAILABLE`; it now returns `INVALID_INPUT`.
+- Original archive/remount browser failure and oversized-cursor integration failure were reproduced before their corrections. Regression coverage includes exact-body/key duplicate acknowledgements preserving new input, late page responses, non-default saved-flow selection and uploaded source kind after remount. New delayed-response tests wait for the exact request to settle and browser frames, not fixed sleeps.
+- Fresh lead checks: guarded local target verified; lint/import boundaries and TypeScript exit 0; 508/508 units and 272/272 integration cases passed with zero skips/failures. An initial lint failure in the new error handling was corrected by keying errors to their version-list attempt; the failed log is retained.
+- `PLAYWRIGHT_PORT=3107 PLAYWRIGHT_WORKERS=2 corepack pnpm test:e2e:production tests/e2e/scope.spec.ts tests/e2e/shell.spec.ts tests/e2e/ai.spec.ts`: production build and tests exit 0; 59/59 Chromium cases passed (Sources 12, shell 10, AI 37), zero skips/failures/flakes/global errors. Build/test/total: 12.650/186.886/199.536 seconds. Lead reviewed the integrated fix and the final raw report; no substantiated blocker remains in the reviewed scope.
+- Review evidence is ignored under `.tmp/stage-07a-review/`; original regression evidence is under `.tmp/reviewer-source-red/` and `.tmp/reviewer-cursor-red.log`. Earlier full browser/worker/Realtime results above remain evidence for the original committed source, not a claim that those complete suites were rerun after review corrections.
+
 Limitations:
 - Capacity refusals name the bound in `details.limit`; the usage line shows retained usage.
-- The reader finds a source's head only in the loaded list (no single-source GET route yet), so the 07b citation picker must carry or fetch the head.
+- The 07b citation picker can use the authorized single-source head GET; citation-writing consumers remain in 07b.
 - An uncertain source write is kept in the lifted per-project Specs `pending` request and retried with the same key.
-- After Archive and a tab switch with the reader still open, the reader says "isn't in the loaded list" until Back.
 - Sources writes are not draft writes and do not save the canvas first.
 - The origin draft FK is `DEFERRABLE INITIALLY DEFERRED` so a project delete cascades; a lone draft delete with a promoted source is still refused.
 - Migration `20261007000000_stage07_sources` was edited in place before merge. Any local database that applied the earlier version must be reset or hand-reverted; CI applies every migration to a fresh database.
 - Pre-existing, outside this PR: an AI prompt that starts with two BOMs hits the stored-text CHECK in admission instead of a clean `INVALID_INPUT`.
+- Hosted CI, an empty-database migration run and a manual NVDA pass remain unverified. Creator/time metadata is available in source read DTOs but not rendered on cards; the revised 07a row scope did not add attribution presentation. Filename extensions remain advisory picker filtering; decoded text is strictly validated as UTF-8.
 - Deferred minors: after a list refresh a stale Load more can send one extra page request (no duplicate rows); a remounted panel can show Retry while an earlier mount's retry with the same key is in flight (no duplicate write); the Specs message region switches between alert and status roles in place, so announcements may be unreliable; focus after a confirmation can land on another reader heading if a different source was opened meanwhile; the scope feature imports `sources/ui/limit-text.ts` (07b should move or parametrize it); there is no browser case for Load more across a refresh, and the late-401 case uses a fixed 1 s wait.
 
-Next action: after the user approves this branch, plan and build PR 07b from `docs/superpowers/plans/2026-10-07-stage-07b-requirements.md`.
+Next action: publish the reviewed Stage 07a branch and open its PR, then inspect hosted CI and complete manual acceptance before merge. PR 07b remains future work under `docs/superpowers/plans/2026-10-07-stage-07b-requirements.md`.
 
 ## Stage 06.3: Apply-all redesign and manual merge hold (2026-10-06)
 

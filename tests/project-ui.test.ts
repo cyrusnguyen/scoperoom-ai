@@ -6,6 +6,19 @@ import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
 import { acknowledgeExternalWrite, admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
 import { type AiRequest, currentAiRun, recoverUnavailableCurrentRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, defaultSpecsUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, settleSpecsRequest, startSpecsRequest, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
+import { finishSourceWrite } from "../src/features/sources/ui/source-write.ts";
+
+test("source acknowledgement clears matching input atomically and a duplicate keeps newer text and selection", () => {
+  const request = { key: "first", method: "POST" as const, path: "sources", body: { title: "First", text: "Submitted" }, label: "Add source" };
+  const current = { ...defaultUi, drafts: { "specs:new-source:title": "First", "specs:new-source:text": "Submitted", "specs:new-source:uploaded": "true" }, specs: { ...defaultSpecsUi, pending: request } };
+  const saved = finishSourceWrite(current, request);
+  assert.deepEqual(saved.drafts, {});
+  assert.equal(saved.specs.pending, null);
+  assert.equal(saved.specs.message, "Add source: saved.");
+  const newer = { ...saved, drafts: { "specs:new-source:text": "New text" }, specs: { ...saved.specs, pending: { ...request, key: "second" } } };
+  assert.equal(finishSourceWrite(newer, request), newer, "old ACK never affects a newer request or its drafts");
+  assert.equal(finishSourceWrite({ ...newer, specs: saved.specs }, request).drafts["specs:new-source:text"], "New text", "even without a newer request");
+});
 
 const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { selected: null, sourceScope: "user" as const, pending: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };

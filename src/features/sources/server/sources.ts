@@ -164,6 +164,21 @@ export async function updateSource(identity: ProjectIdentity, projectId: string,
 
 const SCOPES = { user: { archived: false, kinds: USER_SOURCE_KINDS }, archived: { archived: true, kinds: USER_SOURCE_KINDS }, internal: { archived: null, kinds: ["QUESTION_ANSWER", "AI_PROMPT"] } } as const;
 
+/** The current head is independent of a list filter or page, including after archive and panel remounts. */
+export async function readSource(identity: ProjectIdentity, projectId: string, sourceId: string): Promise<SourceHead> {
+  if (!uuid.test(projectId) || !uuid.test(sourceId)) throw new ProjectError("NOT_FOUND");
+  return readAsMember(identity, projectId.toLowerCase(), async (tx, project) => {
+    const [row] = await tx.$queryRaw<Array<{ id: string; kind: SourceKind; title: string; display_nickname: string | null; archived: boolean; version: number; current_version_id: string; sequence: number; version_count: number; created_by: string; created_at: Date }>>`
+      SELECT source.id, source.kind::text AS kind, head.title, source.display_nickname, source.archived, source.version, source.current_version_id, head.sequence,
+        (SELECT count(*)::integer FROM app.source_version v WHERE v.source_id = source.id) AS version_count, source.created_by, source.created_at
+      FROM app.source_document source JOIN app.source_version head ON head.id = source.current_version_id
+      WHERE source.project_id = ${project.id}::uuid AND source.id = ${sourceId}::uuid`;
+    if (!row) throw new ProjectError("NOT_FOUND");
+    return { id: row.id, kind: row.kind, title: row.title, displayNickname: row.display_nickname, archived: row.archived, version: row.version,
+      currentVersionId: row.current_version_id, currentSequence: row.sequence, versionCount: row.version_count, createdBy: row.created_by, createdAt: row.created_at.toISOString() };
+  });
+}
+
 /** Paginated source heads (newest first) plus project-wide usage, for any reader. Never loads bodies. */
 export async function listSources(identity: ProjectIdentity, projectId: string, query: { scope?: string; cursor?: string }): Promise<SourcePage> {
   if (!uuid.test(projectId)) throw new ProjectError("NOT_FOUND");
@@ -199,7 +214,7 @@ export async function listSourceVersions(identity: ProjectIdentity, projectId: s
   if (!uuid.test(projectId) || !uuid.test(sourceId)) throw new ProjectError("NOT_FOUND");
   projectId = projectId.toLowerCase(); sourceId = sourceId.toLowerCase();
   const before = cursor === undefined ? null : Number(cursor);
-  if (before !== null && (!Number.isSafeInteger(before) || before < 1)) throw new ProjectError("INVALID_INPUT");
+  if (before !== null && (!Number.isSafeInteger(before) || before < 1 || before > 2147483647)) throw new ProjectError("INVALID_INPUT");
   return readAsMember(identity, projectId, async (tx, project) => {
     const rows = await tx.$queryRaw<Array<{ id: string; sequence: number; title: string; content_hash: string; code_point_count: number; created_by: string; created_at: Date }>>`
       SELECT version.id, version.sequence, version.title, version.content_hash, version.code_point_count, version.created_by, version.created_at
