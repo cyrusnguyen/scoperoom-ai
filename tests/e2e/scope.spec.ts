@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, type Page } from "@playwright/test";
+import { test as collaborationTest } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
 import { appUrl, createProjectViaApi, e2eReady, openSpecs, seedStudioChanges } from "./support";
 
@@ -143,4 +144,23 @@ test("the filter and the open source survive a tab switch, and focus returns aft
   await expect(page.locator(".source-lines li")).toHaveText(["Customers pay by card or wallet."]);
   await page.getByRole("button", { name: "Back" }).click();
   await expect(page.getByRole("button", { name: /Brief/ })).toBeFocused();
+});
+
+collaborationTest("a reviewer reads sources without edit controls", async ({ collaboration }) => {
+  const { ownerPage, editorPage, projectId, setEditorRole } = collaboration;
+  const name = "Collaboration project";
+  await openSpecs(ownerPage, projectId, name);
+  await ownerPage.getByLabel("Source title").fill("Brief");
+  await ownerPage.getByLabel("Source text").fill("Shared text");
+  await ownerPage.getByRole("button", { name: "Add source" }).click();
+  await expect(ownerPage.getByRole("button", { name: /Brief/ })).toBeVisible();
+  await setEditorRole("REVIEWER");
+  await openSpecs(editorPage, projectId, name);
+  await expect(editorPage.getByRole("button", { name: /Brief/ })).toBeVisible();
+  await expect(editorPage.getByLabel("Source text")).toHaveCount(0);
+  await editorPage.getByRole("button", { name: /Brief/ }).click();
+  await expect(editorPage.locator(".source-lines li")).toHaveText(["Shared text"]);
+  await expect(editorPage.getByRole("button", { name: "Save new version" })).toHaveCount(0);
+  await expect(editorPage.getByLabel("Corrected text")).toHaveCount(0);
+  await expect(editorPage.getByRole("button", { name: "Archive" })).toHaveCount(0);
 });
