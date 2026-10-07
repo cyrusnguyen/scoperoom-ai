@@ -64,5 +64,72 @@ test("caps refuse the whole write and keep existing evidence", { skip: !canRun }
     const page = await listSources(owner, projectId, {});
     assert.equal(page.usage.activeUserDocuments, 30);
     assert.equal(page.items.length, 30);
+
+    // Restoring needs a free slot: archive one, fill the slot again, and the refused restore writes nothing.
+    const [victim] = page.items;
+    await updateSource(owner, projectId, victim!.id, { key: key(), expectedSourceRecordVersion: victim!.version, archived: true });
+    await createSource(owner, projectId, { key: key(), title: "Replacement", text: "a" });
+    const counts = () => database.query(
+      "select (select count(*)::int from app.audit_event where project_id = $1) events, (select count(*)::int from app.mutation_receipt where scope_id = $1) receipts, (select version from app.source_document where id = $2) version",
+      [projectId, victim!.id],
+    ).then((result) => result.rows[0]);
+    const before = await counts();
+    await assert.rejects(updateSource(owner, projectId, victim!.id, { key: key(), expectedSourceRecordVersion: victim!.version + 1, archived: false }), refused("LIMIT_EXCEEDED"));
+    assert.deepEqual(await counts(), before);
+    assert.equal((await listSources(owner, projectId, {})).usage.activeUserDocuments, 30);
+  });
+});
+
+test("ids are case-insensitive: an uppercase source id replays its receipt", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project }) => {
+    const owner = await user("case owner");
+    const projectId = await project(owner);
+    const created = await createSource(owner, projectId, { key: key(), title: "Brief", text: "a" });
+    const body = { key: key(), expectedSourceRecordVersion: 1, expectedCurrentVersionId: created.sourceVersionId, title: "Brief v2", text: "b" };
+    const first = await correctSource(owner, projectId.toUpperCase(), created.sourceId.toUpperCase(), body);
+    assert.equal(first.sourceId, created.sourceId);
+    assert.deepEqual(await correctSource(owner, projectId, created.sourceId, body), { ...first, replayed: true });
+    const rename = { key: key(), expectedSourceRecordVersion: 2, displayNickname: "Nick" };
+    const renamed = await updateSource(owner, projectId, created.sourceId.toUpperCase(), rename);
+    assert.deepEqual(await updateSource(owner, projectId, created.sourceId, rename), { ...renamed, replayed: true });
+  });
+});
+
+test("viewers and reviewers cannot correct or update; archived sources cannot be corrected", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, join }) => {
+    const owner = await user("role owner"), viewer = await user("role viewer"), reviewer = await user("role reviewer");
+    const projectId = await project(owner);
+    await join(owner, projectId, viewer, "VIEWER");
+    await join(owner, projectId, reviewer, "REVIEWER");
+    const created = await createSource(owner, projectId, { key: key(), title: "Brief", text: "a" });
+    const correction = () => ({ key: key(), expectedSourceRecordVersion: 1, expectedCurrentVersionId: created.sourceVersionId, title: "T", text: "b" });
+    for (const member of [viewer, reviewer]) {
+      await assert.rejects(correctSource(member, projectId, created.sourceId, correction()), refused("FORBIDDEN"));
+      await assert.rejects(updateSource(member, projectId, created.sourceId, { key: key(), expectedSourceRecordVersion: 1, archived: true }), refused("FORBIDDEN"));
+    }
+    const archived = await updateSource(owner, projectId, created.sourceId, { key: key(), expectedSourceRecordVersion: 1, archived: true });
+    await assert.rejects(correctSource(owner, projectId, created.sourceId, { ...correction(), expectedSourceRecordVersion: archived.version }), refused("CONFLICT"));
+  });
+});
+
+test("internal evidence is read-only: no correction, archive or rename", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database, profileId }) => {
+    const owner = await user("prompt owner");
+    const projectId = await project(owner);
+    const actorId = await profileId(owner);
+    const sourceId = randomUUID(), versionId = randomUUID();
+    await database.query("begin");
+    await database.query("insert into app.source_document (id, project_id, kind, current_version_id, created_by) values ($1, $2, 'AI_PROMPT', $3, $4)", [sourceId, projectId, versionId, actorId]);
+    await database.query(
+      "insert into app.source_version (id, project_id, source_id, sequence, title, text, code_point_count, utf8_byte_count, content_hash, created_by) values ($1, $2, $3, 1, 'AI instruction', 'ask', 3, 3, encode(sha256(convert_to('ask', 'UTF8')), 'hex'), $4)",
+      [versionId, projectId, sourceId, actorId],
+    );
+    await database.query("commit");
+    const row = () => database.query("select version, archived, display_nickname, current_version_id from app.source_document where id = $1", [sourceId]).then((result) => result.rows[0]);
+    const before = await row();
+    await assert.rejects(correctSource(owner, projectId, sourceId, { key: key(), expectedSourceRecordVersion: 1, expectedCurrentVersionId: versionId, title: "T", text: "b" }), refused("FORBIDDEN"));
+    await assert.rejects(updateSource(owner, projectId, sourceId, { key: key(), expectedSourceRecordVersion: 1, archived: true }), refused("FORBIDDEN"));
+    await assert.rejects(updateSource(owner, projectId, sourceId, { key: key(), expectedSourceRecordVersion: 1, displayNickname: "x" }), refused("FORBIDDEN"));
+    assert.deepEqual(await row(), before);
   });
 });

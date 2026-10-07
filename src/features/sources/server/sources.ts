@@ -70,6 +70,7 @@ const written = (sourceId: string, versionId: string, version: number, sequence:
   ({ sourceId, sourceVersionId: versionId, version, sequence, sourcesRevision: Number(sourcesRevision), eventSequence: Number(eventSequence) });
 
 export async function createSource(identity: ProjectIdentity, projectId: string, input: Record<string, unknown>): Promise<Write> {
+  projectId = projectId.toLowerCase(); // ids are case-insensitive on the wire; receipts and hashes use one spelling
   const { key, ...raw } = input;
   let parsed: ReturnType<typeof parseCreateSource>;
   try { parsed = parseCreateSource(raw); } catch { throw new ProjectError("INVALID_INPUT"); }
@@ -96,6 +97,7 @@ async function lockUserSource(tx: Transaction, projectId: string, sourceId: stri
 }
 
 export async function correctSource(identity: ProjectIdentity, projectId: string, sourceId: string, input: Record<string, unknown>): Promise<Write> {
+  projectId = projectId.toLowerCase(); sourceId = sourceId.toLowerCase();
   const { key, ...raw } = input;
   let parsed: ReturnType<typeof parseCorrectSource>;
   try { parsed = parseCorrectSource(raw); } catch { throw new ProjectError("INVALID_INPUT"); }
@@ -115,6 +117,7 @@ export async function correctSource(identity: ProjectIdentity, projectId: string
 }
 
 export async function updateSource(identity: ProjectIdentity, projectId: string, sourceId: string, input: Record<string, unknown>): Promise<Write> {
+  projectId = projectId.toLowerCase(); sourceId = sourceId.toLowerCase();
   const { key, ...raw } = input;
   let parsed: ReturnType<typeof parseUpdateSource>;
   try { parsed = parseUpdateSource(raw); } catch { throw new ProjectError("INVALID_INPUT"); }
@@ -137,6 +140,7 @@ const SCOPES = { user: { archived: false, kinds: USER_SOURCE_KINDS }, archived: 
 /** Paginated source heads (newest first) plus project-wide usage, for any reader. Never loads bodies. */
 export async function listSources(identity: ProjectIdentity, projectId: string, query: { scope?: string; cursor?: string }): Promise<SourcePage> {
   if (!uuid.test(projectId)) throw new ProjectError("NOT_FOUND");
+  projectId = projectId.toLowerCase();
   const name = query.scope ?? "user";
   if (!Object.hasOwn(SCOPES, name) || (query.cursor !== undefined && !uuid.test(query.cursor))) throw new ProjectError("INVALID_INPUT");
   const scope = SCOPES[name as keyof typeof SCOPES];
@@ -166,6 +170,7 @@ export async function listSources(identity: ProjectIdentity, projectId: string, 
 
 export async function listSourceVersions(identity: ProjectIdentity, projectId: string, sourceId: string, cursor?: string): Promise<SourceVersionPage> {
   if (!uuid.test(projectId) || !uuid.test(sourceId)) throw new ProjectError("NOT_FOUND");
+  projectId = projectId.toLowerCase(); sourceId = sourceId.toLowerCase();
   const before = cursor === undefined ? null : Number(cursor);
   if (before !== null && (!Number.isSafeInteger(before) || before < 1)) throw new ProjectError("INVALID_INPUT");
   return readAsMember(identity, projectId, async (tx, project) => {
