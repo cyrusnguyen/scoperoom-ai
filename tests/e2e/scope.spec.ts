@@ -692,10 +692,11 @@ test("citation reads can be retried and deleted requirements keep local text for
   await page.getByLabel("Source title").fill("Recovery brief");
   await page.getByLabel("Source text").fill("Keep this evidence.");
   await page.getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByRole("button", { name: /Recovery brief/ })).toBeVisible();
   await page.getByLabel("Source title").fill("Second recovery brief");
   await page.getByLabel("Source text").fill("Second evidence.");
   await page.getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByRole("button", { name: /Recovery brief/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Second recovery brief/ })).toBeVisible();
   const sources = (await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: Array<{ title: string; currentVersionId: string }> }).items;
   const source = sources.find((item) => item.title === "Recovery brief")!, secondSource = sources.find((item) => item.title === "Second recovery brief")!;
   let inputReads = 0, holdCitationReads = false;
@@ -894,6 +895,7 @@ test("a stale requirement edit is explicitly rebased after remount without overw
   await page.getByLabel("Title", { exact: true }).fill("My title");
   const initial = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; document: { requirements: Record<string, { id: string; displayId: string; version: number }> } } }).draft;
   const requirement = Object.values(initial.document.requirements).find((item) => item.displayId === "REQ-001")!;
+  const otherRequirement = Object.values(initial.document.requirements).find((item) => item.displayId === "REQ-002")!;
   const path = `/api/projects/${projectId}/drafts/${initial.id}/commands`;
   const remote = await page.request.post(path, {
     headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
@@ -915,10 +917,28 @@ test("a stale requirement edit is explicitly rebased after remount without overw
   await expect(page.getByLabel("Title", { exact: true })).toHaveValue("My title");
   await expect(page.getByLabel("Statement", { exact: true })).toHaveValue("Remote statement");
   await page.getByRole("button", { name: "Back to requirements" }).click();
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByLabel("Source title").fill("Recovery evidence");
+  await page.getByLabel("Source text").fill("A source save must not hide a requirement conflict.");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByRole("button", { name: /Recovery evidence/ })).toBeVisible();
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Someone saved this requirement first" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to requirements" }).click();
   await page.getByRole("button", { name: /REQ-002 Other payment/ }).click();
   await page.getByLabel("Title", { exact: true }).fill("Keep other payment");
   await expect(page.getByRole("button", { name: "Use saved values" })).toHaveCount(0);
   await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Keep other payment");
+  const remoteOther = await page.request.post(path, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: otherRequirement.version, payload: { requirementId: otherRequirement.id, statement: "Other remote statement" } },
+  });
+  expect(remoteOther.status()).toBe(200);
+  const refusedOther = page.waitForResponse((item) => item.request().method() === "POST" && item.url().endsWith("/commands") && item.request().postDataJSON().command === "UPDATE_REQUIREMENT" && item.request().postDataJSON().payload.requirementId === otherRequirement.id);
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  expect((await refusedOther).status()).toBe(409);
+  await expect(page.getByRole("alert").filter({ hasText: "Someone saved this requirement first" })).toBeVisible();
   await page.getByRole("button", { name: "Back to requirements" }).click();
   await page.getByRole("tab", { name: "Sources" }).click();
   await page.getByRole("tab", { name: "Scope" }).click();
@@ -951,7 +971,7 @@ test("a stale requirement edit is explicitly rebased after remount without overw
   const final = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { requirements: Record<string, { statement: string; title: string }> } } }).draft;
   expect(Object.keys(final.document.requirements)).toHaveLength(2);
   expect(final.document.requirements[requirement.id]).toMatchObject({ title: "My title", statement: "Remote statement after rebase" });
-  expect(Object.values(final.document.requirements).find((item) => item.title === "Other payment")).toMatchObject({ statement: "" });
+  expect(final.document.requirements[otherRequirement.id]).toMatchObject({ title: "Other payment", statement: "Other remote statement" });
 });
 
 test("trace explanation conflicts offer explicit reconciliation and removed links retain copyable input", async ({ page }) => {

@@ -21,7 +21,7 @@ export default function ScopeBoard(props: { ui: SpecsUi; update: (change: (ui: S
     const retained = Object.entries(props.drafts).filter(([key]) => key.startsWith(prefix) && labels[key.split(":").at(-1)!]);
     return <div className="scope-board"><p role="status">This requirement was removed.</p>
       {retained.length > 0 && <section className="inline-note"><p>Your unsaved values are kept for copying.</p><div className="field"><label htmlFor="removed-requirement-edits">Retained requirement edits</label><textarea id="removed-requirement-edits" rows={6} readOnly value={retained.map(([key, value]) => `${labels[key.split(":").at(-1)!]}: ${value}`).join("\n")} /></div></section>}
-      {Object.keys(props.drafts).some((key) => key.startsWith(prefix)) && <button type="button" className="button quiet small" disabled={props.write.busy || props.ui.pending !== null} onClick={() => { for (const key of Object.keys(props.drafts)) if (key.startsWith(prefix)) props.setDraft(key, undefined); }}>Discard requirement edits</button>}
+      {Object.keys(props.drafts).some((key) => key.startsWith(prefix)) && <button type="button" className="button quiet small" disabled={props.write.busy || props.ui.pending !== null} onClick={() => { for (const key of Object.keys(props.drafts)) if (key.startsWith(prefix)) props.setDraft(key, undefined); props.update((current) => { const staleRequirements = { ...current.staleRequirements }; delete staleRequirements[selected]; return { staleRequirements: Object.keys(staleRequirements).length ? staleRequirements : undefined }; }); }}>Discard requirement edits</button>}
       <button type="button" className="button quiet small" onClick={() => props.update(() => ({ selected: null }))}>Back to requirements</button>
     </div>;
   }

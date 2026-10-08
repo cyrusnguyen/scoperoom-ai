@@ -52,14 +52,14 @@ export default function RequirementForm({ requirement, ui, update, drafts, setDr
     if (value === base[key] && !Object.keys(saved).some((field) => field !== key && drafts[`${prefix}${field}`] !== undefined)) {
       setDraft(baseKey, undefined);
       setDraft(guardKey, undefined);
+      clearStale();
     }
   };
   const canEdit = status.status === "ACTIVE" && (status.role === "OWNER" || status.role === "EDITOR");
   const locked = write.busy || ui.pending !== null;
   const edited = Object.keys(saved).some((field) => drafts[`${prefix}${field}`] !== undefined);
   const guard = Number(drafts[guardKey] ?? requirement?.version ?? 0);
-  const staleRequirement = ui.staleRequirement;
-  const stale = staleRequirement?.id === requirement?.id && staleRequirement?.draftId === savedDraft.id;
+  const stale = Boolean(requirement && ui.staleRequirements?.[requirement.id] === savedDraft.id);
   const textErrors = {
     title: textError(get("title").trim(), LIMITS.title, "Title", true), statement: textError(get("statement"), LIMITS.longText, "Statement"),
     verificationDescription: textError(get("verificationDescription").trim(), LIMITS.longText, "Verification description"), responsibleRole: textError(get("responsibleRole").trim(), LIMITS.role, "Responsible role"),
@@ -83,8 +83,10 @@ export default function RequirementForm({ requirement, ui, update, drafts, setDr
     });
   };
   const clearStale = () => update((current) => {
-    const staleRequirement = current.staleRequirement;
-    return staleRequirement?.id === requirement?.id && staleRequirement?.draftId === savedDraft.id ? { staleRequirement: undefined, message: "" } : {};
+    if (!requirement || current.staleRequirements?.[requirement.id] !== savedDraft.id) return {};
+    const staleRequirements = { ...current.staleRequirements };
+    delete staleRequirements[requirement.id];
+    return { staleRequirements: Object.keys(staleRequirements).length ? staleRequirements : undefined, message: "" };
   });
   const useSaved = () => { for (const key of [baseKey, guardKey, ...Object.keys(saved).map((field) => `${prefix}${field}`)]) setDraft(key, undefined); clearStale(); };
   const useMineOnLatest = () => {

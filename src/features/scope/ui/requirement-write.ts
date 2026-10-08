@@ -19,6 +19,7 @@ export function finishRequirementWrite(ui: ProjectUi, request: SpecsRequest, dat
   const requirementId = createdId ?? (typeof payload.requirementId === "string" ? payload.requirementId : undefined);
   const prefix = `specs:req:${createdId ? "new" : requirementId ?? ""}:`;
   const drafts = { ...ui.drafts };
+  const guardMatchesRequest = drafts[`${prefix}expectedEntityVersion`] === String(body.expectedEntityVersion);
   for (const field of fields) {
     const payloadField = field === "verificationDescription" || field === "responsibleRole" ? "verification" : field;
     const key = `${prefix}${field}`;
@@ -47,5 +48,9 @@ export function finishRequirementWrite(ui: ProjectUi, request: SpecsRequest, dat
   const selected = closes ? null : ui.specs.selected;
   if (requirementSave && !remainingFields) { delete drafts[`${prefix}base`]; delete drafts[`${prefix}expectedEntityVersion`]; }
   if (requirementId && result.versions?.[requirementId] && drafts[`${prefix}expectedEntityVersion`] === String(body.expectedEntityVersion)) drafts[`${prefix}expectedEntityVersion`] = String(result.versions[requirementId]);
-  return { ...ui, drafts, specs: { ...ui.specs, selected, pending: null, message: `${request.label}: saved.` } };
+  const draftId = request.path.match(/^drafts\/([^/]+)\/commands$/)?.[1];
+  const clearsStale = (body.command === "DELETE_REQUIREMENT" || body.command === "UPDATE_REQUIREMENT" && (!remainingFields || guardMatchesRequest)) && requirementId && draftId && ui.specs.staleRequirements?.[requirementId] === draftId;
+  const staleRequirements = clearsStale ? { ...ui.specs.staleRequirements } : ui.specs.staleRequirements;
+  if (clearsStale) delete staleRequirements![requirementId];
+  return { ...ui, drafts, specs: { ...ui.specs, selected, pending: null, message: `${request.label}: saved.`, staleRequirements: staleRequirements && Object.keys(staleRequirements).length ? staleRequirements : undefined } };
 }
