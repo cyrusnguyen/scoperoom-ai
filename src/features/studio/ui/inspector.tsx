@@ -13,6 +13,7 @@ import { neighbours, recordOf, stepName } from "./graph-view";
 import { DeleteStepsDialog } from "./step-dialogs";
 import { explain, formKeys, useCommandSubmit, useStudio } from "./studio-context";
 import { canApplyAgain, studioDirtyCount } from "./studio-ui";
+import { linkState } from "@/features/scope/domain/scope";
 
 const NOUNS: Record<EntityKind, string> = { FLOW: "flow", NODE: "step", EDGE: "connection" };
 
@@ -31,7 +32,7 @@ function typedText(kind: EntityKind, values: Fields) {
  * "← Project" returns to the project details. Typed values live in the shell's per-project buffers, so they survive
  * closing the panel, switching selection and every refetch.
  */
-export default function Inspector({ onBack }: { onBack: () => void }) {
+export default function Inspector({ onBack, onOpenRequirement }: { onBack: () => void; onOpenRequirement?: (id: string) => void }) {
   const { draft, ui } = useStudio();
   const selection = ui.selection;
   if (!selection) return null;
@@ -44,7 +45,7 @@ export default function Inspector({ onBack }: { onBack: () => void }) {
   return <>
     {back}
     <EntityEditor key={bufferKey(kind, id)} kind={kind} saved={savedOf(kind, record)} />
-    {kind === "NODE" && <StepContext key={id} node={record as NodeRecord} />}
+    {kind === "NODE" && <StepContext key={id} node={record as NodeRecord} onOpenRequirement={onOpenRequirement} />}
     {kind === "EDGE" && <Endpoints key={id} edge={record as EdgeRecord} />}
     {kind === "FLOW" && <DraftChecks flowId={id} />}
   </>;
@@ -158,7 +159,7 @@ function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {
   </section>;
 }
 
-function StepContext({ node }: { node: NodeRecord }) {
+function StepContext({ node, onOpenRequirement }: { node: NodeRecord; onOpenRequirement?: (id: string) => void }) {
   const { draft, editable, update, ui } = useStudio();
   const [deleting, setDeleting] = useState(false);
   const { incoming, outgoing } = neighbours(draft.document, node.id);
@@ -170,6 +171,18 @@ function StepContext({ node }: { node: NodeRecord }) {
       {incoming.map((edge) => <li key={edge.id}>From {link(edge.fromId, stepName(draft.document, edge.fromId))}{edge.condition && <span className="muted"> · {edge.condition}</span>}</li>)}
       {outgoing.map((edge) => <li key={edge.id}>To {link(edge.toId, stepName(draft.document, edge.toId))}{edge.condition && <span className="muted"> · {edge.condition}</span>}</li>)}
     </ul>
+    <section className="detail-section" aria-labelledby="inspector-requirements">
+      <h4 id="inspector-requirements">Requirements</h4>
+      {Object.values(draft.document.traceLinks).filter((entry) => entry.nodeId === node.id).length
+        ? <ul className="plain-list">{Object.values(draft.document.traceLinks).filter((entry) => entry.nodeId === node.id).map((entry) => {
+          const requirement = draft.document.requirements[entry.requirementId];
+          if (!requirement) return null;
+          const state = linkState(draft.document, entry);
+          const label = state === "CURRENT" ? "Reviewed" : state === "PROPOSED" ? "Proposed" : entry.reviewedRequirementBehaviourVersion !== requirement.behaviourVersion ? "Needs review: requirement changed" : "Needs review: step changed";
+          return <li key={entry.id}><button type="button" className="text-link" onClick={() => onOpenRequirement?.(requirement.id)}>{requirement.displayId} {requirement.title}</button> <span className="specs-badge">{label}</span></li>;
+        })}</ul>
+        : <p className="muted">No linked requirements.</p>}
+    </section>
     {editable && draft.layout.positions[node.id] && <PositionForm key={node.id} node={node} />}
     {!editable && ui.positionBuffers[bufferKey("NODE", node.id)] && <RetainedText label="Your unsaved position" text={positionText(ui.positionBuffers[bufferKey("NODE", node.id)]!.values)}
       onDiscard={() => update((current) => ({ positionBuffers: discard(current.positionBuffers, bufferKey("NODE", node.id)) }))} />}

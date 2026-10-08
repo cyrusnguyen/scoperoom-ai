@@ -10,6 +10,7 @@ import {
   requestHash, requireActive, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow, type Transaction,
 } from "./access.ts";
 import { requestProjectRunCancel } from "../../proposals/server/settle-runs.ts";
+import { unassignInCurrentDraft } from "../../scope/server/unassign.ts";
 import { ProjectError } from "./errors.ts";
 import type { InvitationIdentity } from "./invitations.ts";
 
@@ -68,6 +69,7 @@ async function deactivate(tx: Transaction, project: ProjectRow, actorId: string,
   const sequence = await recordEvent(tx, project, actorId, action, [{ kind: "PROJECT_MEMBER", id: memberId }], { memberVersion });
   await tx.$executeRaw`UPDATE app.project_membership SET active = false, version = ${memberVersion}, deactivated_sequence = ${sequence}::bigint, updated_at = CURRENT_TIMESTAMP WHERE project_id = ${project.id}::uuid AND profile_id = ${memberId}::uuid`;
   await revokeInvitationsFor(tx, project.id, memberId, extraEmails);
+  await unassignInCurrentDraft(tx, project, memberId);
   const next = {
     ...project, eventSequence: sequence, membershipVersion: project.membershipVersion + 1,
     approvalPolicyVersion: project.approvalPolicyVersion + (clearsApprover ? 1 : 0), designatedApproverId: clearsApprover ? null : project.designatedApproverId,

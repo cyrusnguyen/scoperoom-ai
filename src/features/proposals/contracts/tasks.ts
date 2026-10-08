@@ -1,5 +1,5 @@
 import type { FlowFields, NodeFields, GraphCommand } from "../../drafts/contracts/commands.ts";
-import { LIMITS, type EdgeRecord, type FlowRecord, type NodeRecord, type SourceRef } from "../../drafts/contracts/scope-document.ts";
+import { LIMITS, type EdgeRecord, type FlowRecord, type NodeRecord, type SourceRef, type TraceLinkRecord } from "../../drafts/contracts/scope-document.ts";
 import { id, idList, invalid, keys, object, oneOf, text, version } from "../../drafts/contracts/strict.ts";
 import { keyPattern } from "../../projects/contracts/project.ts";
 
@@ -12,6 +12,8 @@ export type TaskKind = (typeof TASK_KINDS)[number];
 export const AI_LIMITS = {
   promptCodePoints: 8_000, maxInputTokens: 16_000, maxOutputTokens: 6_000, maxGraphNodes: 20, maxGraphEdges: 40,
   runPageSize: 50, startBodyBytes: 64 * 1024, captureBytes: 256 * 1024, resultBytes: 128 * 1024,
+  // Before/after subsets of two valid 2 MiB documents, plus bounded IDs, assumptions and citations.
+  applicationEvidenceBytes: 5 * 1024 * 1024,
   ownerConcurrentRuns: 2, ownerDailyRuns: 30, applicableResults: 10,
   // Operational default, not a product promise: start attempts per actor per minute, counted by the keyed AI_ADMISSION bucket.
   admissionAttemptsPerMinute: 30,
@@ -174,6 +176,6 @@ export type RunApplicabilityReason = "APPLIED" | "DISCARDED" | "EXPIRED" | "PROJ
 export type RunApplication = {
   id: string; runId: string; draftId: string; actorId: string; promptSourceVersionId: string; resultHash: string;
   selectedOperations: ProposalOperation[]; actualOperations: GraphCommand[]; idMap: Record<string, string>; createdIdMap: Record<string, string>;
-  evidence: { changedIds: string[]; before: (FlowRecord | NodeRecord | EdgeRecord)[]; after: (FlowRecord | NodeRecord | EdgeRecord)[]; assumptions: string[]; citations: SourceRef[] };
+  evidence: { changedIds: string[]; before: (FlowRecord | NodeRecord | EdgeRecord | TraceLinkRecord)[]; after: (FlowRecord | NodeRecord | EdgeRecord | TraceLinkRecord)[]; assumptions: string[]; citations: SourceRef[] };
   sourceVersionIds: string[]; beforeDocumentRevision: number; afterDocumentRevision: number; beforeLayoutRevision: number; afterLayoutRevision: number; createdAt: string;
 };

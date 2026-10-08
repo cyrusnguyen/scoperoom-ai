@@ -3,11 +3,12 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { Client } from "pg";
 import { executeGraphCommand } from "../../src/features/drafts/server/execute-command.ts";
+import { parseDraftPair } from "../../src/features/drafts/contracts/scope-document.ts";
 import { canonicalJson, sha256 } from "../../src/features/proposals/domain/capture.ts";
 import { applyRun } from "../../src/features/proposals/server/apply-run.ts";
 import { discardRun } from "../../src/features/proposals/server/discard-run.ts";
 import { workerCleanup } from "../../src/server/maintenance/worker-cleanup.ts";
-import { parseStartRunInput } from "../../src/features/proposals/contracts/tasks.ts";
+import { AI_LIMITS, parseStartRunInput } from "../../src/features/proposals/contracts/tasks.ts";
 import { admitRun, startRun } from "../../src/features/proposals/server/admit-run.ts";
 import { listRuns, readRun } from "../../src/features/proposals/server/read-runs.ts";
 import { cancelRun } from "../../src/features/proposals/server/settle-runs.ts";
@@ -525,6 +526,93 @@ test("permanent applied evidence survives body cleanup and later graph edits; di
     assert.deepEqual((await readRun(owner.identity, p, discarded)).applicabilityReasons, ["DISCARDED"]);
     assert.equal((await readRun(owner.identity, p, expired)).disposition, "EXPIRED");
     assert.deepEqual((await readRun(owner.identity, p, expired)).applicabilityReasons, ["EXPIRED"]);
+  });
+});
+
+test("permanent Apply evidence keeps a trace link retired with its selected node after body cleanup", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner); const draft = await draftOf(database, p);
+    const flow = await executeGraphCommand(owner.identity, p, draft.id, { key: randomUUID(), commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision: draft.revision,
+      payload: { title: "Checkout", purpose: "", classification: "USER_JOURNEY", inclusion: "INCLUDED" } });
+    const flowId = flow.createdIds[0]!;
+    const node = await executeGraphCommand(owner.identity, p, draft.id, { key: randomUUID(), commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision: flow.documentRevision,
+      payload: { flowId, kind: "ACTION", label: "Pay", description: "", actorLabel: "" } });
+    const nodeId = node.createdIds[0]!;
+    const requirement = await executeGraphCommand(owner.identity, p, draft.id, { key: randomUUID(), commandSchemaVersion: 1, command: "CREATE_REQUIREMENT", expectedDocumentRevision: node.documentRevision,
+      payload: { title: "Pay by card", statement: "", category: "FUNCTIONAL", inclusion: "UNDECIDED", ownerId: null, verification: null, sourceRefs: [] } });
+    const link = await executeGraphCommand(owner.identity, p, draft.id, { key: randomUUID(), commandSchemaVersion: 1, command: "ADD_TRACE_LINK", expectedDocumentRevision: requirement.documentRevision,
+      payload: { requirementId: requirement.createdIds[0]!, nodeId, explanation: "Payment evidence" } });
+    const linkId = link.createdIds[0]!;
+    const proposal = { schemaVersion: 1, kind: "proposal" as const, operations: [
+      { id: "remove", dependsOn: [], edit: { command: "DELETE_NODES" as const, payload: { flowId, nodeIds: [nodeId], removeEdgeIds: [] } } },
+    ], assumptions: [], citations: [] };
+    const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: proposal, selection: { flowId, nodeIds: [nodeId] } });
+    const view = await readRun(owner.identity, p, run);
+    await applyRun(owner.identity, p, run, { key: randomUUID(), draftId: view.draftId, expectedDocumentRevision: view.documentRevision, expectedParentSnapshotId: view.parentSnapshotId, resultHash: view.resultHash!, selectedOperationIds: ["remove"] });
+    const before = await readRun(owner.identity, p, run);
+    const retained = before.application?.evidence.before.find((record) => record.id === linkId);
+    assert.deepEqual(retained, { id: linkId, version: 1, requirementId: requirement.createdIds[0], nodeId, explanation: "Payment evidence", reviewedRequirementBehaviourVersion: null, reviewedNodeBehaviourVersion: null, reviewedBy: null, reviewedAt: null });
+    assert.ok(!before.application?.evidence.after.some((record) => record.id === linkId));
+    await database.query("alter table app.ai_run disable trigger enforce_ai_run");
+    try { await database.query("update app.ai_run set terminal_at = now() - interval '8 days' where id = $1", [run]); }
+    finally { await database.query("alter table app.ai_run enable trigger enforce_ai_run"); }
+    await workerCleanup();
+    const after = await readRun(owner.identity, p, run);
+    assert.equal(after.capture, null); assert.equal(after.result, null);
+    assert.deepEqual(after.application?.evidence.before.find((record) => record.id === linkId), retained);
+
+    const large = (await getProjectBootstrap(owner.identity, p)).draft;
+    const nodeIds: string[] = Array.from({ length: 3 }, () => randomUUID()), requirementIds: string[] = [requirement.createdIds[0]!, ...Array.from({ length: 149 }, () => randomUUID())], linkIds: string[] = [];
+    for (const nodeId of nodeIds) {
+      large.document.nodes[nodeId] = { id: nodeId, flowId, version: 1, behaviourVersion: 1, kind: "ACTION", label: "Retained step", description: "", actorLabel: "", origin: "HUMAN", sourceRefs: [], assumptionNotes: [] };
+      large.layout.positions[nodeId] = { x: 0, y: 0, version: 1 };
+    }
+    large.layout.directions[flowId] = "TB";
+    for (let index = 1; index < 150; index += 1) {
+      const id = requirementIds[index]!;
+      large.document.requirements[id] = { id, displayId: `REQ-${String(index + 1).padStart(3, "0")}`, version: 1, behaviourVersion: 1, title: "Retained requirement", statement: "", category: "FUNCTIONAL", inclusion: "UNDECIDED", origin: "HUMAN", sourceRefs: [], decisionIds: [], ownerId: null, confirmation: null, verificationMethod: null };
+    }
+    for (let index = 0; index < 400; index += 1) {
+      const id = randomUUID(); linkIds.push(id);
+      large.document.traceLinks[id] = { id, version: 1, requirementId: requirementIds[index % 150]!, nodeId: nodeIds[Math.floor(index / 150)]!, explanation: "x".repeat(4_000), reviewedRequirementBehaviourVersion: null, reviewedNodeBehaviourVersion: null, reviewedBy: null, reviewedAt: null };
+    }
+    parseDraftPair(large.document, large.layout);
+    const { rows: [fixtureSize] } = await database.query<{ bytes: number }>("select octet_length($1::jsonb::text)::int bytes", [large.document]);
+    assert.ok(fixtureSize!.bytes > 1_048_576 && fixtureSize!.bytes <= 2_097_152);
+    await database.query("begin");
+    try {
+      await database.query("update app.scope_draft set document_json = $2, layout_json = $3 where id = $1", [large.id, large.document, large.layout]);
+      await database.query("update app.project set requirement_display_sequence = 150 where id = $1", [p]);
+      await database.query("commit");
+    } catch (error) { await database.query("rollback"); throw error; }
+    const largeProposal = { schemaVersion: 1, kind: "proposal" as const, operations: [
+      { id: "remove", dependsOn: [], edit: { command: "DELETE_NODES" as const, payload: { flowId, nodeIds, removeEdgeIds: [] } } },
+    ], assumptions: [], citations: [] };
+    const largeRun = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: largeProposal, selection: { flowId, nodeIds } });
+    const largeView = await readRun(owner.identity, p, largeRun);
+    await assert.rejects(database.query(`INSERT INTO app.ai_suggestion_application
+      (id, project_id, run_id, draft_id, actor_id, prompt_source_version_id, result_hash,
+       selected_operations, actual_operations, id_map, created_id_map, evidence, source_version_ids,
+       before_document_revision, after_document_revision, before_layout_revision, after_layout_revision)
+      SELECT $2, project_id, id, draft_id, $3, prompt_source_version_id, result_hash,
+       '[{}]'::jsonb, '[{}]'::jsonb, '{}'::jsonb, '{}'::jsonb, jsonb_build_object('padding', repeat('x', $4)), ARRAY[prompt_source_version_id],
+       expected_document_revision, expected_document_revision, 1, 1
+      FROM app.ai_run WHERE id = $1`, [largeRun, randomUUID(), owner.profile, AI_LIMITS.applicationEvidenceBytes]),
+    { code: "23514", constraint: "ai_application_bounds" });
+    await applyRun(owner.identity, p, largeRun, { key: randomUUID(), draftId: largeView.draftId, expectedDocumentRevision: largeView.documentRevision, expectedParentSnapshotId: largeView.parentSnapshotId, resultHash: largeView.resultHash!, selectedOperationIds: ["remove"] });
+    const retainedLarge = await readRun(owner.identity, p, largeRun);
+    const retainedLinks = retainedLarge.application!.evidence.before.filter((record) => "explanation" in record);
+    assert.equal(retainedLinks.length, 400); assert.deepEqual(new Set(retainedLinks.map((record) => record.id)), new Set(linkIds));
+    assert.deepEqual(Object.fromEntries(retainedLinks.map((record) => [record.id, record])), large.document.traceLinks);
+    const { rows: [evidenceSize] } = await database.query<{ bytes: number }>("select octet_length(evidence::text)::int bytes from app.ai_suggestion_application where run_id = $1", [largeRun]);
+    assert.ok(evidenceSize!.bytes > 1_048_576);
+    await database.query("alter table app.ai_run disable trigger enforce_ai_run");
+    try { await database.query("update app.ai_run set terminal_at = now() - interval '8 days' where id = $1", [largeRun]); }
+    finally { await database.query("alter table app.ai_run enable trigger enforce_ai_run"); }
+    await workerCleanup();
+    const retainedAfterCleanup = await readRun(owner.identity, p, largeRun);
+    assert.equal(retainedAfterCleanup.capture, null); assert.equal(retainedAfterCleanup.result, null);
+    assert.deepEqual(retainedAfterCleanup.application, retainedLarge.application);
   });
 });
 

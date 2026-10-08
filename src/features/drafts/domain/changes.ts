@@ -1,6 +1,6 @@
 import type { Changes } from "../contracts/changes.ts";
 import type { SavedPosition } from "../contracts/draft-layout.ts";
-import { applyGraphCommand, bump, checkDraft, GraphError, type Applied, type Draft } from "./graph.ts";
+import { applyGraphCommand, bump, checkDraft, GraphError, usedIds, type Applied, type Draft } from "./graph.ts";
 import { moveNodes } from "./moves.ts";
 
 // A batch of draft changes (API "POST D/changes"): commands in order, then moves, all or nothing. Each command is checked
@@ -30,9 +30,7 @@ function at(part: "commands" | "moves", index: number, error: unknown): never {
 }
 
 export function applyChanges(base: Draft, documentRevision: number, changes: Changes): AppliedChanges {
-  const used = new Set([
-    ...Object.keys(base.document.flows), ...Object.keys(base.document.nodes), ...Object.keys(base.document.edges), ...base.document.retiredEntityIds,
-  ]);
+  const used = usedIds(base.document);
   let draft: Draft = { document: structuredClone(base.document), layout: structuredClone(base.layout) };
   let revision = documentRevision;
   let layoutChanged = false;

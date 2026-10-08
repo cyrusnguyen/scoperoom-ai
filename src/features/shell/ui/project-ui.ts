@@ -11,25 +11,39 @@ export type AiRequest =
   | (AiRequestBase & { kind: "discard" | "cancel"; runId: string });
 export type AiUi = { instruction: string; action: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; selectedRunId: string | null; pendingRequest: AiRequest | null; applyPhase?: { key: string; projectId: string; runId: string; state: "uncertain" | "acknowledged" | "adopted"; draftId: string; documentRevision?: number; layoutRevision?: number } };
 export type RightTab = "details" | "ai" | "specs";
-export type SpecsSelection = { kind: "source"; sourceId: string; versionId: string | null; back: SpecsSelection } | null;
+export type SpecsSelection =
+  | { kind: "source"; sourceId: string; versionId: string | null; back: SpecsSelection; range?: { startLine: number; endLine: number } }
+  | { kind: "requirement"; id: string }
+  | null;
 /** One Specs write at a time per project, kept in this store so a lost response survives tab switches and remounts. `path` is relative to `/api/projects/:projectId/`. */
-export type SpecsRequest = { key: string; method: "POST" | "PATCH"; path: string; body: Record<string, unknown>; label: string };
-export type SpecsUi = { selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string; sourceCorrections?: Record<string, SourceCorrection> };
+export type SpecsRequest = { key: string; method: "POST" | "PATCH"; path: string; body: Record<string, unknown> | null; label: string; draft?: true; acknowledged?: true };
+export type SpecsUi = { section: "sources" | "scope"; selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string; staleRequirements?: Record<string, string>; sourceCorrections?: Record<string, SourceCorrection> };
 export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: RightTab; drafts: Record<string, string>; ai: AiUi; specs: SpecsUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
 export const defaultAiUi: AiUi = { instruction: "", action: "PROPOSE_FLOW", selectedRunId: null, pendingRequest: null };
-export const defaultSpecsUi: SpecsUi = { selected: null, sourceScope: "user", pending: null, message: "" };
+export const defaultSpecsUi: SpecsUi = { section: "sources", selected: null, sourceScope: "user", pending: null, message: "" };
+
+/** Records the frozen body only for the reservation that owns it. */
+export function fillSpecsRequest(specs: SpecsUi, key: string, body: Record<string, unknown>): SpecsUi {
+  return specs.pending?.key === key ? { ...specs, pending: { ...specs.pending, body } } : specs;
+}
 
 /** Starts a request only when no other one is unresolved (null means refused). */
 export function startSpecsRequest(specs: SpecsUi, request: SpecsRequest): SpecsUi | null {
   return specs.pending ? null : { ...specs, pending: request, message: "" };
 }
 
-/** Settles exactly one request: an unconfirmed one keeps its key and body for Retry; any other key's late result is ignored. */
-export function settleSpecsRequest(specs: SpecsUi, key: string, outcome: "saved" | "uncertain" | "refused", message: string): SpecsUi {
+/** Settles exactly one request: an unconfirmed or acknowledged one keeps its key and body for recovery; any other key's late result is ignored. */
+export function settleSpecsRequest(specs: SpecsUi, key: string, outcome: "saved" | "uncertain" | "acknowledged" | "refused", message: string, code?: string): SpecsUi {
   if (specs.pending?.key !== key) return specs;
-  return outcome === "uncertain" ? { ...specs, message } : { ...specs, pending: null, message };
+  if (outcome === "uncertain") return { ...specs, message: specs.pending.acknowledged ? `${specs.pending.label} was acknowledged. Refresh saved changes to finish.` : message };
+  if (outcome === "acknowledged") return { ...specs, pending: { ...specs.pending, acknowledged: true }, message };
+  const payload = specs.pending.body?.payload as Record<string, unknown> | undefined;
+  const draftId = specs.pending.path.match(/^drafts\/([^/]+)\/commands$/)?.[1];
+  const staleRequirements = outcome === "refused" && code === "STALE_ENTITY_VERSION" && specs.pending.body?.command === "UPDATE_REQUIREMENT" && typeof payload?.requirementId === "string" && draftId
+    ? { ...specs.staleRequirements, [payload.requirementId]: draftId } : specs.staleRequirements;
+  return { ...specs, pending: null, message, ...(staleRequirements ? { staleRequirements } : {}) };
 }
 export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, rightTab: "details", drafts: {}, ai: defaultAiUi, specs: defaultSpecsUi, ...defaultStudioUi };
 
@@ -83,7 +97,7 @@ export function discardDrafts(store: UiStore, projectId: string): UiStore {
   const outbox = discardOutbox(current.outbox);
   const pendingSource = current.specs.pending?.path.match(/^sources\/([^/]+)\/versions$/)?.[1];
   const pendingCorrection = pendingSource && current.specs.sourceCorrections?.[pendingSource];
-  const specs = current.specs.sourceCorrections ? { ...current.specs, sourceCorrections: pendingCorrection ? { [pendingSource]: pendingCorrection } : {} } : current.specs;
+  const specs = { ...current.specs, staleRequirements: undefined, ...(current.specs.sourceCorrections ? { sourceCorrections: pendingCorrection ? { [pendingSource]: pendingCorrection } : {} } : {}) };
   return { ...store, [projectId]: { ...current, specs, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox, save: outbox.sending ? current.save : { state: "idle", message: "" } } };
 }
 

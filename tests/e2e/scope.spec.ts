@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, type Page, type Request as BrowserRequest } from "@playwright/test";
 import { test as collaborationTest } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
-import { appUrl, createProjectViaApi, e2eReady, openSpecs, seedStudioChanges } from "./support";
+import { appUrl, createProjectViaApi, e2eReady, openSpecs, saveStudio, seedStudioChanges } from "./support";
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
@@ -26,6 +26,7 @@ test("paste, read, correct and archive a source", async ({ page }) => {
   await page.getByLabel("Source text").fill("Customers pay by card.\r\nRefunds take 5 days.");
   await page.getByRole("button", { name: "Add source" }).click();
   await page.getByRole("button", { name: /Brief/ }).click();
+  await expect(page.getByRole("button", { name: "Back", exact: true }).locator("svg")).toBeVisible();
   await expect(page.locator(".source-lines li")).toHaveText(["Customers pay by card.", "Refunds take 5 days."]);
   await expect(page.getByLabel("Corrected text")).toBeVisible();
   await expect.poll(() => pageFits(page)).toBe(true); // the reader with its correction form
@@ -96,8 +97,16 @@ test("long source readers render bounded pages with exact absolute line numbers"
 test("uploads keep their BOM for the server; invalid UTF-8 is refused before sending", async ({ page }) => {
   const projectId = await createProjectViaApi(page, "Upload project");
   await openSpecs(page, projectId, "Upload project");
+  await expect(page.getByText("No file selected", { exact: true })).toBeVisible();
   await page.getByLabel("Source text").fill("typed text stays");
-  await page.getByLabel("Upload .txt or .md").setInputFiles({ name: "bad.txt", mimeType: "text/plain", buffer: Buffer.from([0xff, 0xfe, 0x00]) });
+  const upload = page.getByLabel("Upload .txt or .md");
+  await upload.focus();
+  await expect(upload).toBeFocused();
+  expect(await upload.evaluate((element) => element.getBoundingClientRect().width)).toBeLessThanOrEqual(1);
+  expect(await upload.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(1);
+  const fileChooser = page.waitForEvent("filechooser");
+  await page.keyboard.press("Enter");
+  await (await fileChooser).setFiles({ name: "bad.txt", mimeType: "text/plain", buffer: Buffer.from([0xff, 0xfe, 0x00]) });
   await expect(page.getByText("This file isn't valid UTF-8 text.")).toBeVisible();
   await expect(page.getByLabel("Source text")).toHaveValue("typed text stays");
   await page.getByLabel("Upload .txt or .md").setInputFiles({ name: "big.txt", mimeType: "text/plain", buffer: Buffer.alloc(320 * 1024 + 1, "a") });
@@ -107,10 +116,78 @@ test("uploads keep their BOM for the server; invalid UTF-8 is refused before sen
   const bodies: string[] = [];
   page.on("request", (request) => { if (request.method() === "POST" && request.url().endsWith(`/api/projects/${projectId}/sources`)) bodies.push(request.postData() ?? ""); });
   await page.getByLabel("Upload .txt or .md").setInputFiles({ name: "bom.txt", mimeType: "text/plain", buffer: Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("a\r\nb")]) });
+  await expect(page.getByText("bom.txt", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Add source" }).click();
   await page.getByRole("button", { name: /bom/ }).click();
   await expect(page.locator(".source-lines li")).toHaveText(["a", "b"]);
   expect(JSON.parse(bodies[0]!).text.startsWith("\uFEFF")).toBe(true);
+});
+
+test("a pending source filter hides previous cards while preserving panel position until its exact page arrives", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Stable source filters");
+  const archived: Array<{ sourceId: string; version: number }> = [];
+  for (let index = 0; index < 8; index += 1) {
+    const created = await (await page.request.post(`/api/projects/${projectId}/sources`, {
+      headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { title: `Archived ${index}`, text: "Source text" },
+    })).json() as { sourceId: string; version: number };
+    archived.push(created);
+  }
+  for (const source of archived) {
+    const response = await page.request.patch(`/api/projects/${projectId}/sources/${source.sourceId}`, {
+      headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedSourceRecordVersion: source.version, archived: true },
+    });
+    expect(response.status()).toBe(200);
+  }
+  for (let index = 0; index < 8; index += 1) await page.request.post(`/api/projects/${projectId}/sources`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { title: `Active ${index}`, text: "Source text" },
+  });
+  await page.setViewportSize({ width: 900, height: 300 });
+  await openSpecs(page, projectId, "Stable source filters");
+  await expect(page.getByRole("button", { name: /Active 7/ })).toBeVisible();
+  const body = page.locator(".right-panel-body"), filter = page.getByRole("group", { name: "Source filter" });
+  await filter.scrollIntoViewIfNeeded();
+  const before = await body.evaluate((element) => element.scrollTop);
+  const filterTop = (await filter.boundingBox())!.y;
+  expect(before).toBeGreaterThan(0);
+  let release: (() => void) | undefined, settled: Promise<void> | undefined;
+  await page.route(`**/api/projects/${projectId}/sources?scope=archived`, async (route) => {
+    settled = requestSettled(page, route.request());
+    await new Promise<void>((resolve) => { release = resolve; });
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
+  await expect.poll(() => Boolean(release)).toBe(true);
+  await expect(page.getByRole("button", { name: /Active 7/ })).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "Loading sources…" })).toBeVisible();
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(before);
+  expect((await filter.boundingBox())!.y).toBe(filterTop);
+  release!();
+  await settled;
+  await expect(page.getByRole("button", { name: /Archived 7/ })).toBeVisible();
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(before);
+  expect((await filter.boundingBox())!.y).toBe(filterTop);
+  await page.getByRole("button", { name: "Internal", exact: true }).click();
+  await expect(page.getByText("No internal evidence yet", { exact: true })).toBeVisible();
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(before);
+  expect((await filter.boundingBox())!.y).toBe(filterTop);
+  await page.getByRole("button", { name: "Active", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Active 7/ })).toBeVisible();
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(before);
+  expect((await filter.boundingBox())!.y).toBe(filterTop);
+  await page.unroute(`**/api/projects/${projectId}/sources?scope=archived`);
+  await page.route(`**/api/projects/${projectId}/sources?scope=archived`, (route) => route.fulfill({
+    status: 503, json: { error: { code: "UNAVAILABLE", message: "Sources unavailable. Retry." } },
+  }));
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Sources unavailable. Retry." })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Active 7/ })).toHaveCount(0);
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(before);
+  expect((await filter.boundingBox())!.y).toBe(filterTop);
+  await page.unroute(`**/api/projects/${projectId}/sources?scope=archived`);
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Archived 7/ })).toBeVisible();
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(before);
+  expect((await filter.boundingBox())!.y).toBe(filterTop);
 });
 
 test("an upload with a BOM and CRLF counts and reads normalized lines", async ({ page }) => {
@@ -119,6 +196,7 @@ test("an upload with a BOM and CRLF counts and reads normalized lines", async ({
   await page.getByLabel("Upload .txt or .md").setInputFiles({ name: "notes.md", mimeType: "text/markdown", buffer: Buffer.from("\uFEFFfirst\r\nsecond", "utf8") });
   await switchTabs(page);
   await expect(page.getByLabel("Source title")).toHaveValue("notes.md");
+  await expect(page.getByText("notes.md", { exact: true })).toBeVisible();
   await expect(page.getByText("12/50,000 characters")).toBeVisible();
   await page.getByRole("button", { name: "Add source" }).click();
   await expect(page.getByRole("button", { name: /notes\.md.*Uploaded/ })).toBeVisible();
@@ -330,25 +408,6 @@ test("the filter and the open source survive a tab switch, and focus returns aft
   await expect(page.getByRole("button", { name: /Brief/ })).toBeFocused();
 });
 
-collaborationTest("a reviewer reads sources without edit controls", async ({ collaboration }) => {
-  const { ownerPage, editorPage, projectId, setEditorRole } = collaboration;
-  const name = "Collaboration project";
-  await openSpecs(ownerPage, projectId, name);
-  await ownerPage.getByLabel("Source title").fill("Brief");
-  await ownerPage.getByLabel("Source text").fill("Shared text");
-  await ownerPage.getByRole("button", { name: "Add source" }).click();
-  await expect(ownerPage.getByRole("button", { name: /Brief/ })).toBeVisible();
-  await setEditorRole("REVIEWER");
-  await openSpecs(editorPage, projectId, name);
-  await expect(editorPage.getByRole("button", { name: /Brief/ })).toBeVisible();
-  await expect(editorPage.getByLabel("Source text")).toHaveCount(0);
-  await editorPage.getByRole("button", { name: /Brief/ }).click();
-  await expect(editorPage.locator(".source-lines li")).toHaveText(["Shared text"]);
-  await expect(editorPage.getByRole("button", { name: "Save new version" })).toHaveCount(0);
-  await expect(editorPage.getByLabel("Corrected text")).toHaveCount(0);
-  await expect(editorPage.getByRole("button", { name: "Archive" })).toHaveCount(0);
-});
-
 test("a source response that arrives after a project switch has no effect on the new project", async ({ page }) => {
   const first = await createProjectViaApi(page, "Old project"), second = await createProjectViaApi(page, "New project");
   await openSpecs(page, first, "Old project");
@@ -467,4 +526,654 @@ test("version paging is single-flight and a held page cannot join a newer head",
   await browserFrames(page);
   await expect(page.getByRole("button", { name: "v0", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "v1", exact: true })).toHaveCount(1);
+});
+
+test("a requirement cites immutable source text, preserves local input through its reader, and tracks a changed step", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Requirement scope project");
+  const flowId = randomUUID(), nodeId = randomUUID();
+  await seedStudioChanges(page, projectId, [
+    { command: "CREATE_FLOW", payload: { title: "Checkout", purpose: "", classification: "USER_JOURNEY", inclusion: "INCLUDED" }, proposedIds: [flowId] },
+    { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Pay", description: "", actorLabel: "" }, proposedIds: [nodeId] },
+  ]);
+  await openSpecs(page, projectId, "Requirement scope project");
+  await page.getByLabel("Source title", { exact: true }).fill("Brief");
+  await page.getByLabel("Source text").fill("Customers pay by card.\nReceipts remain available.\n");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: "New requirement" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("😀".repeat(120));
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeEnabled();
+  await page.getByLabel("Title", { exact: true }).fill("😀".repeat(121));
+  await expect(page.getByRole("alert").filter({ hasText: "Title must be 120 characters or fewer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  await page.getByLabel("Title", { exact: true }).fill("Pay by card");
+  await page.getByLabel("Inclusion", { exact: true }).selectOption("INCLUDED");
+  await page.getByLabel("Statement", { exact: true }).fill("😀".repeat(4_001));
+  await expect(page.getByRole("alert").filter({ hasText: "Statement must be 4,000 characters or fewer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  await page.getByLabel("Statement", { exact: true }).fill("");
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeEnabled(); // an empty verification method is valid
+  await page.getByLabel("Verification description").fill("😀".repeat(4_001));
+  await page.getByLabel("Responsible role").fill("QA");
+  await expect(page.getByRole("alert").filter({ hasText: "Verification description must be 4,000 characters or fewer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  await page.getByLabel("Verification description").fill("Card payment completes successfully.");
+  await page.getByLabel("Responsible role").fill("😀".repeat(121));
+  await expect(page.getByRole("alert").filter({ hasText: "Responsible role must be 120 characters or fewer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  await page.getByLabel("Responsible role").fill("");
+  await expect(page.getByRole("alert").filter({ hasText: "Verification description and responsible role" })).toBeVisible();
+  await expect(page.getByLabel("Verification description")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("Responsible role")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  await page.getByLabel("Responsible role").fill("QA");
+  await expect(page.getByRole("alert").filter({ hasText: "Verification description and responsible role" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  const included = page.getByRole("region", { name: "Included" });
+  await expect(included.getByRole("button", { name: /REQ-001 Pay by card/ })).toBeVisible();
+  await included.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByLabel("Verification description")).toHaveValue("Card payment completes successfully.");
+  await page.getByLabel("Verification description").fill("");
+  await expect(page.getByRole("alert").filter({ hasText: "Verification description and responsible role" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  await page.getByLabel("Responsible role").fill("");
+  await expect(page.getByRole("alert").filter({ hasText: "Verification description and responsible role" })).toHaveCount(0);
+  const clearedVerification = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/commands") && response.request().postDataJSON().command === "UPDATE_REQUIREMENT");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  expect((await clearedVerification).request().postDataJSON()).toMatchObject({ payload: { verification: null } });
+  await included.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByLabel("Verification description")).toHaveValue("");
+  await expect(page.getByLabel("Responsible role")).toHaveValue("");
+  await page.getByLabel("Cite source").selectOption({ label: "Brief" });
+  await page.getByLabel("Start line").fill("1");
+  await page.getByLabel("End line").fill("1");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("Customers pay by card.");
+  await page.getByLabel("Start line").fill("3");
+  await page.getByLabel("End line").fill("3");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("");
+  await expect(page.getByRole("button", { name: "Add citation" })).toBeDisabled();
+  await page.getByLabel("Start line").fill("1");
+  await page.getByLabel("End line").fill("1");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("Customers pay by card.");
+  await page.getByLabel("Excerpt").fill("Not quoted evidence.");
+  await expect(page.getByRole("alert").filter({ hasText: "Excerpt must be text from the selected lines" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add citation" })).toBeDisabled();
+  await page.getByLabel("Excerpt").fill("😀".repeat(2_001));
+  await expect(page.getByRole("alert").filter({ hasText: "Excerpt must be 2,000 characters or fewer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add citation" })).toBeDisabled();
+  await page.getByLabel("Excerpt").fill("Customers pay by card.");
+  for (const [start, end] of [["1.5", "2"], ["1", "1.5"], ["0", "1"], ["2", "1"], ["1", "4"], ["9007199254740992", "9007199254740992"]]) {
+    await page.getByLabel("Start line").fill(start!);
+    await page.getByLabel("End line").fill(end!);
+    await page.getByLabel("Excerpt").fill("Customers pay by card.");
+    await expect(page.getByRole("button", { name: "Add citation" })).toBeDisabled();
+    await expect(page.getByRole("alert").filter({ hasText: "Choose whole line numbers" })).toBeVisible();
+    await expect(page.getByLabel("Start line")).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByLabel("End line")).toHaveAttribute("aria-invalid", "true");
+  }
+  await page.getByLabel("Start line").fill("1");
+  await page.getByLabel("End line").fill("1");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("Customers pay by card.");
+  await expect(page.getByRole("alert").filter({ hasText: "Choose whole line numbers" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Add citation" }).click();
+  await expect(page.getByRole("button", { name: /Brief v1, lines 1-1/ })).toBeVisible();
+  await page.getByLabel("Cite source").selectOption({ label: "Brief" });
+  await page.getByLabel("Start line").fill("1");
+  await page.getByLabel("End line").fill("1");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("Customers pay by card.");
+  await expect(page.getByRole("alert").filter({ hasText: "This exact citation is already added" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add citation" })).toBeDisabled();
+  await page.getByLabel("Start line").fill("2");
+  await page.getByLabel("End line").fill("2");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("Receipts remain available.");
+  const source = (await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: Array<{ id: string; version: number; currentVersionId: string }> }).items[0]!;
+  const correctedHeads = page.waitForResponse((response) => { const url = new URL(response.url()); return response.request().method() === "GET" && url.pathname === `/api/projects/${projectId}/sources` && url.searchParams.get("scope") === "user" && response.status() === 200; });
+  const newerSource = await page.request.post(`/api/projects/${projectId}/sources/${source.id}/versions`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { expectedSourceRecordVersion: source.version, expectedCurrentVersionId: source.currentVersionId, title: "Corrected Brief", text: "Customers can pay by card or wallet." },
+  });
+  expect(newerSource.status()).toBe(201);
+  const corrected = await newerSource.json() as { sourceVersionId: string; version: number };
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await correctedHeads;
+  await expect(page.locator(`#cite-source option[value="${corrected.sourceVersionId}"]`)).toHaveText("Corrected Brief");
+  await expect(page.getByLabel("Cite source")).toHaveValue(source.currentVersionId);
+  await expect(page.locator("#cite-source option:checked")).toHaveText("Brief v1");
+  const archivedHeads = page.waitForResponse((response) => { const url = new URL(response.url()); return response.request().method() === "GET" && url.pathname === `/api/projects/${projectId}/sources` && url.searchParams.get("scope") === "user" && response.status() === 200; });
+  const archivedSource = await page.request.patch(`/api/projects/${projectId}/sources/${source.id}`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedSourceRecordVersion: corrected.version, archived: true },
+  });
+  expect(archivedSource.status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await archivedHeads;
+  await expect(page.locator(`#cite-source option[value="${corrected.sourceVersionId}"]`)).toHaveCount(0);
+  await expect(page.getByLabel("Cite source")).toHaveValue(source.currentVersionId);
+  await expect(page.locator("#cite-source option:checked")).toHaveText("Brief v1");
+  await expect(page.getByLabel("Start line")).toHaveValue("2");
+  await expect(page.getByLabel("End line")).toHaveValue("2");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("Receipts remain available.");
+  const immutableCitation = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/commands") && response.request().postDataJSON().command === "UPDATE_REQUIREMENT" && response.request().postDataJSON().payload.sourceRefs.some((ref: { sourceVersionId: string; startLine: number; endLine: number }) => ref.sourceVersionId === source.currentVersionId && ref.startLine === 2 && ref.endLine === 2));
+  await page.getByRole("button", { name: "Add citation" }).click();
+  expect((await immutableCitation).status()).toBe(200);
+  await page.getByLabel("Statement", { exact: true }).fill("Keep this local statement");
+  await expect(page.getByRole("button", { name: "Confirm requirement" })).toBeDisabled();
+  await page.getByRole("button", { name: /Brief v1, lines 1-1/ }).click();
+  await expect(page.getByText("Viewing v1; latest v2")).toBeVisible();
+  await expect(page.locator(".source-lines li")).toHaveText(["Customers pay by card.", "Receipts remain available.", ""]);
+  await expect(page.locator('.source-lines li[data-cited="true"]')).toHaveCount(1);
+  await page.getByRole("button", { name: "Latest", exact: true }).click();
+  await expect(page.getByText("Viewing v2; latest v2")).toBeVisible();
+  await expect(page.locator(".source-lines li")).toHaveText(["Customers can pay by card or wallet."]);
+  await expect(page.locator('.source-lines li[data-cited="true"]')).toHaveCount(0);
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByLabel("Statement", { exact: true })).toHaveValue("Keep this local statement");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  await included.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await page.getByLabel("Link to step").selectOption(nodeId);
+  await page.locator("#link-explanation").fill("Supports payment");
+  const linkDraft = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; documentRevision: number; document: { requirements: Record<string, { id: string }> } } }).draft;
+  const remoteLink = await page.request.post(`/api/projects/${projectId}/drafts/${linkDraft.id}/commands`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { commandSchemaVersion: 1, command: "ADD_TRACE_LINK", expectedDocumentRevision: linkDraft.documentRevision, payload: { requirementId: Object.values(linkDraft.document.requirements)[0]!.id, nodeId, explanation: "Supports payment" } },
+  });
+  expect(remoteLink.status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("button", { name: "Edit explanation" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add link" })).toBeDisabled();
+  await expect(page.locator("#link-step option", { hasText: "Checkout / Pay" })).toHaveCount(0);
+  await expect(page.locator("#link-explanation")).toHaveValue("Supports payment");
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await included.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByRole("button", { name: "Add link" })).toBeDisabled();
+  await expect(page.locator("#link-step option", { hasText: "Checkout / Pay" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit explanation" })).toBeVisible();
+  const savedWithLink = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { traceLinks: Record<string, { explanation: string }> } } }).draft;
+  expect(Object.values(savedWithLink.document.traceLinks).map((link) => link.explanation)).toEqual(["Supports payment"]);
+  await page.getByLabel("Explanation", { exact: true }).first().fill("😀".repeat(4_001));
+  await expect(page.getByRole("alert").filter({ hasText: "Explanation must be 4,000 characters or fewer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit explanation" })).toBeDisabled();
+  await page.getByLabel("Explanation", { exact: true }).first().fill("");
+  await expect(page.getByRole("button", { name: "Confirm link" })).toBeDisabled();
+  await page.getByRole("button", { name: "Edit explanation" }).click();
+  await expect(page.getByText("Edit explanation: saved.")).toBeVisible();
+  await expect(page.getByLabel("Explanation", { exact: true }).first()).toHaveValue("");
+  const clearedLink = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { traceLinks: Record<string, { explanation: string }> } } }).draft;
+  expect(Object.values(clearedLink.document.traceLinks).map((link) => link.explanation)).toEqual([""]);
+  await page.getByRole("button", { name: "Confirm link" }).click();
+  await expect(page.getByText("Reviewed", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Confirm requirement" }).click();
+  await expect(page.getByText("Confirmed for this wording")).toBeVisible();
+  await page.locator(".studio-toolbar").getByRole("button", { name: "Canvas", exact: true }).click();
+  await page.locator(`.react-flow__node[data-id="${nodeId}"] .step-label`).dblclick();
+  const name = page.getByRole("textbox", { name: "Step name", exact: true });
+  await name.fill("Pay now");
+  await name.press("Enter");
+  await saveStudio(page);
+  await expect(page.getByText("Needs review: step changed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Confirmed for this wording", { exact: true })).toBeVisible();
+});
+
+test("citation reads can be retried and deleted requirements keep local text for copying", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Requirement read recovery project");
+  await openSpecs(page, projectId, "Requirement read recovery project");
+  await page.getByLabel("Source title").fill("Recovery brief");
+  await page.getByLabel("Source text").fill("Keep this evidence.");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByRole("button", { name: /Recovery brief/ })).toBeVisible();
+  await page.getByLabel("Source title").fill("Second recovery brief");
+  await page.getByLabel("Source text").fill("Second evidence.");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByRole("button", { name: /Second recovery brief/ })).toBeVisible();
+  const sources = (await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: Array<{ title: string; currentVersionId: string }> }).items;
+  const source = sources.find((item) => item.title === "Recovery brief")!, secondSource = sources.find((item) => item.title === "Second recovery brief")!;
+  let inputReads = 0, holdCitationReads = false;
+  const citationCalls = new Map<string, number>(), held = new Map<string, Array<{ release: () => void; settled: Promise<void> }>>();
+  await page.route(`**/api/projects/${projectId}/source-versions/*`, async (route) => {
+    const sourceVersionId = route.request().url().split("/").at(-1)!;
+    if (!holdCitationReads) {
+      if (sourceVersionId === source.currentVersionId && inputReads++ === 0) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { code: "UNAVAILABLE", message: "Source text temporarily unavailable." } }) });
+      return route.continue();
+    }
+    if (sourceVersionId !== source.currentVersionId && sourceVersionId !== secondSource.currentVersionId) return route.continue();
+    citationCalls.set(sourceVersionId, (citationCalls.get(sourceVersionId) ?? 0) + 1);
+    let release!: () => void;
+    const heldRead = { release: () => release(), settled: requestSettled(page, route.request()) };
+    const reads = held.get(sourceVersionId) ?? []; reads.push(heldRead); held.set(sourceVersionId, reads);
+    await new Promise<void>((resolve) => { release = resolve; });
+    if (sourceVersionId === secondSource.currentVersionId && citationCalls.get(sourceVersionId) === 1) return route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Second citation temporarily unavailable." } } });
+    return route.continue();
+  });
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: "New requirement" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Recover local text");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  await page.getByRole("button", { name: /REQ-001 Recover local text/ }).click();
+  await page.getByLabel("Cite source").selectOption(source.currentVersionId);
+  await page.getByLabel("Start line").fill("1");
+  await page.getByLabel("End line").fill("1");
+  await expect(page.getByRole("button", { name: "Retry source text" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add citation" })).toBeDisabled();
+  await page.getByRole("button", { name: "Retry source text" }).click();
+  await expect(page.getByLabel("Excerpt")).toHaveValue("Keep this evidence.");
+  await page.getByRole("button", { name: "Add citation" }).click();
+  await expect(page.getByRole("button", { name: /Recovery brief v1, lines 1-1/ })).toBeVisible();
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  const initial = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; document: { requirements: Record<string, { id: string; version: number }> } } }).draft;
+  const [savedRequirement] = Object.values(initial.document.requirements);
+  const sourceRefs = [
+    { sourceVersionId: source.currentVersionId, startLine: 1, endLine: 1, excerpt: "Keep this evidence." },
+    { sourceVersionId: source.currentVersionId, startLine: 1, endLine: 1, excerpt: "Keep" },
+    { sourceVersionId: secondSource.currentVersionId, startLine: 1, endLine: 1, excerpt: "Second evidence." },
+  ];
+  const updatedRefs = await page.request.post(`/api/projects/${projectId}/drafts/${initial.id}/commands`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: savedRequirement!.version, payload: { requirementId: savedRequirement!.id, title: "Recover multiple citations", sourceRefs } },
+  });
+  expect(updatedRefs.status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("button", { name: /REQ-001 Recover multiple citations/ })).toBeVisible();
+  holdCitationReads = true;
+  try {
+    await page.getByRole("button", { name: /REQ-001 Recover multiple citations/ }).click();
+    await expect.poll(() => citationCalls.get(source.currentVersionId)).toBe(1);
+    await expect.poll(() => citationCalls.get(secondSource.currentVersionId)).toBe(1);
+    const afterRefs = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; document: { requirements: Record<string, { id: string; version: number }> } } }).draft;
+    const [unchangedRequirement] = Object.values(afterRefs.document.requirements);
+    const unrelated = await page.request.post(`/api/projects/${projectId}/drafts/${afterRefs.id}/commands`, {
+      headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+      data: { commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: unchangedRequirement!.version, payload: { requirementId: unchangedRequirement!.id, statement: "Unrelated saved statement" } },
+    });
+    expect(unrelated.status()).toBe(200);
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page.getByLabel("Statement", { exact: true })).toHaveValue("Unrelated saved statement");
+    await browserFrames(page);
+    expect(citationCalls.get(source.currentVersionId)).toBe(1);
+    expect(citationCalls.get(secondSource.currentVersionId)).toBe(1);
+    held.get(source.currentVersionId)![0]!.release();
+    await held.get(source.currentVersionId)![0]!.settled;
+    await browserFrames(page);
+    expect(citationCalls.get(secondSource.currentVersionId)).toBe(1);
+    held.get(secondSource.currentVersionId)![0]!.release();
+    await held.get(secondSource.currentVersionId)![0]!.settled;
+    await expect(page.getByText("Second citation temporarily unavailable.")).toBeVisible();
+    await page.getByRole("button", { name: "Retry citation", exact: true }).click();
+    await expect.poll(() => citationCalls.get(secondSource.currentVersionId)).toBe(2);
+    expect(citationCalls.get(source.currentVersionId)).toBe(1);
+    const retriedCitation = held.get(secondSource.currentVersionId)!.at(-1)!;
+    retriedCitation.release();
+    await retriedCitation.settled;
+    await expect(page.getByRole("button", { name: "Retry citation", exact: true })).toHaveCount(0);
+    await browserFrames(page);
+    expect(citationCalls.get(source.currentVersionId)).toBe(1);
+    expect(citationCalls.get(secondSource.currentVersionId)).toBe(2);
+  } finally {
+    for (const reads of held.values()) for (const read of reads) read.release();
+    await Promise.all([...held.values()].flat().map((read) => read.settled));
+  }
+  await page.getByLabel("Statement", { exact: true }).fill("Keep my unsaved statement.");
+  const draft = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; documentRevision: number; document: { requirements: Record<string, { id: string }> } } }).draft;
+  const requirement = Object.values(draft.document.requirements)[0]!;
+  const deleted = await page.request.post(`/api/projects/${projectId}/drafts/${draft.id}/commands`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { commandSchemaVersion: 1, command: "DELETE_REQUIREMENT", expectedDocumentRevision: draft.documentRevision, payload: { requirementId: requirement.id, removeLinkIds: [] } },
+  });
+  expect(deleted.status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByText("This requirement was removed.")).toBeVisible();
+  await expect(page.getByLabel("Retained requirement edits")).toHaveValue("Statement: Keep my unsaved statement.");
+  await expect(page.getByLabel("Retained requirement edits")).not.toBeEditable();
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: /Removed requirement.*Keep my unsaved statement/ }).click();
+  await expect(page.getByLabel("Retained requirement edits")).toHaveValue("Statement: Keep my unsaved statement.");
+  await page.getByRole("button", { name: "Discard requirement edits" }).click();
+  await expect(page.getByLabel("Retained requirement edits")).toHaveCount(0);
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await expect(page.getByRole("button", { name: /Removed requirement/ })).toHaveCount(0);
+  expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
+});
+
+test("one requirement save first saves the canvas and uses the resulting revision", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Save-first requirement project");
+  const before = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { documentRevision: number } }).draft;
+  await openSpecs(page, projectId, "Save-first requirement project");
+  await page.getByRole("button", { name: "New flow" }).click();
+  const flow = page.getByRole("dialog", { name: "New flow" });
+  await flow.getByLabel("Title").fill("Checkout");
+  await flow.getByRole("button", { name: "Create flow" }).click();
+  await page.getByRole("button", { name: "Add step" }).click();
+  const step = page.getByRole("dialog", { name: "Add step" });
+  await step.getByLabel("Name").fill("Pay");
+  await step.getByRole("button", { name: "Add step" }).click();
+  const commands: Array<{ status: number; body: Record<string, unknown> }> = [];
+  page.on("response", async (response) => {
+    if (response.request().method() === "POST" && /\/drafts\/[^/]+\/commands$/.test(new URL(response.url()).pathname)) commands.push({ status: response.status(), body: response.request().postDataJSON() as Record<string, unknown> });
+  });
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: "New requirement" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("  Pay by card  ");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  await expect(page.getByRole("button", { name: /REQ-001 Pay by card/ })).toBeVisible();
+  await expect(page.locator(".studio-status")).toContainText("All changes saved");
+  await expect.poll(() => commands.length).toBe(1);
+  expect(commands).toHaveLength(1);
+  expect(commands[0]!.status).toBe(200);
+  const saved = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { documentRevision: number; document: { flows: Record<string, unknown>; nodes: Record<string, unknown>; requirements: Record<string, { title: string }> } } }).draft;
+  expect(saved.documentRevision).toBe(before.documentRevision + 3);
+  expect(commands[0]!.body).toMatchObject({ command: "CREATE_REQUIREMENT", expectedDocumentRevision: before.documentRevision + 2, payload: { title: "Pay by card" } });
+  expect(Object.keys(saved.document.flows)).toHaveLength(1);
+  expect(Object.keys(saved.document.nodes)).toHaveLength(1);
+  expect(Object.values(saved.document.requirements).map((requirement) => requirement.title)).toEqual(["Pay by card"]);
+  expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
+});
+
+test("a held save-first keeps its reservation across a panel switch and replays its exact lost acknowledgement", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Requirement reservation project");
+  await openSpecs(page, projectId, "Requirement reservation project");
+  await page.getByRole("button", { name: "New flow" }).click();
+  const flow = page.getByRole("dialog", { name: "New flow" });
+  await flow.getByLabel("Title").fill("Checkout");
+  await flow.getByRole("button", { name: "Create flow" }).click();
+  await page.getByRole("button", { name: "Add step" }).click();
+  const step = page.getByRole("dialog", { name: "Add step" });
+  await step.getByLabel("Name").fill("Pay");
+  await step.getByRole("button", { name: "Add step" }).click();
+  let releaseCanvas: (() => void) | undefined;
+  await page.route(`**/api/projects/${projectId}/drafts/*/changes`, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    await new Promise<void>((resolve) => { releaseCanvas = resolve; });
+    await route.continue();
+  });
+  const commands: Array<{ key: string; body: string }> = [];
+  await page.route(`**/api/projects/${projectId}/drafts/*/commands`, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    commands.push({ key: route.request().headers()["idempotency-key"]!, body: route.request().postData() ?? "" });
+    if (commands.length === 1) { await route.fetch(); return route.abort("failed"); }
+    return route.continue();
+  });
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: "New requirement" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Pay by card");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  await expect.poll(() => Boolean(releaseCanvas)).toBe(true);
+  await page.getByRole("tab", { name: "Details" }).click();
+  await page.getByRole("tab", { name: "Specs" }).click();
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await expect(page.getByRole("button", { name: "Add source" })).toBeDisabled();
+  releaseCanvas!();
+  await expect(page.getByText(/Retry sends the same request/)).toBeVisible();
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByText("Save requirement: saved.")).toBeVisible();
+  await expect.poll(() => commands.length).toBe(2);
+  expect(commands[1]).toEqual(commands[0]);
+  const draft = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { requirements: Record<string, unknown> } } }).draft;
+  expect(Object.keys(draft.document.requirements)).toHaveLength(1);
+});
+
+test("a stale requirement edit is explicitly rebased after remount without overwriting remote fields", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Requirement edit guard project");
+  await openSpecs(page, projectId, "Requirement edit guard project");
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: "New requirement" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Pay by card");
+  await page.getByLabel("Statement", { exact: true }).fill("Original statement");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  await page.getByRole("button", { name: "New requirement" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Other payment");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  await page.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  await page.getByLabel("Title", { exact: true }).fill("My title");
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeEnabled();
+  await page.getByLabel("Title", { exact: true }).fill("Pay by card");
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
+  await page.getByLabel("Title", { exact: true }).fill("My title");
+  const initial = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; document: { requirements: Record<string, { id: string; displayId: string; version: number }> } } }).draft;
+  const requirement = Object.values(initial.document.requirements).find((item) => item.displayId === "REQ-001")!;
+  const otherRequirement = Object.values(initial.document.requirements).find((item) => item.displayId === "REQ-002")!;
+  const path = `/api/projects/${projectId}/drafts/${initial.id}/commands`;
+  const remote = await page.request.post(path, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: requirement!.version, payload: { requirementId: requirement!.id, statement: "Remote statement" } },
+  });
+  expect(remote.status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByLabel("Statement", { exact: true })).toHaveValue("Remote statement");
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("My title");
+  const refused = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/commands") && response.request().postDataJSON().command === "UPDATE_REQUIREMENT");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  const response = await refused;
+  expect(response.status()).toBe(409);
+  expect(response.request().postDataJSON()).toEqual({ commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: requirement!.version, payload: { requirementId: requirement!.id, title: "My title" } });
+  await expect(page.getByRole("alert").filter({ hasText: "Someone saved this requirement first" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("My title");
+  await expect(page.getByLabel("Statement", { exact: true })).toHaveValue("Remote statement");
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByLabel("Source title").fill("Recovery evidence");
+  await page.getByLabel("Source text").fill("A source save must not hide a requirement conflict.");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByRole("button", { name: /Recovery evidence/ })).toBeVisible();
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Someone saved this requirement first" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await page.getByRole("button", { name: /REQ-002 Other payment/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Keep other payment");
+  await expect(page.getByRole("button", { name: "Use saved values" })).toHaveCount(0);
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Keep other payment");
+  const remoteOther = await page.request.post(path, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: otherRequirement.version, payload: { requirementId: otherRequirement.id, statement: "Other remote statement" } },
+  });
+  expect(remoteOther.status()).toBe(200);
+  const refusedOther = page.waitForResponse((item) => item.request().method() === "POST" && item.url().endsWith("/commands") && item.request().postDataJSON().command === "UPDATE_REQUIREMENT" && item.request().postDataJSON().payload.requirementId === otherRequirement.id);
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  expect((await refusedOther).status()).toBe(409);
+  await expect(page.getByRole("alert").filter({ hasText: "Someone saved this requirement first" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Someone saved this requirement first" })).toBeVisible();
+  await page.getByRole("button", { name: "Use my edits on latest version" }).click();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeEnabled();
+  const raced = await page.request.post(path, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: requirement!.version + 1, payload: { requirementId: requirement!.id, statement: "Remote statement after rebase" } },
+  });
+  expect(raced.status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("My title");
+  await expect(page.getByLabel("Statement", { exact: true })).toHaveValue("Remote statement after rebase");
+  const refusedAgain = page.waitForResponse((item) => item.request().method() === "POST" && item.url().endsWith("/commands") && item.request().postDataJSON().command === "UPDATE_REQUIREMENT");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  const secondResponse = await refusedAgain;
+  expect(secondResponse.status()).toBe(409);
+  expect(secondResponse.request().postDataJSON()).toEqual({ commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: requirement!.version + 1, payload: { requirementId: requirement!.id, title: "My title" } });
+  await expect(page.getByRole("alert").filter({ hasText: "Someone saved this requirement first" })).toBeVisible();
+  await page.getByRole("button", { name: "Use my edits on latest version" }).click();
+  const accepted = page.waitForResponse((item) => item.request().method() === "POST" && item.url().endsWith("/commands") && item.request().postDataJSON().command === "UPDATE_REQUIREMENT");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  const finalResponse = await accepted;
+  expect(finalResponse.status()).toBe(200);
+  expect(finalResponse.request().postDataJSON()).toEqual({ commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: requirement!.version + 2, payload: { requirementId: requirement!.id, title: "My title" } });
+  const final = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { requirements: Record<string, { statement: string; title: string }> } } }).draft;
+  expect(Object.keys(final.document.requirements)).toHaveLength(2);
+  expect(final.document.requirements[requirement.id]).toMatchObject({ title: "My title", statement: "Remote statement after rebase" });
+  expect(final.document.requirements[otherRequirement.id]).toMatchObject({ title: "Other payment", statement: "Other remote statement" });
+});
+
+test("trace explanation conflicts offer explicit reconciliation and removed links retain copyable input", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Trace recovery project"), flowId = randomUUID(), nodeId = randomUUID();
+  await seedStudioChanges(page, projectId, [
+    { command: "CREATE_FLOW", payload: { title: "Checkout", purpose: "", classification: "USER_JOURNEY", inclusion: "INCLUDED" }, proposedIds: [flowId] },
+    { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Pay", description: "", actorLabel: "" }, proposedIds: [nodeId] },
+  ]);
+  await openSpecs(page, projectId, "Trace recovery project");
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: "New requirement" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Payment");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  await page.getByRole("button", { name: /REQ-001 Payment/ }).click();
+  await page.getByLabel("Link to step").selectOption(nodeId);
+  await page.locator("#link-explanation").fill("😀".repeat(4_001));
+  await expect(page.getByRole("button", { name: "Add link" })).toBeDisabled();
+  await page.locator("#link-explanation").fill("Original explanation");
+  await page.getByRole("button", { name: "Add link" }).click();
+  await expect(page.getByRole("button", { name: "Edit explanation" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await page.getByRole("button", { name: "New requirement" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Other payment");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  await page.getByRole("button", { name: /REQ-001 Payment/ }).click();
+  const readDraft = async () => (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json()).draft as { id: string; documentRevision: number; document: { traceLinks: Record<string, { id: string; version: number; explanation: string }> } };
+  const initial = await readDraft(), original = Object.values(initial.document.traceLinks)[0]!;
+  const path = `/api/projects/${projectId}/drafts/${initial.id}/commands`, explanation = page.locator(`#link-${original.id}`);
+  await explanation.fill("My explanation");
+  await page.route(`**${path}`, async (route) => {
+    if (route.request().method() === "POST" && route.request().postDataJSON().command === "UPDATE_TRACE_LINK") {
+      const remote = await page.request.post(path, {
+        headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+        data: { commandSchemaVersion: 1, command: "UPDATE_TRACE_LINK", expectedEntityVersion: original.version, payload: { linkId: original.id, explanation: "Remote explanation" } },
+      });
+      expect(remote.status()).toBe(200);
+    }
+    await route.continue();
+  });
+  const refused = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith(path) && response.request().postDataJSON().command === "UPDATE_TRACE_LINK");
+  await page.getByRole("button", { name: "Edit explanation" }).click();
+  const conflict = await refused;
+  await page.unroute(`**${path}`);
+  expect(conflict.status()).toBe(409);
+  expect(conflict.request().postDataJSON().expectedEntityVersion).toBe(original.version);
+  await expect(page.getByLabel("Current saved explanation")).toHaveValue("Remote explanation");
+  await expect(page.getByRole("button", { name: "Edit explanation" })).toBeDisabled();
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await page.getByRole("button", { name: /REQ-002 Other payment/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Keep other payment");
+  await expect(page.getByRole("button", { name: "Use saved values" })).toHaveCount(0);
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Keep other payment");
+  await page.getByLabel("Title", { exact: true }).fill("Other payment");
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await switchTabs(page);
+  await page.getByRole("button", { name: /REQ-001 Payment/ }).click();
+  await expect(explanation).toHaveValue("My explanation");
+  await expect(page.getByLabel("Current saved explanation")).toHaveValue("Remote explanation");
+  await expect(page.getByRole("button", { name: "Edit explanation" })).toBeDisabled();
+  await page.getByRole("button", { name: "Use my explanation on latest version" }).click();
+  await expect(page.getByRole("button", { name: "Edit explanation" })).toBeEnabled();
+  const accepted = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith(path) && response.request().postDataJSON().command === "UPDATE_TRACE_LINK");
+  await page.getByRole("button", { name: "Edit explanation" }).click();
+  const saved = await accepted;
+  expect(saved.status()).toBe(200);
+  expect(saved.request().postDataJSON()).toMatchObject({ expectedEntityVersion: original.version + 1, payload: { explanation: "My explanation" } });
+  await expect(page.getByText("Edit explanation: saved.")).toBeVisible();
+  expect((await readDraft()).document.traceLinks[original.id]!.explanation).toBe("My explanation");
+  await explanation.fill("Discard this explanation");
+  const beforeDiscard = await readDraft();
+  const changed = await page.request.post(path, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { commandSchemaVersion: 1, command: "UPDATE_TRACE_LINK", expectedEntityVersion: beforeDiscard.document.traceLinks[original.id]!.version, payload: { linkId: original.id, explanation: "Newest saved explanation" } },
+  });
+  expect(changed.status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByLabel("Current saved explanation")).toHaveValue("Newest saved explanation");
+  await page.getByRole("button", { name: "Use saved explanation" }).click();
+  await expect(explanation).toHaveValue("Newest saved explanation");
+  expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
+  await explanation.fill("Keep for copying");
+  const beforeDelete = await readDraft();
+  const removed = await page.request.post(path, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { commandSchemaVersion: 1, command: "DELETE_TRACE_LINK", expectedDocumentRevision: beforeDelete.documentRevision, payload: { linkId: original.id } },
+  });
+  expect(removed.status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByLabel("Retained explanation for removed link")).toHaveValue("Keep for copying");
+  await expect(page.getByLabel("Retained explanation for removed link")).not.toBeEditable();
+  await page.getByRole("button", { name: "Discard removed link edits" }).click();
+  await expect(page.getByLabel("Retained explanation for removed link")).toHaveCount(0);
+  expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
+});
+
+collaborationTest("a reviewer reads sources and requirements without edit controls", async ({ collaboration }) => {
+  const { ownerPage, editorPage, projectId, setEditorRole } = collaboration;
+  const name: string = (await (await ownerPage.request.get(`/api/projects/${projectId}/bootstrap`)).json()).project.name;
+  const editorId = (await (await ownerPage.request.get(`/api/projects/${projectId}/members`)).json() as { members: Array<{ profileId: string; role: string }> }).members.find((member) => member.role === "EDITOR")!.profileId;
+  await test.step("owner creates the source and requirement", async () => {
+    await openSpecs(ownerPage, projectId, name);
+    await ownerPage.getByLabel("Source title").fill("Brief");
+    await ownerPage.getByLabel("Source text").fill("Shared text");
+    await ownerPage.getByRole("button", { name: "Add source" }).click();
+    await expect(ownerPage.getByRole("button", { name: /Brief/ })).toBeVisible();
+    await ownerPage.getByRole("tab", { name: "Scope" }).click();
+    await ownerPage.getByRole("button", { name: "New requirement" }).click();
+    await ownerPage.getByLabel("Title", { exact: true }).fill("Pay by card");
+    await ownerPage.getByLabel("Owner").selectOption(editorId);
+    await ownerPage.getByRole("button", { name: "Save requirement" }).click();
+    await ownerPage.getByRole("button", { name: "New requirement" }).click();
+    await ownerPage.getByLabel("Title", { exact: true }).fill("Draft owner change");
+    await ownerPage.getByLabel("Owner").selectOption(editorId);
+    await ownerPage.getByLabel("Statement", { exact: true }).fill("Keep this requirement");
+  });
+  const directoryRefreshed = ownerPage.waitForResponse((response) => new URL(response.url()).pathname === `/api/projects/${projectId}/members` && response.status() === 200);
+  await setEditorRole("VIEWER");
+  await ownerPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await directoryRefreshed;
+  await test.step("owner cannot save a locally selected member who became a viewer", async () => {
+    await expect(ownerPage.getByLabel("Owner")).toHaveValue(editorId);
+    await expect(ownerPage.getByLabel("Owner")).toHaveAttribute("aria-invalid", "true");
+    await expect(ownerPage.getByText("Choose an active Owner, Editor, Reviewer, or Unassigned owner.")).toBeVisible();
+    await expect(ownerPage.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+    await ownerPage.getByLabel("Owner").selectOption("");
+    await expect(ownerPage.getByText("Choose an active Owner, Editor, Reviewer, or Unassigned owner.")).toHaveCount(0);
+    await ownerPage.getByRole("button", { name: "Save requirement" }).click();
+    await expect(ownerPage.getByText("Save requirement: saved.")).toBeVisible();
+  });
+  await test.step("a statement-only save preserves an unchanged saved viewer assignment", async () => {
+    await ownerPage.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+    await ownerPage.getByLabel("Statement", { exact: true }).fill("Saved viewer owner remains unchanged");
+    await expect(ownerPage.getByText("Choose an active Owner, Editor, Reviewer, or Unassigned owner.")).toHaveCount(0);
+    const saved = ownerPage.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/commands") && response.request().postDataJSON().command === "UPDATE_REQUIREMENT" && response.request().postDataJSON().payload.statement === "Saved viewer owner remains unchanged");
+    await ownerPage.getByRole("button", { name: "Save requirement" }).click();
+    expect((await saved).status()).toBe(200);
+    const draft = (await (await ownerPage.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { requirements: Record<string, { ownerId: string | null; title: string }> } } }).draft;
+    const requirement = Object.values(draft.document.requirements).find((item) => item.title === "Pay by card");
+    expect(requirement).toMatchObject({ ownerId: editorId, statement: "Saved viewer owner remains unchanged" });
+    expect((await saved).request().postDataJSON().payload.ownerId).toBeUndefined();
+  });
+  await setEditorRole("REVIEWER");
+  await openSpecs(editorPage, projectId, name);
+  await test.step("reviewer reads the source without source write controls", async () => {
+    await expect(editorPage.getByRole("button", { name: /Brief/ })).toBeVisible();
+    await expect(editorPage.getByLabel("Source text")).toHaveCount(0);
+    await editorPage.getByRole("button", { name: /Brief/ }).click();
+    await expect(editorPage.locator(".source-lines li")).toHaveText(["Shared text"]);
+    await expect(editorPage.getByRole("button", { name: "Save new version" })).toHaveCount(0);
+    await expect(editorPage.getByLabel("Corrected text")).toHaveCount(0);
+    await expect(editorPage.getByRole("button", { name: "Archive" })).toHaveCount(0);
+  });
+  await test.step("reviewer reads the requirement without requirement write controls", async () => {
+    await editorPage.getByRole("tab", { name: "Scope" }).click();
+    await expect(editorPage.getByRole("button", { name: /REQ-001 Pay by card/ })).toBeVisible({ timeout: 20_000 });
+    await expect(editorPage.getByRole("button", { name: "New requirement" })).toHaveCount(0);
+    await editorPage.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+    await expect(editorPage.getByLabel("Title", { exact: true })).not.toBeEditable();
+    await expect(editorPage.getByLabel("Statement", { exact: true })).not.toBeEditable();
+    await expect(editorPage.getByRole("button", { name: "Save requirement" })).toHaveCount(0);
+    await expect(editorPage.getByRole("button", { name: "Confirm requirement" })).toHaveCount(0);
+    await expect(editorPage.getByRole("button", { name: "Add citation" })).toHaveCount(0);
+    await expect(editorPage.getByRole("button", { name: "Add link" })).toHaveCount(0);
+  });
 });

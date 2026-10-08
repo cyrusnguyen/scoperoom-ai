@@ -77,7 +77,7 @@ export async function readRun(identity: ProjectIdentity, projectId: string, runI
         source_version_ids AS "sourceVersionIds", before_document_revision AS "beforeDocumentRevision", after_document_revision AS "afterDocumentRevision",
         before_layout_revision AS "beforeLayoutRevision", after_layout_revision AS "afterLayoutRevision", created_at AS "createdAt",
         octet_length(selected_operations::text) <= 131072 AND octet_length(actual_operations::text) <= 262144
-          AND octet_length(id_map::text) <= 65536 AND octet_length(created_id_map::text) <= 65536 AND octet_length(evidence::text) <= 1048576 AS bounded
+          AND octet_length(id_map::text) <= 65536 AND octet_length(created_id_map::text) <= 65536 AND octet_length(evidence::text) <= ${AI_LIMITS.applicationEvidenceBytes} AS bounded
       FROM app.ai_suggestion_application WHERE project_id = ${project.id}::uuid AND run_id = ${row.id}::uuid`;
     if (application && !application.bounded) throw new ProjectError("UNAVAILABLE");
     const applicationView = application ? (({ bounded, createdAt, ...evidence }) => { void bounded; return { ...evidence, createdAt: createdAt.toISOString() }; })(application) : null;

@@ -4,7 +4,7 @@ import { asJson, graphFailure, lockDraft, nextRevision, requireStoredSize } from
 import { recordEvent, requestHash } from "../../projects/server/access.ts";
 import { uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
-import { parseApplyRunInput, type AppliedRun, type ApplyRunInput } from "../contracts/tasks.ts";
+import { AI_LIMITS, parseApplyRunInput, type AppliedRun, type ApplyRunInput } from "../contracts/tasks.ts";
 import { canonicalJson, sha256 } from "../domain/capture.ts";
 import { applyProposal } from "../domain/proposal-diff.ts";
 import { ResultError } from "../domain/validate-result.ts";
@@ -63,14 +63,14 @@ export async function applyRun(identity: ProjectIdentity, projectId: string, run
     await tx.scopeDraft.update({ where: { id: saved.id }, data: { documentJson: asJson(applied!.document), layoutJson: asJson(applied!.layout), documentRevision, layoutRevision }, select: { id: true } });
     const applicationId = randomUUID();
     const records = (document: typeof applied.document) => applied!.changedIds.flatMap(id => {
-      const record = document.flows[id] ?? document.nodes[id] ?? document.edges[id]; return record ? [record] : [];
+      const record = document.flows[id] ?? document.nodes[id] ?? document.edges[id] ?? document.traceLinks[id]; return record ? [record] : [];
     });
     const selected = run.result!.kind === "proposal" ? run.result!.operations.filter(operation => input.selectedOperationIds.includes(operation.id)) : [];
     const evidence = { changedIds: applied!.changedIds, before: records(saved.draft.document), after: records(applied!.document), assumptions: run.result!.kind === "proposal" ? run.result!.assumptions : [], citations: run.result!.kind === "proposal" ? run.result!.citations : [] };
     const [bounded] = await tx.$queryRaw<Array<{ allowed: boolean }>>`SELECT
       octet_length(${JSON.stringify(selected)}::jsonb::text) <= 131072 AND octet_length(${JSON.stringify(applied!.actualCommands)}::jsonb::text) <= 262144
       AND octet_length(${JSON.stringify(applied!.idMap)}::jsonb::text) <= 65536 AND octet_length(${JSON.stringify(applied!.createdIdMap)}::jsonb::text) <= 65536
-      AND octet_length(${JSON.stringify(evidence)}::jsonb::text) <= 1048576 AS allowed`;
+      AND octet_length(${JSON.stringify(evidence)}::jsonb::text) <= ${AI_LIMITS.applicationEvidenceBytes} AS allowed`;
     if (!bounded?.allowed) throw new ProjectError("LIMIT_EXCEEDED");
     await tx.$executeRaw`INSERT INTO app.ai_suggestion_application
       (id, project_id, run_id, draft_id, actor_id, prompt_source_version_id, result_hash, selected_operations, actual_operations, id_map, created_id_map, evidence,

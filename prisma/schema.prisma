@@ -220,6 +220,7 @@ model Project {
   eventSequence         BigInt              @default(0) @map("event_sequence") @db.BigInt
   aiRevision            BigInt              @default(0) @map("ai_revision") @db.BigInt
   sourcesRevision       BigInt              @default(0) @map("sources_revision") @db.BigInt
+  requirementDisplaySequence Int            @default(0) @map("requirement_display_sequence")
   approvedSnapshotId    String?             @map("approved_snapshot_id") @db.Uuid
   createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt             DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)

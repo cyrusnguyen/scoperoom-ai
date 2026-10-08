@@ -100,7 +100,7 @@ test("coordinates, versions and text respect their bounds", () => {
 });
 
 test("collections owned by later stages stay empty, and retired ids stay sorted and inactive", () => {
-  rejects((draft) => { at(draft.document, "requirements")[flowId] = {}; });
+  rejects((draft) => { at(draft.document, "scenarios")[flowId] = {}; });
   rejects((draft) => { at(draft.document, "flows", flowId).confirmation = { behaviourVersion: 1 }; });
   rejects((draft) => { at(draft.document, "nodes", startId).sourceRefs = [{}]; });
   rejects((draft) => { draft.document.retiredEntityIds = [startId]; });

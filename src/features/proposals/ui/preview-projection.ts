@@ -1,4 +1,5 @@
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
+import { usedIds } from "../../drafts/domain/graph.ts";
 import type { ProjectStatusView } from "@/features/projects/contracts/project";
 import { applyProposal } from "../domain/proposal-diff.ts";
 import type { RunView } from "../contracts/tasks.ts";
@@ -12,7 +13,7 @@ export function projectProposalPreview(saved: DraftView, status: Pick<ProjectSta
     || saved.documentRevision !== status.documentRevision || saved.documentRevision !== run.documentRevision || saved.documentRevision !== capture.documentRevision
     || saved.layoutRevision < status.layoutRevision // Apply places new steps on the newest saved layout; a saved read behind the status would preview other positions.
     || status.approvedSnapshotId !== run.parentSnapshotId || status.approvedSnapshotId !== capture.parentSnapshotId) return null;
-  const used = new Set([...Object.keys(saved.document.flows), ...Object.keys(saved.document.nodes), ...Object.keys(saved.document.edges), ...saved.document.retiredEntityIds]);
+  const used = usedIds(saved.document);
   let sequence = 0;
   const temporaryId = () => {
     let id = "";

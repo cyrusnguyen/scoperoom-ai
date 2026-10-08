@@ -3,6 +3,8 @@ import { COORDINATE_LIMIT, type DraftLayout } from "../../drafts/contracts/draft
 import { NODE_KINDS, type DraftView, type NodeKind } from "../../drafts/contracts/scope-document.ts";
 import { dirtyFields, isDirty, type Buffers } from "./buffers.ts";
 import { advance, covers, emptyOutbox, isNewer, pendingCount, type Outbox, type RevisionFloor } from "./outbox.ts";
+import { projectErrors } from "../../projects/contracts/errors.ts";
+import type { ProjectStatusView } from "../../projects/contracts/project.ts";
 import type { NativeImportState } from "../../exchange/ui/import-recovery.ts";
 
 export { covers, isNewer } from "./outbox.ts";
@@ -59,6 +61,13 @@ export function toggleNode(selection: Selection, id: string): Selection {
 export function studioDirtyCount(ui: StudioUi): number {
   const buffers = [...Object.values(ui.buffers), ...Object.values(ui.endpointBuffers), ...Object.values(ui.positionBuffers)];
   return buffers.filter(isDirty).reduce((count, buffer) => count + Math.max(dirtyFields(buffer).length, 1), 0) + pendingCount(ui.outbox);
+}
+
+/** New work needs its current draft; receipt recovery only needs current readable authority, already checked by Sync. */
+export function draftWriteBlocker(status: Pick<ProjectStatusView, "currentDraftId" | "role" | "status">, target: string, write: boolean, requireCurrentDraft = write): { code: string; message: string } | null {
+  if (requireCurrentDraft && status.currentDraftId !== target) return { code: "DRAFT_REPLACED", message: projectErrors.DRAFT_REPLACED.message };
+  if (write && (status.status !== "ACTIVE" || (status.role !== "OWNER" && status.role !== "EDITOR"))) return { code: "FORBIDDEN", message: "Not saved. This project is read-only now." };
+  return null;
 }
 
 /** Receipts prove both saved revisions even when their following read fails; older replays cannot lower the floor. */

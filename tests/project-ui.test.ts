@@ -4,10 +4,29 @@ import type { Changes } from "../src/features/drafts/contracts/changes.ts";
 import { edit, type Saved } from "../src/features/studio/ui/buffers.ts";
 import { emptyOutbox, type Outbox } from "../src/features/studio/ui/outbox.ts";
 import type { DraftView } from "../src/features/drafts/contracts/scope-document.ts";
-import { acknowledgeExternalWrite, admits, afterDraftRead, canApplyAgain, covers, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
-import { type AiRequest, currentAiRun, recoverUnavailableCurrentRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, defaultSpecsUi, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, settleSpecsRequest, startSpecsRequest, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
+import { acknowledgeExternalWrite, admits, afterDraftRead, canApplyAgain, covers, draftWriteBlocker, requireDraftRevision } from "../src/features/studio/ui/studio-ui.ts";
+import { type AiRequest, currentAiRun, recoverUnavailableCurrentRun, acknowledgedApplyCovered, retainAiApply, finishAiApply, anyDirty, defaultUi, defaultSpecsUi, dirtyCount, discardDrafts, dropProject, fillSpecsRequest, setDraft, setRightOpen, setRightTab, settleSpecsRequest, startSpecsRequest, uiFor, updateUi } from "../src/features/shell/ui/project-ui.ts";
 import { finishSourceWrite } from "../src/features/sources/ui/source-write.ts";
+import { finishRequirementWrite } from "../src/features/scope/ui/requirement-write.ts";
 import { editSourceCorrection, sourceCorrectionBody } from "../src/features/sources/ui/source-correction.ts";
+
+test("receipt recovery reaches the original draft after replacement, downgrade or archive", () => {
+  for (const role of ["OWNER", "EDITOR", "REVIEWER", "VIEWER"] as const) {
+    for (const status of ["ACTIVE", "ARCHIVED"] as const) {
+      assert.equal(draftWriteBlocker({ currentDraftId: "replacement", role, status }, "original", false), null, "existing canvas, AI and import retries must reach server receipt recovery");
+    }
+  }
+});
+
+test("first draft writes retain current-target and capability gates while recovery bypasses them", () => {
+  const status = { currentDraftId: "replacement", role: "OWNER" as const, status: "ACTIVE" as const };
+  assert.equal(draftWriteBlocker(status, "original", true)?.code, "DRAFT_REPLACED");
+  assert.equal(draftWriteBlocker(status, "original", false, true)?.code, "DRAFT_REPLACED", "a fresh Specs write still requires its inspected draft");
+  assert.equal(draftWriteBlocker(status, "replacement", true), null);
+  assert.equal(draftWriteBlocker({ ...status, role: "VIEWER" }, "replacement", true)?.code, "FORBIDDEN");
+  assert.equal(draftWriteBlocker({ ...status, status: "ARCHIVED" }, "replacement", true)?.code, "FORBIDDEN");
+  assert.equal(draftWriteBlocker({ ...status, role: "REVIEWER" }, "replacement", false, true), null, "Specs capability remains server-authorized");
+});
 
 test("correction snapshots protect navigation, survive tabs and pending discard, and only their ACK clears them", () => {
   const correction = editSourceCorrection(undefined, { version: 1, currentVersionId: "v1" }, { id: "v1", sequence: 1, title: "Original", text: "Text" }, "title", "Local")!;
@@ -32,17 +51,97 @@ test("correction snapshots protect navigation, survive tabs and pending discard,
 
 test("source acknowledgement clears matching input atomically and a duplicate keeps newer text and selection", () => {
   const request = { key: "first", method: "POST" as const, path: "sources", body: { title: "First", text: "Submitted" }, label: "Add source" };
-  const current = { ...defaultUi, drafts: { "specs:new-source:title": "First", "specs:new-source:text": "Submitted", "specs:new-source:uploaded": "true" }, specs: { ...defaultSpecsUi, pending: request } };
+  const current = { ...defaultUi, drafts: { "specs:new-source:title": "First", "specs:new-source:text": "Submitted", "specs:new-source:uploaded": "true", "specs:new-source:upload-name": "first.txt" }, specs: { ...defaultSpecsUi, staleRequirements: { r1: "draft" }, pending: request } };
   const saved = finishSourceWrite(current, request);
   assert.deepEqual(saved.drafts, {});
+  assert.equal(saved.drafts["specs:new-source:upload-name"], undefined);
   assert.equal(saved.specs.pending, null);
   assert.equal(saved.specs.message, "Add source: saved.");
+  assert.deepEqual(saved.specs.staleRequirements, { r1: "draft" }, "a source acknowledgement preserves requirement recovery");
   const newer = { ...saved, drafts: { "specs:new-source:text": "New text" }, specs: { ...saved.specs, pending: { ...request, key: "second" } } };
   assert.equal(finishSourceWrite(newer, request), newer, "old ACK never affects a newer request or its drafts");
   assert.equal(finishSourceWrite({ ...newer, specs: saved.specs }, request).drafts["specs:new-source:text"], "New text", "even without a newer request");
 });
 
-const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { selected: null, sourceScope: "user" as const, pending: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
+test("requirement acknowledgement clears only its frozen fields and a duplicate keeps newer input", () => {
+  const request = { key: "requirement", method: "POST" as const, path: "drafts/draft/commands", label: "Save requirement", draft: true as const, body: {
+    commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: 1, payload: { requirementId: "r1", title: "Submitted" },
+  } };
+  const current = { ...defaultUi, drafts: { "specs:req:r1:base": "{}", "specs:req:r1:expectedEntityVersion": "1", "specs:req:r1:title": "Submitted", "specs:req:r1:statement": "Later local text" }, specs: { ...defaultSpecsUi, staleRequirements: { r1: "draft" }, pending: request, selected: { kind: "requirement" as const, id: "r1" } } };
+  const saved = finishRequirementWrite(current, request, { versions: { r1: 2 } });
+  assert.equal(saved.drafts["specs:req:r1:title"], undefined);
+  assert.equal(saved.drafts["specs:req:r1:statement"], "Later local text");
+  assert.equal(saved.specs.pending, null);
+  assert.equal(saved.specs.staleRequirements, undefined, "a matching guarded requirement acknowledgement resolves its recovery control");
+  const newerDraft = finishRequirementWrite({ ...current, specs: { ...current.specs, staleRequirements: { r1: "newer-draft" } } }, request, { versions: { r1: 2 } });
+  assert.deepEqual(newerDraft.specs.staleRequirements, { r1: "newer-draft" }, "an older draft acknowledgement cannot clear newer recovery");
+  const newer = { ...saved, drafts: { ...saved.drafts, "specs:req:r1:title": "Newer text" }, specs: { ...saved.specs, pending: { ...request, key: "next" } } };
+  assert.equal(finishRequirementWrite(newer, request, { versions: { r1: 3 } }).drafts["specs:req:r1:title"], "Newer text");
+});
+
+test("a citation acknowledgement never upgrades an older dirty requirement guard", () => {
+  const request = { key: "citation", method: "POST" as const, path: "drafts/draft/commands", label: "Add citation", draft: true as const, body: {
+    commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: 2, payload: { requirementId: "r1", sourceRefs: [{ sourceVersionId: "v1", startLine: 1, endLine: 1, excerpt: "Evidence" }] },
+  } };
+  const current = { ...defaultUi, drafts: { "specs:req:r1:base": "{}", "specs:req:r1:expectedEntityVersion": "1", "specs:req:r1:title": "Dirty v1 text", "specs:req:r1:cite:source": "v1", "specs:req:r1:cite:start": "1", "specs:req:r1:cite:end": "1", "specs:req:r1:cite:excerpt": "Evidence" }, specs: { ...defaultSpecsUi, staleRequirements: { r1: "draft" }, pending: request, selected: { kind: "requirement" as const, id: "r1" } } };
+  const saved = finishRequirementWrite(current, request, { versions: { r1: 3 } });
+  assert.equal(saved.drafts["specs:req:r1:expectedEntityVersion"], "1");
+  assert.equal(saved.drafts["specs:req:r1:title"], "Dirty v1 text");
+  assert.equal(saved.drafts["specs:req:r1:cite:excerpt"], undefined);
+  assert.deepEqual(saved.specs.staleRequirements, { r1: "draft" }, "a citation acknowledgement cannot clear recovery for an older wording guard");
+  assert.deepEqual(saved.specs.selected, { kind: "requirement", id: "r1" });
+  assert.equal(finishRequirementWrite({ ...saved, drafts: { ...saved.drafts, "specs:req:r1:title": "Newer input" } }, request, { versions: { r1: 4 } }).drafts["specs:req:r1:title"], "Newer input");
+});
+
+test("a citation acknowledgement advances its own matching guard through reader navigation", () => {
+  const request = { key: "citation-in-reader", method: "POST" as const, path: "drafts/draft/commands", label: "Add citation", draft: true as const, body: {
+    commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: 1, payload: { requirementId: "r1", sourceRefs: [{ sourceVersionId: "v1", startLine: 1, endLine: 1, excerpt: "Evidence" }] },
+  } };
+  const selected = { kind: "source" as const, sourceId: "s1", versionId: "v1", back: { kind: "requirement" as const, id: "r1" } };
+  const current = { ...defaultUi, drafts: { "specs:req:r1:base": "{}", "specs:req:r1:expectedEntityVersion": "1", "specs:req:r1:title": "Local wording" }, specs: { ...defaultSpecsUi, pending: request, selected } };
+  const saved = finishRequirementWrite(current, request, { versions: { r1: 2 } });
+  assert.equal(saved.drafts["specs:req:r1:expectedEntityVersion"], "2", "an acknowledged own write cannot leave its form guarded against the prior version");
+  assert.equal(saved.drafts["specs:req:r1:title"], "Local wording");
+  assert.equal(saved.specs.selected, selected);
+});
+
+test("a saved requirement clears its edit snapshot after the person switches panels", () => {
+  const request = { key: "switched", method: "POST" as const, path: "drafts/draft/commands", label: "Save requirement", draft: true as const, body: {
+    commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: 1, payload: { requirementId: "r1", title: "Submitted" },
+  } };
+  const selected = { kind: "requirement" as const, id: "r2" };
+  const current = { ...defaultUi, drafts: { "specs:req:r1:base": "{}", "specs:req:r1:expectedEntityVersion": "1", "specs:req:r1:title": "Submitted" }, specs: { ...defaultSpecsUi, pending: request, selected } };
+  const saved = finishRequirementWrite(current, request, { versions: { r1: 2 } });
+  assert.deepEqual(saved.drafts, {}, "a completed save cannot leave a stale guard or dirty snapshot behind");
+  assert.equal(saved.specs.selected, selected, "acknowledgement preserves the newer selection");
+  assert.equal(anyDirty({ project: saved }), false);
+});
+
+test("a deleted requirement keeps its selected recovery when unsent link text remains", () => {
+  const request = { key: "deleted", method: "POST" as const, path: "drafts/draft/commands", label: "Delete requirement", draft: true as const, body: {
+    commandSchemaVersion: 1, command: "DELETE_REQUIREMENT", expectedDocumentRevision: 1, payload: { requirementId: "r1", removeLinkIds: [] },
+  } };
+  const selected = { kind: "requirement" as const, id: "r1" };
+  const current = { ...defaultUi, drafts: { "specs:req:r1:link:new-explanation": "Copy this explanation" }, specs: { ...defaultSpecsUi, staleRequirements: { r1: "draft" }, pending: request, selected } };
+  const saved = finishRequirementWrite(current, request, {});
+  assert.equal(saved.specs.selected, selected, "the removed-state copy/discard controls must remain reachable");
+  assert.equal(saved.drafts["specs:req:r1:link:new-explanation"], "Copy this explanation");
+  assert.equal(saved.specs.staleRequirements, undefined, "a matching deleted requirement has no recovery target");
+});
+
+test("requirement acknowledgement matches the normalization applied before sending", () => {
+  const request = { key: "normalized", method: "POST" as const, path: "drafts/draft/commands", label: "Save requirement", draft: true as const, body: {
+    commandSchemaVersion: 1, command: "CREATE_REQUIREMENT", expectedDocumentRevision: 1, payload: { title: "Submitted", verification: { description: "Check it", responsibleRole: "Reviewer" } },
+  } };
+  const current = { ...defaultUi, drafts: { "specs:req:new:title": " Submitted ", "specs:req:new:verificationDescription": " Check it ", "specs:req:new:responsibleRole": " Reviewer " }, specs: { ...defaultSpecsUi, pending: request, selected: { kind: "requirement" as const, id: "new" } } };
+  const saved = finishRequirementWrite(current, request, { createdIds: ["r1"], versions: { r1: 1 } });
+  assert.deepEqual(saved.drafts, {});
+  assert.equal(saved.specs.selected, null, "the saved creation closes instead of allowing another create");
+  const newer = { ...current, drafts: { ...current.drafts, "specs:req:new:title": "Later title" } };
+  assert.equal(finishRequirementWrite(newer, request, { createdIds: ["r1"] }).drafts["specs:req:new:title"], "Later title");
+});
+
+const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { section: "sources" as const, selected: null, sourceScope: "user" as const, pending: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("discard preserves an uncertain import's original per-project request; dropping access clears it", () => {
@@ -128,6 +227,63 @@ test("one unresolved Specs request at a time, settled only by its own key", () =
   assert.equal(settleSpecsRequest(uncertain, second.key, "saved", "late").pending, first, "another key's late result changes nothing");
   assert.equal(settleSpecsRequest(uncertain, first.key, "saved", "Saved.").pending, null);
   assert.equal(anyDirty(updateUi({}, "p1", () => ({ specs: uncertain }))), true, "reload protection covers it");
+});
+
+test("stale requirement recovery remains scoped across unrelated Specs requests", () => {
+  const requirement = { key: "a".repeat(16), method: "POST" as const, path: "drafts/draft-a/commands", body: { command: "UPDATE_REQUIREMENT", payload: { requirementId: "requirement-a" } }, label: "Save requirement", draft: true as const };
+  const started = startSpecsRequest(defaultSpecsUi, requirement)!;
+  assert.equal(settleSpecsRequest(started, "b".repeat(16), "refused", "Stale", "STALE_ENTITY_VERSION"), started, "another key cannot mark a stale target");
+  assert.equal(settleSpecsRequest(started, requirement.key, "uncertain", "Unconfirmed", "STALE_ENTITY_VERSION").staleRequirements, undefined, "an uncertain result is not a stale conflict");
+  for (const request of [
+    { ...requirement, path: "sources/source-a/versions", body: { title: "Source" }, draft: undefined },
+    { ...requirement, body: { command: "UPDATE_TRACE_LINK", payload: { linkId: "link-a" } } },
+  ]) assert.equal(settleSpecsRequest(startSpecsRequest(defaultSpecsUi, request)!, request.key, "refused", "Stale", "STALE_ENTITY_VERSION").staleRequirements, undefined, "only requirement updates can set recovery");
+  const stale = settleSpecsRequest(started, requirement.key, "refused", "Stale", "STALE_ENTITY_VERSION");
+  assert.deepEqual(stale.staleRequirements, { "requirement-a": "draft-a" });
+  const source = { key: "c".repeat(16), method: "POST" as const, path: "sources", body: { title: "Source", text: "Evidence" }, label: "Add source" };
+  const savedSource = settleSpecsRequest(startSpecsRequest(stale, source)!, source.key, "saved", "Saved.");
+  assert.deepEqual(savedSource.staleRequirements, { "requirement-a": "draft-a" }, "unrelated source saves retain requirement recovery");
+  const other = { ...requirement, key: "d".repeat(16), path: "drafts/draft-b/commands", body: { command: "UPDATE_REQUIREMENT", payload: { requirementId: "requirement-b" } } };
+  const bothStale = settleSpecsRequest(startSpecsRequest(savedSource, other)!, other.key, "refused", "Stale", "STALE_ENTITY_VERSION");
+  assert.deepEqual(bothStale.staleRequirements, { "requirement-a": "draft-a", "requirement-b": "draft-b" }, "independent conflicts coexist");
+  const discarded = uiFor(discardDrafts(updateUi({}, "p1", () => ({ specs: { ...bothStale, pending: source } })), "p1"), "p1").specs;
+  assert.equal(discarded.pending, source, "discard retains an in-flight receipt");
+  assert.equal(discarded.staleRequirements, undefined, "discard explicitly clears recovery controls");
+});
+
+test("an acknowledged requirement receipt keeps its exact recovery request until a covering read finishes it", () => {
+  const request = { key: "a".repeat(16), method: "POST" as const, path: "drafts/d/commands", body: { command: "CREATE_REQUIREMENT", expectedDocumentRevision: 7 }, label: "Save requirement", draft: true as const };
+  const started = startSpecsRequest(defaultSpecsUi, request)!;
+  const acknowledged = settleSpecsRequest(started, request.key, "acknowledged", "Save requirement was acknowledged. Refresh saved changes to finish.");
+  assert.deepEqual(acknowledged.pending, { ...request, acknowledged: true }, "the acknowledged receipt remains recoverable by its exact key and body");
+  assert.equal(anyDirty(updateUi({}, "p1", () => ({ specs: acknowledged }))), true, "an uncovered acknowledgement still protects unload");
+  assert.equal(startSpecsRequest(acknowledged, { ...request, key: "b".repeat(16) }), null, "a later write cannot replace the acknowledged receipt");
+  const interrupted = settleSpecsRequest(acknowledged, request.key, "uncertain", "We could not confirm this save.");
+  assert.deepEqual(interrupted.pending, acknowledged.pending);
+  assert.equal(interrupted.message, acknowledged.message, "a refresh failure cannot unconfirm a known committed receipt");
+  const finished = settleSpecsRequest(interrupted, request.key, "saved", "Save requirement: saved.");
+  assert.equal(finished.pending, null);
+});
+
+test("a draft write holds the reservation through save-first, then records its exact body", () => {
+  const reserved = { key: "d".repeat(16), method: "POST" as const, path: "drafts/d/commands", body: null, label: "Save requirement", draft: true as const };
+  const preparing = startSpecsRequest(defaultSpecsUi, reserved)!;
+  const source = { key: "e".repeat(16), method: "POST" as const, path: "sources", body: { title: "B", text: "x" }, label: "Add source" };
+  assert.equal(startSpecsRequest(preparing, source), null, "a source write started after a panel remount cannot take the reservation");
+  const body = { commandSchemaVersion: 1, command: "CREATE_REQUIREMENT", expectedDocumentRevision: 7 };
+  assert.equal(fillSpecsRequest(preparing, source.key, body), preparing, "only the owner fills it");
+  const sent = fillSpecsRequest(preparing, reserved.key, body);
+  assert.deepEqual(sent.pending, { ...reserved, body });
+  assert.equal(anyDirty(updateUi({}, "p1", () => ({ specs: preparing }))), true);
+});
+
+test("Specs keeps its section and a frozen draft request across remounts", () => {
+  const request = { key: "c".repeat(16), method: "POST" as const, path: "drafts/d/commands", body: { command: "CREATE_REQUIREMENT", expectedDocumentRevision: 4 }, label: "Save requirement", draft: true as const };
+  const started = startSpecsRequest({ ...defaultSpecsUi, section: "scope" }, request)!;
+  const store = updateUi({}, "p1", () => ({ specs: settleSpecsRequest(started, request.key, "uncertain", "We couldn’t confirm it.") }));
+  assert.deepEqual(uiFor(store, "p1").specs.pending, request, "a retry resends the guard the request was first sent with");
+  assert.equal(uiFor(store, "p1").specs.section, "scope");
+  assert.equal(defaultSpecsUi.section, "sources");
 });
 
 test("drafts belong to one project, and undefined clears a draft", () => {

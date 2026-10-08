@@ -85,11 +85,25 @@ function unchanged(record: Record<string, unknown>, fields: Record<string, unkno
   return Object.entries(fields).every(([key, value]) => JSON.stringify(record[key]) === JSON.stringify(value));
 }
 
-function current<T extends { version: number }>(record: T | undefined, entityId: string, expected: number): T {
+export function current<T extends { version: number }>(record: T | undefined, entityId: string, expected: number): T {
   if (!record || record.version !== expected) {
     fail("STALE_ENTITY_VERSION", { entityId, currentVersion: record?.version ?? null });
   }
   return record;
+}
+
+/** Every id the draft has ever used: active records in any collection plus retired ones. New ids must avoid all of them. */
+export function usedIds(document: ScopeDocument): Set<string> {
+  return new Set([
+    ...Object.keys(document.flows), ...Object.keys(document.nodes), ...Object.keys(document.edges),
+    ...Object.keys(document.requirements), ...Object.keys(document.traceLinks), ...document.retiredEntityIds,
+  ]);
+}
+
+/** Trace links that end at these steps: removed with them in one change (Data02 reference rules). */
+export function incidentTraceLinks(document: ScopeDocument, nodeIds: Iterable<string>): string[] {
+  const removing = new Set(nodeIds);
+  return Object.values(document.traceLinks).filter((link) => removing.has(link.nodeId)).map((link) => link.id).sort();
 }
 
 /** The final size and invariant check of a changed draft (LIMIT_EXCEEDED is a refusal; anything else a server fault). */
@@ -123,12 +137,7 @@ function transformGraphCommand(
   const increment = deferVersions ? (value: number) => value : bump;
   const document = inPlace ? saved.document : structuredClone(saved.document);
   const layout = inPlace ? saved.layout : structuredClone(saved.layout);
-  const used = new Set([
-    ...Object.keys(document.flows),
-    ...Object.keys(document.nodes),
-    ...Object.keys(document.edges),
-    ...document.retiredEntityIds,
-  ]);
+  const used = usedIds(document);
   const createdIds: string[] = [];
   const retiredIds: string[] = [];
   const versions: Record<string, number> = {};
@@ -136,7 +145,7 @@ function transformGraphCommand(
 
   const allocate = () => {
     const value = newId();
-    if (used.has(value)) throw new Error("ID_COLLISION");
+    if (used.has(value)) fail("INVALID_INPUT");
     used.add(value);
     createdIds.push(value);
     return value;
@@ -258,14 +267,16 @@ function transformGraphCommand(
       if (!sameIds(plan.nodeIds, command.payload.removeNodeIds) || !sameIds(plan.edgeIds, command.payload.removeEdgeIds)) {
         fail("DEPENDENCY_CONFLICT");
       }
+      const linkIds = incidentTraceLinks(document, plan.nodeIds);
       for (const edgeId of plan.edgeIds) { delete document.edges[edgeId]; delete layout.edgeSides[edgeId]; }
+      for (const linkId of linkIds) delete document.traceLinks[linkId];
       for (const nodeId of plan.nodeIds) {
         delete document.nodes[nodeId];
         delete layout.positions[nodeId];
       }
       delete document.flows[flow.id];
       delete layout.directions[flow.id];
-      retire([flow.id, ...plan.nodeIds, ...plan.edgeIds]);
+      retire([flow.id, ...plan.nodeIds, ...plan.edgeIds, ...linkIds]);
       layoutChanged = true;
       break;
     }
@@ -311,12 +322,14 @@ function transformGraphCommand(
       }
       const plan = dependencyPlan(document, flowId, nodeIds);
       if (!sameIds(plan.edgeIds, removeEdgeIds)) fail("DEPENDENCY_CONFLICT");
+      const linkIds = incidentTraceLinks(document, plan.nodeIds);
       for (const edgeId of plan.edgeIds) { delete document.edges[edgeId]; delete layout.edgeSides[edgeId]; }
+      for (const linkId of linkIds) delete document.traceLinks[linkId];
       for (const nodeId of plan.nodeIds) {
         delete document.nodes[nodeId];
         delete layout.positions[nodeId];
       }
-      retire([...plan.nodeIds, ...plan.edgeIds]);
+      retire([...plan.nodeIds, ...plan.edgeIds, ...linkIds]);
       touchFlow(flowId);
       layoutChanged = true;
       break;

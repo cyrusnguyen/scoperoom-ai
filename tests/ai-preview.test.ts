@@ -83,3 +83,21 @@ test("temporary preview IDs skip retired UUIDs as well as occupied saved graph I
   assert.equal(preview.document.nodes[retired],undefined);assert.equal(preview.document.edges[retired],undefined);
   assert.deepEqual(preview.document.retiredEntityIds,[retired]);assert.deepEqual(saved,original,'saved input remains unchanged');
 });
+
+test("temporary preview IDs skip saved requirements and links while preserving them", () => {
+  const { saved, status, run } = fixture();
+  const requirementId = id("7"), linkId = id("8"), nodeId = id("2");
+  saved.document.requirements[requirementId] = {
+    id: requirementId, displayId: "REQ-001", version: 1, behaviourVersion: 1, title: "Pay", statement: "", category: "FUNCTIONAL", inclusion: "INCLUDED",
+    origin: "HUMAN", sourceRefs: [], decisionIds: [], ownerId: null, confirmation: null, verificationMethod: null,
+  };
+  saved.document.traceLinks[linkId] = { id: linkId, version: 1, requirementId, nodeId, explanation: "", reviewedRequirementBehaviourVersion: null, reviewedNodeBehaviourVersion: null, reviewedBy: null, reviewedAt: null };
+  const original = structuredClone(saved);
+  const preview = projectProposalPreview(saved, status, run);
+  assert.ok(preview);
+  const createdNode = Object.values(preview.document.nodes).find(node => node.label === "Retry payment");
+  assert.equal(createdNode?.id, id("9"));
+  assert.deepEqual(preview.document.requirements[requirementId], saved.document.requirements[requirementId]);
+  assert.deepEqual(preview.document.traceLinks[linkId], saved.document.traceLinks[linkId]);
+  assert.deepEqual(saved, original);
+});

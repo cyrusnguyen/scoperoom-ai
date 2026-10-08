@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useSync } from "@/features/collaboration/ui/sync-context";
+import { incidentTraceLinks } from "@/features/drafts/domain/graph";
+import { removedRecordIds } from "@/features/scope/domain/scope";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import type { ProposalOperation, RunView } from "../contracts/tasks";
 import { projectProposalPreview, newApplyBlocker } from "./preview-projection";
@@ -42,6 +44,11 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
   const missing = [...missingSet];
   const blocker = newApplyBlocker({ canWrite, editable: studio.editable, authorityConfirmed: authorityConfirmed && !failures, busy: studio.busy || busy, dirty: studio.exportDirty, blockedByPending, preview: Boolean(preview) });
   const canApply = !inspection && !blocker && !pendingApply && run.applicability === "APPLICABLE" && operations.length > 0 && run.resultHash !== null;
+  const removedLinkCount = (operationIds: readonly string[]) => incidentTraceLinks(studio.savedDraft.document, removedRecordIds(operations, operationIds)).length;
+  const removedLinkNotice = (operationIds: readonly string[]) => {
+    const count = removedLinkCount(operationIds);
+    return <p className="muted">Also removes {count} requirement link{count === 1 ? "" : "s"}.</p>;
+  };
   const toggle = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   const apply = (selectedOperationIds: string[]) => {
     if (!canApply || !run.resultHash) return;
@@ -96,6 +103,7 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
       {!inspection && <>
       <p className="muted">Apply all uses every proposed change. Choosing a subset also consumes this proposal; the full preview always shows all proposed changes.</p>
       {!pendingApply && <button type="button" className="button primary" onClick={() => apply(operations.map(operation => operation.id))} disabled={!canApply}>Apply all changes</button>}
+      {!pendingApply && removedLinkNotice(operations.map((operation) => operation.id))}
       <details className="proposal-subset"><summary>Choose individual changes</summary>
       <p className="muted">{selected.length} of {operations.length} operations selected for Apply. Unchecked operations are context only.</p>
       {operations.map((operation) => <label className="proposal-operation" key={operation.id}>
@@ -107,6 +115,7 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
       </label>)}
       {missing.length > 0 && <p className="field-error" role="alert">Also select required operations: {missing.join(", ")}.</p>}
       {!pendingApply && <button type="button" className="button quiet" onClick={() => apply(selected)} disabled={!canApply || !selected.length || missing.length > 0}>Apply selected changes ({selected.length})</button>}
+      {!pendingApply && removedLinkNotice(selected)}
       </details></>}
       <details className="proposal-change-details"><summary>Change details</summary>
       {run.diff && <div className="proposal-diff" aria-label="Full proposal before and after changes">
