@@ -528,6 +528,40 @@ test("permanent applied evidence survives body cleanup and later graph edits; di
   });
 });
 
+test("permanent Apply evidence keeps a trace link retired with its selected node after body cleanup", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(); const p = await projectFor(owner); const draft = await draftOf(database, p);
+    const flow = await executeGraphCommand(owner.identity, p, draft.id, { key: randomUUID(), commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision: draft.revision,
+      payload: { title: "Checkout", purpose: "", classification: "USER_JOURNEY", inclusion: "INCLUDED" } });
+    const flowId = flow.createdIds[0]!;
+    const node = await executeGraphCommand(owner.identity, p, draft.id, { key: randomUUID(), commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision: flow.documentRevision,
+      payload: { flowId, kind: "ACTION", label: "Pay", description: "", actorLabel: "" } });
+    const nodeId = node.createdIds[0]!;
+    const requirement = await executeGraphCommand(owner.identity, p, draft.id, { key: randomUUID(), commandSchemaVersion: 1, command: "CREATE_REQUIREMENT", expectedDocumentRevision: node.documentRevision,
+      payload: { title: "Pay by card", statement: "", category: "FUNCTIONAL", inclusion: "UNDECIDED", ownerId: null, verification: null, sourceRefs: [] } });
+    const link = await executeGraphCommand(owner.identity, p, draft.id, { key: randomUUID(), commandSchemaVersion: 1, command: "ADD_TRACE_LINK", expectedDocumentRevision: requirement.documentRevision,
+      payload: { requirementId: requirement.createdIds[0]!, nodeId, explanation: "Payment evidence" } });
+    const linkId = link.createdIds[0]!;
+    const proposal = { schemaVersion: 1, kind: "proposal" as const, operations: [
+      { id: "remove", dependsOn: [], edit: { command: "DELETE_NODES" as const, payload: { flowId, nodeIds: [nodeId], removeEdgeIds: [] } } },
+    ], assumptions: [], citations: [] };
+    const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: proposal, selection: { flowId, nodeIds: [nodeId] } });
+    const view = await readRun(owner.identity, p, run);
+    await applyRun(owner.identity, p, run, { key: randomUUID(), draftId: view.draftId, expectedDocumentRevision: view.documentRevision, expectedParentSnapshotId: view.parentSnapshotId, resultHash: view.resultHash!, selectedOperationIds: ["remove"] });
+    const before = await readRun(owner.identity, p, run);
+    const retained = before.application?.evidence.before.find((record) => record.id === linkId);
+    assert.deepEqual(retained, { id: linkId, version: 1, requirementId: requirement.createdIds[0], nodeId, explanation: "Payment evidence", reviewedRequirementBehaviourVersion: null, reviewedNodeBehaviourVersion: null, reviewedBy: null, reviewedAt: null });
+    assert.ok(!before.application?.evidence.after.some((record) => record.id === linkId));
+    await database.query("alter table app.ai_run disable trigger enforce_ai_run");
+    try { await database.query("update app.ai_run set terminal_at = now() - interval '8 days' where id = $1", [run]); }
+    finally { await database.query("alter table app.ai_run enable trigger enforce_ai_run"); }
+    await workerCleanup();
+    const after = await readRun(owner.identity, p, run);
+    assert.equal(after.capture, null); assert.equal(after.result, null);
+    assert.deepEqual(after.application?.evidence.before.find((record) => record.id === linkId), retained);
+  });
+});
+
 test("current source heads stale only Apply authority while exact historical versions and captured diff remain readable", { skip: !canRun }, async () => {
   await withAi(async ({ person, projectFor, database }) => {
     const owner = await person(); const p = await projectFor(owner);

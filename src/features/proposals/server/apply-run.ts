@@ -63,7 +63,7 @@ export async function applyRun(identity: ProjectIdentity, projectId: string, run
     await tx.scopeDraft.update({ where: { id: saved.id }, data: { documentJson: asJson(applied!.document), layoutJson: asJson(applied!.layout), documentRevision, layoutRevision }, select: { id: true } });
     const applicationId = randomUUID();
     const records = (document: typeof applied.document) => applied!.changedIds.flatMap(id => {
-      const record = document.flows[id] ?? document.nodes[id] ?? document.edges[id]; return record ? [record] : [];
+      const record = document.flows[id] ?? document.nodes[id] ?? document.edges[id] ?? document.traceLinks[id]; return record ? [record] : [];
     });
     const selected = run.result!.kind === "proposal" ? run.result!.operations.filter(operation => input.selectedOperationIds.includes(operation.id)) : [];
     const evidence = { changedIds: applied!.changedIds, before: records(saved.draft.document), after: records(applied!.document), assumptions: run.result!.kind === "proposal" ? run.result!.assumptions : [], citations: run.result!.kind === "proposal" ? run.result!.citations : [] };

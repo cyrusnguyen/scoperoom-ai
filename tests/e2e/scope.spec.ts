@@ -692,12 +692,27 @@ test("citation reads can be retried and deleted requirements keep local text for
   await page.getByLabel("Source title").fill("Recovery brief");
   await page.getByLabel("Source text").fill("Keep this evidence.");
   await page.getByRole("button", { name: "Add source" }).click();
+  await page.getByLabel("Source title").fill("Second recovery brief");
+  await page.getByLabel("Source text").fill("Second evidence.");
+  await page.getByRole("button", { name: "Add source" }).click();
   await expect(page.getByRole("button", { name: /Recovery brief/ })).toBeVisible();
-  const source = (await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: Array<{ currentVersionId: string }> }).items[0]!;
-  let versionReads = 0;
-  await page.route(`**/api/projects/${projectId}/source-versions/${source.currentVersionId}`, async (route) => {
-    versionReads++;
-    if (versionReads === 1) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { code: "UNAVAILABLE", message: "Source text temporarily unavailable." } }) });
+  const sources = (await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: Array<{ title: string; currentVersionId: string }> }).items;
+  const source = sources.find((item) => item.title === "Recovery brief")!, secondSource = sources.find((item) => item.title === "Second recovery brief")!;
+  let inputReads = 0, holdCitationReads = false;
+  const citationCalls = new Map<string, number>(), held = new Map<string, Array<{ release: () => void; settled: Promise<void> }>>();
+  await page.route(`**/api/projects/${projectId}/source-versions/*`, async (route) => {
+    const sourceVersionId = route.request().url().split("/").at(-1)!;
+    if (!holdCitationReads) {
+      if (sourceVersionId === source.currentVersionId && inputReads++ === 0) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { code: "UNAVAILABLE", message: "Source text temporarily unavailable." } }) });
+      return route.continue();
+    }
+    if (sourceVersionId !== source.currentVersionId && sourceVersionId !== secondSource.currentVersionId) return route.continue();
+    citationCalls.set(sourceVersionId, (citationCalls.get(sourceVersionId) ?? 0) + 1);
+    let release!: () => void;
+    const heldRead = { release: () => release(), settled: requestSettled(page, route.request()) };
+    const reads = held.get(sourceVersionId) ?? []; reads.push(heldRead); held.set(sourceVersionId, reads);
+    await new Promise<void>((resolve) => { release = resolve; });
+    if (sourceVersionId === secondSource.currentVersionId && citationCalls.get(sourceVersionId) === 1) return route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Second citation temporarily unavailable." } } });
     return route.continue();
   });
   await page.getByRole("tab", { name: "Scope" }).click();
@@ -714,6 +729,59 @@ test("citation reads can be retried and deleted requirements keep local text for
   await expect(page.getByLabel("Excerpt")).toHaveValue("Keep this evidence.");
   await page.getByRole("button", { name: "Add citation" }).click();
   await expect(page.getByRole("button", { name: /Recovery brief v1, lines 1-1/ })).toBeVisible();
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  const initial = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; document: { requirements: Record<string, { id: string; version: number }> } } }).draft;
+  const [savedRequirement] = Object.values(initial.document.requirements);
+  const sourceRefs = [
+    { sourceVersionId: source.currentVersionId, startLine: 1, endLine: 1, excerpt: "Keep this evidence." },
+    { sourceVersionId: source.currentVersionId, startLine: 1, endLine: 1, excerpt: "Keep" },
+    { sourceVersionId: secondSource.currentVersionId, startLine: 1, endLine: 1, excerpt: "Second evidence." },
+  ];
+  const updatedRefs = await page.request.post(`/api/projects/${projectId}/drafts/${initial.id}/commands`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+    data: { commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: savedRequirement!.version, payload: { requirementId: savedRequirement!.id, title: "Recover multiple citations", sourceRefs } },
+  });
+  expect(updatedRefs.status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("button", { name: /REQ-001 Recover multiple citations/ })).toBeVisible();
+  holdCitationReads = true;
+  try {
+    await page.getByRole("button", { name: /REQ-001 Recover multiple citations/ }).click();
+    await expect.poll(() => citationCalls.get(source.currentVersionId)).toBe(1);
+    await expect.poll(() => citationCalls.get(secondSource.currentVersionId)).toBe(1);
+    const afterRefs = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; document: { requirements: Record<string, { id: string; version: number }> } } }).draft;
+    const [unchangedRequirement] = Object.values(afterRefs.document.requirements);
+    const unrelated = await page.request.post(`/api/projects/${projectId}/drafts/${afterRefs.id}/commands`, {
+      headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
+      data: { commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: unchangedRequirement!.version, payload: { requirementId: unchangedRequirement!.id, statement: "Unrelated saved statement" } },
+    });
+    expect(unrelated.status()).toBe(200);
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page.getByLabel("Statement", { exact: true })).toHaveValue("Unrelated saved statement");
+    await browserFrames(page);
+    expect(citationCalls.get(source.currentVersionId)).toBe(1);
+    expect(citationCalls.get(secondSource.currentVersionId)).toBe(1);
+    held.get(source.currentVersionId)![0]!.release();
+    await held.get(source.currentVersionId)![0]!.settled;
+    await browserFrames(page);
+    expect(citationCalls.get(secondSource.currentVersionId)).toBe(1);
+    held.get(secondSource.currentVersionId)![0]!.release();
+    await held.get(secondSource.currentVersionId)![0]!.settled;
+    await expect(page.getByText("Second citation temporarily unavailable.")).toBeVisible();
+    await page.getByRole("button", { name: "Retry citation", exact: true }).click();
+    await expect.poll(() => citationCalls.get(secondSource.currentVersionId)).toBe(2);
+    expect(citationCalls.get(source.currentVersionId)).toBe(1);
+    const retriedCitation = held.get(secondSource.currentVersionId)!.at(-1)!;
+    retriedCitation.release();
+    await retriedCitation.settled;
+    await expect(page.getByRole("button", { name: "Retry citation", exact: true })).toHaveCount(0);
+    await browserFrames(page);
+    expect(citationCalls.get(source.currentVersionId)).toBe(1);
+    expect(citationCalls.get(secondSource.currentVersionId)).toBe(2);
+  } finally {
+    for (const reads of held.values()) for (const read of reads) read.release();
+    await Promise.all([...held.values()].flat().map((read) => read.settled));
+  }
   await page.getByLabel("Statement", { exact: true }).fill("Keep my unsaved statement.");
   const draft = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; documentRevision: number; document: { requirements: Record<string, { id: string }> } } }).draft;
   const requirement = Object.values(draft.document.requirements)[0]!;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiRead, sessionEnded } from "@/client/api";
 import { useSync } from "@/features/collaboration/ui/sync-context";
 import { LIMITS, SOURCE_REF_LIMITS, type RequirementCategory, type RequirementRecord, type SourceRef, type TraceLinkRecord } from "@/features/drafts/contracts/scope-document";
@@ -121,6 +121,7 @@ function RequirementActions({ requirement, update, drafts, setDraft, canEdit, lo
   const [sourceError, setSourceError] = useState<{ id: string; message: string } | null>(null), [sourceAttempt, setSourceAttempt] = useState(0);
   const [citationViews, setCitationViews] = useState<Record<string, SourceVersionView>>({});
   const [citationErrors, setCitationErrors] = useState<Record<string, string>>({}), [citationAttempt, setCitationAttempt] = useState(0);
+  const citationCache = useRef<Record<string, SourceVersionView>>({});
   const sourceVersionId = get(`${cite}source`), start = get(`${cite}start`), end = get(`${cite}end`), excerpt = get(`${cite}excerpt`);
   const first = Number(start), last = Number(end);
   const validLines = Number.isSafeInteger(first) && Number.isSafeInteger(last) && first >= 1 && last >= first && source?.id === sourceVersionId && last <= source.lineStarts.length;
@@ -130,6 +131,8 @@ function RequirementActions({ requirement, update, drafts, setDraft, canEdit, lo
     || (!citationMatches(source.text, citation) ? "Excerpt must be text from the selected lines." : "")
     || (requirement.sourceRefs.some((ref) => ref.sourceVersionId === citation.sourceVersionId && ref.startLine === citation.startLine && ref.endLine === citation.endLine && ref.excerpt === citation.excerpt) ? "This exact citation is already added." : "")
     || (requirement.sourceRefs.length >= SOURCE_REF_LIMITS.count ? `A requirement can have at most ${SOURCE_REF_LIMITS.count} citations.` : "");
+  const citationVersionIds = [...new Set(requirement.sourceRefs.map((ref) => ref.sourceVersionId))].sort();
+  const citationVersionKey = citationVersionIds.join(",");
   useEffect(() => {
     if (!sourceVersionId) return;
     const controller = new AbortController();
@@ -140,14 +143,19 @@ function RequirementActions({ requirement, update, drafts, setDraft, canEdit, lo
     return () => controller.abort();
   }, [projectId, sourceVersionId, sourceAttempt]);
   useEffect(() => {
+    if (!citationVersionKey) return;
     const controller = new AbortController();
-    for (const ref of requirement.sourceRefs) if (!citationViews[ref.sourceVersionId]) void apiRead<SourceVersionView>(`/api/projects/${projectId}/source-versions/${ref.sourceVersionId}`, controller.signal).then((result) => {
+    for (const sourceVersionId of citationVersionKey.split(",")) if (!citationCache.current[sourceVersionId]) void apiRead<SourceVersionView>(`/api/projects/${projectId}/source-versions/${sourceVersionId}`, controller.signal).then((result) => {
       if (controller.signal.aborted || sessionEnded(result)) return;
-      if (result.ok) setCitationViews((current) => current[result.data.id] ? current : { ...current, [result.data.id]: result.data });
-      else setCitationErrors((current) => ({ ...current, [ref.sourceVersionId]: result.message }));
+      if (result.ok) {
+        if (citationCache.current[result.data.id]) return;
+        citationCache.current = { ...citationCache.current, [result.data.id]: result.data };
+        setCitationViews((current) => current[result.data.id] ? current : { ...current, [result.data.id]: result.data });
+      }
+      else setCitationErrors((current) => ({ ...current, [sourceVersionId]: result.message }));
     });
     return () => controller.abort();
-  }, [citationViews, projectId, requirement.sourceRefs, citationAttempt]);
+  }, [citationAttempt, citationVersionKey, projectId]);
   useEffect(() => { if (!source || !validLines || excerpt) return; setDraft(`${cite}excerpt`, Array.from(source.text.split("\n").slice(first - 1, last).join("\n")).slice(0, SOURCE_REF_LIMITS.excerpt).join("")); }, [cite, excerpt, first, last, setDraft, source, validLines]);
   const selectedSource = sources.find((item) => item.currentVersionId === sourceVersionId);
   const sourceFor = (ref: SourceRef) => sources.find((item) => item.currentVersionId === ref.sourceVersionId);
