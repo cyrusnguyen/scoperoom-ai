@@ -889,8 +889,11 @@ test("a stale requirement edit is explicitly rebased after remount without overw
   await page.getByLabel("Title", { exact: true }).fill("Other payment");
   await page.getByRole("button", { name: "Save requirement" }).click();
   await page.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
   await page.getByLabel("Title", { exact: true }).fill("My title");
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeEnabled();
   await page.getByLabel("Title", { exact: true }).fill("Pay by card");
+  await expect(page.getByRole("button", { name: "Save requirement" })).toBeDisabled();
   expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
   await page.getByLabel("Title", { exact: true }).fill("My title");
   const initial = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; document: { requirements: Record<string, { id: string; displayId: string; version: number }> } } }).draft;
