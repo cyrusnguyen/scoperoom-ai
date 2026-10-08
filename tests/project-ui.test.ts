@@ -223,6 +223,20 @@ test("one unresolved Specs request at a time, settled only by its own key", () =
   assert.equal(anyDirty(updateUi({}, "p1", () => ({ specs: uncertain }))), true, "reload protection covers it");
 });
 
+test("only a stale requirement update records scoped requirement recovery", () => {
+  const requirement = { key: "a".repeat(16), method: "POST" as const, path: "drafts/draft-a/commands", body: { command: "UPDATE_REQUIREMENT", payload: { requirementId: "requirement-a" } }, label: "Save requirement", draft: true as const };
+  const started = startSpecsRequest(defaultSpecsUi, requirement)!;
+  assert.equal(settleSpecsRequest(started, "b".repeat(16), "refused", "Stale", "STALE_ENTITY_VERSION"), started, "another key cannot mark a stale target");
+  assert.equal(settleSpecsRequest(started, requirement.key, "uncertain", "Unconfirmed", "STALE_ENTITY_VERSION").staleRequirement, undefined, "an uncertain result is not a stale conflict");
+  for (const request of [
+    { ...requirement, path: "sources/source-a/versions", body: { title: "Source" }, draft: undefined },
+    { ...requirement, body: { command: "UPDATE_TRACE_LINK", payload: { linkId: "link-a" } } },
+  ]) assert.equal(settleSpecsRequest(startSpecsRequest(defaultSpecsUi, request)!, request.key, "refused", "Stale", "STALE_ENTITY_VERSION").staleRequirement, undefined, "only requirement updates can set recovery");
+  const stale = settleSpecsRequest(started, requirement.key, "refused", "Stale", "STALE_ENTITY_VERSION");
+  assert.deepEqual(stale.staleRequirement, { id: "requirement-a", draftId: "draft-a" });
+  assert.equal(startSpecsRequest(stale, { ...requirement, key: "c".repeat(16) })!.staleRequirement, undefined, "a new request clears resolved recovery context");
+});
+
 test("an acknowledged requirement receipt keeps its exact recovery request until a covering read finishes it", () => {
   const request = { key: "a".repeat(16), method: "POST" as const, path: "drafts/d/commands", body: { command: "CREATE_REQUIREMENT", expectedDocumentRevision: 7 }, label: "Save requirement", draft: true as const };
   const started = startSpecsRequest(defaultSpecsUi, request)!;

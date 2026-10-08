@@ -17,7 +17,7 @@ export type SpecsSelection =
   | null;
 /** One Specs write at a time per project, kept in this store so a lost response survives tab switches and remounts. `path` is relative to `/api/projects/:projectId/`. */
 export type SpecsRequest = { key: string; method: "POST" | "PATCH"; path: string; body: Record<string, unknown> | null; label: string; draft?: true; acknowledged?: true };
-export type SpecsUi = { section: "sources" | "scope"; selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string; sourceCorrections?: Record<string, SourceCorrection> };
+export type SpecsUi = { section: "sources" | "scope"; selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string; staleRequirement?: { id: string; draftId: string }; sourceCorrections?: Record<string, SourceCorrection> };
 export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: RightTab; drafts: Record<string, string>; ai: AiUi; specs: SpecsUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
@@ -31,15 +31,19 @@ export function fillSpecsRequest(specs: SpecsUi, key: string, body: Record<strin
 
 /** Starts a request only when no other one is unresolved (null means refused). */
 export function startSpecsRequest(specs: SpecsUi, request: SpecsRequest): SpecsUi | null {
-  return specs.pending ? null : { ...specs, pending: request, message: "" };
+  return specs.pending ? null : { ...specs, pending: request, message: "", staleRequirement: undefined };
 }
 
 /** Settles exactly one request: an unconfirmed or acknowledged one keeps its key and body for recovery; any other key's late result is ignored. */
-export function settleSpecsRequest(specs: SpecsUi, key: string, outcome: "saved" | "uncertain" | "acknowledged" | "refused", message: string): SpecsUi {
+export function settleSpecsRequest(specs: SpecsUi, key: string, outcome: "saved" | "uncertain" | "acknowledged" | "refused", message: string, code?: string): SpecsUi {
   if (specs.pending?.key !== key) return specs;
   if (outcome === "uncertain") return { ...specs, message: specs.pending.acknowledged ? `${specs.pending.label} was acknowledged. Refresh saved changes to finish.` : message };
   if (outcome === "acknowledged") return { ...specs, pending: { ...specs.pending, acknowledged: true }, message };
-  return { ...specs, pending: null, message };
+  const payload = specs.pending.body?.payload as Record<string, unknown> | undefined;
+  const draftId = specs.pending.path.match(/^drafts\/([^/]+)\/commands$/)?.[1];
+  const staleRequirement = outcome === "refused" && code === "STALE_ENTITY_VERSION" && specs.pending.body?.command === "UPDATE_REQUIREMENT" && typeof payload?.requirementId === "string" && draftId
+    ? { id: payload.requirementId, draftId } : undefined;
+  return { ...specs, pending: null, message, staleRequirement };
 }
 export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, rightTab: "details", drafts: {}, ai: defaultAiUi, specs: defaultSpecsUi, ...defaultStudioUi };
 

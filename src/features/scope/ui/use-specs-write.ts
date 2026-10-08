@@ -72,7 +72,7 @@ export function useSpecsWrite(ui: SpecsUi, update: (change: (ui: SpecsUi) => Par
         settle(key, "acknowledged", `${label} was acknowledged. Refresh saved changes to finish.`);
         return false;
       }
-      settle(key, outcome.uncertain ? "uncertain" : "refused", outcome.uncertain ? UNCONFIRMED(label) : outcome.message);
+      update((specs) => settleSpecsRequest(specs, key, outcome.uncertain ? "uncertain" : "refused", outcome.uncertain ? UNCONFIRMED(label) : outcome.message, outcome.code));
       return false;
     } finally { sending.current = false; setBusy(false); }
   }

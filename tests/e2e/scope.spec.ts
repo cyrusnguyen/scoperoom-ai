@@ -884,13 +884,16 @@ test("a stale requirement edit is explicitly rebased after remount without overw
   await page.getByLabel("Title", { exact: true }).fill("Pay by card");
   await page.getByLabel("Statement", { exact: true }).fill("Original statement");
   await page.getByRole("button", { name: "Save requirement" }).click();
+  await page.getByRole("button", { name: "New requirement" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Other payment");
+  await page.getByRole("button", { name: "Save requirement" }).click();
   await page.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
   await page.getByLabel("Title", { exact: true }).fill("My title");
   await page.getByLabel("Title", { exact: true }).fill("Pay by card");
   expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
   await page.getByLabel("Title", { exact: true }).fill("My title");
-  const initial = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; document: { requirements: Record<string, { id: string; version: number }> } } }).draft;
-  const [requirement] = Object.values(initial.document.requirements);
+  const initial = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { id: string; document: { requirements: Record<string, { id: string; displayId: string; version: number }> } } }).draft;
+  const requirement = Object.values(initial.document.requirements).find((item) => item.displayId === "REQ-001")!;
   const path = `/api/projects/${projectId}/drafts/${initial.id}/commands`;
   const remote = await page.request.post(path, {
     headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
@@ -911,6 +914,12 @@ test("a stale requirement edit is explicitly rebased after remount without overw
   await expect(page.getByRole("alert").filter({ hasText: "Someone saved this requirement first" })).toBeVisible();
   await expect(page.getByLabel("Title", { exact: true })).toHaveValue("My title");
   await expect(page.getByLabel("Statement", { exact: true })).toHaveValue("Remote statement");
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await page.getByRole("button", { name: /REQ-002 Other payment/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Keep other payment");
+  await expect(page.getByRole("button", { name: "Use saved values" })).toHaveCount(0);
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Keep other payment");
+  await page.getByRole("button", { name: "Back to requirements" }).click();
   await page.getByRole("tab", { name: "Sources" }).click();
   await page.getByRole("tab", { name: "Scope" }).click();
   await page.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
@@ -940,7 +949,9 @@ test("a stale requirement edit is explicitly rebased after remount without overw
   expect(finalResponse.status()).toBe(200);
   expect(finalResponse.request().postDataJSON()).toEqual({ commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: requirement!.version + 2, payload: { requirementId: requirement!.id, title: "My title" } });
   const final = (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { requirements: Record<string, { statement: string; title: string }> } } }).draft;
-  expect(Object.values(final.document.requirements).map(({ title, statement }) => ({ title, statement }))).toEqual([{ title: "My title", statement: "Remote statement after rebase" }]);
+  expect(Object.keys(final.document.requirements)).toHaveLength(2);
+  expect(final.document.requirements[requirement.id]).toMatchObject({ title: "My title", statement: "Remote statement after rebase" });
+  expect(Object.values(final.document.requirements).find((item) => item.title === "Other payment")).toMatchObject({ statement: "" });
 });
 
 test("trace explanation conflicts offer explicit reconciliation and removed links retain copyable input", async ({ page }) => {
@@ -961,6 +972,11 @@ test("trace explanation conflicts offer explicit reconciliation and removed link
   await page.locator("#link-explanation").fill("Original explanation");
   await page.getByRole("button", { name: "Add link" }).click();
   await expect(page.getByRole("button", { name: "Edit explanation" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await page.getByRole("button", { name: "New requirement" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Other payment");
+  await page.getByRole("button", { name: "Save requirement" }).click();
+  await page.getByRole("button", { name: /REQ-001 Payment/ }).click();
   const readDraft = async () => (await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json()).draft as { id: string; documentRevision: number; document: { traceLinks: Record<string, { id: string; version: number; explanation: string }> } };
   const initial = await readDraft(), original = Object.values(initial.document.traceLinks)[0]!;
   const path = `/api/projects/${projectId}/drafts/${initial.id}/commands`, explanation = page.locator(`#link-${original.id}`);
@@ -976,7 +992,15 @@ test("trace explanation conflicts offer explicit reconciliation and removed link
   expect(conflict.status()).toBe(409);
   expect(conflict.request().postDataJSON().expectedEntityVersion).toBe(original.version);
   await expect(page.getByLabel("Current saved explanation")).toHaveValue("Remote explanation");
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await page.getByRole("button", { name: /REQ-002 Other payment/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Keep other payment");
+  await expect(page.getByRole("button", { name: "Use saved values" })).toHaveCount(0);
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Keep other payment");
+  await page.getByLabel("Title", { exact: true }).fill("Other payment");
+  await page.getByRole("button", { name: "Back to requirements" }).click();
   await switchTabs(page);
+  await page.getByRole("button", { name: /REQ-001 Payment/ }).click();
   await expect(explanation).toHaveValue("My explanation");
   await expect(page.getByLabel("Current saved explanation")).toHaveValue("Remote explanation");
   await page.getByRole("button", { name: "Use my explanation on latest version" }).click();

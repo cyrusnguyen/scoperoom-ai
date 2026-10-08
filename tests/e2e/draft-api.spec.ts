@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { request as nodeRequest } from "node:http";
 import { expect, test } from "@playwright/test";
 import { adminClient, appUrl, cleanupUsers, createProjectViaApi, e2eReady, entitle, openDatabase, signIn } from "./support";
 
@@ -69,7 +70,7 @@ test("an owner saves a command once, reads the coherent draft, and another accou
     expect(stale.status()).toBe(409);
     expect(await stale.json()).toMatchObject({ error: { code: "STALE_DOCUMENT_REVISION", details: { documentRevision: 2 } } });
 
-    // 4,000 Vietnamese code points are about 12 KiB of UTF-8: inside the 64 KiB command body limit.
+    // Field limits still apply independently of the command request byte limit.
     const longText = "ệ".repeat(4_000);
     const step = await post({ commandSchemaVersion: 1, command: "ADD_NODE", expectedDocumentRevision: 2, payload: { flowId: result.createdIds[0], kind: "ACTION", label: "Long", description: longText, actorLabel: "" } });
     expect(step.status()).toBe(200);
@@ -80,6 +81,43 @@ test("an owner saves a command once, reads the coherent draft, and another accou
     expect(draft.document.nodes[stepId]!.description).toBe(longText);
     expect(draft.document.flows[result.createdIds[0]!]!.title).toBe("Checkout");
     expect(draft.layout.directions[result.createdIds[0]!]).toBe("TB");
+
+    await test.step("full citation collections fit the bounded command request, including escaped Unicode", async () => {
+      const excerpt = "😀".repeat(2_000);
+      const source = await page.request.post(`/api/projects/${projectId}/sources`, {
+        headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { title: "Citation capacity", text: excerpt + "\n".repeat(99) },
+      });
+      expect(source.status()).toBe(201);
+      const { sourceVersionId } = await source.json() as { sourceVersionId: string };
+      const created = await post({ commandSchemaVersion: 1, command: "CREATE_REQUIREMENT", expectedDocumentRevision: draft.documentRevision,
+        payload: { title: "Full citations", statement: "", category: "FUNCTIONAL", inclusion: "UNDECIDED", ownerId: null, verification: null, sourceRefs: [] } });
+      expect(created.status()).toBe(200);
+      const requirementId = (await created.json() as { createdIds: string[] }).createdIds[0]!;
+      const sourceRefs = Array.from({ length: 100 }, (_, index) => ({ sourceVersionId, startLine: 1, endLine: index + 1, excerpt }));
+      const body = { commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: 1, payload: { requirementId, sourceRefs } };
+      const wire = JSON.stringify(body).replace(/[\uD800-\uDFFF]/g, (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`);
+      expect(Buffer.byteLength(wire)).toBeGreaterThan(2 * 1024 * 1024);
+      expect(Buffer.byteLength(wire)).toBeLessThan(3 * 1024 * 1024);
+      const savedRefs = await page.request.post(`${base}/commands`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID(), "Content-Type": "application/json" }, data: wire });
+      expect(savedRefs.status()).toBe(200);
+      const full = await (await page.request.get(base)).json() as { documentRevision: number; document: { requirements: Record<string, { version: number; sourceRefs: typeof sourceRefs }> } };
+      expect(full.document.requirements[requirementId]!.sourceRefs).toEqual(sourceRefs);
+
+      const oversizedWire = Buffer.from(JSON.stringify({ ...body, expectedEntityVersion: 2, payload: { requirementId, sourceRefs: [] } }) + " ".repeat(3 * 1024 * 1024));
+      const declared = await page.request.post(`${base}/commands`, { headers: { Origin: appUrl, "Idempotency-Key": randomUUID(), "Content-Type": "application/json" }, data: oversizedWire });
+      expect(declared.status()).toBe(400);
+      expect(await declared.json()).toMatchObject({ error: { code: "INVALID_INPUT" } });
+      const cookie = (await page.context().cookies(appUrl)).map(({ name, value }) => `${name}=${value}`).join("; ");
+      const streamed = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+        const upload = nodeRequest(new URL(`${base}/commands`, appUrl), { method: "POST", headers: { Origin: appUrl, Cookie: cookie, "Content-Type": "application/json", "Idempotency-Key": randomUUID(), "Transfer-Encoding": "chunked" } }, (response) => {
+          const chunks: Buffer[] = []; response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () => resolve({ status: response.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString()) }));
+        });
+        upload.on("error", reject); upload.write(oversizedWire.subarray(0, 40_000)); upload.end(oversizedWire.subarray(40_000));
+      });
+      expect(streamed).toMatchObject({ status: 400, body: { error: { code: "INVALID_INPUT" } } });
+      expect(await (await page.request.get(base)).json()).toEqual(full);
+    });
 
     const otherPage = await other.newPage();
     await signIn(otherPage, admin, users, "Draft API Outsider");

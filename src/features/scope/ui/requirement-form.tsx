@@ -58,7 +58,8 @@ export default function RequirementForm({ requirement, ui, update, drafts, setDr
   const locked = write.busy || ui.pending !== null;
   const edited = Object.keys(saved).some((field) => drafts[`${prefix}${field}`] !== undefined);
   const guard = Number(drafts[guardKey] ?? requirement?.version ?? 0);
-  const stale = ui.message.includes("Someone saved this item first");
+  const staleRequirement = ui.staleRequirement;
+  const stale = staleRequirement?.id === requirement?.id && staleRequirement?.draftId === savedDraft.id;
   const textErrors = {
     title: textError(get("title").trim(), LIMITS.title, "Title", true), statement: textError(get("statement"), LIMITS.longText, "Statement"),
     verificationDescription: textError(get("verificationDescription").trim(), LIMITS.longText, "Verification description"), responsibleRole: textError(get("responsibleRole").trim(), LIMITS.role, "Responsible role"),
@@ -81,12 +82,16 @@ export default function RequirementForm({ requirement, ui, update, drafts, setDr
     return Object.keys(changed).length ? { commandSchemaVersion: 1, command: "UPDATE_REQUIREMENT", expectedEntityVersion: guard, payload: { requirementId: requirement.id, ...changed } } : null;
     });
   };
-  const useSaved = () => { for (const key of [baseKey, guardKey, ...Object.keys(saved).map((field) => `${prefix}${field}`)]) setDraft(key, undefined); };
+  const clearStale = () => update((current) => {
+    const staleRequirement = current.staleRequirement;
+    return staleRequirement?.id === requirement?.id && staleRequirement?.draftId === savedDraft.id ? { staleRequirement: undefined, message: "" } : {};
+  });
+  const useSaved = () => { for (const key of [baseKey, guardKey, ...Object.keys(saved).map((field) => `${prefix}${field}`)]) setDraft(key, undefined); clearStale(); };
   const useMineOnLatest = () => {
     if (!requirement || requirement.version <= guard) return;
     setDraft(baseKey, JSON.stringify(saved));
     setDraft(guardKey, String(requirement.version));
-    update((current) => current.message.includes("Someone saved this item first") ? { message: "" } : {});
+    clearStale();
   };
   const field = <K extends keyof Values>(key: K, label: string, control: "input" | "textarea" | "select", options?: readonly [string, string][], error = "", pairInvalid = false) => {
     const errorId = error ? `requirement-${key}-error` : undefined, describedBy = [errorId, pairInvalid ? "verification-method-error" : undefined].filter(Boolean).join(" ") || undefined;
