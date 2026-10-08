@@ -12,6 +12,8 @@ export type TaskKind = (typeof TASK_KINDS)[number];
 export const AI_LIMITS = {
   promptCodePoints: 8_000, maxInputTokens: 16_000, maxOutputTokens: 6_000, maxGraphNodes: 20, maxGraphEdges: 40,
   runPageSize: 50, startBodyBytes: 64 * 1024, captureBytes: 256 * 1024, resultBytes: 128 * 1024,
+  // Before/after subsets of two valid 2 MiB documents, plus bounded IDs, assumptions and citations.
+  applicationEvidenceBytes: 5 * 1024 * 1024,
   ownerConcurrentRuns: 2, ownerDailyRuns: 30, applicableResults: 10,
   // Operational default, not a product promise: start attempts per actor per minute, counted by the keyed AI_ADMISSION bucket.
   admissionAttemptsPerMinute: 30,
