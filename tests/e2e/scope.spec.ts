@@ -621,12 +621,38 @@ test("a requirement cites immutable source text, preserves local input through i
   await expect(page.getByLabel("Excerpt")).toHaveValue("Customers pay by card.");
   await expect(page.getByRole("alert").filter({ hasText: "This exact citation is already added" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add citation" })).toBeDisabled();
+  await page.getByLabel("Start line").fill("2");
+  await page.getByLabel("End line").fill("2");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("Receipts remain available.");
   const source = (await (await page.request.get(`/api/projects/${projectId}/sources`)).json() as { items: Array<{ id: string; version: number; currentVersionId: string }> }).items[0]!;
+  const correctedHeads = page.waitForResponse((response) => { const url = new URL(response.url()); return response.request().method() === "GET" && url.pathname === `/api/projects/${projectId}/sources` && url.searchParams.get("scope") === "user" && response.status() === 200; });
   const newerSource = await page.request.post(`/api/projects/${projectId}/sources/${source.id}/versions`, {
     headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
-    data: { expectedSourceRecordVersion: source.version, expectedCurrentVersionId: source.currentVersionId, title: "Brief", text: "Customers can pay by card or wallet." },
+    data: { expectedSourceRecordVersion: source.version, expectedCurrentVersionId: source.currentVersionId, title: "Corrected Brief", text: "Customers can pay by card or wallet." },
   });
   expect(newerSource.status()).toBe(201);
+  const corrected = await newerSource.json() as { sourceVersionId: string; version: number };
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await correctedHeads;
+  await expect(page.locator(`#cite-source option[value="${corrected.sourceVersionId}"]`)).toHaveText("Corrected Brief");
+  await expect(page.getByLabel("Cite source")).toHaveValue(source.currentVersionId);
+  await expect(page.locator("#cite-source option:checked")).toHaveText("Brief v1");
+  const archivedHeads = page.waitForResponse((response) => { const url = new URL(response.url()); return response.request().method() === "GET" && url.pathname === `/api/projects/${projectId}/sources` && url.searchParams.get("scope") === "user" && response.status() === 200; });
+  const archivedSource = await page.request.patch(`/api/projects/${projectId}/sources/${source.id}`, {
+    headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { expectedSourceRecordVersion: corrected.version, archived: true },
+  });
+  expect(archivedSource.status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await archivedHeads;
+  await expect(page.locator(`#cite-source option[value="${corrected.sourceVersionId}"]`)).toHaveCount(0);
+  await expect(page.getByLabel("Cite source")).toHaveValue(source.currentVersionId);
+  await expect(page.locator("#cite-source option:checked")).toHaveText("Brief v1");
+  await expect(page.getByLabel("Start line")).toHaveValue("2");
+  await expect(page.getByLabel("End line")).toHaveValue("2");
+  await expect(page.getByLabel("Excerpt")).toHaveValue("Receipts remain available.");
+  const immutableCitation = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/commands") && response.request().postDataJSON().command === "UPDATE_REQUIREMENT" && response.request().postDataJSON().payload.sourceRefs.some((ref: { sourceVersionId: string; startLine: number; endLine: number }) => ref.sourceVersionId === source.currentVersionId && ref.startLine === 2 && ref.endLine === 2));
+  await page.getByRole("button", { name: "Add citation" }).click();
+  expect((await immutableCitation).status()).toBe(200);
   await page.getByLabel("Statement", { exact: true }).fill("Keep this local statement");
   await expect(page.getByRole("button", { name: "Confirm requirement" })).toBeDisabled();
   await page.getByRole("button", { name: /Brief v1, lines 1-1/ }).click();
