@@ -1,5 +1,5 @@
 import { LIMITS } from "../../drafts/contracts/scope-document.ts";
-import { checkDraft, GraphError, type Draft } from "../../drafts/domain/graph.ts";
+import { checkDraft, GraphError, type Draft, usedIds } from "../../drafts/domain/graph.ts";
 import type { FlowFileV1 } from "../contracts/flow-file.ts";
 import type { ImportMapping } from "../contracts/import.ts";
 
@@ -17,12 +17,7 @@ export function appendImportedFlow(
   ) throw new GraphError("LIMIT_EXCEEDED");
 
   const draft = structuredClone(saved);
-  const used = new Set([
-    ...Object.keys(draft.document.flows),
-    ...Object.keys(draft.document.nodes),
-    ...Object.keys(draft.document.edges),
-    ...draft.document.retiredEntityIds,
-  ]);
+  const used = usedIds(draft.document);
   const allocate = () => {
     const value = newId();
     if (used.has(value)) throw new Error("ID_COLLISION");

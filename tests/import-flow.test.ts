@@ -5,6 +5,7 @@ import type { ImportApplyResult } from "../src/features/exchange/contracts/impor
 import { emptyDraft, LIMITS, parseDraftPair } from "../src/features/drafts/contracts/scope-document.ts";
 import { GraphError, type Draft } from "../src/features/drafts/domain/graph.ts";
 import { largeDraft } from "./support/large-draft.ts";
+import { requirement } from "./support/scope-fixtures.ts";
 import { appendImportedFlow } from "../src/features/exchange/domain/import-flow.ts";
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
@@ -116,11 +117,21 @@ test("rejects_capacity_and_id_collision", () => {
   const imported = file();
   assert.throws(() => appendImportedFlow(atCapacity, imported, imported.positions!, ids()), (error: unknown) => error instanceof GraphError && error.code === "LIMIT_EXCEEDED");
 
-  for (const collision of [id(100), id(101), id(103), id(1)]) {
+  for (const collision of [id(100), id(101), id(103), id(104), id(105), id(1)]) {
     const colliding = savedDraft();
+    colliding.document.requirements[id(104)] = requirement({ id: id(104) });
+    colliding.document.traceLinks[id(105)] = {
+      id: id(105), version: 1, requirementId: id(104), nodeId: id(101), explanation: "",
+      reviewedRequirementBehaviourVersion: null, reviewedNodeBehaviourVersion: null, reviewedBy: null, reviewedAt: null,
+    };
     colliding.document.retiredEntityIds = [id(1)];
     const before = structuredClone(colliding);
-    assert.throws(() => appendImportedFlow(colliding, imported, imported.positions!, () => collision), /ID_COLLISION/);
+    const remaining = ids(1_000);
+    let first = true;
+    assert.throws(() => appendImportedFlow(colliding, imported, imported.positions!, () => {
+      if (first) { first = false; return collision; }
+      return remaining();
+    }), /ID_COLLISION/);
     assert.deepEqual(colliding, before);
   }
   const duplicate = savedDraft();
