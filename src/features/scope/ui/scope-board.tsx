@@ -28,6 +28,10 @@ export default function ScopeBoard(props: { ui: SpecsUi; update: (change: (ui: S
   if (selected) return <RequirementForm requirement={requirement} ui={props.ui} update={props.update} drafts={props.drafts} setDraft={props.setDraft} write={props.write} onClose={() => props.update(() => ({ selected: null }))} />;
   const all = Object.values(savedDraft.document.requirements).sort((a, b) => a.displayId.localeCompare(b.displayId, undefined, { numeric: true }));
   const shown = all.filter((item) => `${item.displayId} ${item.title}`.toLowerCase().includes(filter.toLowerCase()));
+  const removedIds = [...new Set(Object.keys(props.drafts).flatMap((key) => {
+    const id = key.match(/^specs:req:([^:]+):/)?.[1];
+    return id && id !== "new" && !savedDraft.document.requirements[id] ? [id] : [];
+  }))];
   return <div className="scope-board">
     <div className="scope-toolbar">
       <div className="field"><label htmlFor="scope-filter">Filter by label or ID</label><input id="scope-filter" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>
@@ -35,6 +39,7 @@ export default function ScopeBoard(props: { ui: SpecsUi; update: (change: (ui: S
       {filter && <button type="button" className="button quiet small" onClick={() => setFilter("")}>Clear</button>}
       {canEdit && <button type="button" className="button primary" disabled={props.write.busy || props.ui.pending !== null} onClick={() => props.update(() => ({ selected: { kind: "requirement", id: "new" } }))}>New requirement</button>}
     </div>
+    {removedIds.length > 0 && <section className="specs-group" aria-label="Retained edits"><h3>Retained edits</h3><ul className="sources-list">{removedIds.map((id) => <li key={id}><button type="button" className="specs-card" onClick={() => props.update(() => ({ selected: { kind: "requirement", id } }))}><strong>Removed requirement</strong><span className="specs-badge">{(props.drafts[`specs:req:${id}:title`] || props.drafts[`specs:req:${id}:statement`] || "Unsaved edits").slice(0, 120)}</span></button></li>)}</ul></section>}
     {(["INCLUDED", "UNDECIDED", "EXCLUDED"] as const).map((inclusion) => {
       const name = inclusion === "INCLUDED" ? "Included" : inclusion === "UNDECIDED" ? "Undecided" : "Excluded";
       const items = shown.filter((item) => item.inclusion === inclusion);

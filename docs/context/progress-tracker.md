@@ -110,6 +110,12 @@ Head `0f889b3` passed all three jobs in [run 37763811807](https://github.com/cyr
 
 The extended existing citation journey reproduced the lost selected value before the fix, then passed correction, archive, preserved range/excerpt and a real citation save against the original version. Independent review, scoped ESLint, TypeScript and production build pass; complete Scope/recovery browsers 26/26, zero skips/retries/flakes/failures/global errors, build/test/total 12.782/104.670/117.452 s. No new abstractions, cases or backend changes. The user reiterated minimal scope. Publish this correction and finish fresh review/CI without speculative expansion; no merge or Stage 7.3 authorization.
 
+### Removed requirement recovery review follow-up (2026-10-08)
+
+Fresh review of `974e7b2` found that Back hid the only copy/discard view for remotely deleted requirements. The board now derives a small retained-edits list from existing orphan requirement draft keys, excluding new and saved requirements. Its entries reopen the existing recovery view and disappear after the existing scoped discard; no new persisted state or backend behavior.
+
+The existing deletion journey reproduced the missing return entry before the fix. It now passes Back, Sources/Scope navigation, reopening unchanged retained text, discard, entry removal and the original clean navigation guard. Independent review, scoped ESLint, TypeScript and production build pass. Complete Scope/recovery browsers 26/26, zero skips/retries/flakes/failures/global errors; build/test/total 13.217/108.592/121.808 s. The preceding head's static and database CI jobs passed; its browser job was running at this checkpoint. Publish and finish current-head review/CI through PR #28. Keep scope minimal; merge and Stage 7.3 remain unauthorized.
+
 ### Coverage-preserving test cleanup (2026-10-08)
 
 The user separately authorized delegated test pruning after implementation. An E2E audit, bounded implementation and independent review consolidated three repeated fixture setups: flow Inspect plus empty-filter navigation, responsive shell plus a fresh long-name project, and the same REVIEWER reading Sources plus requirements. All original assertions remain, including actual role restrictions, focus, reload, hit areas and layout. Named steps retain diagnosis, though merged journeys have less independent failure isolation. Independent review found no missing expectation or test-control expressions and no lost workflow. Distinct fault, session, membership, concurrency and recovery cases remain separate.

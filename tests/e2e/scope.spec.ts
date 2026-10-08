@@ -821,8 +821,15 @@ test("citation reads can be retried and deleted requirements keep local text for
   await expect(page.getByText("This requirement was removed.")).toBeVisible();
   await expect(page.getByLabel("Retained requirement edits")).toHaveValue("Statement: Keep my unsaved statement.");
   await expect(page.getByLabel("Retained requirement edits")).not.toBeEditable();
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByRole("tab", { name: "Scope" }).click();
+  await page.getByRole("button", { name: /Removed requirement.*Keep my unsaved statement/ }).click();
+  await expect(page.getByLabel("Retained requirement edits")).toHaveValue("Statement: Keep my unsaved statement.");
   await page.getByRole("button", { name: "Discard requirement edits" }).click();
   await expect(page.getByLabel("Retained requirement edits")).toHaveCount(0);
+  await page.getByRole("button", { name: "Back to requirements" }).click();
+  await expect(page.getByRole("button", { name: /Removed requirement/ })).toHaveCount(0);
   expect(await page.evaluate(() => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
 });
 
