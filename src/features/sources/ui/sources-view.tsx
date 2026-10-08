@@ -31,7 +31,7 @@ export function useSourceList(projectId: string, scope: SourceScope, revision: n
   const loadingMore = useRef(false);
   const pageLifetime = useRef<AbortController | null>(null);
   // Every first-page load (a new project, filter, revision or retry) gets a ticket; only the list that load produced can be paged further.
-  // Retaining rows until the new page is accepted keeps the panel's scroll range stable between scoped requests.
+  // Keep the last page for same-filter refreshes and project-wide usage.
   const load = `${key}:${revision}:${attempt}`;
   const [started, setStarted] = useState({ load, ticket: 1 });
   if (started.load !== load) setStarted({ load, ticket: started.ticket + 1 });
@@ -58,7 +58,7 @@ export function useSourceList(projectId: string, scope: SourceScope, revision: n
       else if (!sessionEnded(result)) setFailed({ key, message: result.message });
     });
   };
-  // Only a matching page is current; the caller may retain same-project rows while its next filter is loading.
+  // Only a matching page is current.
   return { page: list?.key === key ? list.page : null, retainedPage: list?.key.startsWith(`${projectId}:`) ? list.page : null, error: failed?.key === key ? failed.message : "", more, canLoadMore: canLoadMore(list, key, ticket), retry: () => setAttempt((count) => count + 1) };
 }
 
@@ -82,7 +82,7 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
   const { projectId, savedDraft } = useStudio();
   const scope = ui.sourceScope;
   const list = useSourceList(projectId, scope, status.sourcesRevision);
-  const page = list.error ? list.page : list.page ?? list.retainedPage;
+  const page = list.page;
   const results = useRef<HTMLDivElement>(null);
   const [resultsMinHeight, setResultsMinHeight] = useState(0);
   const [refocus, setRefocus] = useState(0);
@@ -153,7 +153,6 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
         </div>
         <div ref={results} className="sources-results" style={resultsMinHeight ? { minHeight: resultsMinHeight } : undefined}>
           {list.error && <p role="alert">{list.error} <button type="button" className="button small" onClick={list.retry}>Retry</button></p>}
-          {!list.page && page && !list.error && <p role="status">Loading {SCOPES.find(([id]) => id === scope)?.[1].toLowerCase()} sources…</p>}
           {!page ? !list.error && <p role="status">Loading sources…</p>
             : !page.items.length ? <p className="muted">{EMPTY[scope]}</p>
             : <ul className="sources-list">{page.items.map((item) => <li key={item.id}>

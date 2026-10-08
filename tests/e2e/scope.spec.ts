@@ -123,7 +123,7 @@ test("uploads keep their BOM for the server; invalid UTF-8 is refused before sen
   expect(JSON.parse(bodies[0]!).text.startsWith("\uFEFF")).toBe(true);
 });
 
-test("a pending source filter retains the visible result and panel position until its exact page arrives", async ({ page }) => {
+test("a pending source filter hides previous cards while preserving panel position until its exact page arrives", async ({ page }) => {
   const projectId = await createProjectViaApi(page, "Stable source filters");
   const archived: Array<{ sourceId: string; version: number }> = [];
   for (let index = 0; index < 8; index += 1) {
@@ -157,8 +157,10 @@ test("a pending source filter retains the visible result and panel position unti
   });
   await page.getByRole("button", { name: "Archived", exact: true }).click();
   await expect.poll(() => Boolean(release)).toBe(true);
-  await expect(page.getByRole("button", { name: /Active 7/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Active 7/ })).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "Loading sources…" })).toBeVisible();
   await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(before);
+  expect((await filter.boundingBox())!.y).toBe(filterTop);
   release!();
   await settled;
   await expect(page.getByRole("button", { name: /Archived 7/ })).toBeVisible();
