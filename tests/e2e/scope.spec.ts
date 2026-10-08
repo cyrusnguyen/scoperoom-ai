@@ -1064,6 +1064,7 @@ test("trace explanation conflicts offer explicit reconciliation and removed link
 collaborationTest("a reviewer reads sources and requirements without edit controls", async ({ collaboration }) => {
   const { ownerPage, editorPage, projectId, setEditorRole } = collaboration;
   const name: string = (await (await ownerPage.request.get(`/api/projects/${projectId}/bootstrap`)).json()).project.name;
+  const editorId = (await (await ownerPage.request.get(`/api/projects/${projectId}/members`)).json() as { members: Array<{ profileId: string; role: string }> }).members.find((member) => member.role === "EDITOR")!.profileId;
   await test.step("owner creates the source and requirement", async () => {
     await openSpecs(ownerPage, projectId, name);
     await ownerPage.getByLabel("Source title").fill("Brief");
@@ -1073,7 +1074,38 @@ collaborationTest("a reviewer reads sources and requirements without edit contro
     await ownerPage.getByRole("tab", { name: "Scope" }).click();
     await ownerPage.getByRole("button", { name: "New requirement" }).click();
     await ownerPage.getByLabel("Title", { exact: true }).fill("Pay by card");
+    await ownerPage.getByLabel("Owner").selectOption(editorId);
     await ownerPage.getByRole("button", { name: "Save requirement" }).click();
+    await ownerPage.getByRole("button", { name: "New requirement" }).click();
+    await ownerPage.getByLabel("Title", { exact: true }).fill("Draft owner change");
+    await ownerPage.getByLabel("Owner").selectOption(editorId);
+    await ownerPage.getByLabel("Statement", { exact: true }).fill("Keep this requirement");
+  });
+  const directoryRefreshed = ownerPage.waitForResponse((response) => new URL(response.url()).pathname === `/api/projects/${projectId}/members` && response.status() === 200);
+  await setEditorRole("VIEWER");
+  await ownerPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await directoryRefreshed;
+  await test.step("owner cannot save a locally selected member who became a viewer", async () => {
+    await expect(ownerPage.getByLabel("Owner")).toHaveValue(editorId);
+    await expect(ownerPage.getByLabel("Owner")).toHaveAttribute("aria-invalid", "true");
+    await expect(ownerPage.getByText("Choose an active Owner, Editor, Reviewer, or Unassigned owner.")).toBeVisible();
+    await expect(ownerPage.getByRole("button", { name: "Save requirement" })).toBeDisabled();
+    await ownerPage.getByLabel("Owner").selectOption("");
+    await expect(ownerPage.getByText("Choose an active Owner, Editor, Reviewer, or Unassigned owner.")).toHaveCount(0);
+    await ownerPage.getByRole("button", { name: "Save requirement" }).click();
+    await expect(ownerPage.getByText("Save requirement: saved.")).toBeVisible();
+  });
+  await test.step("a statement-only save preserves an unchanged saved viewer assignment", async () => {
+    await ownerPage.getByRole("button", { name: /REQ-001 Pay by card/ }).click();
+    await ownerPage.getByLabel("Statement", { exact: true }).fill("Saved viewer owner remains unchanged");
+    await expect(ownerPage.getByText("Choose an active Owner, Editor, Reviewer, or Unassigned owner.")).toHaveCount(0);
+    const saved = ownerPage.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/commands") && response.request().postDataJSON().command === "UPDATE_REQUIREMENT" && response.request().postDataJSON().payload.statement === "Saved viewer owner remains unchanged");
+    await ownerPage.getByRole("button", { name: "Save requirement" }).click();
+    expect((await saved).status()).toBe(200);
+    const draft = (await (await ownerPage.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { document: { requirements: Record<string, { ownerId: string | null; title: string }> } } }).draft;
+    const requirement = Object.values(draft.document.requirements).find((item) => item.title === "Pay by card");
+    expect(requirement).toMatchObject({ ownerId: editorId, statement: "Saved viewer owner remains unchanged" });
+    expect((await saved).request().postDataJSON().payload.ownerId).toBeUndefined();
   });
   await setEditorRole("REVIEWER");
   await openSpecs(editorPage, projectId, name);
