@@ -23,6 +23,8 @@ export type ProjectRow = {
   eventSequence: bigint;
   aiRevision: number;
   sourcesRevision: number;
+  reviewsRevision: number;
+  baselineSequence: number;
   approvedSnapshotId: string | null;
   role: ProjectAccessRole | null;
 };
@@ -30,7 +32,7 @@ export type ProjectRow = {
 type RawProject = {
   id: string; owner_id: string; name: string; status: string; version: number; settings_version: number;
   approval_policy_version: number; membership_version: number; designated_approver_id: string | null;
-  current_draft_id: string | null; realtime_epoch: string; event_sequence: bigint; ai_revision: bigint; sources_revision: bigint; approved_snapshot_id: string | null;
+  current_draft_id: string | null; realtime_epoch: string; event_sequence: bigint; ai_revision: bigint; sources_revision: bigint; reviews_revision: bigint; baseline_sequence: bigint; approved_snapshot_id: string | null;
 };
 
 export function requestHash(operation: string, input: unknown) {
@@ -93,7 +95,7 @@ function projectQuery(projectId: string, lock: boolean) {
   return Prisma.sql`
     SELECT project.id, project.owner_id, project.name, project.status::text AS status, project.version, project.settings_version,
       project.approval_policy_version, project.membership_version, project.designated_approver_id, project.current_draft_id,
-      project.realtime_epoch::text AS realtime_epoch, project.event_sequence, project.ai_revision, project.sources_revision, project.approved_snapshot_id
+      project.realtime_epoch::text AS realtime_epoch, project.event_sequence, project.ai_revision, project.sources_revision, project.reviews_revision, project.baseline_sequence, project.approved_snapshot_id
     FROM app.project project
     WHERE project.id = ${projectId}::uuid AND project.status IN ('ACTIVE'::app.project_status, 'ARCHIVED'::app.project_status)
     ${lock ? Prisma.sql`FOR UPDATE OF project` : Prisma.empty}`;
@@ -111,13 +113,19 @@ export async function projectRole(tx: Transaction, project: Pick<ProjectRow, "id
   return accessRole(membership?.role);
 }
 
+function safeCounter(value: bigint): number {
+  const counter = Number(value);
+  if (!Number.isSafeInteger(counter) || counter < 0) throw new ProjectError("UNAVAILABLE");
+  return counter;
+}
+
 function toProjectRow(row: RawProject | undefined, role: ProjectAccessRole | null): ProjectRow {
   if (!row || (row.status !== "ACTIVE" && row.status !== "ARCHIVED")) throw new ProjectError("NOT_FOUND");
   return {
     id: row.id, ownerId: row.owner_id, name: row.name, status: row.status, version: row.version, settingsVersion: row.settings_version,
     approvalPolicyVersion: row.approval_policy_version, membershipVersion: row.membership_version, designatedApproverId: row.designated_approver_id,
     currentDraftId: row.current_draft_id, realtimeEpoch: row.realtime_epoch, eventSequence: row.event_sequence,
-    aiRevision: Number(row.ai_revision), sourcesRevision: Number(row.sources_revision), approvedSnapshotId: row.approved_snapshot_id, role,
+    aiRevision: safeCounter(row.ai_revision), sourcesRevision: safeCounter(row.sources_revision), reviewsRevision: safeCounter(row.reviews_revision), baselineSequence: safeCounter(row.baseline_sequence), approvedSnapshotId: row.approved_snapshot_id, role,
   };
 }
 

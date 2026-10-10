@@ -2,8 +2,7 @@ import { LAYOUT_BYTE_LIMIT, parseLayout, type DraftLayout } from "./draft-layout
 import { id, idList, invalid, keys, object, oneOf, records, text, utf8Bytes, version } from "./strict.ts";
 
 // ScopeDocument storage schema v3 (Data02). Stage 07 activates requirements and trace links; other collections
-// must stay empty, and confirmation and verification stay unset until the stages whose
-// validators own them (07–09) widen this parser.
+// must stay empty. Stage 09 activates flow confirmation; flow verification remains unset.
 export const NODE_KINDS = ["START", "ACTION", "DECISION", "OUTCOME", "DATA_STORE"] as const;
 export const CLASSIFICATIONS = ["USER_JOURNEY", "BUSINESS_PROCESS"] as const;
 export const INCLUSIONS = ["INCLUDED", "EXCLUDED", "UNDECIDED"] as const;
@@ -23,7 +22,7 @@ export const LIMITS = {
 
 export type FlowRecord = {
   id: string; version: number; behaviourVersion: number; title: string; purpose: string;
-  classification: Classification; inclusion: Inclusion; confirmation: null; verificationMethod: null;
+  classification: Classification; inclusion: Inclusion; confirmation: ConfirmationStamp; verificationMethod: null;
 };
 export type NodeRecord = {
   id: string; flowId: string; version: number; behaviourVersion: number; kind: NodeKind; label: string; description: string;
@@ -72,11 +71,11 @@ export function parseSourceRefs(value: unknown): SourceRef[] {
 function parseFlow(entry: unknown): FlowRecord {
   const flow = object(entry);
   keys(flow, ["id", "version", "behaviourVersion", "title", "purpose", "classification", "inclusion", "confirmation", "verificationMethod"]);
-  if (flow.confirmation !== null || flow.verificationMethod !== null) invalid();
+  if (flow.verificationMethod !== null) invalid();
   return {
     id: id(flow.id), version: version(flow.version), behaviourVersion: version(flow.behaviourVersion), title: text(flow.title, LIMITS.title, true),
     purpose: text(flow.purpose, LIMITS.longText), classification: oneOf(flow.classification, CLASSIFICATIONS), inclusion: oneOf(flow.inclusion, INCLUSIONS),
-    confirmation: null, verificationMethod: null,
+    confirmation: parseConfirmation(flow.confirmation), verificationMethod: null,
   };
 }
 

@@ -3,7 +3,7 @@
 import { useState, type SubmitEvent } from "react";
 import { Icon } from "@/features/shell/ui/icon";
 import { COORDINATE_LIMIT } from "@/features/drafts/contracts/draft-layout";
-import type { EdgeRecord, NodeRecord } from "@/features/drafts/contracts/scope-document";
+import type { EdgeRecord, FlowRecord, NodeRecord } from "@/features/drafts/contracts/scope-document";
 import { graphWarnings, type GraphWarning } from "@/features/drafts/domain/warnings";
 import {
   bufferKey, changedElsewhere, changes, dirtyFields, discard, edit, rebase, refuse, type EntityBuffer, type EntityKind, type Fields, type Saved,
@@ -13,7 +13,10 @@ import { neighbours, recordOf, stepName } from "./graph-view";
 import { DeleteStepsDialog } from "./step-dialogs";
 import { explain, formKeys, useCommandSubmit, useStudio } from "./studio-context";
 import { canApplyAgain, studioDirtyCount } from "./studio-ui";
-import { linkState } from "@/features/scope/domain/scope";
+import { confirmationCurrent, linkState } from "@/features/scope/domain/scope";
+
+import type { SpecsUi } from "@/features/shell/ui/project-ui";
+import { useSpecsWrite } from "@/features/scope/ui/use-specs-write";
 
 const NOUNS: Record<EntityKind, string> = { FLOW: "flow", NODE: "step", EDGE: "connection" };
 
@@ -32,7 +35,7 @@ function typedText(kind: EntityKind, values: Fields) {
  * "← Project" returns to the project details. Typed values live in the shell's per-project buffers, so they survive
  * closing the panel, switching selection and every refetch.
  */
-export default function Inspector({ onBack, onOpenRequirement }: { onBack: () => void; onOpenRequirement?: (id: string) => void }) {
+export default function Inspector({ onBack, onOpenRequirement, specs, updateSpecs }: { onBack: () => void; onOpenRequirement?: (id: string) => void; specs: SpecsUi; updateSpecs: (change: (ui: SpecsUi) => Partial<SpecsUi>) => void }) {
   const { draft, ui } = useStudio();
   const selection = ui.selection;
   if (!selection) return null;
@@ -47,8 +50,31 @@ export default function Inspector({ onBack, onOpenRequirement }: { onBack: () =>
     <EntityEditor key={bufferKey(kind, id)} kind={kind} saved={savedOf(kind, record)} />
     {kind === "NODE" && <StepContext key={id} node={record as NodeRecord} onOpenRequirement={onOpenRequirement} />}
     {kind === "EDGE" && <Endpoints key={id} edge={record as EdgeRecord} />}
-    {kind === "FLOW" && <DraftChecks flowId={id} />}
+    {kind === "FLOW" && <><FlowConfirmation flow={record as FlowRecord} specs={specs} updateSpecs={updateSpecs} /><DraftChecks flowId={id} /></>}
   </>;
+}
+
+function FlowConfirmation({ flow, specs, updateSpecs }: { flow: FlowRecord; specs: SpecsUi; updateSpecs: (change: (ui: SpecsUi) => Partial<SpecsUi>) => void }) {
+  const { draft, editable } = useStudio();
+  const write = useSpecsWrite(specs, updateSpecs);
+  const current = confirmationCurrent(flow);
+  const confirm = () => {
+    // This is the record the person inspected, captured before save-first or an authority refresh.
+    const inspectedVersion = flow.version;
+    void write.sendDraft(`drafts/${draft.id}/commands`, (saved) => {
+      if (saved.document.flows[flow.id]?.version !== inspectedVersion) return null;
+      return { commandSchemaVersion: 1, command: "CONFIRM_FLOW", expectedEntityVersion: inspectedVersion, payload: { flowId: flow.id } };
+    }, "Confirm flow");
+  };
+  const pendingFlow = specs.pending?.body?.command === "CONFIRM_FLOW";
+  return <section className="detail-section" aria-labelledby="inspector-confirmation">
+    <h3 id="inspector-confirmation">Confirmation</h3>
+    <p className="muted">{current ? "Confirmed: current wording." : flow.confirmation ? "Needs confirmation: flow meaning changed." : "Unconfirmed."}</p>
+    {editable && <button type="button" className="button small" disabled={current || write.busy || Boolean(specs.pending)} onClick={confirm}>Confirm flow</button>}
+    {specs.message && <p role={specs.pending || !specs.message.endsWith(": saved.") ? "alert" : "status"}>{specs.message}
+      {pendingFlow && !write.busy && <button type="button" className="button small" onClick={() => void write.retry()}>{specs.pending?.acknowledged ? "Refresh" : "Retry"}</button>}
+    </p>}
+  </section>;
 }
 
 function EntityEditor({ kind, saved }: { kind: EntityKind; saved: Saved }) {

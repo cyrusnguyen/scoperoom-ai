@@ -16,7 +16,7 @@ import { stranded } from "../src/features/studio/ui/studio-ui.ts";
 
 const status = (over: Partial<ProjectStatusView> = {}): ProjectStatusView => ({
   viewerId: "v1", status: "ACTIVE", role: "OWNER", version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null,
-  currentDraftId: "d1", documentRevision: 1, layoutRevision: 1, realtimeEpoch: "e1", eventSequence: 1, aiRevision: 0, sourcesRevision: 0, approvedSnapshotId: null, ...over,
+  currentDraftId: "d1", documentRevision: 1, layoutRevision: 1, realtimeEpoch: "e1", eventSequence: 1, aiRevision: 0, sourcesRevision: 0, reviewsRevision: 0, baselineSequence: 0, approvedSnapshotId: null, ...over,
 });
 const liveOf = (s: ProjectStatusView): Live => ({ role: s.role, status: s.status, draftId: s.currentDraftId, documentRevision: s.documentRevision, layoutRevision: s.layoutRevision });
 const ok = (s: ProjectStatusView): StatusRead => ({ ok: true, data: s });
@@ -1008,4 +1008,14 @@ test("held AI resources do not block authority or the next status poll, and shar
   await settle();
   assert.deepEqual(adopted, [], "session stop fences late resource adoption");
   t.sync.dispose();
+});
+
+test("review-only cursors reconcile through the same status timer and generation fence", async () => {
+  const observed: number[] = [], fences: (() => boolean)[] = [];
+  const t = rig(status(), async (s, fence) => { observed.push(s.reviewsRevision); fences.push(fence); });
+  t.sync.start(); const first = t.sync.revalidate("manual"); await t.answer(ok(status({reviewsRevision:7,eventSequence:7}))); await first;
+  assert.deepEqual(observed,[7]); assert.equal(t.timers.length,1); assert.deepEqual(t.log,[]);
+  await t.advance(10_000); await t.answer(ok(status({reviewsRevision:8,eventSequence:8})));
+  assert.deepEqual(observed,[7,8]); assert.equal(t.timers.length,1);
+  t.sync.dispose(); assert.equal(fences.every(fence=>!fence()),true); assert.equal(t.timers.length,0);
 });

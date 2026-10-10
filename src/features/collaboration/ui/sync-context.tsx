@@ -44,6 +44,7 @@ type Sync = {
   fence: (at?: number) => () => boolean;
   setReader: (read: Reader) => () => void;
   setAiReader: (read: ReconcileResources) => () => void;
+  setReviewReader: (read: ReconcileResources) => () => void;
   setActiveJobVisible: (on: boolean) => void;
   /** The Studio reports each adopted saved draft, so previews are checked against saved data. */
   setSavedDraft: (draft: DraftView) => void;
@@ -83,6 +84,12 @@ export function useAiSyncReader(read: ReconcileResources) {
   useEffect(() => setAiReader?.(read), [setAiReader, read]);
 }
 
+/** Reviews share the existing project resource reconciliation, with no extra timer. */
+export function useReviewSyncReader(read: ReconcileResources) {
+  const setReviewReader = useContext(SyncContext)?.setReviewReader;
+  useEffect(() => setReviewReader?.(read), [setReviewReader, read]);
+}
+
 /** The Studio reports the saved draft it has adopted (once per adoption), so remote previews are validated against it. */
 export function useSyncSavedDraft(draft: DraftView) {
   const setSavedDraft = useContext(SyncContext)?.setSavedDraft;
@@ -99,7 +106,7 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
   projectId: string; initial: ProjectStatusView; live: () => Live | null; bootstrap: (fence: () => boolean) => Promise<unknown>; children: ReactNode;
 }) {
   // What the controller calls back into: the latest shell callbacks and the Studio's registered read.
-  const [bridge] = useState(() => ({ live, bootstrap, reader: null as Reader | null, aiReader: null as ReconcileResources | null }));
+  const [bridge] = useState(() => ({ live, bootstrap, reader: null as Reader | null, aiReader: null as ReconcileResources | null, reviewReader: null as ReconcileResources | null }));
   useLayoutEffect(() => { Object.assign(bridge, { live, bootstrap }); });
   const [state, setState] = useState<SyncState>({ status: initial, failures: 0 });
   const [sync] = useState(() => createProjectSync({
@@ -114,7 +121,7 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
     readDraft: (fence) => bridge.reader?.(fence) ?? Promise.resolve(),
     bootstrap: (fence) => bridge.bootstrap(fence),
     publish: setState,
-    reconcileResources: (status, fence) => bridge.aiReader?.(status, fence) ?? Promise.resolve(),
+    reconcileResources: async (status, fence) => { await Promise.all([bridge.aiReader?.(status, fence), bridge.reviewReader?.(status, fence)]); },
   }));
   const [realtime] = useState(() => createProjectLive({
     transport, sessionId: crypto.randomUUID(), now: Date.now,
@@ -145,10 +152,11 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
   useEffect(() => { if (installed.current !== initial) { installed.current = initial; sync.invalidate(); } }, [initial, sync]);
   const setReader = useMemo(() => (read: Reader) => { Object.assign(bridge, { reader: read }); return () => { if (bridge.reader === read) Object.assign(bridge, { reader: null }); }; }, [bridge]);
   const setAiReader = useMemo(() => (read: ReconcileResources) => { Object.assign(bridge, { aiReader: read }); return () => { if (bridge.aiReader === read) Object.assign(bridge, { aiReader: null }); }; }, [bridge]);
+  const setReviewReader = useMemo(() => (read: ReconcileResources) => { Object.assign(bridge, { reviewReader: read }); return () => { if (bridge.reviewReader === read) Object.assign(bridge, { reviewReader: null }); }; }, [bridge]);
   const previews = useMemo(() => ({ snapshot: realtime.snapshot, subscribe: realtime.subscribe, nextExpiry: realtime.nextExpiry }), [realtime]);
   const value = useMemo<Sync>(() => ({
-    ...state, revalidate: sync.revalidate, beforeWrite: sync.beforeWrite, invalidate: sync.invalidate, fence: sync.fence, setReader, setAiReader, setActiveJobVisible: sync.setActiveJobVisible, setSavedDraft,
+    ...state, revalidate: sync.revalidate, beforeWrite: sync.beforeWrite, invalidate: sync.invalidate, fence: sync.fence, setReader, setAiReader, setReviewReader, setActiveJobVisible: sync.setActiveJobVisible, setSavedDraft,
     liveState, roster, directory, previews, sendCursor: realtime.sendCursor, sendDrag: realtime.sendDrag, endDrag: realtime.endDrag, setPresence: realtime.setPresence,
-  }), [state, sync, setReader, setAiReader, setSavedDraft, liveState, roster, directory, previews, realtime]);
+  }), [state, sync, setReader, setAiReader, setReviewReader, setSavedDraft, liveState, roster, directory, previews, realtime]);
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;
 }

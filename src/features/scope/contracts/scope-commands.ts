@@ -9,6 +9,7 @@ export type RequirementFields = {
 };
 
 export type ScopeCommand =
+  | Command<"CONFIRM_FLOW", ByEntity, { flowId: string }>
   | Command<"CREATE_REQUIREMENT", ByDocument, RequirementFields>
   | Command<"UPDATE_REQUIREMENT", ByEntity, { requirementId: string } & Partial<RequirementFields>>
   | Command<"DELETE_REQUIREMENT", ByDocument, { requirementId: string; removeLinkIds: string[] }>
@@ -20,7 +21,7 @@ export type ScopeCommand =
 export type DraftCommand = GraphCommand | ScopeCommand;
 
 export const SCOPE_COMMANDS: ReadonlySet<string> = new Set([
-  "CREATE_REQUIREMENT", "UPDATE_REQUIREMENT", "DELETE_REQUIREMENT", "CONFIRM_REQUIREMENT", "ADD_TRACE_LINK", "UPDATE_TRACE_LINK", "CONFIRM_TRACE_LINK", "DELETE_TRACE_LINK",
+  "CONFIRM_FLOW", "CREATE_REQUIREMENT", "UPDATE_REQUIREMENT", "DELETE_REQUIREMENT", "CONFIRM_REQUIREMENT", "ADD_TRACE_LINK", "UPDATE_TRACE_LINK", "CONFIRM_TRACE_LINK", "DELETE_TRACE_LINK",
 ]);
 export const isScopeCommand = (command: { command: string }): command is ScopeCommand => SCOPE_COMMANDS.has(command.command);
 
@@ -64,6 +65,10 @@ export function parseScopeCommand(raw: unknown): ScopeCommand {
     case "DELETE_REQUIREMENT": {
       const { guard, payload } = envelope(body, "expectedDocumentRevision", ["requirementId", "removeLinkIds"]);
       return { commandSchemaVersion: 1, command: "DELETE_REQUIREMENT", expectedDocumentRevision: guard, payload: { requirementId: id(payload.requirementId), removeLinkIds: idList(payload.removeLinkIds, LIMITS.traceLinks) } };
+    }
+    case "CONFIRM_FLOW": {
+      const { guard, payload } = envelope(body, "expectedEntityVersion", ["flowId"]);
+      return { commandSchemaVersion: 1, command: "CONFIRM_FLOW", expectedEntityVersion: guard, payload: { flowId: id(payload.flowId) } };
     }
     case "CONFIRM_REQUIREMENT": {
       const { guard, payload } = envelope(body, "expectedEntityVersion", ["requirementId"]);

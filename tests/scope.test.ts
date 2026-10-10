@@ -6,7 +6,7 @@ import { MAX_VERSION } from "../src/features/drafts/contracts/strict.ts";
 import { applyChanges } from "../src/features/drafts/domain/changes.ts";
 import { applyGraphCommand, applyGraphGroup, GraphError, incidentTraceLinks } from "../src/features/drafts/domain/graph.ts";
 import { parseScopeCommand } from "../src/features/scope/contracts/scope-commands.ts";
-import { applyScopeCommand, formatDisplayId, linkState, removedRecordIds, requirementPlan, unassignMember } from "../src/features/scope/domain/scope.ts";
+import { applyScopeCommand, confirmationCurrent, formatDisplayId, linkState, removedRecordIds, requirementPlan, unassignMember } from "../src/features/scope/domain/scope.ts";
 import { graphDocument, ids, NOW, requirement } from "./support/scope-fixtures.ts";
 
 const context = { actorId: ids.actor, now: NOW, displayId: "REQ-001" };
@@ -286,4 +286,81 @@ test("chosen AI deletions include steps, their incident connections and explicit
   assert.equal(incidentTraceLinks(document, removedRecordIds(all, all.map(({ id }) => id))).length, 3);
   assert.equal(incidentTraceLinks(document, removedRecordIds(all, ["drop", "drop", "unknown"])).length, 2, "count links, not nodes, and exclude unselected step deletions");
   assert.equal(incidentTraceLinks(document, removedRecordIds(all, ["cut"])).length, 0, "connection ids cannot count as step links");
+});
+
+
+test("flow confirmation stamps exactly inspected meaning and keeps every other version", () => {
+  const saved = draft(), before = structuredClone(saved);
+  const flow = saved.document.flows[ids.flow]!;
+  const confirm = (expectedEntityVersion: number) => command({ command: "CONFIRM_FLOW", expectedEntityVersion, payload: { flowId: flow.id } });
+  const applied = applyScopeCommand(saved, 1, confirm(flow.version), newId, context);
+  const next = applied.document.flows[flow.id]!;
+  assert.deepEqual(next, { ...flow, version: flow.version + 1, confirmation: { behaviourVersion: flow.behaviourVersion, actorId: ids.actor, confirmedAt: NOW } });
+  assert.equal(confirmationCurrent(next), true);
+  assert.equal(applied.documentChanged, true);
+  assert.equal(applied.layoutChanged, false);
+  assert.deepEqual(applied.versions, { [flow.id]: next.version });
+  assert.deepEqual(applied.document.nodes, before.document.nodes);
+  assert.deepEqual(applied.document.edges, before.document.edges);
+  assert.deepEqual(applied.document.traceLinks, before.document.traceLinks);
+  assert.deepEqual(applied.layout, before.layout);
+  assert.deepEqual(saved, before);
+  const noop = applyScopeCommand(applied, 2, confirm(next.version), newId, { ...context, actorId: ids.other });
+  assert.equal(noop.documentChanged, false);
+  assert.deepEqual(noop.document, applied.document);
+  assert.deepEqual(noop.versions, {});
+  assert.throws(() => applyScopeCommand(applied, 2, confirm(flow.version), newId, context), /STALE_ENTITY_VERSION/, "even current confirmation checks the inspected record version first");
+});
+
+
+test("flow stamps survive graph batches and reviewed AI meaning changes as stale history", () => {
+  const confirmed = applyScopeCommand(draft(), 1, command({ command: "CONFIRM_FLOW", expectedEntityVersion: 1, payload: { flowId: ids.flow } }), newId, context);
+  const stamp = confirmed.document.flows[ids.flow]!.confirmation;
+  const edit = { commandSchemaVersion: 1 as const, command: "UPDATE_NODE" as const, expectedEntityVersion: 1, payload: { nodeId: ids.node, label: "Pay by wallet" } };
+  const batch = applyChanges(confirmed, 2, { commands: [{ command: edit, proposedIds: [] }], moves: [] });
+  const ai = applyGraphGroup(confirmed, 2, [edit], newId);
+  const field = applyGraphCommand(confirmed, 2, { commandSchemaVersion: 1, command: "UPDATE_FLOW", expectedEntityVersion: 2, payload: { flowId: ids.flow, purpose: "Wallet checkout" } }, newId);
+  for (const changed of [batch, ai, field]) {
+    assert.deepEqual(changed.document.flows[ids.flow]!.confirmation, stamp);
+    assert.deepEqual([changed.document.flows[ids.flow]!.version, changed.document.flows[ids.flow]!.behaviourVersion], [3, 2]);
+    assert.equal(confirmationCurrent(changed.document.flows[ids.flow]!), false);
+    assert.throws(() => applyScopeCommand(changed, 3, command({ command: "CONFIRM_FLOW", expectedEntityVersion: 2, payload: { flowId: ids.flow } }), newId, context), /STALE_ENTITY_VERSION/);
+    const renewed = applyScopeCommand(changed, 3, command({ command: "CONFIRM_FLOW", expectedEntityVersion: 3, payload: { flowId: ids.flow } }), newId, context);
+    assert.equal(renewed.document.flows[ids.flow]!.confirmation?.behaviourVersion, 2);
+  }
+});
+
+test("positions and connection sides preserve current flow confirmation", () => {
+  const state = draft();
+  state.document.nodes[ids.other] = { ...state.document.nodes[ids.node]!, id: ids.other, kind: "OUTCOME" };
+  state.layout.positions[ids.other] = { x: 10, y: 20, version: 1 };
+  state.document.edges[ids.link] = { id: ids.link, flowId: ids.flow, version: 1, fromId: ids.node, toId: ids.other, condition: "", origin: "HUMAN", sourceRefs: [] };
+  const confirmed = applyScopeCommand(state, 1, command({ command: "CONFIRM_FLOW", expectedEntityVersion: 1, payload: { flowId: ids.flow } }), newId, context);
+  const moved = applyChanges(confirmed, 2, { commands: [], moves: [{ flowId: ids.flow, items: [{ nodeId: ids.node, expectedPositionVersion: 1, x: 45, y: 65 }] }] });
+  const sides = applyGraphCommand(moved, 2, { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: 2, payload: { edgeId: ids.link, fromId: ids.node, toId: ids.other, fromSide: "right", toSide: "left", expectedSides: null } }, newId);
+  assert.deepEqual(sides.document, confirmed.document);
+  assert.equal(sides.documentChanged, false);
+  assert.equal(sides.layoutChanged, true);
+  assert.equal(confirmationCurrent(sides.document.flows[ids.flow]!), true);
+  const meaning = applyGraphGroup(sides, 2, [{ commandSchemaVersion: 1, command: "UPDATE_EDGE", expectedEntityVersion: 1, payload: { edgeId: ids.link, condition: "Payment accepted" } }], newId);
+  assert.deepEqual(meaning.document.flows[ids.flow]!.confirmation, confirmed.document.flows[ids.flow]!.confirmation);
+  assert.equal(confirmationCurrent(meaning.document.flows[ids.flow]!), false);
+});
+
+test("duplicated and AI-created flows start unconfirmed; flow stamp parsing stays strict", () => {
+  const state = applyScopeCommand(draft(), 1, command({ command: "CONFIRM_FLOW", expectedEntityVersion: 1, payload: { flowId: ids.flow } }), newId, context);
+  const duplicate = applyGraphCommand(state, 2, { commandSchemaVersion: 1, command: "DUPLICATE_FLOW", expectedDocumentRevision: 2, payload: { flowId: ids.flow } }, newId);
+  const created = applyGraphGroup(state, 2, [{ commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision: 2, payload: { title: "AI flow", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" } }], newId);
+  for (const result of [duplicate, created]) assert.equal(result.document.flows[result.createdIds[0]!]!.confirmation, null);
+  assert.deepEqual(parseDocument(state.document), state.document);
+  for (const confirmation of [{ behaviourVersion: 0, actorId: ids.actor, confirmedAt: NOW }, { behaviourVersion: 1, actorId: ids.actor, confirmedAt: "yesterday" }, { ...state.document.flows[ids.flow]!.confirmation, extra: true }]) {
+    const invalid = structuredClone(state.document);
+    Object.assign(invalid.flows[ids.flow]!, { confirmation });
+    assert.throws(() => parseDocument(invalid), /INVALID_INPUT/);
+  }
+  const invalid = structuredClone(state.document);
+  Object.assign(invalid.flows[ids.flow]!, { verificationMethod: { description: "Check", responsibleRole: "QA" } });
+  assert.throws(() => parseDocument(invalid), /INVALID_INPUT/);
+  const valid = { commandSchemaVersion: 1, command: "CONFIRM_FLOW", expectedEntityVersion: 1, payload: { flowId: ids.flow } };
+  for (const raw of [{ ...valid, expectedEntityVersion: 0 }, { ...valid, expectedDocumentRevision: 1 }, { ...valid, payload: { flowId: ids.flow, confirmation: state.document.flows[ids.flow]!.confirmation } }]) assert.throws(() => parseScopeCommand(raw), /INVALID_INPUT/);
 });

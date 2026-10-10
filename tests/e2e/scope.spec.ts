@@ -399,7 +399,11 @@ test("the filter and the open source survive a tab switch, and focus returns aft
   const specsTab = page.getByRole("tab", { name: "Specs", exact: true });
   await expect(specsTab).toBeFocused();
   await page.getByRole("tab", { name: "Details", exact: true }).focus();
-  await page.keyboard.press("ArrowLeft"); // the Reader must not take focus from the tablist
+  await page.keyboard.press("ArrowLeft"); // wrap to Review, then return without the Reader taking focus
+  const reviewTab = page.getByRole("tab", { name: "Review", exact: true });
+  await expect(reviewTab).toBeFocused();
+  await expect(reviewTab).toHaveAttribute("aria-selected", "true");
+  await reviewTab.press("ArrowLeft");
   await expect(specsTab).toBeFocused();
   await expect(specsTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("button", { name: "Restore" })).toBeVisible();

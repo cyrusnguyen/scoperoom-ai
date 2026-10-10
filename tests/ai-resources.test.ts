@@ -8,7 +8,7 @@ import type { RunPage, RunView } from "../src/features/proposals/contracts/tasks
 const status = (over: Partial<ProjectStatusView> = {}): ProjectStatusView => ({
   viewerId: "viewer", status: "ACTIVE", role: "OWNER", version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1,
   designatedApproverId: null, currentDraftId: "draft", documentRevision: 1, layoutRevision: 1, realtimeEpoch: "epoch", eventSequence: 1,
-  aiRevision: 1, sourcesRevision: 0, approvedSnapshotId: null, ...over,
+  aiRevision: 1, sourcesRevision: 0, reviewsRevision: 0, baselineSequence: 0, approvedSnapshotId: null, ...over,
 });
 const page = (id = "run-1"): RunPage => ({ runs: [{ id } as RunView], nextCursor: null });
 const detail = (id = "run-1"): RunView => ({ id } as RunView);

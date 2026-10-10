@@ -1,3 +1,4 @@
+import { seedSnapshot } from "../support/snapshot-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -647,32 +648,20 @@ test("guarded baseline-only change stales captured proposals and frees applicabl
     const target = new URL(process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL!);
     assert.equal(target.hostname, "127.0.0.1");
     assert.equal((await database.query("select environment_id::text id from app.environment_identity where id = 1")).rows[0].id, process.env.SCOPEROOM_ENVIRONMENT_ID);
-    const definition = (await database.query("select pg_get_constraintdef(oid) definition from pg_constraint where conrelid = 'app.project'::regclass and conname = 'project_baseline_pending_snapshots'")).rows[0].definition as string;
     const ids = [];
     for (let i = 0; i < 10; i++) ids.push(await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: generatedProposal }));
     const before = await readRun(owner.identity, p, ids[0]!);
-    await database.query("begin");
     try {
-      await database.query("alter table app.project drop constraint project_baseline_pending_snapshots");
-      await database.query(`alter table app.project add constraint project_baseline_pending_snapshots CHECK ((id = '${p}'::uuid) OR ${definition.slice(6)})`);
-      await database.query("commit");
-    } catch (error) { await database.query("rollback"); throw error; }
-    try {
-      await assert.rejects(database.query("update app.project set approved_snapshot_id = $2 where id = $1", [other, randomUUID()]), { code: "23514" });
-      const baseline = randomUUID(); await database.query("update app.project set approved_snapshot_id = $2 where id = $1", [p, baseline]);
+      const baseline = await seedSnapshot(database, p);
+      await assert.rejects(database.query("update app.project set approved_snapshot_id = $2 where id = $1", [other, baseline]), { code: "23503", constraint: "project_approved_snapshot_fkey" });
+      await database.query("update app.project set approved_snapshot_id = $2 where id = $1", [p, baseline]);
       const view = await readRun(owner.identity, p, ids[0]!);
       assert.equal(view.applicability, "STALE"); assert.deepEqual(view.applicabilityReasons, ["BASELINE_CHANGED"]);
       assert.deepEqual(view.diff, before.diff); assert.equal(view.documentRevision, before.documentRevision);
       assert.equal(await readAsMember(owner.identity, p, (tx, project) => applicableCapacityFull(tx, project)), false);
     } finally {
       await database.query("update app.project set approved_snapshot_id = null where id = $1", [p]);
-      await database.query("begin");
-      try {
-        await database.query("alter table app.project drop constraint project_baseline_pending_snapshots");
-        await database.query(`alter table app.project add constraint project_baseline_pending_snapshots ${definition}`);
-        await database.query("commit");
-      } catch (error) { await database.query("rollback"); throw error; }
-      assert.equal((await database.query("select pg_get_constraintdef(oid) definition from pg_constraint where conrelid = 'app.project'::regclass and conname = 'project_baseline_pending_snapshots'")).rows[0].definition, definition);
+      assert.ok((await database.query("select 1 from pg_constraint where conrelid='app.project'::regclass and conname='project_approved_snapshot_fkey'")).rowCount);
     }
   });
 });

@@ -1,4 +1,46 @@
-﻿# Progress tracker
+# Progress tracker
+
+## Current implementation: Stage 9.1 confirm and freeze (2026-10-10)
+
+The user authorizes plan 09a in the managed worktree `C:/Users/Cyrus/.codex/worktrees/stage-9-1-confirm-freeze-plan/scoperoom-ai`, branch `feat/stage-9.1-confirm-freeze-plan`, from main `7173306`. Stage 08 remains deferred; Stage 9.2 decisions, publication and Markdown are excluded. The user approved committing, pushing and creating the Stage 9.1 PR on 2026-10-10, and authorized monitoring CI/review feedback, fixing confirmed in-scope issues and requesting another Codex review after comment fixes. Merge and Stage 9.2 remain unauthorized.
+
+Implemented exact inspected flow confirmation, bounded candidate checks and agreed-scope projection, immutable saved document/layout/evidence capture, guarded freeze and withdrawal, history/detail reads, effective policy/member/archive invalidation and the Review panel with captured evidence and exact request recovery. Independent task and integrated reviews approved the change. Confirmed review fixes cover runtime INSERT authority, canonical UUID receipt bindings, audit-fixture lock ordering, acknowledgement settlement and failed-detail reconciliation. No dependency or CI changes were needed.
+
+The isolated local runtime passed bootstrap, guard and loopback/ownership checks. A fresh empty target applied all 28 final migrations with the exact source checksum; 80 constraints and 188 runtime grant entries match the main test database. The main target retains its historical migration checksum after documented local-only corrections; no migration history was rewritten. Replay-only stacks are stopped with their volumes/evidence retained. The main test stack remains available. Provider keys are disabled.
+
+Final local qualification passed. All 458 identified executable/config/test inputs match their qualified hashes; compared with the integrated review, only the four independently reviewed test corrections changed.
+
+| Gate | Current evidence |
+| --- | --- |
+| Full lint/import boundaries, TypeScript and production build | Passed; changed test paths also passed scoped lint |
+| Full unit suite | 600/600 passed; zero skips/failures; 20.506 s |
+| Full integration suite | 315/315 passed; zero skips/failures; 152.822 s |
+| Full worker suite | 30/30 passed; zero skips/failures; 23.334 s |
+| Complete serial-alone Realtime suite | 13/13 passed; zero skips/failures; 382.071 s |
+| Complete production browser suite | 457/457 distinct cases and attempts passed; Chromium 443/443, recovery-fault 14/14; two workers; zero failures/skips/retries/flakes/global errors |
+
+Original failures are retained separately. The first full unit run was 598/599 because the exact HTTP catalogue expectation omitted three new Review codes. The first full integration run was 314/315: a queued audit-fixture table lock blocked cleanup before its row-level SKIP LOCKED check. A deterministic lock probe confirmed the dependency; the Review fixture now uses the existing sweep guard. Product race tests and time limits remain unchanged. The first unfiltered browser run was 455/457, with Chromium 441/443 and recovery-fault 14/14, zero skips/retries/flakes/global errors. Its two old keyboard expectations assumed Specs was the last panel tab. Corrected tests explicitly assert Review focus/selection and the next move to Specs. All four test-file corrections received independent review; none changed application behavior. The final complete rerun passed with build/test/total times of 11.336/1097.581/1108.916 seconds and build/test exits 0/0. Its six-file output archive was hash-verified. No isolated rerun totals are combined into that result.
+
+The real 320 px candidate-reader screenshot and automated keyboard workflows were inspected. Local results do not establish hosted CI or manual NVDA acceptance. Realtime observations retain the existing provider boundary: an already joined removed socket can use its old topic until credential expiry, while backend access and credential issuance stop immediately.
+
+Plans and raw evidence remain ignored under `docs/superpowers/plans/` and `.superpowers/sdd/2026-10-10-stage-09a-freeze-candidate/`. Main's pre-existing tracker edits and the Atlas source worktree remain preserved. Next: publish this verified change, monitor current-head CI and review feedback, and address confirmed findings with meaningful tests and fresh Codex review. Keep the PR open for user review; do not merge or start Stage 9.2.
+
+## Current handoff: Stage 09 plans, Stage 08 deferred (2026-10-10)
+
+The user confirms Stage 7 is done and merged and requests exactly two Stage 09 implementation plans, with Stage 08 deferred for MVP. Local `main` is `7173306`, the Stage 7.2 merge of PR #28. E38 already makes 07a/07b the retained Stage 7 foundation and defers unbuilt 07c; this checkpoint does not claim 07c was implemented. Historical review/merge holds below describe earlier sessions and do not override the current request.
+
+Prepared two local plans:
+
+1. [09a: Confirm and freeze an exact candidate](../superpowers/plans/2026-10-10-stage-09a-freeze-candidate.md): flow confirmation, bounded candidate checks, immutable saved document/layout/evidence capture, candidate history/reader and withdrawal. Withdrawal belongs in the first PR so an open candidate can be closed before decision support arrives.
+2. [09b: Decisions and approved Markdown](../superpowers/plans/2026-10-10-stage-09b-decisions-and-markdown.md): designated human decisions, publication that preserves the same draft and newer edits, baseline history/pending labels, deterministic approved-snapshot Markdown and AI baseline compatibility.
+
+Both follow the current `.codex/docs/implementation/v1.6` E38 owners. No Stage 08 scenario/readiness/coverage engine, 07c workflow, reset API, change-request system, approval discussion, AI summary or extra export format is planned. The two plans are sequential PR scopes, not actual GitHub PRs.
+
+Evidence from this planning session: read current context, package/lockfile, v1.6 contracts and relevant source; an independent repository scout confirmed the storage/service gaps. Existing requirement/trace confirmation, graph warnings, citation checks, canonical hashing, access/receipt helpers and sync controller are reuse points. Agreement storage/services and a baseline semantic projection are not implemented yet. The plans explicitly replace the current project and AI baseline-null constraints with same-project snapshot references, preserve receipt ordering and distinguish newer revisions from a replaced draft. A documentation drafter assisted with 09b; lead integration and independent review corrected authority wording, route/file paths and actual verification commands.
+
+Validation is documentation-only: relative links, referenced existing paths, cross-plan interfaces, deferred scope, placeholder/em-dash scans and repository diff checks. No application tests, migrations or hosted checks were run, and no runtime success is inferred. Plans live in the repository's ignored `docs/superpowers/plans` directory. No application source was edited; nothing was committed, pushed or published.
+
+Next action: user review of the two plans. Implementation remains a separate request; begin with 09a and recheck the actual merged source before execution. The plans name focused checks per PR and one complete existing project gate at Stage 09 completion. Stage 12 retains hosted pilot qualification.
 
 ## Stage 7.2: requirements and trace links (2026-10-07 to 2026-10-08)
 

@@ -3,6 +3,7 @@
 import { discardOutbox } from "../../studio/ui/outbox.ts";
 import { defaultStudioUi, studioDirtyCount, type StudioUi } from "../../studio/ui/studio-ui.ts";
 import type { SourceCorrection } from "../../sources/ui/source-correction.ts";
+import { defaultReviewUi, type ReviewUi } from "../../reviews/ui/review-state.ts";
 
 type AiRequestBase = { projectId: string; draftId: string; key: string; body: Record<string, unknown>; };
 export type AiRequest =
@@ -10,7 +11,7 @@ export type AiRequest =
   | (AiRequestBase & { kind: "apply"; runId: string })
   | (AiRequestBase & { kind: "discard" | "cancel"; runId: string });
 export type AiUi = { instruction: string; action: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; selectedRunId: string | null; pendingRequest: AiRequest | null; applyPhase?: { key: string; projectId: string; runId: string; state: "uncertain" | "acknowledged" | "adopted"; draftId: string; documentRevision?: number; layoutRevision?: number } };
-export type RightTab = "details" | "ai" | "specs";
+export type RightTab = "details" | "ai" | "specs" | "review";
 export type SpecsSelection =
   | { kind: "source"; sourceId: string; versionId: string | null; back: SpecsSelection; range?: { startLine: number; endLine: number } }
   | { kind: "requirement"; id: string }
@@ -18,7 +19,7 @@ export type SpecsSelection =
 /** One Specs write at a time per project, kept in this store so a lost response survives tab switches and remounts. `path` is relative to `/api/projects/:projectId/`. */
 export type SpecsRequest = { key: string; method: "POST" | "PATCH"; path: string; body: Record<string, unknown> | null; label: string; draft?: true; acknowledged?: true };
 export type SpecsUi = { section: "sources" | "scope"; selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string; staleRequirements?: Record<string, string>; sourceCorrections?: Record<string, SourceCorrection> };
-export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: RightTab; drafts: Record<string, string>; ai: AiUi; specs: SpecsUi } & StudioUi;
+export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: RightTab; drafts: Record<string, string>; ai: AiUi; specs: SpecsUi; review: ReviewUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
 export const defaultAiUi: AiUi = { instruction: "", action: "PROPOSE_FLOW", selectedRunId: null, pendingRequest: null };
@@ -45,7 +46,7 @@ export function settleSpecsRequest(specs: SpecsUi, key: string, outcome: "saved"
     ? { ...specs.staleRequirements, [payload.requirementId]: draftId } : specs.staleRequirements;
   return { ...specs, pending: null, message, ...(staleRequirements ? { staleRequirements } : {}) };
 }
-export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, rightTab: "details", drafts: {}, ai: defaultAiUi, specs: defaultSpecsUi, ...defaultStudioUi };
+export const defaultUi: ProjectUi = { rightOpen: false, rightMounted: false, rightTab: "details", drafts: {}, ai: defaultAiUi, specs: defaultSpecsUi, review: defaultReviewUi, ...defaultStudioUi };
 
 export function uiFor(store: UiStore, projectId: string | undefined): ProjectUi {
   return (projectId && store[projectId]) || defaultUi;
@@ -80,12 +81,12 @@ export function updateUi(store: UiStore, projectId: string, change: (ui: Project
 /** Unsaved Details fields plus unsaved Studio fields and changes (an unconfirmed or refused save still counts). */
 export function dirtyCount(store: UiStore, projectId: string | undefined): number {
   const ui = uiFor(store, projectId);
-  return Object.keys(ui.drafts).length + Object.keys(ui.specs.sourceCorrections ?? {}).length + studioDirtyCount(ui);
+  return Object.keys(ui.drafts).length + Object.keys(ui.specs.sourceCorrections ?? {}).length + (ui.review.reason ? 1 : 0) + studioDirtyCount(ui);
 }
 
 /** Reload or close also protects pending AI and source-write receipts retained only in memory. */
 export function anyDirty(store: UiStore): boolean {
-  return Object.keys(store).some((projectId) => dirtyCount(store, projectId) > 0 || store[projectId].ai.pendingRequest !== null || store[projectId].specs.pending !== null);
+  return Object.keys(store).some((projectId) => dirtyCount(store, projectId) > 0 || store[projectId].ai.pendingRequest !== null || store[projectId].specs.pending !== null || store[projectId].review.pending !== null);
 }
 
 /**
@@ -98,7 +99,7 @@ export function discardDrafts(store: UiStore, projectId: string): UiStore {
   const pendingSource = current.specs.pending?.path.match(/^sources\/([^/]+)\/versions$/)?.[1];
   const pendingCorrection = pendingSource && current.specs.sourceCorrections?.[pendingSource];
   const specs = { ...current.specs, staleRequirements: undefined, ...(current.specs.sourceCorrections ? { sourceCorrections: pendingCorrection ? { [pendingSource]: pendingCorrection } : {} } : {}) };
-  return { ...store, [projectId]: { ...current, specs, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox, save: outbox.sending ? current.save : { state: "idle", message: "" } } };
+  return { ...store, [projectId]: { ...current, specs, review: { ...current.review, reason: current.review.pending ? current.review.reason : "" }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox, save: outbox.sending ? current.save : { state: "idle", message: "" } } };
 }
 
 /** Access loss or leaving: forget everything held for that project. */

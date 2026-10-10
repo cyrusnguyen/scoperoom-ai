@@ -1,3 +1,4 @@
+import { defaultReviewUi } from "../src/features/reviews/ui/review-state.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Changes } from "../src/features/drafts/contracts/changes.ts";
@@ -141,7 +142,7 @@ test("requirement acknowledgement matches the normalization applied before sendi
   assert.equal(finishRequirementWrite(newer, request, { createdIds: ["r1"] }).drafts["specs:req:new:title"], "Later title");
 });
 
-const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { section: "sources" as const, selected: null, sourceScope: "user" as const, pending: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
+const closed = { review: defaultReviewUi, nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { section: "sources" as const, selected: null, sourceScope: "user" as const, pending: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("discard preserves an uncertain import's original per-project request; dropping access clears it", () => {
@@ -507,4 +508,13 @@ test("opening Specs mounts the panel on that tab with empty Specs state", () => 
   assert.equal(uiFor(store, "p1").rightTab, "specs");
   assert.equal(uiFor(store, "p1").rightOpen, true);
   assert.deepEqual(uiFor(store, "p1").specs, defaultSpecsUi);
+});
+
+test("review attempts and reason protect navigation and survive tabs and pending discard", () => {
+  const request={key:"review",method:"POST" as const,path:"reviews/r/withdraw",body:{reason:"Submitted"},label:"Withdraw candidate",acknowledged:false};
+  const store=updateUi({},"a",ui=>({review:{...ui.review,pending:request,reason:"Newer reason"}}));
+  assert.equal(anyDirty(store),true);assert.equal(dirtyCount(store,"a"),1);
+  const remounted=uiFor(setRightTab(setRightOpen(store,"a",false),"a","review"),"a");assert.equal(remounted.review.pending,request);
+  assert.equal(uiFor(discardDrafts(store,"a"),"a").review.reason,"Newer reason");
+  assert.deepEqual(uiFor(dropProject(store,"a"),"a").review,defaultReviewUi);
 });

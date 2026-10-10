@@ -41,7 +41,7 @@ The Studio queues graph edits in a local outbox on top of an optimistic draft an
 - `POST D/positions` (`MOVE_NODES` up to 20 same-flow nodes, `ARRANGE_FLOW` with an exact revision pair and a preview hash recomputed under lock) is what Arrange applies; graph editing in the Studio no longer sends `MOVE_NODES` or `D/commands`. `POST D/arrangement-preview` is nonmutating and keyless. Neither it nor `changes` has a rate limit yet (project-wide gap).
 - `layout.edgeSides` (remembered connection sides, optional, `{}` in older drafts) lives in the layout, not the document: a sides-only change advances `layoutRevision` only, never `documentRevision`.
 - `RECONNECT_EDGE` also compares its inspected `expectedSides` pair (missing/null means no remembered points), so concurrent side changes cannot silently overwrite one another. Explicit reapply refreshes that targeted guard; an uncertain retry retains its original body and key.
-- Scope commands (`CREATE/UPDATE/DELETE/CONFIRM_REQUIREMENT` and `ADD/UPDATE/CONFIRM/DELETE_TRACE_LINK`) use `POST D/commands` after save-first, never `D/changes`. The server checks immutable same-project citations and assignable owner roles. Requirement labels come from the locked `project.requirement_display_sequence` and are never reused; link confirmation checks the inspected endpoint behavior versions. Step and flow deletion removes incident trace links, member removal and leave unassign current requirements, and allocated ids avoid every document collection.
+- Scope commands (`CONFIRM_FLOW`, `CREATE/UPDATE/DELETE/CONFIRM_REQUIREMENT` and `ADD/UPDATE/CONFIRM/DELETE_TRACE_LINK`) use `POST D/commands` after save-first, never `D/changes`. The server checks immutable same-project citations and assignable owner roles. Requirement labels come from the locked `project.requirement_display_sequence` and are never reused; link confirmation checks the inspected endpoint behavior versions. Step and flow deletion removes incident trace links, member removal and leave unassign current requirements, and allocated ids avoid every document collection.
 - Schema versions stay ScopeDocument v3 and DraftLayout v1 although the layout gained `edgeSides` and the document gained the `DATA_STORE` kind.
 
 ## Saved-update polling (Stage 04.2)
@@ -76,7 +76,15 @@ Pointer-drop entries carry local-only drag-start position metadata. Wire command
 
 One project Realtime controller uses events/collab topics, current JWT policies, post-subscribe refetch and status reconciliation. Messages never write canonical records. Epoch rotation and backend authorization account for cached socket permissions; no instant-eviction promise.
 
-Freeze copies an exact saved candidate. Publication advances the baseline while leaving newer draft content/positions untouched. Explicit reset alone archives/replaces the draft. Selected examples and reviewed links track behavior changes, not confirmation metadata.
+## Review candidates (Stage 9.1)
+
+`src/features/reviews` owns the pure candidate checker and agreed-scope projection, strict wire contracts and authorized preview/freeze/history/withdrawal services. Included flows and requirements need current confirmation; included trace links need current endpoint review. The checker validates graph paths and every captured citation. It compares included meaning with the current baseline without treating layout, confirmation metadata or revision counters as semantic changes.
+
+Freeze copies the exact saved document, layout, cited source versions and approval policy into an immutable snapshot. It checks the inspected document/layout revisions, baseline parent and policy version under existing project/draft locks. Snapshot hashes exclude mutable review state. Same-project foreign keys, immutable bindings and restricted column grants prevent cross-project lineage and premature publication authority. `reviewsRevision` uses the audit event sequence; `baselineSequence` remains zero.
+
+Current read access precedes exact receipt replay; new writes then require owner/editor authority and an active project. Withdrawal closes an open candidate without changing its snapshot. Effective policy changes, loss of approver eligibility and archive supersede the open review atomically; restore does not revive it. Historical reads validate captured payloads and hashes and never substitute newer draft or source content.
+
+Stage 9.2 owns decisions, publication and approved Markdown. Normal publication must preserve the current draft and newer content/positions. Reset and replacement remain deferred.
 
 Every protected read/write checks current access. Matching safe receipts replay before new-operation capability/version checks. AI stores exact input and durable intent, uses bounded fenced attempts and produces one reviewed application; it never approves.
 

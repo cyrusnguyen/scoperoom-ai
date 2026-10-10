@@ -27,7 +27,7 @@ const owner = { profileId: project.ownerId, displayName: "Management Owner", rol
 const listItem = (id: string, name: string, role: string) => ({ id, name, status: "ACTIVE", role, ownerName: "Management Owner", updatedAt: "2026-09-26T00:00:00.000Z" });
 const baseStatus = {
   viewerId: MOCK_VIEWER_ID, status: "ACTIVE", role: "OWNER", version: 1, settingsVersion: 1, approvalPolicyVersion: 1, membershipVersion: 1, designatedApproverId: null as string | null,
-  currentDraftId: draft.id, documentRevision: 1, layoutRevision: 1, realtimeEpoch: "77777777-7777-4777-8777-777777777777", eventSequence: 1, aiRevision: 0, sourcesRevision: 0, approvedSnapshotId: null,
+  currentDraftId: draft.id, documentRevision: 1, layoutRevision: 1, realtimeEpoch: "77777777-7777-4777-8777-777777777777", eventSequence: 1, aiRevision: 0, sourcesRevision: 0, reviewsRevision: 0, baselineSequence: 0, approvedSnapshotId: null,
 };
 
 async function mockOwnerLists(page: Page) {
