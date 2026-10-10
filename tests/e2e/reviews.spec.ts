@@ -81,34 +81,73 @@ test("confirmation requires reinspection when save-first refreshes a changed flo
   await expect(page.getByText("Confirmed: current wording.", { exact: true })).toBeVisible();
 });
 
-test("lost flow confirmation acknowledgement retries the exact body and key after remount", async ({ page }) => {
-  const projectId = await createProjectViaApi(page, "Confirmation recovery");
-  const { path } = await prepare(page, projectId);
-  await inspect(page, projectId);
-  const sent: Array<{ body: string; key: string | undefined }> = [];
-  let committed: unknown;
-  await page.route(`**${path}/commands`, async (route) => {
-    const request = route.request();
-    sent.push({ body: request.postData()!, key: request.headers()["idempotency-key"] });
-    if (sent.length === 1) {
-      const response = await route.fetch();
-      expect(response.status()).toBe(200);
-      committed = await (await page.request.get(path)).json();
-      await route.abort("failed");
-    } else await route.continue();
+for (const acknowledged of [false, true]) {
+  test(acknowledged
+    ? "acknowledged flow confirmation refresh stays with its flow through selection and remount"
+    : "lost flow confirmation acknowledgement retries the exact body and key after selection and remount", async ({ page }) => {
+    const projectId = await createProjectViaApi(page, "Confirmation recovery");
+    const { flowId, path } = await prepare(page, projectId);
+    const otherFlowId = randomUUID();
+    await seedStudioChanges(page, projectId, [
+      { command: "CREATE_FLOW", payload: { title: "Shipping", purpose: "Deliver an order", classification: "USER_JOURNEY", inclusion: "INCLUDED" }, proposedIds: [otherFlowId] },
+    ]);
+    await inspect(page, projectId);
+    const panel = page.locator("#right-panel");
+    const before = await (await page.request.get(path)).json();
+    const sent: Array<{ body: string; key: string | undefined }> = [];
+    let committed: unknown, stale = acknowledged;
+    await page.route(`**${path}`, route => stale && sent.length > 0 ? route.fulfill({ json: before }) : route.continue());
+    await page.route(`**${path}/commands`, async (route) => {
+      const request = route.request();
+      sent.push({ body: request.postData()!, key: request.headers()["idempotency-key"] });
+      if (sent.length === 1) {
+        const response = await route.fetch();
+        expect(response.status()).toBe(200);
+        committed = await (await page.request.get(path)).json();
+        if (acknowledged) await route.fulfill({ response });
+        else await route.abort("failed");
+      } else await route.continue();
+    });
+    await panel.getByRole("button", { name: "Confirm flow", exact: true }).click();
+    const recovery = acknowledged ? "Refresh" : "Retry";
+    const pendingMessage = acknowledged ? /Confirm flow was acknowledged/ : /We couldn’t confirm “Confirm flow”/;
+    await expect(panel.getByRole("button", { name: recovery, exact: true })).toBeVisible();
+    await expect(panel.getByText(pendingMessage)).toBeVisible();
+    const switchTo = async (title: string) => {
+      await page.getByRole("button", { name: "Close panel", exact: true }).click();
+      await page.locator(".flow-switch").click();
+      await page.getByRole("dialog", { name: "Flows", exact: true }).getByRole("button", { name: new RegExp(`^${title}`) }).click();
+      await expect(page.locator("#studio-flow-title")).toHaveText(title);
+      await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    };
+    await switchTo("Shipping");
+    await expect(panel.getByText("Unconfirmed.", { exact: true })).toBeVisible();
+    await expect(panel.getByRole("button", { name: recovery, exact: true })).toHaveCount(0);
+    await expect(panel.getByText(pendingMessage)).toHaveCount(0);
+    // The pending request still blocks a second confirmation, even where its recovery controls are hidden.
+    await expect(panel.getByRole("button", { name: "Confirm flow", exact: true })).toBeDisabled();
+    await page.getByRole("tab", { name: "Specs", exact: true }).click();
+    await page.getByRole("tab", { name: "Details", exact: true }).click();
+    await expect(panel.getByRole("button", { name: recovery, exact: true })).toHaveCount(0);
+    await expect(panel.getByText(pendingMessage)).toHaveCount(0);
+    await switchTo("Checkout");
+    await page.getByRole("tab", { name: "Specs", exact: true }).click();
+    await page.getByRole("tab", { name: "Details", exact: true }).click();
+    await expect(panel.getByRole("button", { name: recovery, exact: true })).toBeVisible();
+    await expect(panel.getByText(pendingMessage)).toBeVisible();
+    expect(sent).toHaveLength(1);
+    stale = false;
+    await panel.getByRole("button", { name: recovery, exact: true }).click();
+    await expect(panel.getByText("Confirm flow: saved.", { exact: true })).toBeVisible();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+    expect(sent[0]!.key).toBeTruthy();
+    expect(JSON.parse(sent[0]!.body).payload).toEqual({ flowId });
+    const saved = await (await page.request.get(path)).json();
+    expect(saved).toEqual(committed);
+    expect(saved.document.flows[otherFlowId].confirmation).toBeNull();
   });
-  await page.getByRole("button", { name: "Confirm flow", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Specs", exact: true }).click();
-  await page.getByRole("tab", { name: "Details", exact: true }).click();
-  await page.getByRole("button", { name: "Retry", exact: true }).click();
-  await expect(page.getByText("Confirm flow: saved.", { exact: true })).toBeVisible();
-  expect(sent).toHaveLength(2);
-  expect(sent[1]).toEqual(sent[0]);
-  expect(sent[0]!.key).toBeTruthy();
-  expect(await (await page.request.get(path)).json()).toEqual(committed);
-});
-
+}
 collaborationTest("editors can confirm flows; viewers and reviewers have no authoring control and are refused", async ({ collaboration }) => {
   const { ownerPage, editorPage, projectId, setEditorRole } = collaboration;
   const { flowId, path } = await prepare(ownerPage, projectId);
