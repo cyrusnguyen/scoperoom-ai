@@ -1,10 +1,8 @@
 /* Review and approval (Stage 09). Every colour, space and radius comes from tokens.css. */
 .review-panel { display: grid; gap: var(--space-3); min-width: 0; }
-.review-panel .detail-facts dd, .candidate-reader, .review-history button { overflow-wrap: anywhere; min-width: 0; }
+.review-panel .detail-facts dd, .candidate-reader { overflow-wrap: anywhere; min-width: 0; }
 .review-panel textarea { width: 100%; min-height: 96px; }
 .review-panel form { display: grid; gap: var(--space-2); }
-.review-history { list-style: none; padding: 0; }
-.review-history button { display: grid; width: 100%; text-align: left; }
 .candidate-reader p, .candidate-reader blockquote { white-space: pre-wrap; }
 .review-heading { display: flex; align-items: center; gap: var(--space-3); }
 .review-heading h2 { margin: 0; font-size: 15px; }
@@ -38,3 +36,17 @@
   .review-facts dd { margin-bottom: var(--space-2); }
   .review-actions > .button { flex: 1 1 auto; }
 }
+.review-back { justify-self: start; }
+.review-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.review-section-heading h2, .review-section-heading h3 { margin: 0; }
+.review-count { color: var(--foreground-muted); font-size: 12px; }
+.review-history { display: grid; gap: var(--space-2); min-width: 0; }
+.review-history > .button { justify-self: start; }
+.review-list { display: grid; margin: 0; padding: 0; list-style: none; border-top: var(--panel-border); }
+.review-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-1) var(--space-2); width: 100%; min-height: 44px; padding: var(--space-3) var(--space-2); border: 0; border-bottom: var(--panel-border); border-radius: 0; background: transparent; color: var(--foreground); text-align: left; }
+.review-row:hover { background: var(--surface-raised); }
+.review-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.review-row-title { font-size: 13px; font-weight: 500; }
+.review-row time { grid-column: 1 / -1; color: var(--foreground-muted); font-size: 12px; }
+.review-row .review-id { grid-column: 1 / -1; }
+.review-empty { margin: 0; padding: var(--space-5) var(--space-3); border: 1px dashed var(--border); border-radius: var(--radius-card); color: var(--foreground-muted); font-size: 13px; text-align: center; }

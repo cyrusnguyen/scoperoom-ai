@@ -255,7 +255,7 @@ test("narrow keyboard preview freezes exact saved scope, reads captured evidence
   await page.getByRole("tab", { name: "Review", exact: true }).click();
   await expect(capturedName).toHaveText("Candidate reader");
   await page.getByRole("button", { name: "Back to history", exact: true }).click();
-  await page.getByRole("button", { name: /OPEN/ }).click();
+  await page.getByRole("button", { name: /Candidate Open/ }).click();
   await expect(capturedName).toHaveText("Candidate reader");
   await expect(page.locator(".candidate-reader")).not.toContainText("Renamed candidate project");
   await expect(page.locator(".source-lines li")).toHaveCount(100);
@@ -277,7 +277,7 @@ test("narrow keyboard preview freezes exact saved scope, reads captured evidence
   await page.getByRole("button",{name:"Withdraw candidate",exact:true}).click();
   await expect(page.getByText("Closed reason: Revisit saved scope",{exact:true})).toBeVisible();
   await page.getByRole("button",{name:"Back to history",exact:true}).click();
-  await expect(page.getByRole("button",{name:/WITHDRAWN/})).toBeFocused();
+  await expect(page.getByRole("button",{name:/Candidate Withdrawn/})).toBeFocused();
   await page.getByRole("tab",{name:"Current",exact:true}).click();
   await freezeInUi(page);
   await page.keyboard.press("Escape");
@@ -369,7 +369,7 @@ collaborationTest("editor receipt recovery after downgrade preserves read access
   await expect(editorPage.getByText("Saved scope is ready to freeze.",{exact:true})).toBeVisible();
   await expect(editorPage.getByRole("button",{name:"Freeze candidate",exact:true})).toHaveCount(0);
   const status=await(await ownerPage.request.get(`/api/projects/${projectId}/status`)).json();expect((await ownerPage.request.post(`/api/projects/${projectId}/archive`,{headers:reviewHeaders(),data:{expectedProjectVersion:status.version,reason:"Archive candidate"}})).status()).toBe(200);
-  await editorPage.reload();await editorPage.getByRole("button",{name:"Inspect",exact:true}).click();await editorPage.getByRole("tab",{name:"Review",exact:true}).click();await editorPage.getByRole("tab",{name:"History",exact:true}).click();await editorPage.getByRole("button",{name:/SUPERSEDED/}).click();await expect(editorPage.getByRole("heading",{name:"Candidate - not approved",exact:true})).toBeVisible();
+  await editorPage.reload();await editorPage.getByRole("button",{name:"Inspect",exact:true}).click();await editorPage.getByRole("tab",{name:"Review",exact:true}).click();await editorPage.getByRole("tab",{name:"History",exact:true}).click();await editorPage.getByRole("button",{name:/Candidate Superseded/}).click();await expect(editorPage.getByRole("heading",{name:"Candidate - not approved",exact:true})).toBeVisible();
 });
 
 test("acknowledged review cannot settle below its exact receipt floor", async ({page}) => {
@@ -458,7 +458,7 @@ test("late withdrawal 401 after project switch cannot sign out the next project 
 });
 
 collaborationTest("loss of membership removes protected candidate and evidence before late reads can repopulate them",async({collaboration})=>{
-  const {ownerPage,editorPage,projectId,removeEditor}=collaboration;const {draftId}=await readyCandidate(ownerPage,projectId,true);const frozen=await freezeViaApi(ownerPage,projectId,draftId);await openReview(editorPage,projectId);await editorPage.getByRole("tab",{name:"History",exact:true}).click();await editorPage.getByRole("button",{name:/OPEN/}).click();await expect(editorPage.getByRole("heading",{name:"Candidate - not approved",exact:true})).toBeVisible();
+  const {ownerPage,editorPage,projectId,removeEditor}=collaboration;const {draftId}=await readyCandidate(ownerPage,projectId,true);const frozen=await freezeViaApi(ownerPage,projectId,draftId);await openReview(editorPage,projectId);await editorPage.getByRole("tab",{name:"History",exact:true}).click();await editorPage.getByRole("button",{name:/Candidate Open/}).click();await expect(editorPage.getByRole("heading",{name:"Candidate - not approved",exact:true})).toBeVisible();
   await removeEditor();await editorPage.evaluate(()=>{window.dispatchEvent(new Event("blur"));window.dispatchEvent(new Event("focus"));});await expect(editorPage.locator(".candidate-reader")).toHaveCount(0);await expect(editorPage.locator(".source-lines")).toHaveCount(0);await expect(editorPage.locator("#right-panel")).toHaveCount(0);
   expect((await editorPage.request.get(`/api/projects/${projectId}/reviews/${frozen.reviewId}`)).status()).toBe(404);
 });
@@ -696,7 +696,7 @@ test("decision controls and terminal attribution support keyboard at desktop and
   await page.getByRole("heading", { name: "Candidate - changes requested", exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("decision-terminal-desktop.png"), fullPage: true });
   await page.getByRole("button", { name: "Back to history", exact: true }).focus(); await page.keyboard.press("Enter");
-  await expect(page.getByRole("button", { name: /CHANGES_REQUESTED/ })).toBeFocused();
+  await expect(page.getByRole("button", { name: /Candidate Changes requested/ })).toBeFocused();
 });
 
 test("a decision refused after an approver policy change retains submitted and newer reason", async ({ page }) => {

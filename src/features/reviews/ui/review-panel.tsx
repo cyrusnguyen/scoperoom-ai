@@ -15,6 +15,8 @@ import ApprovedMarkdown from "./approved-markdown";
 import { savedPendingWork } from "./pending-work";
 import ReviewCurrent from "./review-current";
 import SavedComparison from "./review-comparison";
+import ReviewHistory from "./review-history";
+import { Icon } from "@/features/shell/ui/icon";
 
 const SECTIONS = ["current", "history"] as const;
 export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, onAccessLost }: {
@@ -209,7 +211,7 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
         onSharing={onSharing} onTarget={onTarget} onReadOpen={reviewId => { update(() => ({ section: "history" })); select(reviewId); }}
         onFreeze={inspected => void write.send(`drafts/${inspected.draftId}/reviews`, { ...inspected.guards }, "Freeze candidate", inspected)} />
       </> : ui.selectedReviewId ? <>
-        <button type="button" className="button small" onClick={() => select(null)}>Back to history</button>
+        <button type="button" className="button quiet small review-back" onClick={() => select(null)}><Icon name="back" size={16} /><span>Back to history</span></button>
         {selected ? <>
           <CandidateReader key={selected.snapshot.id} detail={selected} />
           {canDecide && <section aria-label="Decide frozen candidate">
@@ -238,27 +240,11 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
           </form>}
         </> : !readError && <p role="status">Loading candidate…</p>}
       </> : ui.selectedSnapshotId ? <>
-        <button type="button" className="button small" onClick={() => selectSnapshot(null)}>Back to history</button>
+        <button type="button" className="button quiet small review-back" onClick={() => selectSnapshot(null)}><Icon name="back" size={16} /><span>Back to history</span></button>
         {selectedPublishedSnapshot ? <><CandidateReader key={selectedPublishedSnapshot.snapshot.id} detail={selectedPublishedSnapshot} /><ApprovedMarkdown key={selectedPublishedSnapshot.snapshot.id} published={selectedPublishedSnapshot} onAccessLost={onAccessLost} /></> : !readError && <p role="status">Loading baseline…</p>}
       </> : <>
-        <h2>Approved baselines</h2>
-        {snapshotPage && !snapshotPage.items.length && <p>No approved baselines yet.</p>}
-        <ul className="review-history">{snapshotPage?.items.map(snapshot => <li key={snapshot.snapshotId}>
-          <button id={`snapshot-row-${snapshot.snapshotId}`} type="button" className="button quiet" onClick={() => selectSnapshot(snapshot.snapshotId)}>
-            Baseline {snapshot.publicationSequence} · {snapshot.publishedAt}<span>{snapshot.snapshotId}</span>
-          </button>
-        </li>)}</ul>
-        {snapshotPage?.nextCursor && <button type="button" className="button small" onClick={() => void refreshSnapshots(snapshotPage.nextCursor!)}>More baselines</button>}
-        <h2>Candidate history</h2>
-        {!page && !readError && <p role="status">Loading reviews…</p>}
-        {page && !page.items.length && <p>No frozen candidates yet.</p>}
-        <ul className="review-history">{page?.items.map(review => <li key={review.reviewId}>
-          <button id={`review-row-${review.reviewId}`} type="button" className="button quiet" onClick={() => select(review.reviewId)}>
-            {review.state} · {review.createdAt}<span>{review.reviewId}</span>
-          </button>
-        </li>)}</ul>
-        {page?.nextCursor && <button type="button" className="button small"
-          onClick={() => void refresh(page.nextCursor!)}>More candidates</button>}
+      <ReviewHistory snapshots={snapshotPage} reviews={page} loading={!page && !readError} onOpenSnapshot={selectSnapshot} onOpenReview={select}
+        onMoreSnapshots={cursor => void refreshSnapshots(cursor)} onMoreReviews={cursor => void refresh(cursor)} />
       </>}
     </div>
   </div>;
