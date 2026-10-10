@@ -517,6 +517,8 @@ for (const [action, state, heading] of [
     const projectId = await createProjectViaApi(page, "Human decision");
     await readyCandidate(page, projectId);
     await openReview(page, projectId);
+    const approver = page.locator(".review-panel dt").filter({ hasText: /^Designated approver$/ }).locator("+ dd");
+    await expect(approver).toHaveText("Studio test owner · Owner");
     await freezeInUi(page);
     const candidate = await (await page.request.get(`/api/projects/${projectId}/reviews`)).json();
     const review = candidate.items[0];

@@ -8,6 +8,7 @@ import { tabListKeyDown } from "@/features/shell/ui/right-panel";
 import type { ProjectStatusView } from "@/features/projects/contracts/project";
 import type { PublishedSnapshot, SnapshotPage, DecisionInput, ReviewDetail, ReviewPage, ReviewPreview } from "../contracts/review";
 import { canDecideReview, joinSnapshotPage, joinReviewPage, previewMatches, reviewReceiptCovered, settleCoveredReview, type ReviewReceipt, type ReviewUi } from "./review-state";
+import { approverLabel } from "./review-format";
 import { useReviewWrite } from "./use-review-write";
 import { candidateErrorText } from "./candidate-error-text";
 import CandidateReader from "./candidate-reader";
@@ -175,7 +176,7 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
     update(() => ({ selectedSnapshotId: id, selectedReviewId: null }));
     if (!id) requestAnimationFrame(() => window.document.getElementById(`snapshot-row-${ui.selectedSnapshotId}`)?.focus());
   };
-  return <div className="specs-panel review-panel">
+  return <div className="review-panel">
     <div className="specs-tabs" role="tablist" aria-label="Review sections">
       {SECTIONS.map((section, index) => <button key={section} type="button" role="tab"
         id={`review-tab-${section}`} aria-controls={`review-body-${section}`}
@@ -215,7 +216,7 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
         <p>Only saved work is captured. Another person’s unsent edits are not included.</p>
         <dl className="detail-facts">
           <dt>Saved revisions</dt><dd>Document {studio.savedDraft.documentRevision}, layout {studio.savedDraft.layoutRevision}</dd>
-          <dt>Designated approver</dt><dd>{sync.status.designatedApproverId ?? "Not assigned"}</dd>
+          <dt>Designated approver</dt><dd>{approverLabel(sync.status.designatedApproverId, sync.directory)}</dd>
           <dt>Included flows</dt><dd>{Object.values(document.flows).filter(f => f.inclusion === "INCLUDED").length}</dd>
           <dt>Included requirements</dt><dd>{Object.values(document.requirements).filter(r => r.inclusion === "INCLUDED").length}</dd>
         </dl>

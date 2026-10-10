@@ -21,10 +21,3 @@
 .scope-toolbar .field { flex: 1 1 14rem; margin: 0; }
 .requirement-form > h3, .requirement-form h4 { margin: 0; }
 .requirement-form .detail-section { margin: 0; }
-
-.review-panel .detail-facts dd, .candidate-reader, .review-history button { overflow-wrap: anywhere; min-width: 0; }
-.review-panel textarea { width: 100%; min-height: 96px; }
-.review-panel form { display: grid; gap: var(--space-2); }
-.review-history { list-style: none; padding: 0; }
-.review-history button { display: grid; width: 100%; text-align: left; }
-.candidate-reader p, .candidate-reader blockquote { white-space: pre-wrap; }
