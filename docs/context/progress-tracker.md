@@ -2,7 +2,7 @@
 
 ## Stage 9.2 review completion and Review UI refresh (2026-10-10)
 
-Worktree `D:/Project/scoperoom-ai/.claude/worktrees/stage-9-bug-review-13d0df`, branch `claude/stage-9-bug-review-13d0df`. The Stage 9.2 decisions, publication and approved Markdown work, including its external-review corrections, was copied byte for byte from the Codex worktree as baseline `81cb3e4`. Commits `365c9a5` through `99d7316` finish the review fixes and refresh the Review and Approval UI. No migration, dependency, API route, server service, SQL or contract changed after the baseline; the local database keeps its 32 migrations.
+Worktree `D:/Project/scoperoom-ai/.claude/worktrees/stage-9-bug-review-13d0df`, branch `claude/stage-9-bug-review-13d0df`. The Stage 9.2 decisions, publication and approved Markdown work, including its external-review corrections, was copied byte for byte from the Codex worktree as baseline `81cb3e4`. Code commits `365c9a5` through `99d7316` finish the review fixes and refresh the Review and Approval UI; docs commits `7d8388b` and `5570599` record the review completion, qualification and external review follow-up; the final-review polish commit (Review tones, labels and counters) and the docs commit that follows it close the whole-branch review's Minor findings. No migration, dependency, API route, server service, SQL or contract changed after the baseline; the local database keeps its 32 migrations.
 
 External review findings:
 
@@ -48,7 +48,7 @@ The twelve external review findings were verified and the supported fixes comple
 
 ## Stage 9.2 implemented and locally verified, awaiting approval (2026-10-10)
 
-Implemented in managed worktree `C:/Users/Cyrus/.codex/worktrees/stage-9-2-decisions-markdown/scoperoom-ai`, branch `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan`, from merged main `46ea382`. Stages 1 through 7 and 9.1 are merged; Stage 08 remains deferred. All source remains uncommitted pending the user's approval before commit, push or PR. Main, Atlas and unrelated work are preserved.
+Implemented in managed worktree `C:/Users/Cyrus/.codex/worktrees/stage-9-2-decisions-markdown/scoperoom-ai`, branch `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan`, from merged main `46ea382`. Stages 1 through 7 and 9.1 are merged; Stage 08 remains deferred. All source remained uncommitted pending the user's approval before commit, push or PR at that point; it was later committed on branch `claude/stage-9-bug-review-13d0df` (see the top section). Main, Atlas and unrelated work are preserved.
 
 All six tasks and the integrated change passed independent review. Stage 9.2 adds exact designated-human decisions, atomic publication preserving the same draft and newer saved/unsent work, immutable approved history, deterministic approved-only Markdown, separate saved semantic/layout pending labels and AI compatibility after real publication. Existing authority, scoped receipts, sync and native download owners are reused; no dependency or additional controller was added. Review fixes cover historical receipt binding, blank optional approval comments and preserving explicit historical selection through receipt reconciliation and late acknowledgement.
 
