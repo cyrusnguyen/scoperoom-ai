@@ -10,10 +10,11 @@ import type { PublishedSnapshot, SnapshotPage, DecisionInput, ReviewDetail, Revi
 import { canDecideReview, joinSnapshotPage, joinReviewPage, previewMatches, reviewReceiptCovered, settleCoveredReview, type ReviewReceipt, type ReviewUi } from "./review-state";
 import { approverLabel } from "./review-format";
 import { useReviewWrite } from "./use-review-write";
-import { candidateErrorText } from "./candidate-error-text";
 import CandidateReader from "./candidate-reader";
 import ApprovedMarkdown from "./approved-markdown";
 import { savedPendingWork } from "./pending-work";
+import ReviewCurrent from "./review-current";
+import SavedComparison from "./review-comparison";
 
 const SECTIONS = ["current", "history"] as const;
 export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, onAccessLost }: {
@@ -163,7 +164,6 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
     }, label, undefined, selected);
   };
   const eligible = preview && previewMatches(preview, sync.status, studio.exportDirty || dirty());
-  const document = studio.savedDraft.document;
   const { currentDraftId, documentRevision, layoutRevision, approvedSnapshotId, baselineSequence } = sync.status;
   const comparisonFloor = studio.ui.acknowledgedRevisions[studio.savedDraft.id];
   const comparisonAvailable = !sync.failures && !studio.readFailures && !studio.refreshFailed && !baselineError;
@@ -187,70 +187,27 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
           tabListKeyDown(event, SECTIONS, index, section => update(() => ({ section })));
         }}>{section === "current" ? "Current" : "History"}</button>)}
     </div>
-    {ui.message && <p role={ui.pending ? "alert" : "status"}>
+    {ui.message && <p className="review-callout" data-tone={ui.pending ? "pending" : "open"} role={ui.pending ? "alert" : "status"}>
       {ui.message}
       {ui.pending && !write.busy && <button type="button" className="button small" onClick={() => void write.retry()}>
         {ui.pending.acknowledged ? "Refresh" : "Retry"}
       </button>}
     </p>}
-    {write.busy && <p role="status">Saving review action…</p>}
-    {readError && <p role="alert">{readError} <button type="button" className="button small" onClick={() => {
+    {write.busy && <p role="status" className="review-intro">Saving review action…</p>}
+    {readError && <p role="alert" className="review-callout" data-tone="rejected">{readError} <button type="button" className="button small" onClick={() => {
       void refresh();
       if (ui.selectedReviewId) void readDetail(ui.selectedReviewId);
       if (ui.selectedSnapshotId) void readPublishedSnapshot(ui.selectedSnapshotId);
     }}>Retry reviews</button></p>}
-    <section aria-label="Saved work against current baseline">
-      <h3>Saved work against current baseline</h3>
-      {sync.status.approvedSnapshotId && <p>Baseline {sync.status.baselineSequence}</p>}
-      {pendingWork.kind === "unavailable" ? <p role="status">Saved comparison is unavailable or still refreshing. {baselineError}
-        <button type="button" className="button quiet small" onClick={() => { void readCurrentBaseline(current.current.status, fence(), true); void sync.revalidate("manual"); }}>Retry saved comparison</button>
-      </p> : pendingWork.kind === "unapproved" ? <p>No approved baseline yet. Saved scope is not approved.</p> : <>
-        <p>{pendingWork.semantic ? "Saved included scope has changes pending approval." : "Saved included scope matches the current approved baseline."}</p>
-        {pendingWork.layout && <p>Saved layout has unapproved presentation changes.</p>}
-      </>}
-      {(studio.exportDirty || dirty()) && <p>Unsent edits and typed fields are separate from this saved comparison and are not approved.</p>}
-    </section>
+    <SavedComparison work={pendingWork} baselineSequence={sync.status.approvedSnapshotId ? sync.status.baselineSequence : null} baselineError={baselineError}
+      unsent={studio.exportDirty || dirty()} onRetry={() => { void readCurrentBaseline(current.current.status, fence(), true); void sync.revalidate("manual"); }} />
     <div id={`review-body-${ui.section}`} role="tabpanel" aria-labelledby={`review-tab-${ui.section}`}>
       {ui.section === "current" ? <>
-        <h2>Review saved scope</h2>
-        <p>Only saved work is captured. Another person’s unsent edits are not included.</p>
-        <dl className="detail-facts">
-          <dt>Saved revisions</dt><dd>Document {studio.savedDraft.documentRevision}, layout {studio.savedDraft.layoutRevision}</dd>
-          <dt>Designated approver</dt><dd>{approverLabel(sync.status.designatedApproverId, sync.directory)}</dd>
-          <dt>Included flows</dt><dd>{Object.values(document.flows).filter(f => f.inclusion === "INCLUDED").length}</dd>
-          <dt>Included requirements</dt><dd>{Object.values(document.requirements).filter(r => r.inclusion === "INCLUDED").length}</dd>
-        </dl>
-        <button type="button" className="button quiet small" onClick={onSharing}>Project sharing and approver</button>
-        {sync.status.status === "ACTIVE" && <>
-          <button type="button" className="button" disabled={previewBusy || write.busy || !!ui.pending}
-            onClick={() => void prepare(false)}>Preview saved scope</button>
-          {canWrite && studio.unsaved && <button type="button" className="button" disabled={previewBusy || write.busy || !!ui.pending}
-            onClick={() => void prepare(true)}>Save Studio changes and preview</button>}
-        </>}
-        {!canWrite && <p>You can inspect saved scope and candidates. Freezing and withdrawal require an owner or editor.</p>}
-        {previewBusy && <p role="status">Preparing saved preview…</p>}
-        {previewError && <p role="alert">{previewError}</p>}
-        {preview && <section aria-label="Saved candidate preview">
-          <h3>Saved candidate preview</h3>
-          <p>Document {preview.guards.expectedDocumentRevision}, layout {preview.guards.expectedLayoutRevision} · Approval policy {preview.guards.expectedApprovalPolicyVersion}</p>
-          {preview.check.valid ? <p>Saved scope is ready to freeze.</p> : <>
-            <p>Resolve these saved-scope checks, then preview again.</p>
-            <ul>{preview.check.errors.map((error, index) => <li key={index}>
-              {candidateErrorText[error.code]}
-              {error.targetId && <button type="button" className="button quiet small"
-                onClick={() => onTarget(error.targetId!)}>Inspect item</button>}
-            </li>)}</ul>
-            {preview.check.truncated && <p>More checks remain. Resolve these and preview again.</p>}
-          </>}
-          {!eligible && <p>Saved or local changes affected this preview. Preview saved scope again before freezing.</p>}
-          {preview.openReviewId && <p>An open candidate already exists. <button type="button" className="button small" onClick={() => {
-            update(() => ({ section: "history" }));
-            select(preview.openReviewId);
-          }}>Read open candidate</button></p>}
-          {canWrite && <button type="button" className="button primary"
-            disabled={!eligible || !preview.check.valid || !!preview.openReviewId || !!ui.pending || write.busy}
-            onClick={() => void write.send(`drafts/${preview.draftId}/reviews`, { ...preview.guards }, "Freeze candidate", preview)}>Freeze candidate</button>}
-        </section>}
+      <ReviewCurrent savedDraft={studio.savedDraft} approver={approverLabel(sync.status.designatedApproverId, sync.directory)}
+        active={sync.status.status === "ACTIVE"} canWrite={canWrite} unsaved={studio.unsaved} previewBusy={previewBusy} writing={write.busy || !!ui.pending}
+        previewError={previewError} preview={preview} eligible={Boolean(eligible)} onPreview={saveFirst => void prepare(saveFirst)}
+        onSharing={onSharing} onTarget={onTarget} onReadOpen={reviewId => { update(() => ({ section: "history" })); select(reviewId); }}
+        onFreeze={inspected => void write.send(`drafts/${inspected.draftId}/reviews`, { ...inspected.guards }, "Freeze candidate", inspected)} />
       </> : ui.selectedReviewId ? <>
         <button type="button" className="button small" onClick={() => select(null)}>Back to history</button>
         {selected ? <>

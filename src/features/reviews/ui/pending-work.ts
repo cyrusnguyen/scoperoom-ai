@@ -5,7 +5,7 @@ import type { PublishedSnapshot } from "../contracts/review.ts";
 import { agreedProjection } from "../domain/candidate.ts";
 import { covers, type RevisionFloor } from "../../studio/ui/outbox.ts";
 
-type PendingWork = { kind: "unavailable" } | { kind: "unapproved" } | { kind: "compared"; semantic: boolean; layout: boolean };
+export type PendingWork = { kind: "unavailable" } | { kind: "unapproved" } | { kind: "compared"; semantic: boolean; layout: boolean };
 const sorted = <T>(records: Record<string, T>) => Object.entries(records).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
 // Compare the bounded saved geometry, not position counters or object insertion order.
 const layoutMeaning = (layout: DraftLayout) => [
