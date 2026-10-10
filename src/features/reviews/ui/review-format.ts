@@ -53,3 +53,10 @@ export function linkNote(included: boolean, state: LinkState, approved: boolean)
 }
 
 export const linkReviewLabel = (state: LinkState): string => state === "CURRENT" ? "Current" : state === "PROPOSED" ? "Not reviewed" : "Needs review";
+
+export const REVIEW_REASON_LIMIT = 4000;
+/** Mirrors the server reason contract: code points, at most 4,000, blank after ECMAScript trim. */
+export function reasonStatus(reason: string): { count: number; over: boolean; blank: boolean } {
+  const count = [...reason].length;
+  return { count, over: count > REVIEW_REASON_LIMIT, blank: !reason.trim() };
+}

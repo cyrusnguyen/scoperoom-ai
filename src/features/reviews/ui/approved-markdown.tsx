@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiReadText, SESSION_ENDED, sessionEnded } from "@/client/api";
 import { useSync } from "@/features/collaboration/ui/sync-context";
 import { exportFilename } from "@/features/exports/domain/flow-file";
+import { Icon } from "@/features/shell/ui/icon";
 import type { PublishedSnapshot } from "../contracts/review";
 
 /** The component is keyed by exact selected snapshot; prepared text never outlives its project/access fence. */
@@ -59,13 +60,15 @@ export default function ApprovedMarkdown({ published, onAccessLost }: { publishe
     finally { working.current = false; request.current = null; if (mounted.current) setBusy(false); }
   }
   const text = prepared?.live() && !sync.failures ? prepared.text : null;
-  return <section className="detail-section" aria-label="Approved Markdown export">
+  return <section className="review-card review-export" aria-label="Approved Markdown export">
     <h3>Approved Markdown</h3>
-    <p>Downloads this exact baseline. Labels, descriptions and captured evidence may contain confidential information.</p>
-    <button type="button" className="button" disabled={busy} onClick={() => void prepare("download")}>Download Markdown</button>
-    <button type="button" className="button quiet" disabled={busy} onClick={() => void prepare("copy")}>Show Markdown for copy</button>
-    {busy && <p role="status">Preparing Markdown…</p>}
-    {error && <p role="alert">{error} <button type="button" className="button small" disabled={busy} onClick={() => void prepare(intent.current)}>Retry Markdown</button></p>}
-    {text !== null && <><p><label htmlFor="approved-markdown-copy">Approved Markdown</label></p><textarea id="approved-markdown-copy" rows={8} value={text} readOnly spellCheck={false} /></>}
+    <p className="review-intro">Downloads this exact baseline. Labels, descriptions and captured evidence may contain confidential information.</p>
+    <div className="review-actions">
+      <button type="button" className="button primary" disabled={busy} onClick={() => void prepare("download")}><Icon name="download" size={16} /><span>Download Markdown</span></button>
+      <button type="button" className="button quiet" disabled={busy} onClick={() => void prepare("copy")}><Icon name="copy" size={16} /><span>Show Markdown for copy</span></button>
+    </div>
+    {busy && <p role="status" className="review-intro">Preparing Markdown…</p>}
+    {error && <p role="alert" className="review-callout" data-tone="rejected">{error} <button type="button" className="button small" disabled={busy} onClick={() => void prepare(intent.current)}>Retry Markdown</button></p>}
+    {text !== null && <div className="review-export-copy"><label htmlFor="approved-markdown-copy">Approved Markdown</label><textarea id="approved-markdown-copy" rows={8} value={text} readOnly spellCheck={false} /></div>}
   </section>;
 }

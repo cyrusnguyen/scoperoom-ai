@@ -672,7 +672,7 @@ test("decision publication keeps exact saved newer work and unsent canvas, inspe
 test("decision controls and terminal attribution support keyboard at desktop and 320px", async ({ page }, testInfo) => {
   const projectId = await createProjectViaApi(page, "Decision accessibility"); await readyCandidate(page, projectId); await openReview(page, projectId); await freezeInUi(page);
   await expect(page.locator("#right-panel textarea")).toHaveCount(1);
-  await expect(page.getByText("Required for request changes, rejection and withdrawal. Optional for approval. Up to 4,000 characters.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Required for request changes, rejection and withdrawal. Optional for approval. 0/4,000 characters.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Approve candidate", exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("decision-desktop.png"), fullPage: true });
   await page.setViewportSize({ width: 320, height: 844 });

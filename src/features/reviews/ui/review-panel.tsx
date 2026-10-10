@@ -8,7 +8,8 @@ import { tabListKeyDown } from "@/features/shell/ui/right-panel";
 import type { ProjectStatusView } from "@/features/projects/contracts/project";
 import type { PublishedSnapshot, SnapshotPage, DecisionInput, ReviewDetail, ReviewPage, ReviewPreview } from "../contracts/review";
 import { canDecideReview, joinSnapshotPage, joinReviewPage, previewMatches, reviewReceiptCovered, settleCoveredReview, type ReviewReceipt, type ReviewUi } from "./review-state";
-import { approverLabel } from "./review-format";
+import { approverLabel, reasonStatus } from "./review-format";
+import ReviewDecision from "./review-decision";
 import { useReviewWrite } from "./use-review-write";
 import CandidateReader from "./candidate-reader";
 import ApprovedMarkdown from "./approved-markdown";
@@ -158,7 +159,7 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
   const selected = detail?.review.reviewId === ui.selectedReviewId ? detail : null;
   const selectedPublishedSnapshot = !ui.selectedReviewId && publishedSnapshot?.snapshot.id === ui.selectedSnapshotId ? publishedSnapshot : null;
   const canDecide = selected && canDecideReview(selected, sync.status);
-  const reasonValid = [...ui.reason].length <= 4000;
+  const reasonValid = !reasonStatus(ui.reason).over;
   const decide = (decision: DecisionInput["decision"], label: string) => {
     if (!selected || !canDecide || !reasonValid || (decision !== "APPROVE" && !ui.reason.trim())) return;
     void write.send(`reviews/${selected.review.reviewId}/decision`, {
@@ -214,30 +215,11 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
         <button type="button" className="button quiet small review-back" onClick={() => select(null)}><Icon name="back" size={16} /><span>Back to history</span></button>
         {selected ? <>
           <CandidateReader key={selected.snapshot.id} detail={selected} />
-          {canDecide && <section aria-label="Decide frozen candidate">
-            <h3>Decide this exact candidate</h3>
-            <p>Approval publishes the included scope above and keeps newer draft work. Request changes or rejection closes this candidate without publication.</p>
-            <label htmlFor="decision-reason">Reason</label>
-            <textarea id="decision-reason" value={ui.reason} onChange={event => update(() => ({ reason: event.target.value }))} aria-describedby="decision-reason-help" />
-            <p id="decision-reason-help">Required for request changes, rejection{canWrite ? " and withdrawal" : ""}. Optional for approval. Up to 4,000 characters.</p>
-            <button type="button" className="button primary" disabled={write.busy || !!ui.pending || !reasonValid}
-              onClick={() => decide("APPROVE", "Approve candidate")}>Approve candidate</button>
-            <button type="button" className="button" disabled={write.busy || !!ui.pending || !reasonValid || !ui.reason.trim()}
-              onClick={() => decide("REQUEST_CHANGES", "Request changes")}>Request changes</button>
-            <button type="button" className="button danger" disabled={write.busy || !!ui.pending || !reasonValid || !ui.reason.trim()}
-              onClick={() => decide("REJECT", "Reject candidate")}>Reject candidate</button>
-          </section>}
-          {canWrite && selected.review.state === "OPEN" && <form onSubmit={event => {
-            event.preventDefault();
-            void write.send(`reviews/${selected.review.reviewId}/withdraw`, {
+          <ReviewDecision reason={ui.reason} onReason={reason => update(() => ({ reason }))} canDecide={Boolean(canDecide)}
+            canWithdraw={canWrite && selected.review.state === "OPEN"} writing={write.busy || !!ui.pending} onDecide={decide}
+            onWithdraw={() => void write.send(`reviews/${selected.review.reviewId}/withdraw`, {
               expectedReviewVersion: selected.review.reviewVersion, reason: ui.reason,
-            }, "Withdraw candidate");
-          }}>
-            {!canDecide && <><label htmlFor="withdraw-reason">Withdrawal reason</label>
-            <textarea id="withdraw-reason" value={ui.reason} onChange={event => update(() => ({ reason: event.target.value }))} required /></>}
-            <button type="submit" className="button danger"
-              disabled={write.busy || !!ui.pending || !ui.reason.trim() || [...ui.reason].length > 4000}>Withdraw candidate</button>
-          </form>}
+            }, "Withdraw candidate")} />
         </> : !readError && <p role="status">Loading candidate…</p>}
       </> : ui.selectedSnapshotId ? <>
         <button type="button" className="button quiet small review-back" onClick={() => selectSnapshot(null)}><Icon name="back" size={16} /><span>Back to history</span></button>
