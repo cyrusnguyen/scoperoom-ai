@@ -47,7 +47,7 @@ function PreviewCard({ preview, eligible, canWrite, writing, onTarget, onReadOpe
   return <section className="review-card" aria-label="Saved candidate preview">
     <div className="review-card-header">
       <h3>Saved candidate preview</h3>
-      <span className="badge review-state" data-tone={check.valid ? "approved" : "pending"}>{check.valid ? "Ready" : "Needs attention"}</span>
+      <span className="badge review-state" data-tone={check.valid ? "open" : "pending"}>{check.valid ? "Ready" : "Needs attention"}</span>
     </div>
     <p className="review-intro">Document {guards.expectedDocumentRevision}, layout {guards.expectedLayoutRevision} · Approval policy {guards.expectedApprovalPolicyVersion}</p>
     {check.valid ? <p>Saved scope is ready to freeze.</p> : <>

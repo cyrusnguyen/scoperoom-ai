@@ -2,7 +2,9 @@
 import { useState } from "react";
 import type { SourceRef } from "@/features/drafts/contracts/scope-document";
 import { linkState } from "@/features/scope/domain/scope";
-import { REQUIREMENT_CATEGORY_LABELS } from "@/features/scope/ui/requirement-form";
+import { REQUIREMENT_CATEGORY_LABELS } from "@/features/scope/ui/requirement-labels";
+import type { SourceKind } from "@/features/sources/contracts/source-version";
+import { SOURCE_KIND_LABELS } from "@/features/sources/ui/source-labels";
 import SourceLines from "@/features/sources/ui/source-lines";
 import { CLASSIFICATION_LABELS, KIND_LABELS } from "@/features/studio/ui/fields";
 import type { CandidateSnapshot } from "../contracts/review";
@@ -74,7 +76,7 @@ export default function CandidateScope({ snapshot: s, approved }: { snapshot: Ca
       {s.evidenceManifest.length === 0 && <p className="review-empty">No source citations were captured.</p>}
       {s.evidenceManifest.map(source => <section key={source.id} id={`captured-source-${source.id}`} className="review-scope-item">
         <h4>{source.title} · Version {source.sequence}</h4>
-        <p className="review-id">{source.kind} · {source.contentHash}</p>
+        <p className="review-id">{SOURCE_KIND_LABELS[source.kind as SourceKind] ?? source.kind} · {source.contentHash}</p>
         <SourceLines key={`${s.id}:${source.id}:${citation?.sourceVersionId === source.id ? `${citation.startLine}:${citation.endLine}` : "first"}`} text={source.text} range={citation?.sourceVersionId === source.id ? citation : undefined} />
       </section>)}
     </section>

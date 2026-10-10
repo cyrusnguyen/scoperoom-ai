@@ -5,7 +5,7 @@ import type { ReviewTone } from "./review-format";
 export type SavedComparisonProps = { work: PendingWork; baselineSequence: number | null; baselineError: string; unsent: boolean; onRetry: () => void };
 
 const toneOf = (work: PendingWork): ReviewTone =>
-  work.kind === "unavailable" ? "pending" : work.kind === "unapproved" ? "closed" : work.semantic ? "pending" : "approved";
+  work.kind === "unavailable" ? "pending" : work.kind === "unapproved" ? "closed" : work.semantic || work.layout ? "pending" : "approved";
 
 /** The saved draft against the current approved baseline; unsent local work is reported separately and never as approved. */
 export default function SavedComparison({ work, baselineSequence, baselineError, unsent, onRetry }: SavedComparisonProps) {

@@ -15,7 +15,7 @@ export default function ReviewHistory({ snapshots, reviews, loading, onOpenSnaps
     <section className="review-history" aria-labelledby="review-baselines-heading">
       <div className="review-section-heading">
         <h2 id="review-baselines-heading">Approved baselines</h2>
-        {snapshots && <span className="review-count">{snapshots.items.length}{snapshots.nextCursor ? "+" : ""}</span>}
+        {snapshots && <span className="review-count">{snapshots.items.length}{snapshots.nextCursor ? "+" : ""}<span className="sr-only">{snapshots.nextCursor ? " loaded, more available" : " in total"}</span></span>}
       </div>
       {snapshots && !snapshots.items.length && <p className="review-empty">No approved baselines yet.</p>}
       {snapshots && snapshots.items.length > 0 && <ul className="review-list">{snapshots.items.map(item => <li key={item.snapshotId}>
@@ -31,7 +31,7 @@ export default function ReviewHistory({ snapshots, reviews, loading, onOpenSnaps
     <section className="review-history" aria-labelledby="review-candidates-heading">
       <div className="review-section-heading">
         <h2 id="review-candidates-heading">Candidate history</h2>
-        {reviews && <span className="review-count">{reviews.items.length}{reviews.nextCursor ? "+" : ""}</span>}
+        {reviews && <span className="review-count">{reviews.items.length}{reviews.nextCursor ? "+" : ""}<span className="sr-only">{reviews.nextCursor ? " loaded, more available" : " in total"}</span></span>}
       </div>
       {loading && <p role="status" className="review-intro">Loading reviews…</p>}
       {reviews && !reviews.items.length && <p className="review-empty">No frozen candidates yet.</p>}

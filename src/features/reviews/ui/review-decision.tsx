@@ -1,6 +1,6 @@
 "use client";
 import type { DecisionInput } from "../contracts/review";
-import { reasonStatus } from "./review-format";
+import { REVIEW_REASON_LIMIT, reasonStatus } from "./review-format";
 
 export type ReviewDecisionProps = {
   reason: string; onReason: (value: string) => void; canDecide: boolean; canWithdraw: boolean; writing: boolean;
@@ -10,7 +10,7 @@ export type ReviewDecisionProps = {
 /** Decision and withdrawal share one retained reason; each action keeps its existing guard and exact request. */
 export default function ReviewDecision({ reason, onReason, canDecide, canWithdraw, writing, onDecide, onWithdraw }: ReviewDecisionProps) {
   const { count, over, blank } = reasonStatus(reason);
-  const counter = `${count.toLocaleString("en-US")}/4,000 characters.`;
+  const counter = `${count.toLocaleString("en-US")}/${REVIEW_REASON_LIMIT.toLocaleString("en-US")} characters.`;
   return <>
     {canDecide && <section className="review-card" aria-label="Decide frozen candidate">
       <h3>Decide this exact candidate</h3>

@@ -190,7 +190,7 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
           tabListKeyDown(event, SECTIONS, index, section => update(() => ({ section })));
         }}>{section === "current" ? "Current" : "History"}</button>)}
     </div>
-    {ui.message && <p className="review-callout" data-tone={ui.pending ? "pending" : "open"} role={ui.pending ? "alert" : "status"}>
+    {ui.message && <p className="review-callout" data-tone={ui.pending ? "pending" : undefined} role={ui.pending ? "alert" : "status"}>
       {ui.message}
       {ui.pending && !write.busy && <button type="button" className="button small" onClick={() => void write.retry()}>
         {ui.pending.acknowledged ? "Refresh" : "Retry"}

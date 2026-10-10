@@ -688,6 +688,7 @@ test("decision controls and terminal attribution support keyboard at desktop and
   await page.keyboard.press("Enter"); await expect(page.getByRole("heading", { name: "Candidate - changes requested", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Human decision", exact: true }).getByText("Changes requested", { exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.locator(".candidate-reader details.review-technical").evaluate(element => { (element as HTMLDetailsElement).open = true; });
   const readerOverflow = await page.locator(".review-panel").evaluate(panel => panel.scrollWidth - panel.clientWidth);
   expect(readerOverflow).toBeLessThanOrEqual(0);
   await page.getByRole("heading", { name: "Candidate - changes requested", exact: true }).scrollIntoViewIfNeeded();
