@@ -1,11 +1,11 @@
 "use client";
 import { roleLabel } from "@/features/projects/ui/format";
-import type { PublishedSnapshot, ReviewDetail } from "../contracts/review";
+import type { PublishedSnapshot, ReviewDetail, ReviewState } from "../contracts/review";
 import CandidateScope from "./candidate-scope";
 import { ReviewStateBadge } from "./review-badges";
 import { decisionState, formatUtc } from "./review-format";
 
-const TITLES: Partial<Record<string, string>> = { APPROVED: "Approved candidate", CHANGES_REQUESTED: "Candidate - changes requested", REJECTED: "Candidate - rejected" };
+const TITLES: Partial<Record<ReviewState, string>> = { APPROVED: "Approved candidate", CHANGES_REQUESTED: "Candidate - changes requested", REJECTED: "Candidate - rejected" };
 
 /** One immutable candidate or published baseline: identity, human decision, then the captured scope and evidence. */
 export default function CandidateReader({ detail }: { detail: ReviewDetail | PublishedSnapshot }) {
