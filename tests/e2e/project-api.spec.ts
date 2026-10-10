@@ -34,6 +34,9 @@ test("a project is created once, owned by its creator and private to others", as
     expect(denied.status()).toBe(403);
     expect((await denied.json() as { error: { code: string } }).error.code).toBe("ENTITLEMENT_REQUIRED");
     await entitle(database, authUserId);
+    const invalidCreate = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { name: "Bad\u0000name" } });
+    expect(invalidCreate.status()).toBe(400);
+    expect((await invalidCreate.json()).error.code).toBe("INVALID_INPUT");
     const key = randomUUID();
     const created = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": key }, data: { name: "Private project" } });
     expect(created.status()).toBe(201);
@@ -46,6 +49,20 @@ test("a project is created once, owned by its creator and private to others", as
     expect((await reused.json() as { error: { code: string } }).error.code).toBe("KEY_REUSED");
     const status = async () => await (await page.request.get(`/api/projects/${project.id}/status`)).json() as { version: number; settingsVersion: number };
     const headers = () => ({ Origin: appUrl, "Idempotency-Key": randomUUID() });
+    const beforeInvalid = await status();
+    for (const [endpoint, body] of [
+      ["settings", { name: "Bad\u0000name", expectedSettingsVersion: beforeInvalid.settingsVersion }],
+      ["archive", { reason: "Bad\u0000reason", expectedProjectVersion: beforeInvalid.version }],
+      ["invitations", { verifiedEmail: "bad\u0000@example.test", role: "EDITOR" }],
+    ] as const) {
+      const response = endpoint === "settings"
+        ? await page.request.patch(`/api/projects/${project.id}/${endpoint}`, { headers: headers(), data: body })
+        : await page.request.post(`/api/projects/${project.id}/${endpoint}`, { headers: headers(), data: body });
+      expect(response.status()).toBe(400);
+      expect((await response.json()).error.code).toBe("INVALID_INPUT");
+      expect(await status()).toEqual(beforeInvalid);
+    }
+    expect((await (await page.request.get(`/api/projects/${project.id}/invitations`)).json()).invitations).toEqual([]);
     const renamed = await page.request.patch(`/api/projects/${project.id}/settings`, { headers: headers(), data: { name: "Renamed project", expectedSettingsVersion: (await status()).settingsVersion } });
     expect(renamed.status()).toBe(200);
     expect(await renamed.json()).toMatchObject({ name: "Renamed project", replayed: false });

@@ -10,10 +10,11 @@ function required(name) {
   return value;
 }
 
-export function localConfig() {
-  const config = readFileSync(process.env.SCOPEROOM_SUPABASE_CONFIG ?? new URL("../../supabase/config.toml", import.meta.url), "utf8");
-  const projectId = config.match(/^project_id\s*=\s*"([^"]+)"/m)?.[1];
-  const dbPort = config.match(/^\[db\][\s\S]*?^port\s*=\s*(\d+)/m)?.[1];
+export function localConfig(configPath = process.env.SCOPEROOM_SUPABASE_CONFIG ?? new URL("../../supabase/config.toml", import.meta.url)) {
+  const config = readFileSync(configPath, "utf8");
+  const projectId = config.split(/^\s*\[/m)[0].match(/^project_id\s*=\s*"([^"]+)"/m)?.[1];
+  const dbSection = config.match(/^\[db\][^\S\r\n]*(?:#[^\r\n]*)?\r?\n([\s\S]*)/m)?.[1]?.split(/^\s*\[/m)[0];
+  const dbPort = dbSection?.match(/^port\s*=\s*(\d+)/m)?.[1];
   if (!projectId || !dbPort) throw new Error("Database guard could not read local Supabase project configuration.");
   return { dbPort, projectId };
 }
@@ -35,7 +36,7 @@ export function inspectLocalContainer(projectId, dbPort, service = "db") {
   }
   const bindings = inspected.NetworkSettings?.Ports?.["5432/tcp"] ?? [];
   const loopbackPort = service !== "db" || bindings.some((binding) => binding.HostIp === "127.0.0.1" && binding.HostPort === dbPort);
-  const loopbackNetwork = Object.keys(inspected.NetworkSettings?.Networks ?? {}).some((network) => {
+  const loopbackNetworks = Object.keys(inspected.NetworkSettings?.Networks ?? {}).filter((network) => {
     try {
       const details = JSON.parse(execFileSync(selectedDocker, ["network", "inspect", network], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }))[0];
       return details.Options?.["com.docker.network.bridge.host_binding_ipv4"] === "127.0.0.1";
@@ -43,8 +44,8 @@ export function inspectLocalContainer(projectId, dbPort, service = "db") {
       return false;
     }
   });
-  if (!loopbackPort || !loopbackNetwork) throw new Error("Database guard rejected a non-loopback local Supabase database binding.");
-  return { docker: selectedDocker, container: inspected };
+  if (!loopbackPort || loopbackNetworks.length === 0) throw new Error("Database guard rejected a non-loopback local Supabase database binding.");
+  return { docker: selectedDocker, container: inspected, loopbackNetworks };
 }
 
 export function targetInput() {

@@ -414,3 +414,31 @@ test("History generation and status changes fence stale success and failure inde
   resources.selectHistory('run-1');let alive=true;const first=resources.reconcile(status(),()=>alive);alive=false;const fence=()=>true;const second=resources.reconcile(status({aiRevision:2}),fence);held[0].resolve(unavailable());held[1].resolve(ok(detail()));await Promise.all([first,second]);assert.equal(adopted.at(-1)?.id,'run-1');assert.equal(states.includes('error'),false);
   const third=resources.reconcile(status({approvedSnapshotId:'new'}),fence);held[2].resolve(unavailable());await third;assert.equal(states.at(-1),'error');const retry=resources.reconcile(status({approvedSnapshotId:'new'}),fence);held[3].resolve(ok(detail()));await retry;assert.equal(states.at(-1),'loaded');
 });
+
+
+test("baseline sequence independently invalidates shared Current and History applicability without draft drift", async () => {
+  let reads = 0; const current: RunView[] = [], history: RunView[] = [];
+  const resources = createRunResources({ projectId: "project", apiRead: async <T,>(url: string) => {
+    if (url.endsWith("ai-runs")) return ok(page() as T);
+    reads++; return ok({ id: "run-1", applicability: reads === 1 ? "APPLICABLE" : "STALE" } as T);
+  }, adoptPage: () => undefined, adoptRun: run => { if (run) current.push(run); }, adoptHistoryRun: run => { if (run) history.push(run); } });
+  const fence = () => true;
+  resources.selectRun("run-1"); resources.selectHistory("run-1");
+  await resources.reconcile(status({ approvedSnapshotId: "baseline", baselineSequence: 1 }), fence);
+  await resources.reconcile(status({ approvedSnapshotId: "baseline", baselineSequence: 2 }), fence);
+  assert.equal(reads, 2);
+  assert.equal(current.at(-1)?.applicability, "STALE");
+  assert.equal(history.at(-1)?.applicability, "STALE");
+});
+
+
+test("held old-baseline read cannot restore applicability after independent sequence reconciliation", async () => {
+  const releases: Array<(value: ApiResult<RunView>) => void> = [], adopted: RunView[] = [];
+  const resources = createRunResources({ projectId: "project", apiRead: <T,>(url: string) => url.endsWith("ai-runs") ? Promise.resolve(ok(page() as T)) : new Promise<ApiResult<T>>(resolve => { releases.push(resolve as (value: ApiResult<RunView>) => void); }), adoptPage: () => undefined, adoptRun: run => { if (run) adopted.push(run); } });
+  const fence = () => true; resources.selectRun("run-1");
+  const older = resources.reconcile(status({ approvedSnapshotId: "baseline", baselineSequence: 1 }), fence);
+  const newer = resources.reconcile(status({ approvedSnapshotId: "baseline", baselineSequence: 2 }), fence);
+  releases[1]!(ok({ ...detail(), applicability: "STALE" })); await newer;
+  releases[0]!(ok({ ...detail(), applicability: "APPLICABLE" })); await older;
+  assert.equal(adopted.length, 1); assert.equal(adopted[0]?.applicability, "STALE");
+});

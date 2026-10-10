@@ -1,3 +1,4 @@
+import { text } from "../../drafts/contracts/strict.ts";
 import type { RealtimeTopics } from "../../collaboration/contracts/topics.ts";
 import type { DraftView } from "../../drafts/contracts/scope-document.ts";
 
@@ -47,6 +48,6 @@ export function validateProjectCreateInput(input: unknown): CreateProjectInput {
   if (Object.keys(value).some((field) => field !== "name" && field !== "key")) invalidInput();
   if (typeof value.name !== "string" || typeof value.key !== "string" || !keyPattern.test(value.key)) invalidInput();
   const name = value.name.normalize("NFC").trim();
-  if (!name || Array.from(name).length > 120) invalidInput();
+  text(name, 120, true);
   return { name, key: value.key };
 }

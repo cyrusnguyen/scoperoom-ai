@@ -89,7 +89,15 @@ export async function readRoute(request: Request, run: (user: VerifiedIdentity) 
   const requestId = requestIdFor(request);
   const identity = await currentIdentity();
   if (identity.kind !== "user") return denied(identity, requestId);
-  try { return apiResponse(await run(identity.user), 200, requestId); } catch (error) { return apiFailure(error, requestId); }
+  try {
+    const result = await run(identity.user);
+    if (result instanceof Response) {
+      result.headers.set("Cache-Control", "private, no-store");
+      result.headers.set("X-Request-Id", requestId);
+      return result;
+    }
+    return apiResponse(result, 200, requestId);
+  } catch (error) { return apiFailure(error, requestId); }
 }
 
 /**

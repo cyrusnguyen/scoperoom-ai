@@ -67,7 +67,7 @@ test.describe("project details", () => {
     await mockOwnerLists(page);
     await page.route(`**/api/projects/${project.id}/bootstrap`, (route) => route.fulfill({ json: { ...withStatus({ project: { ...project, status: status.status, role: "OWNER" }, draft }), status } }));
     await page.route(`**/api/projects/${project.id}/status`, (route) => route.fulfill({ json: status }));
-    await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [owner, ...(removed ? [] : [{ ...member, designatedApprover: status.designatedApproverId === member.profileId }])] } }));
+    await page.route(`**/api/projects/${project.id}/members`, (route) => route.fulfill({ json: { project: status, members: [{ ...owner, designatedApprover: status.designatedApproverId === owner.profileId }, ...(removed ? [] : [{ ...member, designatedApprover: status.designatedApproverId === member.profileId }])] } }));
     await page.route(`**/api/projects/${project.id}/members/${member.profileId}`, async (route) => {
       const body = route.request().postDataJSON() as { role?: string; expectedMemberVersion: number };
       expect(body.expectedMemberVersion).toBe(member.version);
@@ -101,6 +101,9 @@ test.describe("project details", () => {
     await expect(panel.getByText("1 flow · revision 1")).toBeVisible();
     await expect(panel.getByText("Casey Collaborator", { exact: true })).toBeVisible();
     await expect(panel.getByText("2 of 10")).toBeVisible();
+    await panel.getByLabel("Designated approver").selectOption(owner.profileId);
+    await panel.getByRole("button", { name: "Save approver" }).click();
+    await expect(panel.getByText("Owner · Designated approver", { exact: true })).toBeVisible();
     await panel.getByLabel("Role for Casey Collaborator").selectOption("EDITOR");
     await expect(panel.getByText("Member role updated.")).toBeVisible();
     await panel.getByLabel("Designated approver").selectOption(member.profileId);

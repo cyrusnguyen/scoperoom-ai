@@ -4,7 +4,7 @@ import { checkReceipt, findReceipt, lockActor, lockProject, profileFor, projectR
 import { ProjectError } from "../../projects/server/errors.ts";
 import { asJson, draftMutation, nextRevision, storedDraft, type LockedDraft } from "../../drafts/server/execute-command.ts";
 import { citationMatches, lineStarts, type SourceVersionView } from "../../sources/contracts/source-version.ts";
-import { parseFreezeInput, parseFreezeResult, parseWithdrawInput, parseWithdrawResult, type CandidatePayload, type FreezeInput, type ReviewPreview } from "../contracts/review.ts";
+import { parseDecision, parseDecisionResult, parseFreezeInput, parseFreezeResult, parseWithdrawInput, parseWithdrawResult, type CandidatePayload, type DecisionResult, type FreezeInput, type ReviewPreview } from "../contracts/review.ts";
 import { checkCandidate } from "../domain/candidate.ts";
 import { candidateHashes, loadSnapshot, requireCandidateSize } from "./snapshot.ts";
 /** One scoped immutable-version query for all references, including background graph content. */
@@ -271,6 +271,99 @@ export async function withdrawReview(identity: ProjectIdentity, projectId: strin
       return {
         ...value, replayed: false
       };
+    });
+  });
+}
+
+/** Decisions admit the designated reviewer as well as editors, with access before scoped receipt replay. */
+export async function decideReview(identity: ProjectIdentity, projectId: string, reviewId: string, input: unknown, key: string): Promise<DecisionResult & { replayed: boolean }> {
+  let parsed;
+  try {
+    parsed = parseDecision(input);
+    if (typeof key !== "string" || !keyPattern.test(key)) throw new Error();
+  } catch { throw new ProjectError("INVALID_INPUT"); }
+  if (!uuid.test(projectId) || !uuid.test(reviewId)) throw new ProjectError("NOT_FOUND");
+  projectId = projectId.toLowerCase();
+  reviewId = reviewId.toLowerCase();
+  // Blank optional approval text is absent in storage; receipt identity still binds the exact parsed request.
+  const comment = parsed.reason?.trim() ? parsed.reason : null;
+  const operation = "DECIDE_REVIEW_V1", hash = requestHash(operation, { projectId, reviewId, input: parsed });
+  return withDatabase(async (database) => {
+    const profile = await profileFor(database, identity);
+    return database.$transaction(async (tx) => {
+      await lockActor(tx, profile.id, identity.authUserId);
+      const project = await lockProject(tx, profile.id, projectId);
+      const role = requireMember(project);
+      const routeReview = await tx.reviewRequest.findFirst({ where: { id: reviewId, projectId } });
+      if (!routeReview) throw new ProjectError("NOT_FOUND");
+      const receipt = await findReceipt(tx, profile.id, "PROJECT", projectId, key);
+      if (receipt) {
+        checkReceipt(receipt, operation, hash);
+        const value = parseDecisionResult(receipt.result);
+        const decision = await tx.reviewDecision.findFirst({ where: { id: value.decisionId, projectId, reviewId, actorId: profile.id } });
+        if (!decision || value.reviewId !== reviewId || value.draftId !== routeReview.sourceDraftId
+          || decision.decision !== parsed.decision || decision.reviewedHash !== parsed.expectedReviewHash || decision.comment !== comment
+          || value.reviewVersion !== routeReview.version || value.state !== routeReview.state || value.eventSequence !== Number(routeReview.lastEventSequence)
+          || value.publicationSequence !== (routeReview.publicationSequence === null ? null : Number(routeReview.publicationSequence))
+          || value.publishedAt !== (routeReview.publishedAt?.toISOString() ?? null)
+          || value.approvedSnapshotId !== (value.state === "APPROVED" ? routeReview.candidateSnapshotId : routeReview.parentSnapshotId)) throw new ProjectError("UNAVAILABLE");
+        if (value.state !== "APPROVED" && routeReview.parentSnapshotId) {
+          const parent = await tx.reviewRequest.findFirst({
+            where: { projectId, candidateSnapshotId: routeReview.parentSnapshotId, state: "APPROVED" },
+            select: { publicationSequence: true },
+          });
+          if (parent?.publicationSequence == null || value.baselineSequence !== Number(parent.publicationSequence)) throw new ProjectError("UNAVAILABLE");
+        }
+        return { ...value, replayed: true };
+      }
+      const [draft] = await tx.$queryRaw<Array<{ id: string; status: string; document_revision: number; layout_revision: number }>>
+        `SELECT id,status::text AS status,document_revision,layout_revision FROM app.scope_draft
+        WHERE project_id=${projectId}::uuid AND id=${routeReview.sourceDraftId}::uuid FOR UPDATE`;
+      await tx.$queryRaw `SELECT id FROM app.review_request WHERE project_id=${projectId}::uuid AND id=${reviewId}::uuid FOR UPDATE`;
+      const review = await tx.reviewRequest.findFirst({ where: { id: reviewId, projectId } });
+      if (!review) throw new ProjectError("NOT_FOUND");
+      requireActive(project);
+      if (role === "VIEWER" || project.designatedApproverId !== profile.id) throw new ProjectError("FORBIDDEN");
+      if (review.designatedApproverId !== profile.id || review.approvalPolicyVersion !== project.approvalPolicyVersion) throw new ProjectError("REVIEW_POLICY_CHANGED");
+      if (review.state !== "OPEN" || review.version !== parsed.expectedReviewVersion) throw new ProjectError("CONFLICT");
+      const snapshot = await loadSnapshot(tx, projectId, review.candidateSnapshotId);
+      if (review.sourceDraftId !== snapshot.sourceDraftId || review.parentSnapshotId !== snapshot.parentSnapshotId
+        || review.designatedApproverId !== snapshot.policySnapshot.designatedApproverId || review.approvalPolicyVersion !== snapshot.policySnapshot.approvalPolicyVersion
+        || review.createdBy !== snapshot.createdBy || review.createdAt.toISOString() !== snapshot.createdAt) throw new ProjectError("UNAVAILABLE");
+      if (snapshot.reviewHash !== parsed.expectedReviewHash) throw new ProjectError("CONFLICT");
+      if (project.approvedSnapshotId !== snapshot.parentSnapshotId) throw new ProjectError("BASELINE_CHANGED");
+      if (!draft || draft.status !== "EDITABLE" || draft.id !== project.currentDraftId) throw new ProjectError("DRAFT_REPLACED");
+      const approval = parsed.decision === "APPROVE";
+      if (approval && project.baselineSequence >= Number.MAX_SAFE_INTEGER) throw new ProjectError("VERSION_EXHAUSTED");
+      const reviewVersion = nextRevision(review.version), baselineSequence = project.baselineSequence + (approval ? 1 : 0);
+      const state = approval ? "APPROVED" : parsed.decision === "REQUEST_CHANGES" ? "CHANGES_REQUESTED" : "REJECTED";
+      // lockActor holds this profile for the transaction; capture its current name, never the earlier profileFor copy.
+      const actor = await tx.userProfile.findUniqueOrThrow({ where: { id: profile.id }, select: { displayName: true } });
+      const decisionId = randomUUID(), createdAt = new Date(), publicationSequence = approval ? baselineSequence : null;
+      await tx.reviewDecision.create({ data: {
+        id: decisionId, projectId, reviewId, actorId: profile.id, actorDisplayName: actor.displayName, actorRole: role, decision: parsed.decision,
+        comment, reviewedHash: snapshot.reviewHash, createdAt,
+      } });
+      const sequence = await recordEvent(tx, project, profile.id, `REVIEW_${state}`, [
+        { kind: "REVIEW", id: reviewId }, { kind: "REVIEW_DECISION", id: decisionId }, { kind: "SNAPSHOT", id: snapshot.id },
+      ], { reviewVersion, publicationSequence });
+      if (approval) {
+        await tx.$executeRaw `UPDATE app.scope_draft SET base_snapshot_id=${snapshot.id}::uuid WHERE project_id=${projectId}::uuid AND id=${draft.id}::uuid`;
+      }
+      await tx.reviewRequest.update({ where: { id: reviewId }, data: {
+        state, version: reviewVersion, closedReason: comment, publicationSequence,
+        publishedAt: approval ? createdAt : null, lastEventSequence: sequence, updatedAt: createdAt,
+      } });
+      await tx.project.update({ where: { id: projectId }, data: {
+        reviewsRevision: sequence, ...(approval ? { approvedSnapshotId: snapshot.id, baselineSequence } : {}),
+      } });
+      const value = parseDecisionResult({
+        reviewId, decisionId, reviewVersion, state, publicationSequence, publishedAt: approval ? createdAt.toISOString() : null,
+        approvedSnapshotId: approval ? snapshot.id : project.approvedSnapshotId, baselineSequence, draftId: draft.id,
+        documentRevision: draft.document_revision, layoutRevision: draft.layout_revision, eventSequence: Number(sequence),
+      });
+      await saveReceipt(tx, profile.id, "PROJECT", projectId, key, operation, hash, asJson(value));
+      return { ...value, replayed: false };
     });
   });
 }

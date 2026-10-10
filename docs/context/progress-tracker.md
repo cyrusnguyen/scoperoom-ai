@@ -1,5 +1,36 @@
 # Progress tracker
 
+## Active follow-up: external review findings (2026-10-10)
+
+The user requests verifying twelve external findings and fixing those supported by current code and v1.6 contracts in the same Stage 9.2 worktree. Investigation and bounded fixes are active; the passing qualification below describes the pre-follow-up source. Preserve its evidence and rerun affected checks after corrections. No database reset, commit, push or PR is authorized. Current coordination: `.superpowers/sdd/2026-10-10-stage-09b-decisions-and-markdown/external-review-progress.md`.
+
+## Stage 9.2 implemented and locally verified, awaiting approval (2026-10-10)
+
+Implemented in managed worktree `C:/Users/Cyrus/.codex/worktrees/stage-9-2-decisions-markdown/scoperoom-ai`, branch `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan`, from merged main `46ea382`. Stages 1 through 7 and 9.1 are merged; Stage 08 remains deferred. All source remains uncommitted pending the user's approval before commit, push or PR. Main, Atlas and unrelated work are preserved.
+
+All six tasks and the integrated change passed independent review. Stage 9.2 adds exact designated-human decisions, atomic publication preserving the same draft and newer saved/unsent work, immutable approved history, deterministic approved-only Markdown, separate saved semantic/layout pending labels and AI compatibility after real publication. Existing authority, scoped receipts, sync and native download owners are reused; no dependency or additional controller was added. Review fixes cover historical receipt binding, blank optional approval comments and preserving explicit historical selection through receipt reconciliation and late acknowledgement.
+
+Complete local qualification passed. The lead independently parsed the raw browser report and suite totals.
+
+| Gate | Final evidence |
+| --- | --- |
+| Full lint/import boundaries, TypeScript and production build | Passed; build/test exits 0/0 |
+| Full unit suite | 617/617 passed; zero failures/skips |
+| Full integration suite | 368/368 passed; zero failures/skips |
+| Full worker suite | 30/30 passed; zero failures/skips |
+| Complete serial-alone Realtime suite | 13/13 passed; zero failures/skips |
+| Complete production browser suite | 490/490 distinct cases and attempts, Chromium 476 and recovery-fault 14; two concurrent workers; zero failures/skips/retries/flakes/attempt/global errors |
+
+The successful unfiltered browser run took 11.748/1281.996/1293.744 seconds for build/test/total. Its raw report SHA256 is `ad08f0434dfcc05a53244205616d749d71b1e7bd30ec403479e3006e016d8669`. All 502 qualification inputs matched the corrected tested inventory; 38 changed paths were recorded. The only correction during qualification added assigned loopback Auth port 62321 to the existing browser fixture allowlist, preserving its host guard. The original setup failure was proved by trace and retained; that first run was explicitly interrupted and remains incomplete. The full affected signup file passed 10/10, independent review approved the one-line fix, and the fresh complete run above passed. Earlier nonbrowser inputs were unchanged. Final tracker/testing edits are documentation-only after qualification.
+
+Three appended migrations are present. Real post-publication AI admission exposed an old null-only captured-parent guard; the third migration narrowly binds capture to the actual parent. Both null/non-null mismatch and foreign-parent controls remain refused. All 31 main migration checksums match source. The retained initially empty 30-migration replay target was extended to 31, matched constraints/grants/routines/triggers/roles exactly and passed both new SQL regressions. This is clean-30 plus extension-31 evidence, not a fresh-31 single pass or preserved pre-upgrade fixture comparison.
+
+The eight exact main loopback 623xx containers remain running, Auth is healthy and providers are disabled. Eight replay containers remain stopped with data retained; test app/fault listeners are closed. Realtime retains the existing provider boundary: backend access and old-epoch joins stop immediately, while already joined removed sockets can retain their old topic until credential expiry. Narrow-screen screenshots and automated keyboard journeys were inspected; hosted CI/deployment, live providers and manual NVDA are not claimed.
+
+Plans and raw evidence remain ignored under `docs/superpowers/plans/`, `.superpowers/sdd/2026-10-10-stage-09b-decisions-and-markdown/` and `.tmp/stage-09b-runtime/`. Reports are `final-review.md` and `final-verification-report.md`, with original failures, full inventories and logs retained. Narrow elevated execution worked around Windows sandbox setup failure. Nonblocking Git line-ending and pg deprecation warnings are recorded. No confirmed in-scope finding remains deferred.
+
+Next: user approval before commit, push or PR. No further stage or external publication has been started.
+
 ## Current implementation: Stage 9.1 confirm and freeze (2026-10-10)
 
 The user authorizes plan 09a in the managed worktree `C:/Users/Cyrus/.codex/worktrees/stage-9-1-confirm-freeze-plan/scoperoom-ai`, branch `feat/stage-9.1-confirm-freeze-plan`, from main `7173306`. Stage 08 remains deferred; Stage 9.2 decisions, publication and Markdown are excluded. The user approved committing, pushing and creating the Stage 9.1 PR on 2026-10-10, and authorized monitoring CI/review feedback, fixing confirmed in-scope issues and requesting another Codex review after comment fixes. Merge and Stage 9.2 remain unauthorized.
