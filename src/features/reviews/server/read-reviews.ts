@@ -4,11 +4,18 @@ import { readAsMember } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { canonicalJson } from "../../proposals/domain/capture.ts";
 import { storedDraft } from "../../drafts/server/execute-command.ts";
-import { REVIEW_STATES, reviewCounter, type ReviewDetail, type ReviewPage, type ReviewState, type ReviewSummary } from "../contracts/review.ts";
-import { storedSnapshot, loadSnapshot } from "./snapshot.ts";
-const summary = (row: ReviewRequest, reviewHash: string): ReviewSummary => ({
-  reviewId: row.id, snapshotId: row.candidateSnapshotId, sourceDraftId: row.sourceDraftId, state: row.state, reviewVersion: row.version, reviewHash, createdAt: row.createdAt.toISOString(), createdBy: row.createdBy, lastEventSequence: reviewCounter(Number(row.lastEventSequence))
-});
+import { REVIEW_STATES, reviewCounter, reviewHashValue, type ReviewDetail, type ReviewPage, type ReviewState, type ReviewSummary } from "../contracts/review.ts";
+import { loadSnapshot } from "./snapshot.ts";
+type SummaryRow = Pick<ReviewRequest, "id" | "candidateSnapshotId" | "sourceDraftId" | "state" | "version" | "createdAt" | "createdBy" | "lastEventSequence">;
+const summary = (row: SummaryRow, reviewHash: string): ReviewSummary => {
+  try {
+    return {
+      reviewId: row.id, snapshotId: row.candidateSnapshotId, sourceDraftId: row.sourceDraftId, state: row.state, reviewVersion: row.version, reviewHash: reviewHashValue(reviewHash), createdAt: row.createdAt.toISOString(), createdBy: row.createdBy, lastEventSequence: reviewCounter(Number(row.lastEventSequence))
+    };
+  } catch {
+    throw new ProjectError("UNAVAILABLE");
+  }
+};
 export async function listReviews(identity: ProjectIdentity, projectId: string, options: {
   cursor?: string;
   state?: string;
@@ -57,11 +64,12 @@ export async function listReviews(identity: ProjectIdentity, projectId: string, 
           createdAt: "desc"
         }, {
           id: "desc"
-        }], take: 51, include: {
-        candidate: true
+        }], take: 51, select: {
+        id: true, candidateSnapshotId: true, sourceDraftId: true, state: true, version: true, createdAt: true, createdBy: true, lastEventSequence: true,
+        candidate: { select: { reviewHash: true } }
       }
     });
-    const items = rows.slice(0, 50).map(row => summary(row, storedSnapshot(row.candidate).reviewHash));
+    const items = rows.slice(0, 50).map(row => summary(row, row.candidate.reviewHash));
     const last = items.at(-1);
     return {
       items, nextCursor: rows.length > 50 && last ? Buffer.from(JSON.stringify({

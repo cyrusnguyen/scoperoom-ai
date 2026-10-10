@@ -427,6 +427,30 @@ test("audit failure rolls back candidate, cursor and receipt in the same real tr
     }
   });
 });
+test("history summaries do not fetch candidate payloads; detail reads still do", {
+  skip: !canRun
+}, async (context) => {
+  await withFixture(async (f) => {
+    const { owner, projectId, draftId, input } = await prepared(f);
+    const frozen = await freezeReview(owner, projectId, draftId, input, randomUUID());
+    const queries = context.mock.method(Client.prototype, "query");
+    try {
+      const history = await listReviews(owner, projectId);
+      assert.equal(history.items[0].reviewHash, frozen.reviewHash);
+      const snapshotQueries = () => queries.mock.calls.map(({ arguments: [query] }) => {
+        const value: unknown = query;
+        return typeof value === "string" ? value : value && typeof value === "object" && "text" in value ? String(value.text) : "";
+      }).filter(sql => /\bscope_snapshot\b/.test(sql));
+      assert.ok(snapshotQueries().length > 0, "observed real candidate SQL");
+      assert.ok(snapshotQueries().every(sql => !/\bpayload\b/.test(sql)), "history must not transfer immutable candidate bodies");
+      queries.mock.resetCalls();
+      assert.equal((await readReview(owner, projectId, frozen.reviewId)).snapshot.reviewHash, frozen.reviewHash);
+      assert.ok(snapshotQueries().some(sql => /\bpayload\b/.test(sql)), "detail still loads the complete candidate for integrity checks");
+    } finally {
+      queries.mock.restore();
+    }
+  });
+});
 test("snapshot corruption and hash mismatch fail closed without substituting newer work", {
   skip: !canRun
 }, async () => {
@@ -448,6 +472,9 @@ test("snapshot corruption and hash mismatch fail closed without substituting new
         await f.database.query("rollback");
         throw error;
       }
+      const history = await listReviews(owner, projectId);
+      assert.equal(history.items[0].reviewId, frozen.reviewId);
+      assert.equal(history.items[0].reviewHash, field === "hash" ? "0".repeat(64) : frozen.reviewHash);
       await assert.rejects(readReview(owner, projectId, frozen.reviewId), refused("UNAVAILABLE"));
     }
   });
