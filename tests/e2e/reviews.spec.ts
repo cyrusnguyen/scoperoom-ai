@@ -148,6 +148,57 @@ for (const acknowledged of [false, true]) {
     expect(saved.document.flows[otherFlowId].confirmation).toBeNull();
   });
 }
+for (const outcome of ["saved", "refused", "unsent"] as const) {
+  test(`settled flow confirmation ${outcome} stays with its flow through selection and remount`, async ({ page }) => {
+    const projectId = await createProjectViaApi(page, "Settled confirmation");
+    const { flowId, path } = await prepare(page, projectId);
+    const otherFlowId = randomUUID();
+    await seedStudioChanges(page, projectId, [
+      { command: "CREATE_FLOW", payload: { title: "Shipping", purpose: "Deliver an order", classification: "USER_JOURNEY", inclusion: "INCLUDED" }, proposedIds: [otherFlowId] },
+    ]);
+    await inspect(page, projectId);
+    const panel = page.locator("#right-panel");
+    const before = await (await page.request.get(path)).json();
+    const sent: string[] = [];
+    page.on("request", request => { if (request.method() === "POST" && request.url().endsWith(`${path}/commands`)) sent.push(request.postData()!); });
+    if (outcome === "refused") await page.route(`**${path}/commands`, route => route.fulfill({ status: 409, json: { error: { code: "STALE_ENTITY_VERSION", message: "Inspected flow changed." } } }));
+    if (outcome === "unsent") await panel.getByLabel("Purpose", { exact: true }).fill("Unapplied wording");
+    await panel.getByRole("button", { name: "Confirm flow", exact: true }).click();
+    const message = outcome === "saved" ? "Confirm flow: saved." : outcome === "refused" ? /changed|stale/i : /Submit or discard your typed text/;
+    const confirmation = panel.getByRole("region", { name: "Confirmation", exact: true });
+    await expect(confirmation.getByText(message)).toBeVisible();
+    if (outcome === "unsent") {
+      await panel.getByRole("button", { name: "Discard local changes", exact: true }).click();
+      await expect(panel.getByLabel("Purpose", { exact: true })).toHaveValue("Complete an order");
+    }
+    const switchTo = async (title: string) => {
+      await page.getByRole("button", { name: "Close panel", exact: true }).click();
+      await page.locator(".flow-switch").click();
+      await page.getByRole("dialog", { name: "Flows", exact: true }).getByRole("button", { name: new RegExp(`^${title}`) }).click();
+      await expect(page.locator("#studio-flow-title")).toHaveText(title);
+      await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    };
+    await switchTo("Shipping");
+    await expect(panel.getByText("Unconfirmed.", { exact: true })).toBeVisible();
+    await expect(confirmation.getByText(message)).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Confirm flow", exact: true })).toBeEnabled();
+    await page.getByRole("tab", { name: "Specs", exact: true }).click();
+    await page.getByRole("tab", { name: "Details", exact: true }).click();
+    await expect(confirmation.getByText(message)).toHaveCount(0);
+    await switchTo("Checkout");
+    await page.getByRole("tab", { name: "Specs", exact: true }).click();
+    await page.getByRole("tab", { name: "Details", exact: true }).click();
+    await expect(confirmation.getByText(message)).toBeVisible();
+    await expect(confirmation.getByRole("button", { name: /^(Retry|Refresh)$/ })).toHaveCount(0);
+    expect(sent).toHaveLength(outcome === "unsent" ? 0 : 1);
+    if (sent.length) expect(JSON.parse(sent[0]!).payload).toEqual({ flowId });
+    const after = await (await page.request.get(path)).json();
+    expect(after.document.flows[otherFlowId].confirmation).toBeNull();
+    if (outcome === "saved") expect(after.document.flows[flowId].confirmation.behaviourVersion).toBe(after.document.flows[flowId].behaviourVersion);
+    else expect(after).toEqual(before);
+  });
+}
+
 collaborationTest("editors can confirm flows; viewers and reviewers have no authoring control and are refused", async ({ collaboration }) => {
   const { ownerPage, editorPage, projectId, setEditorRole } = collaboration;
   const { flowId, path } = await prepare(ownerPage, projectId);
@@ -192,6 +243,21 @@ test("narrow keyboard preview freezes exact saved scope, reads captured evidence
   await freezeInUi(page);
   expect(JSON.parse(freezes[0]!)).toEqual(JSON.parse(previews[0]!));
   await expect(page.locator(".candidate-reader").getByText("Saved checkout",{exact:true})).toBeVisible();
+  const capturedName = page.locator(".candidate-reader dt").filter({ hasText: /^Captured project name$/ }).locator("+ dd");
+  await expect(capturedName).toHaveText("Candidate reader");
+  await page.getByRole("tab", { name: "Details", exact: true }).click();
+  await page.getByRole("button", { name: "Back to project", exact: true }).click();
+  await page.getByLabel("Project name", { exact: true }).fill("Renamed candidate project");
+  await page.locator("#right-panel").getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Project name updated.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Renamed candidate project");
+  expect((await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json()).project.name).toBe("Renamed candidate project");
+  await page.getByRole("tab", { name: "Review", exact: true }).click();
+  await expect(capturedName).toHaveText("Candidate reader");
+  await page.getByRole("button", { name: "Back to history", exact: true }).click();
+  await page.getByRole("button", { name: /OPEN/ }).click();
+  await expect(capturedName).toHaveText("Candidate reader");
+  await expect(page.locator(".candidate-reader")).not.toContainText("Renamed candidate project");
   await expect(page.locator(".source-lines li")).toHaveCount(100);
   await page.getByRole("button",{name:"Captured brief, lines 105-105",exact:true}).click();
   await expect(page.locator(".source-lines")).toHaveAttribute("start","101");
@@ -362,12 +428,33 @@ test("freeze receipt retry reaches original path after a replaced visible draft 
 
 test("late withdrawal 401 after project switch cannot sign out the next project and recovers exact attempt",async({page})=>{
   const projectId=await createProjectViaApi(page,"Old candidate project"),other=await createProjectViaApi(page,"Next project");await readyCandidate(page,projectId);await openReview(page,projectId);await freezeInUi(page);
-  let release!:()=>void,entered!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});const started=new Promise<void>(resolve=>{entered=resolve;});const sent:Array<{body:string;key:string|undefined}>=[];
-  await page.route(`**/api/projects/${projectId}/reviews/*/withdraw`,async route=>{sent.push({body:route.request().postData()!,key:route.request().headers()["idempotency-key"]});if(sent.length===1){expect((await route.fetch()).status()).toBe(200);entered();await held;await route.fulfill({status:401,json:{error:{code:"UNAUTHENTICATED",message:"Late session response"}}});}else await route.continue();});
+  let release!:()=>void,entered!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});const started=new Promise<void>(resolve=>{entered=resolve;});const sent:Array<{body:string;key:string|undefined;url:string}>=[];
+  await page.route(`**/api/projects/${projectId}/reviews/*/withdraw`,async route=>{sent.push({body:route.request().postData()!,key:route.request().headers()["idempotency-key"],url:route.request().url()});if(sent.length===1){expect((await route.fetch()).status()).toBe(200);entered();await held;await route.fulfill({status:401,json:{error:{code:"UNAUTHENTICATED",message:"Late session response"}}});}else await route.continue();});
   await page.getByLabel("Withdrawal reason").fill("Submitted closure");await page.getByRole("button",{name:"Withdraw candidate",exact:true}).click();await started;
   try{await page.getByRole("button",{name:"Next project",exact:true}).click();await page.getByRole("button",{name:"Discard changes",exact:true}).click();await expect(page.getByRole("heading",{level:1,name:"Next project",exact:true})).toBeVisible();}finally{release();}
   await expect(page).toHaveURL(new RegExp(`/app/projects/${other}$`));await page.getByRole("button",{name:"Old candidate project",exact:true}).click();await expect(page.getByRole("heading",{level:1,name:"Old candidate project",exact:true})).toBeVisible();await page.getByRole("button",{name:"Inspect",exact:true}).click();await page.getByRole("tab",{name:"Review",exact:true}).click();
-  await page.getByRole("button",{name:"Retry",exact:true}).click();await expect(page.getByText("Closed reason: Submitted closure",{exact:true})).toBeVisible();expect(sent[1]).toEqual(sent[0]);
+  await expect(page.getByText("Closed reason: Submitted closure", { exact: true })).toBeVisible();
+  let releaseAuthority!: () => void, enteredAuthority!: () => void;
+  const authorityHeld = new Promise<void>(resolve => { releaseAuthority = resolve; });
+  const authorityStarted = new Promise<void>(resolve => { enteredAuthority = resolve; });
+  await page.route(`**/api/projects/${projectId}/status`, async route => { enteredAuthority(); await authorityHeld; await route.continue(); });
+  await page.evaluate(() => { window.dispatchEvent(new Event("blur")); window.dispatchEvent(new Event("focus")); });
+  await authorityStarted;
+  // The reader can already show closure while Retry still awaits its current-access check.
+  const replay = page.waitForResponse(response => response.url() === sent[0]!.url
+    && response.request().method() === "POST" && response.request().headers()["idempotency-key"] === sent[0]!.key);
+  try {
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(page.getByText("Closed reason: Submitted closure", { exact: true })).toBeVisible();
+    expect(sent).toHaveLength(1);
+  } finally { releaseAuthority(); }
+  const response = await replay;
+  expect(response.status()).toBe(200);
+  expect((await response.json()).replayed).toBe(true);
+  await expect(page.getByText("Withdraw candidate: saved.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
+  expect(sent).toHaveLength(2);
+  expect(sent[1]).toEqual(sent[0]);
 });
 
 collaborationTest("loss of membership removes protected candidate and evidence before late reads can repopulate them",async({collaboration})=>{

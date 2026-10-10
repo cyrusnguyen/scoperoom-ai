@@ -64,14 +64,14 @@ function FlowConfirmation({ flow, specs, updateSpecs }: { flow: FlowRecord; spec
     void write.sendDraft(`drafts/${draft.id}/commands`, (saved) => {
       if (saved.document.flows[flow.id]?.version !== inspectedVersion) return null;
       return { commandSchemaVersion: 1, command: "CONFIRM_FLOW", expectedEntityVersion: inspectedVersion, payload: { flowId: flow.id } };
-    }, "Confirm flow");
+    }, "Confirm flow", flow.id);
   };
   const pendingFlow = specs.pending?.body?.command === "CONFIRM_FLOW" && (specs.pending.body.payload as Record<string, unknown> | undefined)?.flowId === flow.id;
   return <section className="detail-section" aria-labelledby="inspector-confirmation">
     <h3 id="inspector-confirmation">Confirmation</h3>
     <p className="muted">{current ? "Confirmed: current wording." : flow.confirmation ? "Needs confirmation: flow meaning changed." : "Unconfirmed."}</p>
     {editable && <button type="button" className="button small" disabled={current || write.busy || Boolean(specs.pending)} onClick={confirm}>Confirm flow</button>}
-    {specs.message && (!specs.pending || pendingFlow) && <p role={specs.pending || !specs.message.endsWith(": saved.") ? "alert" : "status"}>{specs.message}
+    {specs.message && specs.messageFlowId === flow.id && <p role={specs.pending || !specs.message.endsWith(": saved.") ? "alert" : "status"}>{specs.message}
       {pendingFlow && !write.busy && <button type="button" className="button small" onClick={() => void write.retry()}>{specs.pending?.acknowledged ? "Refresh" : "Retry"}</button>}
     </p>}
   </section>;

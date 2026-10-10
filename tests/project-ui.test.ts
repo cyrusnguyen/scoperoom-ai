@@ -518,3 +518,28 @@ test("review attempts and reason protect navigation and survive tabs and pending
   assert.equal(uiFor(discardDrafts(store,"a"),"a").review.reason,"Newer reason");
   assert.deepEqual(uiFor(dropProject(store,"a"),"a").review,defaultReviewUi);
 });
+
+test("flow message origin survives reservation, settlement and remount, and unrelated Specs writes clear it", () => {
+  const request = { key: "flow-key", method: "POST" as const, path: "drafts/d/commands", body: null, label: "Confirm flow", draft: true as const, flowId: "flow-a" };
+  const reserved = startSpecsRequest(defaultSpecsUi, request)!;
+  const origin = (specs: typeof reserved) => specs.messageFlowId;
+  assert.equal(origin(reserved), "flow-a", "identity exists before save-first builds a body");
+  const body = { command: "CONFIRM_FLOW", payload: { flowId: "flow-a" } };
+  const sent = fillSpecsRequest(reserved, request.key, body);
+  for (const [state, outcome] of [[reserved, "refused"], [sent, "refused"], [sent, "saved"], [sent, "uncertain"], [sent, "acknowledged"]] as const) {
+    const settled = settleSpecsRequest(state, request.key, outcome, "Flow outcome");
+    assert.equal(origin(settled), "flow-a");
+    assert.equal(settleSpecsRequest(settled, "foreign-key", "saved", "Foreign"), settled);
+    const store = updateUi({}, "p", () => ({ specs: settled }));
+    assert.equal(origin(uiFor(setRightTab(setRightTab(store, "p", "specs"), "p", "details"), "p").specs), "flow-a");
+    if (outcome === "saved" || outcome === "refused") {
+      assert.equal(settled.pending, null);
+      const next = startSpecsRequest(settled, { ...request, key: "flow-b-key", flowId: "flow-b" })!;
+      assert.equal(settleSpecsRequest(next, request.key, "saved", "Late flow A"), next);
+      assert.equal(origin(next), "flow-b", "a late result cannot overwrite the newer flow origin");
+      const source = startSpecsRequest(settled, { key: "source-key", method: "POST", path: "sources", body: {}, label: "Add source" })!;
+      assert.equal(origin(source), undefined);
+      assert.equal(origin(settleSpecsRequest(source, "source-key", "saved", "Add source: saved.")), undefined);
+    } else assert.deepEqual(settled.pending?.body, body);
+  }
+});

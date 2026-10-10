@@ -17,8 +17,8 @@ export type SpecsSelection =
   | { kind: "requirement"; id: string }
   | null;
 /** One Specs write at a time per project, kept in this store so a lost response survives tab switches and remounts. `path` is relative to `/api/projects/:projectId/`. */
-export type SpecsRequest = { key: string; method: "POST" | "PATCH"; path: string; body: Record<string, unknown> | null; label: string; draft?: true; acknowledged?: true };
-export type SpecsUi = { section: "sources" | "scope"; selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string; staleRequirements?: Record<string, string>; sourceCorrections?: Record<string, SourceCorrection> };
+export type SpecsRequest = { key: string; method: "POST" | "PATCH"; path: string; body: Record<string, unknown> | null; label: string; draft?: true; acknowledged?: true; flowId?: string };
+export type SpecsUi = { section: "sources" | "scope"; selected: SpecsSelection; sourceScope: "user" | "archived" | "internal"; pending: SpecsRequest | null; message: string; messageFlowId?: string; staleRequirements?: Record<string, string>; sourceCorrections?: Record<string, SourceCorrection> };
 export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: RightTab; drafts: Record<string, string>; ai: AiUi; specs: SpecsUi; review: ReviewUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
@@ -32,7 +32,7 @@ export function fillSpecsRequest(specs: SpecsUi, key: string, body: Record<strin
 
 /** Starts a request only when no other one is unresolved (null means refused). */
 export function startSpecsRequest(specs: SpecsUi, request: SpecsRequest): SpecsUi | null {
-  return specs.pending ? null : { ...specs, pending: request, message: "" };
+  return specs.pending ? null : { ...specs, pending: request, message: "", messageFlowId: request.flowId };
 }
 
 /** Settles exactly one request: an unconfirmed or acknowledged one keeps its key and body for recovery; any other key's late result is ignored. */

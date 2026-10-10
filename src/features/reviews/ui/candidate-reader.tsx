@@ -15,6 +15,8 @@ export default function CandidateReader({ detail }: { detail: ReviewDetail }) {
   return <article className="candidate-reader" aria-label="Frozen candidate">
     <h2>Candidate - not approved</h2>
     <dl className="detail-facts">
+      <dt>Captured project name</dt>
+      <dd>{s.projectName}</dd>
       <dt>Review</dt>
       <dd>{review.reviewId}</dd>
       <dt>State</dt>
