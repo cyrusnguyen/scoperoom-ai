@@ -85,10 +85,10 @@ export function useSpecsWrite(ui: SpecsUi, update: (change: (ui: SpecsUi) => Par
       update((specs) => startSpecsRequest(specs, request) ?? {});
       return run(request, false);
     },
-    sendDraft: (path: string, build: (saved: DraftView) => Record<string, unknown> | null, label: string) => {
+    sendDraft: (path: string, build: (saved: DraftView) => Record<string, unknown> | null, label: string, flowId?: string) => {
       if (ui.pending || sending.current) { update(() => ({ message: "Another save is still in progress or unconfirmed." })); return Promise.resolve(false); }
       const key = crypto.randomUUID();
-      update((specs) => startSpecsRequest(specs, { key, method: "POST", path, body: null, label, draft: true }) ?? {});
+      update((specs) => startSpecsRequest(specs, { key, method: "POST", path, body: null, label, draft: true, flowId }) ?? {});
       return runDraft(path, build, key, label, false);
     },
     retry: () => (!ui.pending || ui.pending.body === null ? Promise.resolve(false)

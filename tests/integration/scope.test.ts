@@ -223,3 +223,57 @@ test("concurrent requirement creates serialize labels without burning one on sta
     }
   });
 });
+
+
+test("flow confirmation is exact, role guarded and replayable without repeating effects", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, join, profileId, database }) => {
+    const owner = await user("flow owner"), editor = await user("flow editor"), reviewer = await user("flow reviewer"), viewer = await user("flow viewer");
+    const projectId = await project(owner);
+    await join(owner, projectId, editor, "EDITOR");
+    await join(owner, projectId, reviewer, "REVIEWER");
+    await join(owner, projectId, viewer, "VIEWER");
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const flow = await send(owner, projectId, draftId, { command: "CREATE_FLOW", expectedDocumentRevision: 1, payload: { title: "Checkout", purpose: "", classification: "USER_JOURNEY", inclusion: "INCLUDED" } });
+    const flowId = flow.createdIds[0]!;
+    const node = await send(owner, projectId, draftId, { command: "ADD_NODE", expectedDocumentRevision: 2, payload: { flowId, kind: "ACTION", label: "Pay", description: "", actorLabel: "" } });
+    const before = await getDraft(owner, projectId, draftId);
+    const body = { key: key(), commandSchemaVersion: 1, command: "CONFIRM_FLOW", expectedEntityVersion: before.document.flows[flowId]!.version, payload: { flowId } };
+    for (const reader of [reviewer, viewer]) await assert.rejects(executeGraphCommand(reader, projectId, draftId, body), refused("FORBIDDEN"));
+    assert.deepEqual(await getDraft(owner, projectId, draftId), before);
+    const confirmed = await executeGraphCommand(editor, projectId, draftId, body);
+    const after = await getDraft(owner, projectId, draftId);
+    const record = after.document.flows[flowId]!;
+    assert.equal(record.confirmation?.actorId, await profileId(editor));
+    assert.equal(record.confirmation?.behaviourVersion, before.document.flows[flowId]!.behaviourVersion);
+    assert.ok(record.confirmation?.confirmedAt && !Number.isNaN(Date.parse(record.confirmation.confirmedAt)));
+    assert.equal(record.version, before.document.flows[flowId]!.version + 1);
+    assert.equal(record.behaviourVersion, before.document.flows[flowId]!.behaviourVersion);
+    assert.equal(after.documentRevision, before.documentRevision + 1);
+    assert.equal(after.layoutRevision, before.layoutRevision);
+    assert.deepEqual(after.layout, before.layout);
+    assert.deepEqual(after.document.nodes, before.document.nodes);
+    assert.deepEqual(after.document.edges, before.document.edges);
+    assert.deepEqual(after.document.traceLinks, before.document.traceLinks);
+    const cursor = await getProjectStatus(owner, projectId);
+    const replay = await executeGraphCommand(editor, projectId, draftId, body);
+    assert.deepEqual(replay, { ...confirmed, replayed: true });
+    assert.deepEqual(await getDraft(owner, projectId, draftId), after);
+    const noop = await send(owner, projectId, draftId, { command: "CONFIRM_FLOW", expectedEntityVersion: record.version, payload: { flowId } });
+    assert.equal(noop.documentRevision, after.documentRevision);
+    assert.equal(noop.eventSequence, cursor.eventSequence);
+    await assert.rejects(send(owner, projectId, draftId, { command: "CONFIRM_FLOW", expectedEntityVersion: body.expectedEntityVersion, payload: { flowId } }), refused("STALE_ENTITY_VERSION"));
+    await send(owner, projectId, draftId, { command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId: node.createdIds[0], label: "Pay by wallet" } });
+    const changed = await getDraft(owner, projectId, draftId);
+    assert.deepEqual(changed.document.flows[flowId]!.confirmation, record.confirmation);
+    assert.equal(changed.document.flows[flowId]!.behaviourVersion, record.behaviourVersion + 1);
+    await assert.rejects(send(owner, projectId, draftId, { command: "CONFIRM_FLOW", expectedEntityVersion: record.version, payload: { flowId } }), refused("STALE_ENTITY_VERSION"));
+    assert.deepEqual(await getDraft(owner, projectId, draftId), changed);
+    assert.equal((await executeGraphCommand(editor, projectId, draftId, body)).replayed, true, "exact replay still works after meaning advances");
+    assert.deepEqual(await getDraft(owner, projectId, draftId), changed);
+    const { rows: [membership] } = await database.query<{ version: number }>("select version from app.project_membership where project_id = $1 and profile_id = $2", [projectId, await profileId(editor)]);
+    const downgraded = await changeProjectMember(owner, projectId, await profileId(editor), { key: key(), expectedMemberVersion: membership!.version, role: "VIEWER" });
+    assert.equal((await executeGraphCommand(editor, projectId, draftId, body)).replayed, true, "admitted readers may replay completed receipts");
+    await removeProjectMember(owner, projectId, await profileId(editor), { key: key(), expectedMemberVersion: downgraded.memberVersion! });
+    await assert.rejects(executeGraphCommand(editor, projectId, draftId, body), refused("NOT_FOUND"), "removed access is checked before completed replay");
+  });
+});

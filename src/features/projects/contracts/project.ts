@@ -28,6 +28,8 @@ export type ProjectStatusView = {
   aiRevision: number;
   /** Resource cursor derived from eventSequence: the sequence of the last committed source change (Stage 07). */
   sourcesRevision: number;
+  reviewsRevision: number;
+  baselineSequence: number;
   approvedSnapshotId: string | null;
 };
 

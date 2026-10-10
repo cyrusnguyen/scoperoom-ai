@@ -1,3 +1,4 @@
+import { seedSnapshot } from "../support/snapshot-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
@@ -112,6 +113,10 @@ test("Generate from an empty project and restore the exact queued run from its U
   await expect(detailsTab).toBeFocused();
   await expect(detailsTab).toHaveAttribute("aria-selected", "true");
   await detailsTab.press("End");
+  const reviewTab = panel(page).getByRole("tab", { name: "Review", exact: true });
+  await expect(reviewTab).toBeFocused();
+  await expect(reviewTab).toHaveAttribute("aria-selected", "true");
+  await reviewTab.press("ArrowLeft");
   const specsTab = panel(page).getByRole("tab", { name: "Specs", exact: true });
   await expect(specsTab).toBeFocused();
   await expect(specsTab).toHaveAttribute("aria-selected", "true");
@@ -929,18 +934,10 @@ test("a fixture-scoped baseline change stales a run without changing the saved d
   const databaseTarget = new URL(process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL!);
   expect(databaseTarget.hostname).toBe("127.0.0.1");
   expect((await database.query("select environment_id::text id from app.environment_identity where id = 1")).rows[0]?.id).toBe(process.env.SCOPEROOM_ENVIRONMENT_ID);
-  const definition = (await database.query("select pg_get_constraintdef(oid) definition from pg_constraint where conrelid = 'app.project'::regclass and conname = 'project_baseline_pending_snapshots'")).rows[0]?.definition as string;
-  let scoped = false;
   try {
-    await database.query("begin");
-    try {
-      await database.query("alter table app.project drop constraint project_baseline_pending_snapshots");
-      await database.query(`alter table app.project add constraint project_baseline_pending_snapshots CHECK ((id = '${projectId}'::uuid) OR ${definition.slice(6)})`);
-      await database.query("commit");
-      scoped = true;
-    } catch (error) { await database.query("rollback"); throw error; }
-    await assert.rejects(database.query("update app.project set approved_snapshot_id = $2 where id = $1", [otherProjectId, randomUUID()]), { code: "23514" });
-    await database.query("update app.project set approved_snapshot_id = $2 where id = $1", [projectId, randomUUID()]);
+    const baseline = await seedSnapshot(database, projectId);
+    await assert.rejects(database.query("update app.project set approved_snapshot_id = $2 where id = $1", [otherProjectId, baseline]), { code: "23503", constraint: "project_approved_snapshot_fkey" });
+    await database.query("update app.project set approved_snapshot_id = $2 where id = $1", [projectId, baseline]);
     const view = await (await page.request.get(`/api/projects/${projectId}/ai-runs/${completed.runId}`)).json() as { applicability: string; applicabilityReasons: string[]; diff: unknown; documentRevision: number };
     expect(view.applicability).toBe("STALE");
     expect(view.applicabilityReasons).toContain("BASELINE_CHANGED");
@@ -951,16 +948,8 @@ test("a fixture-scoped baseline change stales a run without changing the saved d
     expect((await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { documentRevision: number; layoutRevision: number } }).draft)
       .toMatchObject({ documentRevision: before.draft.documentRevision, layoutRevision: before.draft.layoutRevision });
   } finally {
-    if (scoped) {
-      await database.query("update app.project set approved_snapshot_id = null where id = $1", [projectId]);
-      await database.query("begin");
-      try {
-        await database.query("alter table app.project drop constraint project_baseline_pending_snapshots");
-        await database.query(`alter table app.project add constraint project_baseline_pending_snapshots ${definition}`);
-        await database.query("commit");
-      } catch (error) { await database.query("rollback"); throw error; }
-      expect((await database.query("select pg_get_constraintdef(oid) definition from pg_constraint where conrelid = 'app.project'::regclass and conname = 'project_baseline_pending_snapshots'")).rows[0]?.definition).toBe(definition);
-    }
+    await database.query("update app.project set approved_snapshot_id = null where id = $1", [projectId]);
+    expect((await database.query("select 1 from pg_constraint where conrelid='app.project'::regclass and conname='project_approved_snapshot_fkey'")).rowCount).toBe(1);
   }
 });
 

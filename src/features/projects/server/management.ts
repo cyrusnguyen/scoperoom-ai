@@ -10,6 +10,7 @@ import {
   requestHash, requireActive, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow, type Transaction,
 } from "./access.ts";
 import { requestProjectRunCancel } from "../../proposals/server/settle-runs.ts";
+import { invalidateOpenReview } from "../../reviews/server/invalidate.ts";
 import { unassignInCurrentDraft } from "../../scope/server/unassign.ts";
 import { ProjectError } from "./errors.ts";
 import type { InvitationIdentity } from "./invitations.ts";
@@ -64,7 +65,8 @@ async function revokeInvitationsFor(tx: Transaction, projectId: string, profileI
 async function deactivate(tx: Transaction, project: ProjectRow, actorId: string, memberId: string, action: string, extraEmails: string[] = []) {
   const [membership] = await tx.$queryRaw<{ version: number }[]>`SELECT version FROM app.project_membership WHERE project_id = ${project.id}::uuid AND profile_id = ${memberId}::uuid AND active FOR UPDATE`;
   if (!membership) throw new ProjectError("NOT_FOUND");
-  const clearsApprover = project.designatedApproverId === memberId;
+  const clearsApprover = project.designatedApproverId === memberId.toLowerCase();
+  if (clearsApprover) await invalidateOpenReview(tx, project, actorId, "APPROVER_REMOVED");
   const memberVersion = membership.version + 1;
   const sequence = await recordEvent(tx, project, actorId, action, [{ kind: "PROJECT_MEMBER", id: memberId }], { memberVersion });
   await tx.$executeRaw`UPDATE app.project_membership SET active = false, version = ${memberVersion}, deactivated_sequence = ${sequence}::bigint, updated_at = CURRENT_TIMESTAMP WHERE project_id = ${project.id}::uuid AND profile_id = ${memberId}::uuid`;
@@ -125,11 +127,13 @@ export async function updateApprovalPolicy(identity: ProjectIdentity, projectId:
   return ownerMutation(identity, projectId, validated.key, operation, hash, async (tx, project, actorId) => {
     requireActive(project);
     if (project.approvalPolicyVersion !== validated.expectedApprovalPolicyVersion) throw new ProjectError("CONFLICT");
-    if (validated.designatedApproverId && validated.designatedApproverId !== project.ownerId) {
+    if (validated.designatedApproverId && validated.designatedApproverId.toLowerCase() !== project.ownerId) {
       const eligible = await tx.projectMembership.count({ where: { projectId: project.id, profileId: validated.designatedApproverId, active: true, role: { in: ["EDITOR", "REVIEWER"] } } });
       if (!eligible) throw new ProjectError("CONFLICT");
     }
-    const next = { ...project, designatedApproverId: validated.designatedApproverId, approvalPolicyVersion: project.approvalPolicyVersion + 1 };
+    if ((validated.designatedApproverId?.toLowerCase() ?? null) === project.designatedApproverId) return result(project);
+    await invalidateOpenReview(tx, project, actorId, "APPROVAL_POLICY_CHANGED");
+    const next = { ...project, designatedApproverId: validated.designatedApproverId?.toLowerCase() ?? null, approvalPolicyVersion: project.approvalPolicyVersion + 1 };
     await tx.$executeRaw`UPDATE app.project SET designated_approver_id = ${next.designatedApproverId}::uuid, approval_policy_version = ${next.approvalPolicyVersion}, realtime_epoch = gen_random_uuid(), updated_at = CURRENT_TIMESTAMP WHERE id = ${project.id}::uuid`;
     await recordEvent(tx, project, actorId, "APPROVAL_POLICY_UPDATED", [{ kind: "PROJECT", id: project.id }], { designatedApproverId: next.designatedApproverId, approvalPolicyVersion: next.approvalPolicyVersion });
     return result(next);
@@ -149,7 +153,8 @@ export async function changeProjectMember(identity: ProjectIdentity, projectId: 
     const rank = { VIEWER: 1, REVIEWER: 2, EDITOR: 3 } as const;
     // Archived projects allow downgrades only, never new grants.
     if (project.status === "ARCHIVED" && rank[validated.role] > rank[current.role as keyof typeof rank]) throw new ProjectError("CONFLICT");
-    const clearsApprover = project.designatedApproverId === profileId && validated.role === "VIEWER";
+    const clearsApprover = project.designatedApproverId === profileId.toLowerCase() && validated.role === "VIEWER";
+    if (clearsApprover) await invalidateOpenReview(tx, project, actorId, "APPROVER_DOWNGRADED");
     const next = { ...project, membershipVersion: project.membershipVersion + 1, approvalPolicyVersion: project.approvalPolicyVersion + (clearsApprover ? 1 : 0), designatedApproverId: clearsApprover ? null : project.designatedApproverId };
     const memberVersion = current.version + 1;
     await tx.$executeRaw`UPDATE app.project_membership SET role = ${validated.role}::app.project_member_role, version = ${memberVersion}, updated_at = CURRENT_TIMESTAMP WHERE project_id = ${project.id}::uuid AND profile_id = ${profileId}::uuid`;
@@ -222,6 +227,7 @@ async function changeLifecycle(identity: ProjectIdentity, projectId: string, inp
       if (project.version !== validated.expectedProjectVersion || project.status !== (restoring ? "ARCHIVED" : "ACTIVE")) throw new ProjectError("CONFLICT");
       if (restoring) await assertOwnerCapacity(tx, profile.id);
       else await tx.$executeRaw`UPDATE app.invitation SET revoked_at = CURRENT_TIMESTAMP, version = version + 1 WHERE project_id = ${project.id}::uuid AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP`;
+      if (!restoring) await invalidateOpenReview(tx, project, profile.id, "PROJECT_ARCHIVED");
       const next: ProjectRow = { ...project, status: restoring ? "ACTIVE" : "ARCHIVED", version: project.version + 1 };
       await tx.$executeRaw`UPDATE app.project SET status = ${next.status}::app.project_status, version = ${next.version}, realtime_epoch = gen_random_uuid(), updated_at = CURRENT_TIMESTAMP WHERE id = ${project.id}::uuid`;
       const sequence = await recordEvent(tx, project, profile.id, restoring ? "PROJECT_RESTORED" : "PROJECT_ARCHIVED", [{ kind: "PROJECT", id: project.id }], restoring ? {} : { reason: validated.reason! });

@@ -29,6 +29,8 @@ import AiActions from "@/features/proposals/ui/ai-actions";
 import SpecsPanel from "@/features/scope/ui/specs-panel";
 import { finishSourceWrite } from "@/features/sources/ui/source-write";
 import { finishRequirementWrite } from "@/features/scope/ui/requirement-write";
+import ReviewPanel from "@/features/reviews/ui/review-panel";
+import { defaultReviewUi } from "@/features/reviews/ui/review-state";
 
 type Prefs = { leftOpen: boolean; listTab: ListTab };
 type Opened = { projectId: string; bootstrap?: ProjectBootstrap; missing?: boolean; error?: string };
@@ -139,7 +141,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     else if (result.status === 403 || result.status === 404) {
       if (viewerRef.current) clearImport({ actorId: viewerRef.current, projectId: id });
       install(result.status === 404 ? { projectId: id, missing: true } : { projectId: id, error: result.message });
-      setStore((previous) => result.status === 404 ? dropProject(previous, id) : updateUi(previous, id, () => ({ nativeImport: null })));
+      setStore((previous) => result.status === 404 ? dropProject(previous, id) : updateUi(previous, id, (ui) => ({ nativeImport: null, review: { ...defaultReviewUi, reason: ui.review.reason } })));
     }
     // A background read (polling, Details) that fails transiently keeps what is shown: unmounting would stop the polling
     // that retries it. The unavailable view's own Retry has nothing shown, and 403 or 404 always show their recovery.
@@ -324,10 +326,15 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const panel = projectId && bootstrap && ui.rightMounted
     ? <RightPanel key={projectId} mode={dock.right} tab={ui.rightTab} onTabChange={(tab) => openRightTab(tab)} onClose={() => setPanel(false)}>
       {ui.rightTab === "ai" ? dock.right !== "closed" ? <AiActions ui={ui.ai} update={(change) => setStore((previous) => updateUi(previous, projectId, (current) => ({ ai: change(current.ai) })))} /> : null
+        : ui.rightTab === "review" ? dock.right !== "closed" ? <ReviewPanel ui={ui.review}
+          update={(change) => setStore((previous) => !endedRef.current && previous[projectId] && !(openedRef.current?.projectId === projectId && (openedRef.current.missing || openedRef.current.error)) ? updateUi(previous, projectId, (current) => ({ review: { ...current.review, ...change(current.review) } })) : previous)}
+          dirty={() => { const current = uiFor(latestStore.current, projectId); return Object.keys(current.drafts).length > 0 || Object.keys(current.specs.sourceCorrections ?? {}).length > 0 || Boolean(current.specs.pending || current.ai.pendingRequest || current.nativeImport); }}
+          onAccessLost={projectChanged} onSharing={() => { updateStudio(() => ({ selection: null })); openRightTab("details"); }}
+          onTarget={(id) => { const doc = bootstrap.draft.document; if (doc.requirements[id]) { openRightTab("specs"); setStore(previous => updateUi(previous, projectId, current => ({ specs: { ...current.specs, section: "scope", selected: { kind: "requirement", id } } }))); } else { const node = doc.nodes[id], flow = doc.flows[id], edge = doc.edges[id], link = doc.traceLinks[id]; const nodeId = node?.id ?? link?.nodeId; const flowId = flow?.id ?? node?.flowId ?? edge?.flowId ?? (nodeId ? doc.nodes[nodeId]?.flowId : undefined); if (flowId) { updateStudio(() => ({ flowId, selection: nodeId ? { kind: "NODES", ids: [nodeId] } : edge ? { kind: "EDGE", id } : { kind: "FLOW", id: flowId } })); openRightTab("details"); } } }} /> : null
         : ui.rightTab === "specs" ? dock.right !== "closed" ? <SpecsPanel ui={ui.specs} update={(change) => setStore((previous) => updateUi(previous, projectId, (current) => ({ specs: { ...current.specs, ...change(current.specs) } })))}
             drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))}
             onSaved={(request, data) => setStore((previous) => updateUi(previous, projectId, (current) => request.draft ? finishRequirementWrite(current, request, data) : finishSourceWrite(current, request)))} /> : null
-        : ui.selection ? <Inspector onBack={() => { updateStudio(() => ({ selection: null })); requestAnimationFrame(() => document.getElementById("right-tab-details")?.focus()); }} onOpenRequirement={(id) => { openRightTab("specs"); setStore((previous) => updateUi(previous, projectId, (current) => ({ specs: { ...current.specs, section: "scope", selected: { kind: "requirement", id } } }))); }} />
+        : ui.selection ? <Inspector specs={ui.specs} updateSpecs={(change) => setStore((previous) => updateUi(previous, projectId, (current) => ({ specs: { ...current.specs, ...change(current.specs) } })))} onBack={() => { updateStudio(() => ({ selection: null })); requestAnimationFrame(() => document.getElementById("right-tab-details")?.focus()); }} onOpenRequirement={(id) => { openRightTab("specs"); setStore((previous) => updateUi(previous, projectId, (current) => ({ specs: { ...current.specs, section: "scope", selected: { kind: "requirement", id } } }))); }} />
           : <ProjectDetails bootstrap={bootstrap} drafts={ui.drafts} setDraft={(key, value) => setStore((previous) => setDraft(previous, projectId, key, value))}
             onChanged={projectChanged} onLifecycle={(kind) => setDialog({ kind, project: { id: projectId, name: bootstrap.project.name } })} />}
     </RightPanel>
@@ -366,7 +373,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     {dialog?.kind === "create" && <NewProjectDialog onClose={() => closeDialog()} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}
     {switchTarget && <Dialog title={`Unsaved changes in ${bootstrap?.project.name ?? "this project"}`} onClose={() => setDialog(null)} footer={<>
       <CancelFocus label="Stay" onClick={() => setDialog(null)} />
-      <button type="button" className="button danger" disabled={Boolean(ui.request)} onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
+      <button type="button" className="button danger" disabled={Boolean(ui.request && ui.request !== ui.review.pending?.key)} onClick={() => { if (projectId) setStore((previous) => discardDrafts(previous, projectId)); setDialog(null); navigate(switchTarget); }}>Discard changes</button>
     </>}><p>{dirtyCount(store, projectId)} {ui.outbox.sending?.state === "uncertain" ? "unsaved edit(s) or unconfirmed change(s)." : pendingCount(ui.outbox) ? "unsaved change(s)." : "unsaved field(s)."}</p>{ui.outbox.sending?.state === "uncertain" && <p>The unconfirmed save will still be available to retry when you return. Discard only removes local edits; it cannot cancel a change already sent.</p>}</Dialog>}
     {lifecycleDialog && <LifecycleDialog key={`${lifecycleDialog.kind}-${lifecycleDialog.project.id}`} kind={lifecycleDialog.kind} project={lifecycleDialog.project} viewer={() => viewerRef.current}
       onClose={() => closeDialog(lifecycleDialog.project.id)} onDone={() => void finishLifecycle(lifecycleDialog.kind, lifecycleDialog.project)} />}

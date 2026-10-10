@@ -1,3 +1,4 @@
+import { seedSnapshot } from "../support/snapshot-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -240,17 +241,28 @@ for (const failAt of ["application", "audit"] as const) {
       const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: proposal });
       const input = inputOf(draft); const before = await stateOf(database, p, run);
       const table = failAt === "application" ? "ai_suggestion_application" : "audit_event";
-      await database.query(`create function app.test_ai_insertion_failure() returns trigger language plpgsql set search_path = pg_catalog, pg_temp as $body$
-        begin if NEW.project_id = '${p}'::uuid then raise exception 'synthetic evidence insertion refusal' using errcode = '23514'; end if; return NEW; end; $body$`);
+      await database.query("begin");
       try {
+        await database.query("lock table app.project in exclusive mode");
+        await database.query(`create function app.test_ai_insertion_failure() returns trigger language plpgsql set search_path = pg_catalog, pg_temp as $body$
+        begin if NEW.project_id = '${p}'::uuid then raise exception 'synthetic evidence insertion refusal' using errcode = '23514'; end if; return NEW; end; $body$`);
         await database.query(`create trigger test_ai_insertion_failure before insert on app.${table} for each row execute function app.test_ai_insertion_failure()`);
+        await database.query("commit");
+      } catch (error) { await database.query("rollback"); throw error; }
+      try {
         await assert.rejects(applyRun(owner.identity, p, run, input), { code: "UNAVAILABLE" });
         assert.deepEqual(await stateOf(database, p, run), before);
         assert.equal((await database.query("select count(*)::int n from app.mutation_receipt where scope_id = $1 and key = $2", [p, input.key])).rows[0].n, 0);
         assert.equal((await database.query("select count(*)::int n from app.ai_application_source s join app.ai_suggestion_application a on a.id = s.application_id where a.run_id = $1", [run])).rows[0].n, 0);
       } finally {
-        await database.query(`drop trigger if exists test_ai_insertion_failure on app.${table}`);
-        await database.query("drop function app.test_ai_insertion_failure()");
+        // Drain project writers before DDL takes downstream audit/Realtime relation locks.
+        await database.query("begin");
+        try {
+          await database.query("lock table app.project in exclusive mode");
+          await database.query(`drop trigger if exists test_ai_insertion_failure on app.${table}`);
+          await database.query("drop function app.test_ai_insertion_failure()");
+          await database.query("commit");
+        } catch (error) { await database.query("rollback"); throw error; }
       }
       assert.equal((await applyRun(owner.identity, p, run, input)).replayed, false, "the exact refused request can succeed after the fault is removed");
     });
@@ -455,25 +467,16 @@ test("current draft replacement, cancellation, expired and discarded results ref
   });
 });
 
-test("a guarded synthetic baseline-head change refuses Apply and restores the pending-snapshot check", { skip: !canRun }, async () => {
+test("a real same-project baseline-head change refuses Apply and preserves the snapshot FK", { skip: !canRun }, async () => {
   await withAi(async ({ person, projectFor, database }) => {
     const owner = await person(); const p = await projectFor(owner); const other = await projectFor(owner); const draft = await draftOf(database, p);
     const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: proposal });
     const target = new URL(process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL!);
     assert.equal(target.hostname, "127.0.0.1");
     assert.equal((await database.query("select environment_id::text id from app.environment_identity where id = 1")).rows[0].id, process.env.SCOPEROOM_ENVIRONMENT_ID);
-    const definition = (await database.query("select pg_get_constraintdef(oid) definition from pg_constraint where conrelid = 'app.project'::regclass and conname = 'project_baseline_pending_snapshots'")).rows[0].definition as string;
-    assert.ok(definition.startsWith("CHECK ("));
-    // This one synthetic ID is the only exception. Other projects keep the original published guard throughout.
-    await database.query("begin");
     try {
-      await database.query("alter table app.project drop constraint project_baseline_pending_snapshots");
-      await database.query(`alter table app.project add constraint project_baseline_pending_snapshots CHECK ((id = '${p}'::uuid) OR ${definition.slice(6)})`);
-      await database.query("commit");
-    } catch (error) { await database.query("rollback"); throw error; }
-    try {
-      await assert.rejects(database.query("update app.project set approved_snapshot_id = $2 where id = $1", [other, randomUUID()]), { code: "23514" });
-      const baseline = randomUUID();
+      const baseline = await seedSnapshot(database, p);
+      await assert.rejects(database.query("update app.project set approved_snapshot_id = $2 where id = $1", [other, baseline]), { code: "23503", constraint: "project_approved_snapshot_fkey" });
       await database.query("update app.project set approved_snapshot_id = $2 where id = $1", [p, baseline]);
       const before = await stateOf(database, p, run);
       await assert.rejects(applyRun(owner.identity, p, run, inputOf(draft)), { code: "BASELINE_CHANGED" });
@@ -481,13 +484,7 @@ test("a guarded synthetic baseline-head change refuses Apply and restores the pe
       assert.deepEqual(await stateOf(database, p, run), before);
     } finally {
       await database.query("update app.project set approved_snapshot_id = null where id = $1", [p]);
-      await database.query("begin");
-      try {
-        await database.query("alter table app.project drop constraint project_baseline_pending_snapshots");
-        await database.query(`alter table app.project add constraint project_baseline_pending_snapshots ${definition}`);
-        await database.query("commit");
-      } catch (error) { await database.query("rollback"); throw error; }
-      assert.equal((await database.query("select pg_get_constraintdef(oid) definition from pg_constraint where conrelid = 'app.project'::regclass and conname = 'project_baseline_pending_snapshots'")).rows[0].definition, definition);
+      assert.ok((await database.query("select 1 from pg_constraint where conrelid='app.project'::regclass and conname='project_approved_snapshot_fkey'")).rowCount);
     }
   });
 });

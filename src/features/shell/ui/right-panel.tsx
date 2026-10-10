@@ -51,8 +51,8 @@ export function tabListKeyDown<T extends string>(event: ReactKeyboardEvent<HTMLE
   (event.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
 }
 
-const TABS = ["details", "ai", "specs"] as const;
-const LABELS: Record<RightTab, string> = { details: "Details", ai: "AI", specs: "Specs" };
+const TABS = ["details", "ai", "specs", "review"] as const;
+const LABELS: Record<RightTab, string> = { details: "Details", ai: "AI", specs: "Specs", review: "Review" };
 
 /** The on-demand right panel. Closed means hidden (display:none): it reserves no width and its in-memory state survives. */
 export default function RightPanel({ mode, tab, onTabChange, onClose, children }: { mode: PanelMode; tab: RightTab; onTabChange: (tab: RightTab) => void; onClose: () => void; children: ReactNode }) {

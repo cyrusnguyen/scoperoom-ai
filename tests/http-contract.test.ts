@@ -19,12 +19,21 @@ test("project error statuses match the API contract", () => {
     INVITATION_LIMIT: 409, NOT_FOUND: 404, KEY_REUSED: 409, INVALID_INPUT: 400, CONFLICT: 409, FORBIDDEN: 403, UNAVAILABLE: 503,
     STALE_ENTITY_VERSION: 409, STALE_DOCUMENT_REVISION: 409, DEPENDENCY_CONFLICT: 422, LIMIT_EXCEEDED: 422, VERSION_EXHAUSTED: 409, DRAFT_REPLACED: 409,
     POSITION_CONFLICT: 409, STALE_LAYOUT_REVISION: 409, ARRANGEMENT_PREVIEW_CHANGED: 409, UNSUPPORTED_FLOW_FORMAT: 422, IMPORT_EXPIRED: 409, IMPORT_STALE: 409, IMPORT_PAYLOAD_MISMATCH: 409,
-    INVALID_SOURCE_REFERENCE: 422, BASELINE_CHANGED: 409, AI_BUSY: 409, AI_RUN_CONSUMED: 409, AI_RESULT_UNAVAILABLE: 409, AI_RESULT_MISMATCH: 409, AI_BUDGET_EXCEEDED: 429, RATE_LIMITED: 429, EXPORT_REVISION_CHANGED: 409,
+    INVALID_SOURCE_REFERENCE: 422, CANDIDATE_INVALID: 422, ACTIVE_REVIEW_EXISTS: 409, REVIEW_POLICY_CHANGED: 409, BASELINE_CHANGED: 409, AI_BUSY: 409, AI_RUN_CONSUMED: 409, AI_RESULT_UNAVAILABLE: 409, AI_RESULT_MISMATCH: 409, AI_BUDGET_EXCEEDED: 429, RATE_LIMITED: 429, EXPORT_REVISION_CHANGED: 409,
   });
 });
 
 test("reviewed AI proposal conflicts carry safe non-retryable envelopes", () => {
   for (const code of ["AI_RUN_CONSUMED", "AI_RESULT_UNAVAILABLE", "AI_RESULT_MISMATCH"] as const) {
+    const entry = projectErrors[code];
+    assert.deepEqual(errorBody(code, entry.message, entry.status, requestId), {
+      error: { code, message: entry.message, requestId, retryable: false },
+    });
+  }
+});
+
+test("candidate review refusals carry safe non-retryable envelopes", () => {
+  for (const code of ["CANDIDATE_INVALID", "ACTIVE_REVIEW_EXISTS", "REVIEW_POLICY_CHANGED"] as const) {
     const entry = projectErrors[code];
     assert.deepEqual(errorBody(code, entry.message, entry.status, requestId), {
       error: { code, message: entry.message, requestId, retryable: false },

@@ -32,6 +32,8 @@ export type Queued = { createdIds: string[]; versions: Record<string, number>; r
 export type RunOutcome = Outcome<Queued>;
 
 type Studio = {
+  dragging: boolean;
+  reserveWrite: (key: string) => (() => void) | null;
   projectId: string;
   /** What every view shows: the saved draft with the unsaved changes applied (readers see the saved draft). */
   draft: DraftView;
@@ -68,7 +70,7 @@ type Studio = {
   importFlow: (previewId: string, input: { draftId: string; previewHash: string }, key: string) => Promise<Outcome<ImportApplyResult>>;
   inspectSavedExport: (saveFirst: boolean) => Promise<Outcome<DraftView>>;
   /** A Specs write saves the Studio first; first attempts build against that saved draft, retries resend their frozen body. */
-  writeDraft: <T extends { draftId: string; documentRevision: number; layoutRevision: number }>(path: string, request: Record<string, unknown> | ((saved: DraftView) => Record<string, unknown> | null), key: string, options?: { retry?: boolean; onSend?: (body: Record<string, unknown>) => void }) => Promise<Outcome<T>>;
+  writeDraft: <T extends { draftId: string; documentRevision: number; layoutRevision: number }>(path: string, request: Record<string, unknown> | ((saved: DraftView) => Record<string, unknown> | null), key: string, options?: { retry?: boolean; saveFirst?: boolean; onSend?: (body: Record<string, unknown>) => void; onAcknowledged?: (receipt: T) => void }) => Promise<Outcome<T>>;
   /** AI Apply uses the Studio's admission, request lock, exact receipt floor and saved-read adoption path. */
   applyAiRun: (runId: string, input: Omit<ApplyRunInput, "key">, key: string, retry?: boolean, onAcknowledged?: (receipt: AppliedRun) => void) => Promise<Outcome<AppliedRun & { adopted: boolean; currentDraft: boolean }>>;
   exportDirty: boolean;
@@ -375,7 +377,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
 
   const writeDraft = useCallback(async <T extends { draftId: string; documentRevision: number; layoutRevision: number }>(
     path: string, request: Record<string, unknown> | ((saved: DraftView) => Record<string, unknown> | null), key: string,
-    { retry = false, onSend }: { retry?: boolean; onSend?: (body: Record<string, unknown>) => void } = {},
+    { retry = false, saveFirst = true, onSend, onAcknowledged }: { retry?: boolean; saveFirst?: boolean; onSend?: (body: Record<string, unknown>) => void; onAcknowledged?: (receipt: T) => void } = {},
   ): Promise<Outcome<T>> => {
     const invocation = fence(), current = () => mounted.current && invocation();
     const refused = (code: string, message: string, uncertain = false): Outcome<T> => ({ ok: false, code, message, uncertain });
@@ -383,7 +385,8 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
     if (inFlight.current) return refused("BUSY", busyOutcome.message, retry);
     let reason = guard();
     if (reason) return refused("LOCAL_CHANGES", reason, retry);
-    if (!await saveChanges()) return refused("LOCAL_CHANGES", "Resolve the unsaved Studio changes first.", retry);
+    if (!saveFirst && pendingCount(latest.current)) return refused("LOCAL_CHANGES", "New edits affected this action. Review saved scope again.", retry);
+    if (saveFirst && !await saveChanges()) return refused("LOCAL_CHANGES", "Resolve the unsaved Studio changes first.", retry);
     if (!current()) return refused("DRAFT_REPLACED", projectErrors.DRAFT_REPLACED.message, retry);
     reason = guard();
     if (reason || pendingCount(latest.current) || inFlight.current) return refused("LOCAL_CHANGES", reason ?? "New edits are waiting in the Studio. Save them first.", retry);
@@ -412,6 +415,7 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
         if (accessCodes.has(result.code)) onAccessChanged(); else await reload(stillCurrent);
         return { ok: false, code: result.code, message: result.message, uncertain: false, ...(result.details ? { details: result.details } : {}) };
       }
+      onAcknowledged?.(result.data);
       if (result.data.draftId !== saved.current.id) return refused("DRAFT_REPLACED", "This change was saved to the previous draft. Your input is kept. Review the current draft before saving again.");
       if (result.data.draftId === saved.current.id) {
         floorRef.current = requireDraftRevision(floorRef.current ? { [result.data.draftId]: floorRef.current } : {}, result.data)[result.data.draftId];
@@ -582,10 +586,20 @@ export function StudioProvider({ projectId, draft: savedDraft, role, archived, n
   const unsaved = pendingCount(outbox) > 0;
   const canUndo = editable && outbox.entries.length > 0, canRedo = editable && outbox.redo.length > 0;
   const exportDirty = isDragging || studioDirtyCount(ui) > 0 || busy || refreshFailed;
+  const reserveWrite = useCallback((key: string): (() => void) | null => {
+    if (inFlight.current) return null;
+    inFlight.current = key;
+    update(() => ({ request: key }));
+    return () => {
+      if (inFlight.current === key) inFlight.current = null;
+      update(ui => ui.request === key ? { request: null } : {});
+    };
+  }, [update]);
   const value = useMemo<Studio>(() => ({
+    dragging: isDragging, reserveWrite,
     projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, readFailures, frozen, redoCleared, dismissRedoCleared, run, moveSteps, saveChanges, unsaved,
     applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, importFlow, inspectSavedExport, applyAiRun, writeDraft, exportDirty, reload, dragActive, inspect: onInspect,
-  }), [projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, readFailures, frozen, redoCleared, dismissRedoCleared, run, moveSteps, saveChanges, unsaved,
+  }), [isDragging, reserveWrite, projectId, draft, savedDraft, role, archived, editable, narrow, ui, update, busy, save, refreshFailed, readFailures, frozen, redoCleared, dismissRedoCleared, run, moveSteps, saveChanges, unsaved,
     applyAgain, discardChanges, dismissDropped, keepTheirs, skipped, undo, redo, canUndo, canRedo, place, preview, importFlow, inspectSavedExport, applyAiRun, writeDraft, exportDirty, reload, dragActive, onInspect]);
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>;
 }

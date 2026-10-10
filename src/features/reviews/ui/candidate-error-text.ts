@@ -1,0 +1,21 @@
+import type { CandidateErrorCode } from "../contracts/review.ts";
+export const candidateErrorText: Record<CandidateErrorCode, string> = {
+  INVALID_DRAFT: "This saved draft cannot be captured. Refresh and inspect the saved scope.",
+  NO_INCLUDED_CONTENT: "Include at least one flow or requirement.",
+  CONFIRMATION_REQUIRED: "Confirm the current wording of this included item.",
+  LINK_REVIEW_REQUIRED: "Review this trace link against its current endpoints.",
+  INVALID_CITATION: "Inspect this citation and its exact source lines.",
+  EMPTY_FLOW: "This included flow needs steps.",
+  NO_START: "This flow needs a start step.",
+  NO_OUTCOME: "This flow needs an outcome step.",
+  UNCONNECTED_STEP: "Connect this step to the flow.",
+  UNLABELLED_BRANCH: "Give this decision branch a label.",
+  START_HAS_INCOMING: "A start step cannot have an incoming connection.",
+  OUTCOME_HAS_OUTGOING: "An outcome step cannot have an outgoing connection.",
+  ACTION_OUTGOING_COUNT: "This action needs one outgoing connection.",
+  DECISION_OUTGOING_COUNT: "This decision needs at least two outgoing branches.",
+  DUPLICATE_BRANCH_LABEL: "Use a different label for each decision branch.",
+  UNREACHABLE_FROM_START: "This step needs a path from a start step.",
+  CANNOT_REACH_OUTCOME: "This step needs a path to an outcome step.",
+  NO_SEMANTIC_CHANGE: "The included scope matches the approved baseline.",
+};

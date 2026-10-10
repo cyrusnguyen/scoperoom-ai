@@ -1,3 +1,4 @@
+import { defaultReviewUi } from "../src/features/reviews/ui/review-state.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Changes } from "../src/features/drafts/contracts/changes.ts";
@@ -141,7 +142,7 @@ test("requirement acknowledgement matches the normalization applied before sendi
   assert.equal(finishRequirementWrite(newer, request, { createdIds: ["r1"] }).drafts["specs:req:new:title"], "Later title");
 });
 
-const closed = { nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { section: "sources" as const, selected: null, sourceScope: "user" as const, pending: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
+const closed = { review: defaultReviewUi, nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { section: "sources" as const, selected: null, sourceScope: "user" as const, pending: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("discard preserves an uncertain import's original per-project request; dropping access clears it", () => {
@@ -507,4 +508,38 @@ test("opening Specs mounts the panel on that tab with empty Specs state", () => 
   assert.equal(uiFor(store, "p1").rightTab, "specs");
   assert.equal(uiFor(store, "p1").rightOpen, true);
   assert.deepEqual(uiFor(store, "p1").specs, defaultSpecsUi);
+});
+
+test("review attempts and reason protect navigation and survive tabs and pending discard", () => {
+  const request={key:"review",method:"POST" as const,path:"reviews/r/withdraw",body:{reason:"Submitted"},label:"Withdraw candidate",acknowledged:false};
+  const store=updateUi({},"a",ui=>({review:{...ui.review,pending:request,reason:"Newer reason"}}));
+  assert.equal(anyDirty(store),true);assert.equal(dirtyCount(store,"a"),1);
+  const remounted=uiFor(setRightTab(setRightOpen(store,"a",false),"a","review"),"a");assert.equal(remounted.review.pending,request);
+  assert.equal(uiFor(discardDrafts(store,"a"),"a").review.reason,"Newer reason");
+  assert.deepEqual(uiFor(dropProject(store,"a"),"a").review,defaultReviewUi);
+});
+
+test("flow message origin survives reservation, settlement and remount, and unrelated Specs writes clear it", () => {
+  const request = { key: "flow-key", method: "POST" as const, path: "drafts/d/commands", body: null, label: "Confirm flow", draft: true as const, flowId: "flow-a" };
+  const reserved = startSpecsRequest(defaultSpecsUi, request)!;
+  const origin = (specs: typeof reserved) => specs.messageFlowId;
+  assert.equal(origin(reserved), "flow-a", "identity exists before save-first builds a body");
+  const body = { command: "CONFIRM_FLOW", payload: { flowId: "flow-a" } };
+  const sent = fillSpecsRequest(reserved, request.key, body);
+  for (const [state, outcome] of [[reserved, "refused"], [sent, "refused"], [sent, "saved"], [sent, "uncertain"], [sent, "acknowledged"]] as const) {
+    const settled = settleSpecsRequest(state, request.key, outcome, "Flow outcome");
+    assert.equal(origin(settled), "flow-a");
+    assert.equal(settleSpecsRequest(settled, "foreign-key", "saved", "Foreign"), settled);
+    const store = updateUi({}, "p", () => ({ specs: settled }));
+    assert.equal(origin(uiFor(setRightTab(setRightTab(store, "p", "specs"), "p", "details"), "p").specs), "flow-a");
+    if (outcome === "saved" || outcome === "refused") {
+      assert.equal(settled.pending, null);
+      const next = startSpecsRequest(settled, { ...request, key: "flow-b-key", flowId: "flow-b" })!;
+      assert.equal(settleSpecsRequest(next, request.key, "saved", "Late flow A"), next);
+      assert.equal(origin(next), "flow-b", "a late result cannot overwrite the newer flow origin");
+      const source = startSpecsRequest(settled, { key: "source-key", method: "POST", path: "sources", body: {}, label: "Add source" })!;
+      assert.equal(origin(source), undefined);
+      assert.equal(origin(settleSpecsRequest(source, "source-key", "saved", "Add source: saved.")), undefined);
+    } else assert.deepEqual(settled.pending?.body, body);
+  }
 });

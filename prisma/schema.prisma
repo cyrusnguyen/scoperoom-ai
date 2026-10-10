@@ -167,6 +167,11 @@ model UserProfile {
   aiRunsStarted         AiRun[]             @relation("ai_run_actor")
   aiApplications        AiSuggestionApplication[]
 
+  snapshotsCreated ScopeSnapshot[] @relation("snapshot_creator")
+  snapshotsDesignated ScopeSnapshot[] @relation("snapshot_approver")
+  reviewsCreated ReviewRequest[] @relation("review_creator")
+  reviewsDesignated ReviewRequest[] @relation("review_approver")
+
   @@map("user_profile")
   @@schema("app")
 }
@@ -220,6 +225,8 @@ model Project {
   eventSequence         BigInt              @default(0) @map("event_sequence") @db.BigInt
   aiRevision            BigInt              @default(0) @map("ai_revision") @db.BigInt
   sourcesRevision       BigInt              @default(0) @map("sources_revision") @db.BigInt
+  reviewsRevision BigInt @default(dbgenerated("0")) @map("reviews_revision") @db.BigInt
+  baselineSequence BigInt @default(dbgenerated("0")) @map("baseline_sequence") @db.BigInt
   requirementDisplaySequence Int            @default(0) @map("requirement_display_sequence")
   approvedSnapshotId    String?             @map("approved_snapshot_id") @db.Uuid
   createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -236,6 +243,11 @@ model Project {
   aiRuns                AiRun[]
   aiApplications        AiSuggestionApplication[]
 
+  snapshots ScopeSnapshot[] @relation("project_snapshots")
+  reviews ReviewRequest[]
+  approvedSnapshot ScopeSnapshot? @relation("project_approved_snapshot", fields: [id, approvedSnapshotId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "project_approved_snapshot_fkey")
+
+  @@unique([id, approvedSnapshotId])
   @@unique([id, currentDraftId])
   @@index([ownerId, status, updatedAt, id])
   @@map("project")
@@ -289,6 +301,10 @@ model ScopeDraft {
   id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   projectId        String           @map("project_id") @db.Uuid
   createdBy        String           @map("created_by") @db.Uuid
+  baseSnapshotId String? @map("base_snapshot_id") @db.Uuid
+  baseSnapshot ScopeSnapshot? @relation("draft_base_snapshot", fields: [projectId, baseSnapshotId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "scope_draft_base_snapshot_fkey")
+  snapshots ScopeSnapshot[] @relation("snapshot_source_draft")
+  reviews ReviewRequest[] @relation("review_source_draft")
   documentRevision Int              @default(1) @map("document_revision")
   layoutRevision   Int              @default(1) @map("layout_revision")
   schemaVersion    Int              @default(3) @map("schema_version")
@@ -430,6 +446,7 @@ model AiRun {
   capture                  Json?
   captureHash              String               @map("capture_hash") @db.Char(64)
   expectedDocumentRevision Int                  @map("expected_document_revision")
+  parentSnapshot ScopeSnapshot? @relation("ai_parent_snapshot", fields: [projectId, parentSnapshotId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "ai_run_parent_snapshot_fkey")
   parentSnapshotId         String?              @map("parent_snapshot_id") @db.Uuid
   state                    AiRunState           @default(QUEUED)
   disposition              AiResultDisposition?
@@ -561,5 +578,78 @@ model AuditEvent {
   @@unique([projectId, sequence])
   @@index([projectId, createdAt, id])
   @@map("audit_event")
+  @@schema("app")
+}
+
+enum ReviewState {
+  OPEN
+  APPROVED
+  CHANGES_REQUESTED
+  REJECTED
+  WITHDRAWN
+  SUPERSEDED
+  STALE
+  @@map("review_state")
+  @@schema("app")
+}
+
+model ScopeSnapshot {
+  id String @id @db.Uuid
+  projectId String @map("project_id") @db.Uuid
+  sourceDraftId String @map("source_draft_id") @db.Uuid
+  parentSnapshotId String? @map("parent_snapshot_id") @db.Uuid
+  capturedDocumentRevision Int @map("captured_document_revision")
+  capturedLayoutRevision Int @map("captured_layout_revision")
+  designatedApproverId String @map("designated_approver_id") @db.Uuid
+  approvalPolicyVersion Int @map("approval_policy_version")
+  payload Json
+  contentHash String @map("content_hash") @db.Char(64)
+  reviewHash String @map("review_hash") @db.Char(64)
+  createdBy String @map("created_by") @db.Uuid
+  createdAt DateTime @map("created_at") @db.Timestamptz(6)
+  project Project @relation("project_snapshots", fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  sourceDraft ScopeDraft @relation("snapshot_source_draft", fields: [projectId, sourceDraftId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "scope_snapshot_source_draft_fkey")
+  parent ScopeSnapshot? @relation("snapshot_parent", fields: [projectId, parentSnapshotId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "scope_snapshot_parent_fkey")
+  children ScopeSnapshot[] @relation("snapshot_parent")
+  approver UserProfile @relation("snapshot_approver", fields: [designatedApproverId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  creator UserProfile @relation("snapshot_creator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  approvedFor Project[] @relation("project_approved_snapshot")
+  basedDrafts ScopeDraft[] @relation("draft_base_snapshot")
+  aiRuns AiRun[] @relation("ai_parent_snapshot")
+  review ReviewRequest? @relation("review_candidate")
+  parentReviews ReviewRequest[] @relation("review_parent")
+  @@unique([projectId, id])
+  @@index([projectId, createdAt, id])
+  @@map("scope_snapshot")
+  @@schema("app")
+}
+
+model ReviewRequest {
+  id String @id @db.Uuid
+  projectId String @map("project_id") @db.Uuid
+  candidateSnapshotId String @unique @map("candidate_snapshot_id") @db.Uuid
+  sourceDraftId String @map("source_draft_id") @db.Uuid
+  parentSnapshotId String? @map("parent_snapshot_id") @db.Uuid
+  designatedApproverId String @map("designated_approver_id") @db.Uuid
+  approvalPolicyVersion Int @map("approval_policy_version")
+  state ReviewState @default(OPEN)
+  version Int @default(1)
+  lastEventSequence BigInt @map("last_event_sequence") @db.BigInt
+  publicationSequence BigInt? @map("publication_sequence") @db.BigInt
+  publishedAt DateTime? @map("published_at") @db.Timestamptz(6)
+  closedReason String? @map("closed_reason") @db.Text
+  createdBy String @map("created_by") @db.Uuid
+  createdAt DateTime @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  candidate ScopeSnapshot @relation("review_candidate", fields: [projectId, candidateSnapshotId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "review_request_candidate_fkey")
+  sourceDraft ScopeDraft @relation("review_source_draft", fields: [projectId, sourceDraftId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "review_request_source_draft_fkey")
+  parent ScopeSnapshot? @relation("review_parent", fields: [projectId, parentSnapshotId], references: [projectId, id], onDelete: NoAction, onUpdate: NoAction, map: "review_request_parent_fkey")
+  creator UserProfile @relation("review_creator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  approver UserProfile @relation("review_approver", fields: [designatedApproverId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  @@unique([projectId, id])
+  @@index([projectId, createdAt, id])
+  @@unique([projectId, candidateSnapshotId])
+  @@map("review_request")
   @@schema("app")
 }

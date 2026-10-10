@@ -12,7 +12,7 @@ const MATERIAL = ["title", "statement", "category", "inclusion", "sourceRefs", "
 
 export const formatDisplayId = (sequence: number) => `REQ-${String(sequence).padStart(3, "0")}`;
 
-export const confirmationCurrent = (requirement: RequirementRecord) => requirement.confirmation?.behaviourVersion === requirement.behaviourVersion;
+export const confirmationCurrent = (requirement: Pick<RequirementRecord, "confirmation" | "behaviourVersion">) => requirement.confirmation?.behaviourVersion === requirement.behaviourVersion;
 
 export function linkState(document: ScopeDocument, link: TraceLinkRecord): LinkState {
   if (link.reviewedBy === null) return "PROPOSED";
@@ -122,6 +122,13 @@ export function applyScopeCommand(saved: Draft, documentRevision: number, comman
       for (const linkId of plan.traceLinkIds) delete document.traceLinks[linkId];
       delete document.requirements[requirementId];
       retire([requirementId, ...plan.traceLinkIds]);
+      break;
+    }
+    case "CONFIRM_FLOW": {
+      const flow = current(document.flows[command.payload.flowId], command.payload.flowId, command.expectedEntityVersion);
+      if (confirmationCurrent(flow)) return unchanged();
+      document.flows[flow.id] = { ...flow, version: bump(flow.version), confirmation: { behaviourVersion: flow.behaviourVersion, actorId: context.actorId, confirmedAt: context.now } };
+      versions[flow.id] = document.flows[flow.id]!.version;
       break;
     }
     case "CONFIRM_REQUIREMENT": {
