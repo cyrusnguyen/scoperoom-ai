@@ -2,7 +2,7 @@
 
 ## Stage 9.2 review completion and Review UI refresh (2026-10-10)
 
-Worktree `D:/Project/scoperoom-ai/.claude/worktrees/stage-9-bug-review-13d0df`, branch `claude/stage-9-bug-review-13d0df`. The Stage 9.2 decisions, publication and approved Markdown work, including its external-review corrections, was copied byte for byte from the Codex worktree as baseline `81cb3e4`. Code commits `365c9a5` through `99d7316` finish the review fixes and refresh the Review and Approval UI; docs commits `7d8388b` and `5570599` record the review completion, qualification and external review follow-up; the final-review polish commit (Review tones, labels and counters) and the docs commit that follows it close the whole-branch review's Minor findings. No migration, dependency, API route, server service, SQL or contract changed after the baseline; the local database keeps its 32 migrations.
+Branch `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan`, from main `46ea382`. The Stage 9.2 decisions, publication and approved Markdown work, including its external-review corrections, was copied byte for byte from the Stage 9.2 implementation worktree as baseline `0bfaabb`. Code commits `0996f91` through `38f950c` finish the review fixes and refresh the Review and Approval UI; docs commits `0fb5cc0` and `8351aac` record the review completion, qualification and external review follow-up; the final-review polish commit `705aa19` (Review tones, labels and counters) and the docs commits that follow it close the whole-branch review's Minor findings. No migration, dependency, API route, server service, SQL or contract changed after the baseline; the local database keeps its 32 migrations.
 
 External review findings:
 
@@ -12,7 +12,7 @@ External review findings:
 
 The Review panel keeps every read, write, fence and recovery path in `review-panel.tsx` and now renders through presentational components (`review-current.tsx`, `review-comparison.tsx`, `review-history.tsx`, `candidate-reader.tsx`, `candidate-scope.tsx`, `review-decision.tsx`, `approved-markdown.tsx`, `review-badges.tsx`) styled by `review.css` from `tokens.css` values only. Display rules live in the unit-tested `review-format.ts`. See `ui-context.md`, section Review candidates.
 
-Qualification on `99d7316`, one gate at a time against the running local 623xx stack:
+Qualification on `38f950c`, one gate at a time against the running local 623xx stack:
 
 | Gate | Command | Result | Duration | Exit |
 | --- | --- | --- | --- | --- |
@@ -40,15 +40,15 @@ All of these match the local loopback transport instability recorded in earlier 
 
 Limitations: hosted CI, deployment, live providers and manual screen reader passes are not claimed. The Studio draft read (`apiRead`) has no client-side timeout, so a hung loopback request leaves the flow dialog open; this is pre-existing behaviour outside this change. Raw logs and browser evidence stay ignored under `.superpowers/sdd/2026-10-10-stage-09b-review-ui-and-fixes/`.
 
-Next: user review of the branch before any push or PR.
+Next: pull request review of `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan` into main.
 
 ## External review findings follow-up (2026-10-10, closed)
 
-The twelve external review findings were verified and the supported fixes completed on branch `claude/stage-9-bug-review-13d0df`, with full requalification. See the top section, Stage 9.2 review completion and Review UI refresh, for the finding outcomes and gate evidence.
+The twelve external review findings were verified and the supported fixes completed on branch `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan`, with full requalification. See the top section, Stage 9.2 review completion and Review UI refresh, for the finding outcomes and gate evidence.
 
 ## Stage 9.2 implemented and locally verified, awaiting approval (2026-10-10)
 
-Implemented in managed worktree `C:/Users/Cyrus/.codex/worktrees/stage-9-2-decisions-markdown/scoperoom-ai`, branch `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan`, from merged main `46ea382`. Stages 1 through 7 and 9.1 are merged; Stage 08 remains deferred. All source remained uncommitted pending the user's approval before commit, push or PR at that point; it was later committed on branch `claude/stage-9-bug-review-13d0df` (see the top section). Main, Atlas and unrelated work are preserved.
+Implemented in managed worktree `C:/Users/Cyrus/.codex/worktrees/stage-9-2-decisions-markdown/scoperoom-ai`, branch `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan`, from merged main `46ea382`. Stages 1 through 7 and 9.1 are merged; Stage 08 remains deferred. All source remained uncommitted pending the user's approval before commit, push or PR at that point; it was later committed as baseline `0bfaabb` on this pull request branch (see the top section). Main, Atlas and unrelated work are preserved.
 
 All six tasks and the integrated change passed independent review. Stage 9.2 adds exact designated-human decisions, atomic publication preserving the same draft and newer saved/unsent work, immutable approved history, deterministic approved-only Markdown, separate saved semantic/layout pending labels and AI compatibility after real publication. Existing authority, scoped receipts, sync and native download owners are reused; no dependency or additional controller was added. Review fixes cover historical receipt binding, blank optional approval comments and preserving explicit historical selection through receipt reconciliation and late acknowledgement.
 
