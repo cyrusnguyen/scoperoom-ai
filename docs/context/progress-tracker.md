@@ -1,5 +1,45 @@
 # Progress tracker
 
+## Stage 9.2 review completion and Review UI refresh (2026-10-10)
+
+Worktree `D:/Project/scoperoom-ai/.claude/worktrees/stage-9-bug-review-13d0df`, branch `claude/stage-9-bug-review-13d0df`. The Stage 9.2 decisions, publication and approved Markdown work, including its external-review corrections, was copied byte for byte from the Codex worktree as baseline `81cb3e4`. Commits `365c9a5` through `99d7316` finish the review fixes and refresh the Review and Approval UI. No migration, dependency, API route, server service, SQL or contract changed after the baseline; the local database keeps its 32 migrations.
+
+External review findings:
+
+- Fixed: 1 Setext-safe Markdown escaping, 2 single-exit DATA_STORE freeze rule, 3 database reset target binding, 4 ECMAScript-trim reason constraint (migration `20261010000400`), 7 strict Unicode project inputs and 8 captured decision attribution. Finding 8 now also names the designated approver by name and role in the Review tab instead of a raw ID.
+- Covered by the refresh: 5, 9 and 11, through the refreshed reader with per-item approval notes, the saved comparison memoized on the fields it reads, and the owner `Self/internal approval` badge.
+- No change, keeping the recorded adjudication: 6, because database publication triggers would be defense in depth needing a migration on the shared local database while the services already guard publication; 10, because the spec has no case-fold rule for branch labels and trimmed exact duplicates are already rejected; 12, because negative decisions after a draft replacement cannot happen until a draft replacement workflow exists.
+
+The Review panel keeps every read, write, fence and recovery path in `review-panel.tsx` and now renders through presentational components (`review-current.tsx`, `review-comparison.tsx`, `review-history.tsx`, `candidate-reader.tsx`, `candidate-scope.tsx`, `review-decision.tsx`, `approved-markdown.tsx`, `review-badges.tsx`) styled by `review.css` from `tokens.css` values only. Display rules live in the unit-tested `review-format.ts`. See `ui-context.md`, section Review candidates.
+
+Qualification on `99d7316`, one gate at a time against the running local 623xx stack:
+
+| Gate | Command | Result | Duration | Exit |
+| --- | --- | --- | --- | --- |
+| Lint and import boundaries | `corepack pnpm lint` | Passed | 48 s wall | 0 |
+| TypeScript | `corepack pnpm typecheck` | Passed | 5 s wall | 0 |
+| Unit | `corepack pnpm test:unit` | 653/653 passed, 0 failed, 0 skipped (648 plus 5 `review-format` tests) | 18.277 s | 0 |
+| Integration | `corepack pnpm test:integration` | 375/375 passed, 0 failed, 0 skipped | 182.175 s | 0 |
+| Workers | `corepack pnpm test:workers` | 30/30 passed, 0 failed, 0 skipped | 21.890 s | 0 |
+| Realtime (serial) | `corepack pnpm test:realtime` | 13/13 passed, 0 failed, 0 skipped | 336.483 s | 0 |
+| Browser run 1 (unfiltered) | `corepack pnpm test:e2e:production` | 488 passed, 4 failed, 0 skipped, 0 flaky; Chromium 474/478, recovery-fault 14/14 | build/test/total 11.405/1350.429/1361.833 s | build 0, test 1 |
+| Browser run 2 (unfiltered) | `corepack pnpm test:e2e:production` | 491 passed, 1 failed, 0 skipped, 0 flaky; Chromium 477/478, recovery-fault 14/14 | build/test/total 8.997/1198.255/1207.252 s | build 0, test 1 |
+| Browser run 3 (unfiltered) | `corepack pnpm test:e2e:production` | 492/492 passed, 0 failed, 0 skipped, 0 flaky, 0 retries, 0 global errors; Chromium 478/478, recovery-fault 14/14 | build/test/total 9.415/1190.670/1200.085 s | build 0, test 0 |
+
+Every browser failure was diagnosed from its trace and none is a product or test defect, so no source or test changed during qualification:
+
+- Run 1, export-flows "REVIEWER exports an archived saved flow with read authority" and studio "an in-flight save stays locked after browser history remount (uncertain: false, failed read: true)": `connect ETIMEDOUT 127.0.0.1:62300` from the test request context during setup (`/api/me`, `/api/projects`).
+- Run 1, invitations "an uncertain revoke retries with the same key, and a conflict re-reads the list before Revoke re-enables": the shared sign-in fixture stayed on `/login`. The trace shows the sign-in server action answered 200 with the session cookie and `x-action-redirect: /app;push`, but its body never arrived, and the server logged `Error: The destination stream closed early.` at that moment. Login code is unchanged since main `46ea382`.
+- Run 1, studio "flow creation fixture waits for its exact successful save before checking the dialog closes": after the deliberately held save was delivered, the follow-up `GET .../drafts/<id>` never received a response while concurrent status reads on other connections returned 200 in under 200 ms; the dialog waits for that read. Studio code is unchanged since main.
+- Both run-1 non-transport files then passed alone: `invitations.spec.ts` 9/9 and `studio.spec.ts` 53/53, exit 0. These isolated runs are not counted in any gate result.
+- Run 2, ai-api "start is 202 only after commit, replays by key, enforces limits and authority, and cancel keeps the slot": `connect ETIMEDOUT 127.0.0.1:62300` on `/api/me` in the sign-in fixture after the browser had reached `/app`.
+
+All of these match the local loopback transport instability recorded in earlier stages; the traces also show a host filtering proxy (`local.adguard.org`) injecting into browser traffic to the local app. No retry, timeout or assertion was changed. Run 3 is the one further unfiltered run allowed after a run failing only on setup connection errors, and it passed completely; the three runs are reported separately and never combined. Run 3 raw report SHA256 is `f829f86d53b5e4de6bc5e8e279303cfe9c19a5e3ffd0a1cafc0523a7e0d240d7`.
+
+Limitations: hosted CI, deployment, live providers and manual screen reader passes are not claimed. The Studio draft read (`apiRead`) has no client-side timeout, so a hung loopback request leaves the flow dialog open; this is pre-existing behaviour outside this change. Raw logs and browser evidence stay ignored under `.superpowers/sdd/2026-10-10-stage-09b-review-ui-and-fixes/`.
+
+Next: user review of the branch before any push or PR.
+
 ## Active follow-up: external review findings (2026-10-10)
 
 The user requests verifying twelve external findings and fixing those supported by current code and v1.6 contracts in the same Stage 9.2 worktree. Investigation and bounded fixes are active; the passing qualification below describes the pre-follow-up source. Preserve its evidence and rerun affected checks after corrections. No database reset, commit, push or PR is authorized. Current coordination: `.superpowers/sdd/2026-10-10-stage-09b-decisions-and-markdown/external-review-progress.md`.
