@@ -78,7 +78,7 @@ export function checkCandidate({ draft, evidence, baseline }: CandidateInput): C
       const exits = outgoing.get(node.id)!;
       if (node.kind === "START" && incoming.get(node.id)!.length) add("START_HAS_INCOMING", node.id);
       if (node.kind === "OUTCOME" && exits.length) add("OUTCOME_HAS_OUTGOING", node.id);
-      if (node.kind === "ACTION" && exits.length !== 1) add("ACTION_OUTGOING_COUNT", node.id);
+      if ((node.kind === "ACTION" || node.kind === "DATA_STORE") && exits.length !== 1) add("ACTION_OUTGOING_COUNT", node.id);
       if (node.kind === "DECISION") {
         if (exits.length < 2) add("DECISION_OUTGOING_COUNT", node.id);
         const labels = exits.map(edge => edge.condition.trim()).filter(Boolean);

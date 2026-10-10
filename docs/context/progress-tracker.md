@@ -1,5 +1,78 @@
 # Progress tracker
 
+## Stage 9.2 review completion and Review UI refresh (2026-10-10)
+
+Branch `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan`, from main `46ea382`. The Stage 9.2 decisions, publication and approved Markdown work, including its external-review corrections, was copied byte for byte from the Stage 9.2 implementation worktree as baseline `0bfaabb`. Code commits `0996f91` through `38f950c` finish the review fixes and refresh the Review and Approval UI; docs commits `0fb5cc0` and `8351aac` record the review completion, qualification and external review follow-up; the final-review polish commit `705aa19` (Review tones, labels and counters) and the docs commits that follow it close the whole-branch review's Minor findings. No migration, dependency, API route, server service, SQL or contract changed after the baseline; the local database keeps its 32 migrations.
+
+External review findings:
+
+- Fixed: 1 Setext-safe Markdown escaping, 2 single-exit DATA_STORE freeze rule, 3 database reset target binding, 4 ECMAScript-trim reason constraint (migration `20261010000400`), 7 strict Unicode project inputs and 8 captured decision attribution. Finding 8 now also names the designated approver by name and role in the Review tab instead of a raw ID.
+- Covered by the refresh: 5, 9 and 11, through the refreshed reader with per-item approval notes, the saved comparison memoized on the fields it reads, and the owner `Self/internal approval` badge.
+- No change, keeping the recorded adjudication: 6, because the trust boundary routes private data writes through trusted services, no reachable service bypass or atomicity defect was found, and database publication triggers would be speculative hardening; 10, because the spec has no case-fold rule for branch labels and trimmed exact duplicates are already rejected; 12, because negative decisions after a draft replacement cannot happen until a draft replacement workflow exists.
+
+The Review panel keeps every read, write, fence and recovery path in `review-panel.tsx` and now renders through presentational components (`review-current.tsx`, `review-comparison.tsx`, `review-history.tsx`, `candidate-reader.tsx`, `candidate-scope.tsx`, `review-decision.tsx`, `approved-markdown.tsx`, `review-badges.tsx`) styled by `review.css` from `tokens.css` values only. Display rules live in the unit-tested `review-format.ts`. See `ui-context.md`, section Review candidates.
+
+Qualification on `38f950c`, one gate at a time against the running local 623xx stack:
+
+| Gate | Command | Result | Duration | Exit |
+| --- | --- | --- | --- | --- |
+| Lint and import boundaries | `corepack pnpm lint` | Passed | 48 s wall | 0 |
+| TypeScript | `corepack pnpm typecheck` | Passed | 5 s wall | 0 |
+| Unit | `corepack pnpm test:unit` | 653/653 passed, 0 failed, 0 skipped (648 plus 5 `review-format` tests) | 18.277 s | 0 |
+| Integration | `corepack pnpm test:integration` | 375/375 passed, 0 failed, 0 skipped | 182.175 s | 0 |
+| Workers | `corepack pnpm test:workers` | 30/30 passed, 0 failed, 0 skipped | 21.890 s | 0 |
+| Realtime (serial) | `corepack pnpm test:realtime` | 13/13 passed, 0 failed, 0 skipped | 336.483 s | 0 |
+| Browser run 1 (unfiltered) | `corepack pnpm test:e2e:production` | 488 passed, 4 failed, 0 skipped, 0 flaky; Chromium 474/478, recovery-fault 14/14 | build/test/total 11.405/1350.429/1361.833 s | build 0, test 1 |
+| Browser run 2 (unfiltered) | `corepack pnpm test:e2e:production` | 491 passed, 1 failed, 0 skipped, 0 flaky; Chromium 477/478, recovery-fault 14/14 | build/test/total 8.997/1198.255/1207.252 s | build 0, test 1 |
+| Browser run 3 (unfiltered) | `corepack pnpm test:e2e:production` | 492/492 passed, 0 failed, 0 skipped, 0 flaky, 0 retries, 0 global errors; Chromium 478/478, recovery-fault 14/14 | build/test/total 9.415/1190.670/1200.085 s | build 0, test 0 |
+
+Browser run 1 came from the first, interrupted attempt at this task; the static and database rows and browser runs 2 and 3 come from the resumed attempt. The first attempt's own static and database runs also passed (unit 22.107 s, integration 230.243 s, workers 23.486 s, Realtime 456.102 s) and are not counted separately.
+
+Every browser failure was diagnosed from its trace and none is a product or test defect, so no source or test changed during qualification:
+
+- Run 1, export-flows "REVIEWER exports an archived saved flow with read authority" and studio "an in-flight save stays locked after browser history remount (uncertain: false, failed read: true)": `connect ETIMEDOUT 127.0.0.1:62300` from the test request context during setup (`/api/me`, `/api/projects`).
+- Run 1, invitations "an uncertain revoke retries with the same key, and a conflict re-reads the list before Revoke re-enables": the shared sign-in fixture stayed on `/login`. The trace shows the sign-in server action answered 200 with the session cookie and `x-action-redirect: /app;push`, but the trace recorded no response body (receive and transferSize -1), and the server logged `Error: The destination stream closed early.` at that moment. Login code is unchanged since main `46ea382`.
+- Run 1, studio "flow creation fixture waits for its exact successful save before checking the dialog closes": after the deliberately held save was delivered, the follow-up `GET .../drafts/<id>` never received a response while concurrent status reads on other connections returned 200 in under 200 ms; the dialog waits for that read. Studio code is unchanged since main.
+- Both run-1 non-transport files then passed alone: `invitations.spec.ts` 9/9 and `studio.spec.ts` 53/53, exit 0. These isolated runs are not counted in any gate result.
+- Run 2, ai-api "start is 202 only after commit, replays by key, enforces limits and authority, and cancel keeps the slot": `connect ETIMEDOUT 127.0.0.1:62300` on `/api/me` in the sign-in fixture after the browser had reached `/app`.
+
+All of these match the local loopback transport instability recorded in earlier stages; the traces also show a host filtering proxy (`local.adguard.org`) injecting into browser traffic to the local app. No retry, timeout or assertion was changed. Run 3 was made under the lead's instruction for this task, which allowed one further unfiltered run only if run 2 failed solely on setup connection errors; it passed completely; the three runs are reported separately and never combined. Run 3 raw report SHA256 is `f829f86d53b5e4de6bc5e8e279303cfe9c19a5e3ffd0a1cafc0523a7e0d240d7`.
+
+Limitations: hosted CI, deployment, live providers and manual screen reader passes are not claimed. The Studio draft read (`apiRead`) has no client-side timeout, so a hung loopback request leaves the flow dialog open; this is pre-existing behaviour outside this change. Raw logs and browser evidence stay ignored under `.superpowers/sdd/2026-10-10-stage-09b-review-ui-and-fixes/`.
+
+Next: pull request review of `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan` into main.
+
+## External review findings follow-up (2026-10-10, closed)
+
+The twelve external review findings were verified and the supported fixes completed on branch `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan`, with full requalification. See the top section, Stage 9.2 review completion and Review UI refresh, for the finding outcomes and gate evidence.
+
+## Stage 9.2 implemented and locally verified, awaiting approval (2026-10-10)
+
+Implemented in managed worktree `C:/Users/Cyrus/.codex/worktrees/stage-9-2-decisions-markdown/scoperoom-ai`, branch `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan`, from merged main `46ea382`. Stages 1 through 7 and 9.1 are merged; Stage 08 remains deferred. All source remained uncommitted pending the user's approval before commit, push or PR at that point; it was later committed as baseline `0bfaabb` on this pull request branch (see the top section). Main, Atlas and unrelated work are preserved.
+
+All six tasks and the integrated change passed independent review. Stage 9.2 adds exact designated-human decisions, atomic publication preserving the same draft and newer saved/unsent work, immutable approved history, deterministic approved-only Markdown, separate saved semantic/layout pending labels and AI compatibility after real publication. Existing authority, scoped receipts, sync and native download owners are reused; no dependency or additional controller was added. Review fixes cover historical receipt binding, blank optional approval comments and preserving explicit historical selection through receipt reconciliation and late acknowledgement.
+
+Complete local qualification passed. The lead independently parsed the raw browser report and suite totals.
+
+| Gate | Final evidence |
+| --- | --- |
+| Full lint/import boundaries, TypeScript and production build | Passed; build/test exits 0/0 |
+| Full unit suite | 617/617 passed; zero failures/skips |
+| Full integration suite | 368/368 passed; zero failures/skips |
+| Full worker suite | 30/30 passed; zero failures/skips |
+| Complete serial-alone Realtime suite | 13/13 passed; zero failures/skips |
+| Complete production browser suite | 490/490 distinct cases and attempts, Chromium 476 and recovery-fault 14; two concurrent workers; zero failures/skips/retries/flakes/attempt/global errors |
+
+The successful unfiltered browser run took 11.748/1281.996/1293.744 seconds for build/test/total. Its raw report SHA256 is `ad08f0434dfcc05a53244205616d749d71b1e7bd30ec403479e3006e016d8669`. All 502 qualification inputs matched the corrected tested inventory; 38 changed paths were recorded. The only correction during qualification added assigned loopback Auth port 62321 to the existing browser fixture allowlist, preserving its host guard. The original setup failure was proved by trace and retained; that first run was explicitly interrupted and remains incomplete. The full affected signup file passed 10/10, independent review approved the one-line fix, and the fresh complete run above passed. Earlier nonbrowser inputs were unchanged. Final tracker/testing edits are documentation-only after qualification.
+
+Three appended migrations are present. Real post-publication AI admission exposed an old null-only captured-parent guard; the third migration narrowly binds capture to the actual parent. Both null/non-null mismatch and foreign-parent controls remain refused. All 31 main migration checksums match source. The retained initially empty 30-migration replay target was extended to 31, matched constraints/grants/routines/triggers/roles exactly and passed both new SQL regressions. This is clean-30 plus extension-31 evidence, not a fresh-31 single pass or preserved pre-upgrade fixture comparison.
+
+The eight exact main loopback 623xx containers remain running, Auth is healthy and providers are disabled. Eight replay containers remain stopped with data retained; test app/fault listeners are closed. Realtime retains the existing provider boundary: backend access and old-epoch joins stop immediately, while already joined removed sockets can retain their old topic until credential expiry. Narrow-screen screenshots and automated keyboard journeys were inspected; hosted CI/deployment, live providers and manual NVDA are not claimed.
+
+Plans and raw evidence remain ignored under `docs/superpowers/plans/`, `.superpowers/sdd/2026-10-10-stage-09b-decisions-and-markdown/` and `.tmp/stage-09b-runtime/`. Reports are `final-review.md` and `final-verification-report.md`, with original failures, full inventories and logs retained. Narrow elevated execution worked around Windows sandbox setup failure. Nonblocking Git line-ending and pg deprecation warnings are recorded. No confirmed in-scope finding remains deferred.
+
+Next: user approval before commit, push or PR. No further stage or external publication has been started.
+
 ## Current implementation: Stage 9.1 confirm and freeze (2026-10-10)
 
 The user authorizes plan 09a in the managed worktree `C:/Users/Cyrus/.codex/worktrees/stage-9-1-confirm-freeze-plan/scoperoom-ai`, branch `feat/stage-9.1-confirm-freeze-plan`, from main `7173306`. Stage 08 remains deferred; Stage 9.2 decisions, publication and Markdown are excluded. The user approved committing, pushing and creating the Stage 9.1 PR on 2026-10-10, and authorized monitoring CI/review feedback, fixing confirmed in-scope issues and requesting another Codex review after comment fixes. Merge and Stage 9.2 remain unauthorized.

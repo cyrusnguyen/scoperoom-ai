@@ -1,9 +1,9 @@
 import type { ProjectStatusView } from "../../projects/contracts/project.ts";
-import type { ReviewPage, ReviewPreview } from "../contracts/review.ts";
+import type { ReviewDetail, ReviewPage, ReviewPreview, SnapshotPage } from "../contracts/review.ts";
 export type ReviewReceipt = { reviewId: string; eventSequence: number };
 export type ReviewRequestAttempt = { key: string; method: "POST"; path: string; body: Record<string, unknown>; label: string; acknowledged: boolean; receipt?: ReviewReceipt };
-export type ReviewUi = { section: "current" | "history"; selectedReviewId: string | null; pending: ReviewRequestAttempt | null; reason: string; message: string };
-export const defaultReviewUi: ReviewUi = { section: "current", selectedReviewId: null, pending: null, reason: "", message: "" };
+export type ReviewUi = { section: "current" | "history"; selectedReviewId: string | null; selectedSnapshotId: string | null; pending: ReviewRequestAttempt | null; reason: string; message: string };
+export const defaultReviewUi: ReviewUi = { section: "current", selectedReviewId: null, selectedSnapshotId: null, pending: null, reason: "", message: "" };
 export const reserveReview = (ui: ReviewUi, pending: ReviewRequestAttempt): ReviewUi | null => ui.pending ? null : { ...ui, pending, message: "" };
 export function settleReview(ui: ReviewUi, key: string, outcome: "saved" | "acknowledged" | "uncertain" | "refused", message: string): ReviewUi {
   if (ui.pending?.key !== key) return ui;
@@ -26,4 +26,15 @@ export function settleCoveredReview(ui: ReviewUi, key: string, page: ReviewPage,
   const request = ui.pending;
   return request?.key === key && request.acknowledged && request.receipt && reviewReceiptCovered(request.receipt, page, detail)
     ? settleReview(ui, key, "saved", `${request.label}: saved.`) : ui;
+}
+
+export function canDecideReview(detail: { review: Pick<ReviewDetail["review"], "state">; snapshot: { policySnapshot: ReviewDetail["snapshot"]["policySnapshot"] }; draftChanges: Pick<ReviewDetail["draftChanges"], "replaced"> }, status: Pick<ProjectStatusView, "status" | "role" | "viewerId" | "designatedApproverId" | "approvalPolicyVersion">): boolean {
+  return status.status === "ACTIVE" && ["OWNER", "EDITOR", "REVIEWER"].includes(status.role)
+    && detail.review.state === "OPEN" && !detail.draftChanges.replaced
+    && status.viewerId === status.designatedApproverId && status.viewerId === detail.snapshot.policySnapshot.designatedApproverId
+    && status.approvalPolicyVersion === detail.snapshot.policySnapshot.approvalPolicyVersion;
+}
+
+export function joinSnapshotPage(current: SnapshotPage, incoming: SnapshotPage, cursor: string): SnapshotPage {
+  return current.nextCursor === cursor && current.baselineSequence === incoming.baselineSequence ? { ...incoming, items: [...current.items, ...incoming.items.filter(item => !current.items.some(old => old.snapshotId === item.snapshotId))] } : current;
 }

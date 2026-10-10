@@ -329,3 +329,13 @@ test("my invitations list is email-bound, actionable-only and metadata-only", { 
     assert.deepEqual((await listMyInvitations(outsider)).items, []);
   });
 });
+
+test("invalid invitation email returns INVALID_INPUT without effects", { skip: !canRun }, async () => {
+  await withFixture(async f => {
+    const owner = await f.user(), projectId = await f.project(owner);
+    const state = async () => (await f.database.query("select to_jsonb(p) project,(select count(*)::int from app.invitation where project_id=p.id) invitations,(select count(*)::int from app.audit_event where project_id=p.id) events,(select count(*)::int from app.mutation_receipt where scope_id=p.id) receipts from app.project p where id=$1", [projectId])).rows[0];
+    const before = await state();
+    for (const part of ["bad\u0000", "bad\ud800", "bad\udc00"]) await assert.rejects(issueInvitation(owner, projectId, { verifiedEmail: part + "@example.test", role: "EDITOR", key: randomUUID() }), code("INVALID_INPUT"));
+    assert.deepEqual(await state(), before);
+  });
+});

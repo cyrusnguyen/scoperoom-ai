@@ -1,3 +1,4 @@
+import { text } from "../../drafts/contracts/strict.ts";
 import { uuid } from "./project.ts";
 
 export const projectMemberRoles = ["EDITOR", "REVIEWER", "VIEWER"] as const;
@@ -31,6 +32,7 @@ function key(value: unknown) {
 export function normalizeVerifiedEmail(value: unknown) {
   if (typeof value !== "string") invalidInput();
   const email = value.normalize("NFC").trim().toLowerCase();
+  text(email, 254, true);
   if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) invalidInput();
   return email;
 }

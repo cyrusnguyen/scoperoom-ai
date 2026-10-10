@@ -84,14 +84,27 @@ test("all captured citations are checked against exact versions, including backg
   hasError(input, "INVALID_CITATION", ids.req);
 });
 
-test("exit-bearing cycle and DATA_STORE branching are allowed; closed cycle fails", () => {
+for (const kind of ["ACTION", "DATA_STORE"] as const) {
+  for (const exitCount of [0, 1, 2]) test(kind + " requires exactly one outgoing connection: " + exitCount, () => {
+    const input = flowFixture();
+    addNode(input.draft, reviewIds.action, kind);
+    input.draft.document.edges[reviewIds.edge]!.toId = reviewIds.action;
+    if (exitCount >= 1) addEdge(input.draft, reviewIds.edge2, reviewIds.action, reviewIds.outcome);
+    if (exitCount === 2) {
+      addNode(input.draft, ids.other, "OUTCOME");
+      addEdge(input.draft, ids.link, reviewIds.action, ids.other);
+    }
+    if (exitCount === 1) assert.deepEqual(checkCandidate(input), { valid: true, errors: [], truncated: false });
+    else hasError(input, "ACTION_OUTGOING_COUNT", reviewIds.action);
+  });
+}
+
+test("exit-bearing DECISION cycle is allowed; closed cycle fails", () => {
   const input = flowFixture();
   addNode(input.draft, reviewIds.action, "DECISION");
   input.draft.document.edges[reviewIds.edge]!.toId = reviewIds.action;
   addEdge(input.draft, reviewIds.edge2, reviewIds.action, reviewIds.action, "Retry");
   addEdge(input.draft, ids.other, reviewIds.action, reviewIds.outcome, "Finish");
-  assert.equal(checkCandidate(input).valid, true);
-  input.draft.document.nodes[reviewIds.action]!.kind = "DATA_STORE";
   assert.equal(checkCandidate(input).valid, true);
   delete input.draft.document.edges[ids.other];
   hasError(input, "CANNOT_REACH_OUTCOME", reviewIds.action);

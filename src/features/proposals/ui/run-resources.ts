@@ -27,8 +27,8 @@ export function createRunResources({ projectId, apiRead, adoptPage, adoptRun, ad
   const runFlights = new Map<() => boolean, Map<string, { promise: Promise<void>; origin: Reconciliation; key: string; current?: CurrentParticipant }>>();
   const cache = new Map<string, { key: string; fence: () => boolean; value: RunView }>();
   const pageUrl = `/api/projects/${projectId}/ai-runs`;
-  const statusKey = (status: ProjectStatusView) => JSON.stringify([status.aiRevision,status.currentDraftId,status.documentRevision,status.approvedSnapshotId,status.status]);
-  const runKey = (status: ProjectStatusView, id: string) => JSON.stringify([id,status.aiRevision,status.currentDraftId,status.documentRevision,status.approvedSnapshotId,status.status]);
+  const statusKey = (status: ProjectStatusView) => JSON.stringify([status.aiRevision,status.currentDraftId,status.documentRevision,status.approvedSnapshotId,status.baselineSequence,status.status]);
+  const runKey = (status: ProjectStatusView, id: string) => JSON.stringify([id,status.aiRevision,status.currentDraftId,status.documentRevision,status.approvedSnapshotId,status.baselineSequence,status.status]);
   const publish = (destination: Destination, value: RunView | null) => destination === "current" ? adoptRun(value) : adoptHistoryRun?.(value);
   const pageMatches = (reconciliation: Reconciliation) => pageEvidence?.id === reconciliation.id && pageEvidence.statusKey === reconciliation.statusKey && pageEvidence.fence === reconciliation.fence && reconciliation.fence();
   function select(destination: Destination, id: string | null) {

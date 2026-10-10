@@ -59,3 +59,17 @@ test("a preview POST without a key sends no Idempotency-Key header", async () =>
     assert.equal(seen[0].body, JSON.stringify({ direction: "TB" }));
   } finally { restore(); }
 });
+
+test("text reads preserve exact UTF8 success, no-store and abort while JSON errors keep session and refusal status", async () => {
+  const { apiReadText } = await import("../src/client/api.ts");
+  assert.equal(typeof apiReadText, "function");
+  const controller = new AbortController(), seen: RequestInit[] = [];
+  let restore = stubFetch(async (_url, init) => { seen.push(init ?? {}); return new Response("# Approved 🙂\n", { headers: { "Content-Type": "text/markdown; charset=utf-8" } }); });
+  try { assert.deepEqual(await apiReadText("/api/export", controller.signal), { ok: true, data: "# Approved 🙂\n" }); assert.equal(seen[0].cache, "no-store"); assert.equal(seen[0].signal, controller.signal); } finally { restore(); }
+  for (const status of [401, 403, 404, 503]) {
+    restore = stubFetch(async () => Response.json({ error: { code: "DENIED", message: "Unavailable" } }, { status }));
+    try { assert.deepEqual(await apiReadText("/api/export"), { ok: false, code: "DENIED", message: "Unavailable", status, uncertain: status >= 500 }); } finally { restore(); }
+  }
+  restore = stubFetch(async () => { throw new TypeError("Failed to fetch"); });
+  try { const result = await apiReadText("/api/export"); assert.equal(result.ok, false); if (!result.ok) assert.equal(result.code, "NETWORK"); } finally { restore(); }
+});
