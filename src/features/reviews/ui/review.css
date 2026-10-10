@@ -1,9 +1,7 @@
 /* Review and approval (Stage 09). Every colour, space and radius comes from tokens.css. */
 .review-panel { display: grid; gap: var(--space-3); min-width: 0; }
-.review-panel .detail-facts dd, .candidate-reader { overflow-wrap: anywhere; min-width: 0; }
 .review-panel textarea { width: 100%; min-height: 96px; }
 .review-panel form { display: grid; gap: var(--space-2); }
-.candidate-reader p, .candidate-reader blockquote { white-space: pre-wrap; }
 .review-heading { display: flex; align-items: center; gap: var(--space-3); }
 .review-heading h2 { margin: 0; font-size: 15px; }
 .review-mark { display: grid; place-items: center; flex-shrink: 0; width: 38px; height: 38px; border: 1px solid var(--accent-border); border-radius: var(--radius-overlay); background: var(--accent-soft); color: var(--accent-hover); }
@@ -50,3 +48,22 @@
 .review-row time { grid-column: 1 / -1; color: var(--foreground-muted); font-size: 12px; }
 .review-row .review-id { grid-column: 1 / -1; }
 .review-empty { margin: 0; padding: var(--space-5) var(--space-3); border: 1px dashed var(--border); border-radius: var(--radius-card); color: var(--foreground-muted); font-size: 13px; text-align: center; }
+.candidate-reader { display: grid; gap: var(--space-4); min-width: 0; overflow-wrap: anywhere; }
+.candidate-reader h2 { margin: 0; font-size: 15px; }
+.candidate-reader h4 { margin: 0; font-size: 13px; font-weight: var(--weight-heading); }
+.candidate-reader p, .candidate-reader blockquote { margin: 0; white-space: pre-wrap; }
+.candidate-reader blockquote { margin-top: var(--space-1); padding-left: var(--space-3); border-left: 2px solid var(--accent-border); color: var(--foreground-muted); }
+.review-technical { border-top: var(--panel-border); }
+.review-technical > summary { display: flex; align-items: center; min-height: 44px; color: var(--foreground-muted); font-size: 12px; cursor: pointer; }
+.review-technical > summary:hover { color: var(--foreground); }
+.review-technical > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.review-section { display: grid; gap: var(--space-2); min-width: 0; }
+.review-scope-item { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: var(--panel-border); border-radius: var(--radius-card); background: var(--surface); }
+.review-scope-item[data-approved="true"] { border-color: var(--scope-approved-border); }
+.review-scope-note { color: var(--foreground-muted); font-size: 12px; }
+.review-scope-item[data-approved="true"] > .review-scope-note { color: var(--scope-approved); }
+.review-steps { display: grid; gap: var(--space-2); margin: 0; padding-left: var(--space-5); }
+.review-step-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); }
+.review-kind { color: var(--foreground-muted); font-size: 12px; }
+.review-connections, .review-citations, .review-links { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.review-connections li { font-size: 13px; }

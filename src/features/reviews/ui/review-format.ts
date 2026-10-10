@@ -1,6 +1,8 @@
 import type { DirectoryMember } from "../../collaboration/ui/participants.ts";
 import { roleLabel } from "../../projects/ui/format.ts";
-import type { ReviewState } from "../contracts/review.ts";
+import type { Inclusion } from "../../drafts/contracts/scope-document.ts";
+import type { LinkState } from "../../scope/domain/scope.ts";
+import type { ReviewDecision, ReviewState } from "../contracts/review.ts";
 
 /** One visual tone per review outcome; review.css maps each tone to tokens.css colours. */
 export type ReviewTone = "approved" | "open" | "pending" | "rejected" | "closed";
@@ -32,3 +34,22 @@ export function approverLabel(approverId: string | null, directory: readonly Dir
   const member = directory?.find(entry => entry.profileId === approverId);
   return member ? `${member.displayName} · ${roleLabel(member.role)}` : `Member ${approverId}`;
 }
+
+export const decisionState = (decision: ReviewDecision["decision"]): ReviewState =>
+  decision === "APPROVE" ? "APPROVED" : decision === "REQUEST_CHANGES" ? "CHANGES_REQUESTED" : "REJECTED";
+
+/** Whether a captured flow or requirement is approved scope, in the exact words the reader shows. */
+export function scopeNote(inclusion: Inclusion, approved: boolean): string {
+  if (inclusion === "EXCLUDED") return "Excluded background. Not approved behavior.";
+  if (inclusion === "UNDECIDED") return "Undecided / exploratory background. Not approved.";
+  return approved ? "Included in approved scope." : "Included candidate scope. Not approved.";
+}
+
+/** Only an included link reviewed against its current endpoints is approved scope. */
+export function linkNote(included: boolean, state: LinkState, approved: boolean): string {
+  if (!included) return "Background trace link. Not approved.";
+  if (state !== "CURRENT") return "Unreviewed included trace link. Not approved.";
+  return approved ? "Reviewed included link. Approved scope." : "Reviewed included candidate link. Not approved.";
+}
+
+export const linkReviewLabel = (state: LinkState): string => state === "CURRENT" ? "Current" : state === "PROPOSED" ? "Not reviewed" : "Needs review";

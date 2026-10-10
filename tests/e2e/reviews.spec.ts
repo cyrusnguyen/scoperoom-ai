@@ -539,7 +539,7 @@ for (const [action, state, heading] of [
     await expect(attribution.getByText("Owner", { exact: true })).toBeVisible();
     await expect(attribution.getByText("Self/internal approval", { exact: true })).toHaveCount(state === "APPROVED" ? 1 : 0);
     await expect(page.locator(".candidate-reader")).toContainText(saved.decision.actorId);
-    await expect(page.locator(".candidate-reader")).toContainText(saved.decision.createdAt);
+    await expect(attribution.locator(`time[datetime="${saved.decision.createdAt}"]`)).toHaveCount(state === "APPROVED" ? 2 : 1);
     await page.reload();
     await page.getByRole("button", { name: "Inspect", exact: true }).click();
     await page.getByRole("tab", { name: "Review", exact: true }).click();
@@ -697,6 +697,9 @@ test("decision controls and terminal attribution support keyboard at desktop and
   await page.screenshot({ path: testInfo.outputPath("decision-terminal-desktop.png"), fullPage: true });
   await page.getByRole("button", { name: "Back to history", exact: true }).focus(); await page.keyboard.press("Enter");
   await expect(page.getByRole("button", { name: /Candidate Changes requested/ })).toBeFocused();
+  await page.setViewportSize({ width: 320, height: 844 });
+  const overflow = await page.locator(".review-panel").evaluate(panel => panel.scrollWidth - panel.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
 });
 
 test("a decision refused after an approver policy change retains submitted and newer reason", async ({ page }) => {
@@ -744,7 +747,7 @@ test("approved history preserves the exact selected baseline through later publi
   const reader=page.getByRole("article",{name:"Published baseline",exact:true});
   await expect(reader.getByRole("heading",{name:"Approved baseline 1",exact:true})).toBeVisible();
   await expect(reader.getByText("First exact agreement",{exact:false})).toBeVisible();
-  await expect(reader.getByText(publication.publishedAt,{exact:true})).toHaveCount(2);
+  await expect(reader.locator(`time[datetime="${publication.publishedAt}"]`)).toHaveCount(2);
   await expect(reader.getByText(original.decision.actorId,{exact:true})).toHaveCount(2);
   await expect(reader.getByText("Captured checkout",{exact:true})).toBeVisible();
   await expect(reader.getByText("Original agreed project",{exact:true})).toBeVisible();

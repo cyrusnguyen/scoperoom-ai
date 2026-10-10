@@ -28,3 +28,18 @@ test("designated approver shows name and role, and an unknown or unassigned appr
   assert.equal(approverLabel(approver, null), `Member ${approver}`);
   assert.equal(approverLabel(approver, directory.slice(1)), `Member ${approver}`);
 });
+
+test("scope and link notes keep the exact approval wording for every inclusion and review state", async () => {
+  const { decisionState, linkNote, linkReviewLabel, scopeNote } = await import("../src/features/reviews/ui/review-format.ts");
+  assert.deepEqual([decisionState("APPROVE"), decisionState("REQUEST_CHANGES"), decisionState("REJECT")], ["APPROVED", "CHANGES_REQUESTED", "REJECTED"]);
+  assert.equal(scopeNote("INCLUDED", true), "Included in approved scope.");
+  assert.equal(scopeNote("INCLUDED", false), "Included candidate scope. Not approved.");
+  assert.equal(scopeNote("EXCLUDED", true), "Excluded background. Not approved behavior.");
+  assert.equal(scopeNote("UNDECIDED", true), "Undecided / exploratory background. Not approved.");
+  assert.equal(linkNote(false, "CURRENT", true), "Background trace link. Not approved.");
+  assert.equal(linkNote(true, "NEEDS_REVIEW", true), "Unreviewed included trace link. Not approved.");
+  assert.equal(linkNote(true, "PROPOSED", false), "Unreviewed included trace link. Not approved.");
+  assert.equal(linkNote(true, "CURRENT", true), "Reviewed included link. Approved scope.");
+  assert.equal(linkNote(true, "CURRENT", false), "Reviewed included candidate link. Not approved.");
+  assert.deepEqual(["CURRENT", "PROPOSED", "NEEDS_REVIEW"].map(state => linkReviewLabel(state as "CURRENT")), ["Current", "Not reviewed", "Needs review"]);
+});
