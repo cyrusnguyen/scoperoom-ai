@@ -1143,3 +1143,20 @@ collaborationTest("historical approval keeps captured actor name and role after 
   await ownerPage.getByRole("button", { name: "Show Markdown for copy", exact: true }).click();
   await expect(ownerPage.getByLabel("Approved Markdown", { exact: true })).toHaveValue(original);
 });
+
+test("History says baselines are loading while their first read is in flight", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Loading baselines");
+  const { draftId } = await readyCandidate(page, projectId);
+  const frozen = await freezeViaApi(page, projectId, draftId);
+  expect((await page.request.post(`/api/projects/${projectId}/reviews/${frozen.reviewId}/decision`, { headers: reviewHeaders(), data: { decision: "APPROVE", expectedReviewVersion: 1, expectedReviewHash: frozen.reviewHash } })).status()).toBe(200);
+  let release!: () => void;
+  const held = new Promise<void>(resolve => release = resolve);
+  await page.route(`**/api/projects/${projectId}/snapshots`, async route => { await held; await route.continue(); });
+  await openReview(page, projectId);
+  await page.getByRole("tab", { name: "History", exact: true }).click();
+  const baselines = page.locator("section[aria-labelledby='review-baselines-heading']");
+  await expect(baselines.getByRole("status")).toHaveText("Loading baselines…");
+  release();
+  await expect(page.locator(`#snapshot-row-${frozen.snapshotId}`)).toBeVisible();
+  await expect(baselines.getByText("Loading baselines…", { exact: true })).toHaveCount(0);
+});

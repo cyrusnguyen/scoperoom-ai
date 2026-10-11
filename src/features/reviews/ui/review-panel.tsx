@@ -225,7 +225,7 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
         <button type="button" className="button quiet small review-back" onClick={() => selectSnapshot(null)}><Icon name="back" size={16} /><span>Back to history</span></button>
         {selectedPublishedSnapshot ? <Fragment key={selectedPublishedSnapshot.snapshot.id}><CandidateReader detail={selectedPublishedSnapshot} /><ApprovedMarkdown published={selectedPublishedSnapshot} onAccessLost={onAccessLost} /></Fragment> : !readError && <p role="status">Loading baseline…</p>}
       </> : <>
-      <ReviewHistory snapshots={snapshotPage} reviews={page} loading={!page && !readError} onOpenSnapshot={selectSnapshot} onOpenReview={select}
+      <ReviewHistory snapshots={snapshotPage} reviews={page} snapshotsLoading={!snapshotPage && !readError} reviewsLoading={!page && !readError} onOpenSnapshot={selectSnapshot} onOpenReview={select}
         onMoreSnapshots={cursor => void refreshSnapshots(cursor)} onMoreReviews={cursor => void refresh(cursor)} />
       </>}
     </div>
