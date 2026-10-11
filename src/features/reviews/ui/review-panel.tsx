@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import { useReviewSyncReader, useSync } from "@/features/collaboration/ui/sync-context";
 import { exportSaveBlocker } from "@/features/exports/ui/export-state";
@@ -223,7 +223,7 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
         </> : !readError && <p role="status">Loading candidate…</p>}
       </> : ui.selectedSnapshotId ? <>
         <button type="button" className="button quiet small review-back" onClick={() => selectSnapshot(null)}><Icon name="back" size={16} /><span>Back to history</span></button>
-        {selectedPublishedSnapshot ? <><CandidateReader key={selectedPublishedSnapshot.snapshot.id} detail={selectedPublishedSnapshot} /><ApprovedMarkdown key={selectedPublishedSnapshot.snapshot.id} published={selectedPublishedSnapshot} onAccessLost={onAccessLost} /></> : !readError && <p role="status">Loading baseline…</p>}
+        {selectedPublishedSnapshot ? <Fragment key={selectedPublishedSnapshot.snapshot.id}><CandidateReader detail={selectedPublishedSnapshot} /><ApprovedMarkdown published={selectedPublishedSnapshot} onAccessLost={onAccessLost} /></Fragment> : !readError && <p role="status">Loading baseline…</p>}
       </> : <>
       <ReviewHistory snapshots={snapshotPage} reviews={page} loading={!page && !readError} onOpenSnapshot={selectSnapshot} onOpenReview={select}
         onMoreSnapshots={cursor => void refreshSnapshots(cursor)} onMoreReviews={cursor => void refresh(cursor)} />
