@@ -2,11 +2,11 @@
 
 ## Resizable side panels (2026-10-11)
 
-Branch `feat/resizable-side-panels`, stacked on the Stage 9.2 pull request branch. Requested by the user: the docked Projects sidebar and right panel are resizable through an accessible window splitter (`src/features/shell/ui/panel-resizer.tsx`) by pointer, arrows, Home, End, Enter and double click. Pure limits live in `dock.ts` (`PANEL_WIDTHS`, `clampPanelWidth`, `parsePanelWidths`): sidebar 220 to 480 px, right panel 320 to 720 px, and the editor never drops below min(W, 560). Widths persist per browser in localStorage. Drag previews update the CSS width variables directly and commit once, so the Studio is not re-rendered per frame. No server, contract, migration or dependency change.
+Branch `feat/resizable-panels` from main `82b01da` (Stage 9.2 merged as #30). Requested by the user: the docked Projects sidebar and right panel are resizable through an accessible window splitter (`src/features/shell/ui/panel-resizer.tsx`) by pointer, arrows, Home, End, Enter and double click. Pure limits live in `dock.ts` (`PANEL_WIDTHS`, `clampPanelWidth`, `parsePanelWidths`): sidebar 220 to 480 px, right panel 320 to 720 px, and the editor never drops below min(W, 560). Widths persist per browser in localStorage. Drag previews update the CSS width variables directly and commit once, so the Studio is not re-rendered per frame. No server, contract, migration or dependency change.
 
 Evidence: lint 0, typecheck 0, unit 657/657 (three new dock tests), `corepack pnpm test:e2e:production tests/e2e/shell.spec.ts` 10/10 including the new resize test, and a dev-server check of drag, the 560 px editor floor, keyboard limits, reload persistence, resets, no splitter at 390 px and no console errors.
 
-Next: user decision on publishing this branch as its own pull request.
+Next: pull request review of `feat/resizable-panels` into main.
 
 ## Stage 9.2 review completion and Review UI refresh (2026-10-10)
 
@@ -50,7 +50,7 @@ Limitations: hosted CI, deployment, live providers and manual screen reader pass
 
 Manual happy-path walkthrough (2026-10-11) against the local dev server on 127.0.0.1:3100 with two local test accounts: an owner and an invited Reviewer as designated approver. It covered flow confirmation, invitation, approver assignment, preview, freeze, request changes, approval and publication, approved history, approved Markdown copy and download (byte-identical), saved work pending against baseline 1, rejection, withdrawal and the 320 px reader without horizontal overflow. It found one defect: opening an approved baseline rendered `CandidateReader` and `ApprovedMarkdown` as siblings with the same snapshot key, which React reports only in development. Commit `3156487` keys them once through a Fragment and adds `tests/jsx-keys.test.ts`, which failed on the previous source and passes now. After the fix: lint 0, typecheck 0, unit 654/654, `corepack pnpm test:e2e:production tests/e2e/reviews.spec.ts` 47/47 passed in 4.7 m, and no console errors on the Review panel at 1440 and 320 px. The walkthrough needed the operator pilot entitlement for the owner account and `NEXT_PUBLIC_APP_URL` set to the dev server origin, because writes from any other origin are refused. Screenshots stay local and uncommitted. A later pass showed History rendering an empty Approved baselines heading while the first baseline read was in flight; commit `9cedb7e` adds a Loading baselines status with a browser test that failed on the previous source and passes now. The Review spec then passed 47 of 48; the other, the narrow keyboard preview test, failed on `net::ERR_NO_BUFFER_SPACE` during `page.goto` (local loopback socket exhaustion) and passed alone.
 
-Next: pull request review of `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan` into main.
+Merged into main as #30 (`82b01da`) on 2026-10-11.
 
 ## External review findings follow-up (2026-10-10, closed)
 
