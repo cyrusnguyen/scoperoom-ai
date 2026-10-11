@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveDock } from "../src/features/shell/ui/dock.ts";
+import { clampPanelWidth, PANEL_WIDTHS, parsePanelWidths, resolveDock } from "../src/features/shell/ui/dock.ts";
 
 const widths = [1440, 1200, 1024, 900, 768, 390];
 
@@ -74,4 +74,30 @@ test("nothing docks below 560, and both dock only from 1220 upward", () => {
   assert(both1219.left !== "docked" || both1219.right !== "docked");
   const both1220 = resolveDock(1220, { leftOpen: true, rightOpen: true, lastOpened: "left" });
   assert.deepEqual({ left: both1220.left, right: both1220.right }, { left: "docked", right: "docked" });
+});
+
+test("panel widths clamp to their limits and keep the editor at least min(W, 560) wide", () => {
+  assert.equal(clampPanelWidth("left", 100), PANEL_WIDTHS.left.min);
+  assert.equal(clampPanelWidth("left", 900), PANEL_WIDTHS.left.max);
+  assert.equal(clampPanelWidth("right", 100), PANEL_WIDTHS.right.min);
+  assert.equal(clampPanelWidth("right", 900), PANEL_WIDTHS.right.max);
+  assert.equal(clampPanelWidth("right", 512.6), 513);
+  assert.equal(clampPanelWidth("right", Number.NaN), PANEL_WIDTHS.right.initial);
+  // 1440 wide with the 300 px sidebar docked leaves 580 for the right panel before the editor drops below 560.
+  assert.equal(clampPanelWidth("right", 700, { W: 1440, other: 300 }), 580);
+  assert.equal(clampPanelWidth("left", 470, { W: 1440, other: 720 }), PANEL_WIDTHS.left.min);
+  assert.equal(clampPanelWidth("left", 400, { W: 1440, other: 360 }), 400);
+});
+
+test("stored panel widths are read defensively", () => {
+  assert.deepEqual(parsePanelWidths(null), { left: 300, right: 360 });
+  assert.deepEqual(parsePanelWidths({ left: 260, right: 540 }), { left: 260, right: 540 });
+  assert.deepEqual(parsePanelWidths({ left: "wide", right: 9999 }), { left: 300, right: PANEL_WIDTHS.right.max });
+  assert.deepEqual(parsePanelWidths([1, 2]), { left: 300, right: 360 });
+});
+
+test("resized panels change docking and the editor width", () => {
+  assert.deepEqual(resolveDock(1440, { leftOpen: true, rightOpen: true, lastOpened: "right", leftW: 260, rightW: 560 }), { left: "docked", right: "docked", editor: 620 });
+  // A 720 px right panel at 1280 leaves room for the editor but not the sidebar, so the sidebar closes (right opened last).
+  assert.deepEqual(resolveDock(1280, { leftOpen: true, rightOpen: true, lastOpened: "right", rightW: 720 }), { left: "closed", right: "docked", editor: 560 });
 });

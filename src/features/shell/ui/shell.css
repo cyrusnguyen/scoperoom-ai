@@ -85,6 +85,14 @@
 .detail-facts dt { color: var(--foreground-muted); }
 .detail-facts dd { margin: 0; overflow-wrap: anywhere; text-align: right; }
 
+/* Resizable docked panels (panel-resizer.tsx): an 8 px splitter straddles the panel edge; its negative margins keep the layout width unchanged. */
+.panel-resizer { position: relative; z-index: 15; flex: 0 0 8px; width: 8px; margin: 0 -4px; cursor: col-resize; touch-action: none; outline: none; }
+.panel-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; background: transparent; pointer-events: none; transition: background-color var(--duration) var(--ease); }
+.panel-resizer:hover::after, .app-shell[data-resizing] .panel-resizer:focus::after { background: var(--accent); }
+.panel-resizer:focus-visible::after { left: calc(50% - 2px); width: 4px; background: var(--focus-ring); }
+.app-shell[data-resizing] { cursor: col-resize; user-select: none; }
+.app-shell[data-resizing] :is(.sidebar-slot, .editor-slot, .right-panel) { pointer-events: none; }
+
 /* Controls and dialogs */
 .button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 6px 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface); font-size: 13px; font-weight: 500; line-height: 1.35; transition: background var(--duration) var(--ease), border-color var(--duration) var(--ease); }
 .button:hover:not(:disabled) { border-color: var(--foreground-subtle); background: var(--surface-raised); }

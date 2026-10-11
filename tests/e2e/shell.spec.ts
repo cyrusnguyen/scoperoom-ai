@@ -172,6 +172,64 @@ test.describe("project shell", () => {
     });
   });
 
+  test("docked panels resize by pointer and keyboard, keep the editor at least 560 px wide and remember their widths", async ({ page }) => {
+    await mockShell(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/app/projects/${ids.alpha}`);
+    await expect(page.getByRole("heading", { level: 1, name: "Alpha plan" })).toBeVisible();
+    await page.getByRole("button", { name: "Inspect" }).click();
+    const panel = page.locator("#right-panel");
+    await expect(panel).toHaveAttribute("data-dock", "docked");
+    const left = page.getByRole("separator", { name: "Resize projects sidebar" });
+    const right = page.getByRole("separator", { name: "Resize project panel" });
+    await expect(left).toHaveAttribute("aria-valuenow", "300");
+    await expect(right).toHaveAttribute("aria-valuenow", "360");
+    const panelWidth = () => panel.evaluate((element) => Math.round(element.getBoundingClientRect().width));
+    const drag = async (by: number) => {
+      const box = (await right.boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, 400);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + by, 400, { steps: 6 });
+      await page.mouse.up();
+    };
+
+    await drag(-200);
+    await expect(right).toHaveAttribute("aria-valuenow", "560");
+    expect(await panelWidth()).toBe(560);
+    expect(await editorWidth(page)).toBe(580);
+    // Past the room the panel stops where the editor keeps 560 px beside the 300 px sidebar.
+    await drag(-600);
+    await expect(right).toHaveAttribute("aria-valuenow", "580");
+    expect(await editorWidth(page)).toBe(560);
+
+    await left.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(left).toHaveAttribute("aria-valuenow", "284");
+    await page.keyboard.press("Home");
+    await expect(left).toHaveAttribute("aria-valuenow", "220");
+    expect(await sidebar(page).evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(220);
+    expect(await editorWidth(page)).toBe(640);
+
+    await page.reload();
+    await expect(page.getByRole("heading", { level: 1, name: "Alpha plan" })).toBeVisible();
+    await page.getByRole("button", { name: "Inspect" }).click();
+    await expect(right).toHaveAttribute("aria-valuenow", "580");
+    await expect(left).toHaveAttribute("aria-valuenow", "220");
+    expect(await editorWidth(page)).toBe(640);
+
+    await right.dblclick();
+    await expect(right).toHaveAttribute("aria-valuenow", "360");
+    await left.focus();
+    await page.keyboard.press("Enter");
+    await expect(left).toHaveAttribute("aria-valuenow", "300");
+    expect(await editorWidth(page)).toBe(780);
+
+    // An overlay keeps its responsive width and offers no splitter.
+    await page.setViewportSize({ width: 768, height: 800 });
+    await expect(panel).toHaveAttribute("data-dock", "overlay");
+    await expect(page.getByRole("separator")).toHaveCount(0);
+  });
+
   test("a late response for the previous project never renders in the next one", async ({ page }) => {
     await mockShell(page);
     await page.route(`**/api/projects/${ids.alpha}/bootstrap`, async (route) => {

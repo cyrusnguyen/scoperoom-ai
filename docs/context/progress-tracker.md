@@ -1,5 +1,13 @@
 # Progress tracker
 
+## Resizable side panels (2026-10-11)
+
+Branch `feat/resizable-side-panels`, stacked on the Stage 9.2 pull request branch. Requested by the user: the docked Projects sidebar and right panel are resizable through an accessible window splitter (`src/features/shell/ui/panel-resizer.tsx`) by pointer, arrows, Home, End, Enter and double click. Pure limits live in `dock.ts` (`PANEL_WIDTHS`, `clampPanelWidth`, `parsePanelWidths`): sidebar 220 to 480 px, right panel 320 to 720 px, and the editor never drops below min(W, 560). Widths persist per browser in localStorage. Drag previews update the CSS width variables directly and commit once, so the Studio is not re-rendered per frame. No server, contract, migration or dependency change.
+
+Evidence: lint 0, typecheck 0, unit 657/657 (three new dock tests), `corepack pnpm test:e2e:production tests/e2e/shell.spec.ts` 10/10 including the new resize test, and a dev-server check of drag, the 560 px editor floor, keyboard limits, reload persistence, resets, no splitter at 390 px and no console errors.
+
+Next: user decision on publishing this branch as its own pull request.
+
 ## Stage 9.2 review completion and Review UI refresh (2026-10-10)
 
 Branch `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan`, from main `46ea382`. The Stage 9.2 decisions, publication and approved Markdown work, including its external-review corrections, was copied byte for byte from the Stage 9.2 implementation worktree as baseline `0bfaabb`. Code commits `0996f91` through `38f950c` finish the review fixes and refresh the Review and Approval UI; docs commits `0fb5cc0` and `8351aac` record the review completion, qualification and external review follow-up; the final-review polish commit `705aa19` (Review tones, labels and counters) and the docs commits that follow it close the whole-branch review's Minor findings. No migration, dependency, API route, server service, SQL or contract changed after the baseline; the local database keeps its 32 migrations.
