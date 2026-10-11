@@ -4,6 +4,7 @@ import { id, invalid, keys, object, oneOf, text, version } from "../../drafts/co
 import { lineStarts, SOURCE_LIMITS, type SourceVersionView } from "../../sources/contracts/source-version.ts";
 export const REVIEW_BODY_LIMIT = 4 * 1024;
 export const WITHDRAW_BODY_LIMIT = 32 * 1024;
+export const DECISION_BODY_LIMIT = 32 * 1024;
 export type FreezeInput = {
   expectedDocumentRevision: number;
   expectedLayoutRevision: number;
@@ -122,7 +123,7 @@ export type ReviewDetail = {
     publishedAt: string | null;
   };
   snapshot: CandidateSnapshot;
-  decision: null;
+  decision: ReviewDecision | null;
   draftChanges: {
     replaced: boolean;
     contentChanged: boolean;
@@ -228,3 +229,95 @@ export function parseWithdrawResult(raw: unknown): WithdrawResult {
     reviewId: id(body.reviewId), reviewVersion: version(body.reviewVersion), state: "WITHDRAWN", eventSequence: reviewCounter(body.eventSequence)
   };
 }
+
+export const REVIEW_DECISIONS = ["APPROVE", "REQUEST_CHANGES", "REJECT"] as const;
+export type DecisionInput = {
+  decision: typeof REVIEW_DECISIONS[number];
+  expectedReviewVersion: number;
+  expectedReviewHash: string;
+  reason?: string;
+};
+export type ReviewDecision = {
+  id: string;
+  projectId: string;
+  reviewId: string;
+  actorId: string;
+  actorDisplayName: string | null;
+  actorRole: "OWNER" | "EDITOR" | "REVIEWER" | null;
+  decision: DecisionInput["decision"];
+  comment: string | null;
+  reviewedHash: string;
+  createdAt: string;
+};
+export type DecisionResult = {
+  reviewId: string;
+  decisionId: string;
+  reviewVersion: number;
+  state: "APPROVED" | "CHANGES_REQUESTED" | "REJECTED";
+  publicationSequence: number | null;
+  publishedAt: string | null;
+  approvedSnapshotId: string | null;
+  baselineSequence: number;
+  draftId: string;
+  documentRevision: number;
+  layoutRevision: number;
+  eventSequence: number;
+};
+export function parseDecision(raw: unknown): DecisionInput {
+  const body = object(raw);
+  keys(body, ["decision", "expectedReviewVersion", "expectedReviewHash"], ["reason"]);
+  const decision = oneOf(body.decision, REVIEW_DECISIONS);
+  const reason = Object.hasOwn(body, "reason") ? text(body.reason, 4000, decision !== "APPROVE") : undefined;
+  if (decision !== "APPROVE" && reason === undefined) invalid();
+  return {
+    decision, expectedReviewVersion: version(body.expectedReviewVersion), expectedReviewHash: reviewHashValue(body.expectedReviewHash),
+    ...(reason === undefined ? {} : { reason }),
+  };
+}
+export function parseReviewDecision(raw: unknown): ReviewDecision {
+  const body = object(raw);
+  keys(body, ["id", "projectId", "reviewId", "actorId", "actorDisplayName", "actorRole", "decision", "comment", "reviewedHash", "createdAt"]);
+  const decision = oneOf(body.decision, REVIEW_DECISIONS);
+  const actorDisplayName = body.actorDisplayName === null ? null : text(body.actorDisplayName, 120, true);
+  const actorRole = body.actorRole === null ? null : oneOf(body.actorRole, ["OWNER", "EDITOR", "REVIEWER"] as const);
+  if ((actorDisplayName === null) !== (actorRole === null)) invalid();
+  const comment = body.comment === null ? null : text(body.comment, 4000, decision !== "APPROVE");
+  if (decision !== "APPROVE" && comment === null) invalid();
+  return {
+    id: id(body.id), projectId: id(body.projectId), reviewId: id(body.reviewId), actorId: id(body.actorId), actorDisplayName, actorRole, decision,
+    comment, reviewedHash: reviewHashValue(body.reviewedHash), createdAt: timestamp(body.createdAt),
+  };
+}
+export function parseDecisionResult(raw: unknown): DecisionResult {
+  const body = object(raw);
+  keys(body, ["reviewId", "decisionId", "reviewVersion", "state", "publicationSequence", "publishedAt", "approvedSnapshotId", "baselineSequence", "draftId", "documentRevision", "layoutRevision", "eventSequence"]);
+  const state = oneOf(body.state, ["APPROVED", "CHANGES_REQUESTED", "REJECTED"] as const);
+  const publicationSequence = body.publicationSequence === null ? null : reviewCounter(body.publicationSequence);
+  const publishedAt = body.publishedAt === null ? null : timestamp(body.publishedAt);
+  const approvedSnapshotId = body.approvedSnapshotId === null ? null : id(body.approvedSnapshotId);
+  const baselineSequence = reviewCounter(body.baselineSequence);
+  if (state === "APPROVED" ? !publicationSequence || publishedAt === null || approvedSnapshotId === null || publicationSequence !== baselineSequence : publicationSequence !== null || publishedAt !== null) invalid();
+  if ((approvedSnapshotId === null) !== (baselineSequence === 0)) invalid();
+  return {
+    reviewId: id(body.reviewId), decisionId: id(body.decisionId), reviewVersion: version(body.reviewVersion), state,
+    publicationSequence, publishedAt, approvedSnapshotId, baselineSequence, draftId: id(body.draftId),
+    documentRevision: version(body.documentRevision), layoutRevision: version(body.layoutRevision), eventSequence: reviewCounter(body.eventSequence),
+  };
+}
+
+export type PublishedSnapshot = {
+  snapshot: CandidateSnapshot;
+  reviewId: string;
+  publicationSequence: number;
+  publishedAt: string;
+  decision: ReviewDecision;
+};
+export type SnapshotSummary = {
+  snapshotId: string;
+  reviewId: string;
+  publicationSequence: number;
+  publishedAt: string;
+  publishedBy: string;
+  reviewHash: string;
+};
+export type SnapshotPage = { items: SnapshotSummary[]; nextCursor: string | null; baselineSequence: number };

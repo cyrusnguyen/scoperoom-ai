@@ -23,3 +23,10 @@ test("issuance accepts only invited roles and rejects extra fields", () => {
   assert.throws(() => validateInvitationIssueInput({ verifiedEmail: "a@example.test", role: "OWNER", key }), /INVALID_INPUT/);
   assert.throws(() => validateInvitationIssueInput({ verifiedEmail: "a@example.test", role: "EDITOR", key, workspaceId: invitationId }), /INVALID_INPUT/);
 });
+
+test("invitation email rejects NUL and malformed Unicode and keeps its UTF-16 bound", () => {
+  for (const part of ["bad\u0000", "bad\ud800", "bad\udc00"])
+    assert.throws(() => normalizeVerifiedEmail(part + "@example.test"), /INVALID_INPUT/);
+  assert.equal(normalizeVerifiedEmail("😀".repeat(120) + "@example.test").length, 253);
+  assert.throws(() => normalizeVerifiedEmail("😀".repeat(121) + "@example.test"), /INVALID_INPUT/);
+});

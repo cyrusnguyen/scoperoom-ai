@@ -1,3 +1,6 @@
+import { candidateFixture, addFlow, ids } from "../support/review-fixtures.ts";
+import { updateApprovalPolicy } from "../../src/features/projects/server/management.ts";
+import { freezeReview, decideReview } from "../../src/features/reviews/server/reviews.ts";
 import { seedSnapshot } from "../support/snapshot-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -710,4 +713,51 @@ test("hash-consistent malformed legacy captures cannot gain direct Apply authori
       assert.deepEqual(await state(), before, shape);
     });
   }
+});
+
+
+test("real approval stales old-parent proposal and replays committed Start before new Generate and Improve admissions", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, database }) => {
+    const owner = await person(), projectId = await projectFor(owner), draftId = (await draftOf(database, projectId)).id;
+    const fixture = candidateFixture(); addFlow(fixture.draft);
+    for (const record of [...Object.values(fixture.draft.document.flows), ...Object.values(fixture.draft.document.requirements)]) if (record.confirmation) record.confirmation.actorId = owner.profile;
+    await database.query("update app.scope_draft set document_json=$2,layout_json=$3 where id=$1", [draftId, fixture.draft.document, fixture.draft.layout]);
+    await updateApprovalPolicy(owner.identity, projectId, { key: randomUUID(), expectedApprovalPolicyVersion: 1, designatedApproverId: owner.profile });
+    const completed = await seedRun(database, { projectId, owner: owner.profile, shape: "SUCCEEDED", result: generatedProposal });
+    const original = await readRun(owner.identity, projectId, completed); assert.equal(original.applicability, "APPLICABLE");
+    const originalInput = parseStartRunInput({ taskType: "PROPOSE_FLOW", prompt: "Uncertain committed old parent", draftId, expectedDocumentRevision: 1, expectedParentSnapshotId: null, context: { selection: null, sources: [] } }, randomUUID());
+    const admitted = await admitRun(owner.identity, projectId, originalInput, CONFIG);
+    const frozen = await freezeReview(owner.identity, projectId, draftId, { expectedDocumentRevision: 1, expectedLayoutRevision: 1, expectedParentSnapshotId: null, expectedApprovalPolicyVersion: 2 }, randomUUID());
+    const before = (await database.query("select * from app.scope_draft where id=$1", [draftId])).rows[0];
+    await decideReview(owner.identity, projectId, frozen.reviewId, { decision: "APPROVE", expectedReviewVersion: frozen.reviewVersion, expectedReviewHash: frozen.reviewHash }, randomUUID());
+    assert.deepEqual((await database.query("select * from app.scope_draft where id=$1", [draftId])).rows[0], { ...before, base_snapshot_id: frozen.snapshotId });
+    const stale = await readRun(owner.identity, projectId, completed);
+    assert.equal(stale.applicability, "STALE"); assert.deepEqual(stale.applicabilityReasons, ["BASELINE_CHANGED"]);
+    assert.deepEqual(stale.capture, original.capture); assert.deepEqual(stale.result, original.result);
+    await assert.rejects(applyRun(owner.identity, projectId, completed, { key: randomUUID(), draftId, expectedDocumentRevision: 1, expectedParentSnapshotId: null, resultHash: original.resultHash!, selectedOperationIds: ["flow", "step"] }), { code: "BASELINE_CHANGED" });
+    const count = await database.query("select count(*)::int n from app.ai_run where project_id=$1", [projectId]);
+    assert.deepEqual(await admitRun(owner.identity, projectId, originalInput, CONFIG), { ...admitted, replayed: true });
+    assert.deepEqual((await database.query("select count(*)::int n from app.ai_run where project_id=$1", [projectId])).rows, count.rows);
+    assert.equal((await readRun(owner.identity, projectId, admitted.runId)).parentSnapshotId, null);
+    await cancelRun(owner.identity, projectId, admitted.runId, randomUUID());
+    await database.query("select app.finish_ai_run($1, 'CANCELLED', null)", [admitted.runId]);
+    // The INSERT guard binds null and nonnull captures; a matching foreign parent still fails the scoped FK.
+    const foreign = await seedSnapshot(database, await projectFor(owner));
+    for (const [parent, captured, code] of [[frozen.snapshotId, null, "23514"], [null, frozen.snapshotId, "23514"], [frozen.snapshotId, foreign, "23514"], [foreign, foreign, "23503"]] as const) {
+      const capture = { ...original.capture!, parentSnapshotId: captured };
+      await assert.rejects(database.query(`insert into app.ai_run (id,project_id,draft_id,actor_id,owner_id,admission_day,prompt_source_version_id,task_type,model,execution_binding,capture,capture_hash,expected_document_revision,parent_snapshot_id,deadline_at,created_at)
+        select gen_random_uuid(),project_id,draft_id,actor_id,owner_id,admission_day,prompt_source_version_id,task_type,model,execution_binding,$2::jsonb,$3,expected_document_revision,$4::uuid,deadline_at,created_at from app.ai_run where id=$1`,
+        [completed, JSON.stringify(capture), sha256(canonicalJson(capture)), parent]), { code });
+    }
+    for (const selection of [null, { flowId: ids.flow, nodeIds: [ids.node] }]) {
+      const input = parseStartRunInput({ taskType: selection ? "REFINE_FLOW_SELECTION" : "PROPOSE_FLOW", prompt: selection ? "Improve real baseline" : "Generate real baseline", draftId, expectedDocumentRevision: 1, expectedParentSnapshotId: frozen.snapshotId, context: { selection, sources: [] } }, randomUUID());
+      const next = await admitRun(owner.identity, projectId, input, CONFIG), view = await readRun(owner.identity, projectId, next.runId);
+      assert.equal(view.parentSnapshotId, frozen.snapshotId); assert.equal(view.capture?.parentSnapshotId, frozen.snapshotId);
+      assert.equal(view.taskType, input.taskType); assert.equal(view.documentRevision, 1);
+      await cancelRun(owner.identity, projectId, next.runId, randomUUID());
+      await database.query("select app.finish_ai_run($1, 'CANCELLED', null)", [next.runId]);
+    }
+    assert.equal((await database.query("select count(*)::int n from app.ai_run_attempt a join app.ai_run r on r.id=a.run_id where r.project_id=$1", [projectId])).rows[0].n, 0);
+    assert.deepEqual((await database.query("select * from app.scope_draft where id=$1", [draftId])).rows[0], { ...before, base_snapshot_id: frozen.snapshotId });
+  });
 });

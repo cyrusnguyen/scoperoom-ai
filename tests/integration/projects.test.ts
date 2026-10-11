@@ -167,3 +167,13 @@ test("status carries the draft, revision, epoch and sequence fields; outsiders g
     await assert.rejects(getProjectBootstrap(outsider, projectId), code("NOT_FOUND"));
   });
 });
+
+test("invalid project names return INVALID_INPUT without writes", { skip: !canRun }, async () => {
+  await withFixture(async f => {
+    const owner = await f.user(); await f.entitle(owner); const actorId = await f.profileId(owner);
+    const state = async () => (await f.database.query("select (select count(*)::int from app.project where owner_id=$1) projects,(select count(*)::int from app.audit_event where actor_id=$1) events,(select count(*)::int from app.mutation_receipt where actor_id=$1) receipts", [actorId])).rows[0];
+    const before = await state();
+    for (const name of ["Bad\u0000name", "Bad\ud800name", "Bad\udc00name"]) await assert.rejects(createProject(owner, { name, key: randomUUID() }), code("INVALID_INPUT"));
+    assert.deepEqual(await state(), before);
+  });
+});

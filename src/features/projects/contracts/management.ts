@@ -1,3 +1,4 @@
+import { text } from "../../drafts/contracts/strict.ts";
 import { uuid } from "./project.ts";
 import { projectMemberRoles } from "./invitation.ts";
 
@@ -46,7 +47,7 @@ function key(value: unknown) {
 function name(value: unknown) {
   if (typeof value !== "string") invalidInput();
   const normalized = value.normalize("NFC").trim();
-  if (!normalized || Array.from(normalized).length > 120) invalidInput();
+  text(normalized, 120, true);
   return normalized;
 }
 
@@ -90,7 +91,7 @@ export function validateProjectArchiveInput(input: unknown): ProjectArchiveInput
   const value = only(object(input), ["expectedProjectVersion", "reason", "key"]);
   if (typeof value.reason !== "string") invalidInput();
   const reason = value.reason.normalize("NFC").trim();
-  if (!reason || Array.from(reason).length > 1_000) invalidInput();
+  text(reason, 1_000, true);
   return { expectedProjectVersion: version(value.expectedProjectVersion), reason, key: key(value.key) };
 }
 

@@ -8,7 +8,7 @@ export type ApiResult<T> =
 export const SESSION_ENDED = "scoperoom:session-ended";
 const unavailable = "ScopeRoom is unavailable right now. Try again.";
 
-async function settle<T>(request: () => Promise<Response>): Promise<ApiResult<T>> {
+async function settle<T>(request: () => Promise<Response>, textSuccess = false): Promise<ApiResult<T>> {
   let response: Response;
   try {
     response = await request();
@@ -17,7 +17,7 @@ async function settle<T>(request: () => Promise<Response>): Promise<ApiResult<T>
     return { ok: false, code: "NETWORK", message: "We could not reach ScopeRoom. Check your connection and retry.", status: 0, uncertain: true };
   }
   let body: unknown = null;
-  try { body = await response.json(); } catch { /* A non-JSON body is treated as unavailable below. */ }
+  try { body = response.ok && textSuccess ? await response.text() : await response.json(); } catch { /* An unreadable body is treated as unavailable below. */ }
   if (response.ok && body !== null) return { ok: true, data: body as T };
   const error = (body as Partial<ErrorBody> | null)?.error;
   // A 2xx without a readable body is also uncertain: a mutation may have committed.
@@ -27,6 +27,11 @@ async function settle<T>(request: () => Promise<Response>): Promise<ApiResult<T>
 
 export function apiRead<T>(url: string, signal?: AbortSignal): Promise<ApiResult<T>> {
   return settle<T>(() => fetch(url, { cache: "no-store", signal }));
+}
+
+/** Authenticated text success with the same JSON error envelope and session handling. */
+export function apiReadText(url: string, signal?: AbortSignal): Promise<ApiResult<string>> {
+  return settle<string>(() => fetch(url, { cache: "no-store", signal }), true);
 }
 
 /** A same-origin POST with no body and no Idempotency-Key, for an endpoint that writes nothing (the Realtime credential). */

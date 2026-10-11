@@ -33,3 +33,20 @@ export function addFlow(draft: DraftView) {
   addNode(draft, reviewIds.outcome, "OUTCOME");
   addEdge(draft, reviewIds.edge, ids.node, reviewIds.outcome);
 }
+
+export function publishedFixture(): import("../../src/features/reviews/contracts/review.ts").PublishedSnapshot {
+  const { draft } = candidateFixture();
+  const snapshot = {
+    canonicalizationVersion: 1 as const, schemaVersion: 3 as const,
+    projectId: "30000000-0000-4000-8000-000000000001", projectName: "Card checkout", sourceDraftId: draft.id,
+    capturedDocumentRevision: 1, capturedLayoutRevision: 1, documentJson: draft.document, layoutJson: draft.layout,
+    evidenceManifest: [], policySnapshot: { designatedApproverId: ids.actor, approvalPolicyVersion: 2 },
+    parentSnapshotId: null, agreementIntent: "INCLUDED_SCOPE" as const, requestResolution: null,
+    id: "30000000-0000-4000-8000-000000000002", contentHash: "a".repeat(64), reviewHash: "b".repeat(64), createdBy: ids.actor, createdAt: NOW,
+  };
+  const reviewId = "30000000-0000-4000-8000-000000000003";
+  return { snapshot, reviewId, publicationSequence: 1, publishedAt: NOW, decision: {
+    id: "30000000-0000-4000-8000-000000000004", projectId: snapshot.projectId, reviewId, actorId: ids.actor, actorDisplayName: "Named reviewer", actorRole: "REVIEWER",
+    decision: "APPROVE", comment: null, reviewedHash: snapshot.reviewHash, createdAt: NOW,
+  } };
+}

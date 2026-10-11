@@ -9,6 +9,7 @@ import {
 import type { SpecsUi } from "@/features/shell/ui/project-ui";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import { confirmationCurrent } from "../domain/scope";
+import { REQUIREMENT_CATEGORY_LABELS } from "./requirement-labels";
 import { requirementTextError } from "./requirement-text";
 import type { useSpecsWrite } from "./use-specs-write";
 import RequirementActions from "./requirement-actions";
@@ -31,11 +32,7 @@ type Values = {
   verificationDescription: string;
   responsibleRole: string;
 };
-const categories: Array<[RequirementCategory, string]> = [
-  ["FUNCTIONAL", "Functional"],
-  ["NON_FUNCTIONAL", "Non-functional"],
-  ["CONSTRAINT", "Constraint"],
-];
+const categories = Object.entries(REQUIREMENT_CATEGORY_LABELS) as Array<[RequirementCategory, string]>;
 const inclusions: Array<[RequirementRecord["inclusion"], string]> = [
   ["INCLUDED", "Included"],
   ["UNDECIDED", "Undecided"],

@@ -14,3 +14,8 @@ test("project creation input rejects unknown fields, bad names and bad keys", ()
   assert.throws(() => validateProjectCreateInput({ ...valid, key: "k".repeat(15) }), /INVALID_INPUT/);
   assert.throws(() => validateProjectCreateInput(null), /INVALID_INPUT/);
 });
+
+test("project names reject NUL and malformed Unicode", () => {
+  for (const name of ["Bad\u0000name", "Bad\ud800name", "Bad\udc00name"])
+    assert.throws(() => validateProjectCreateInput({ name, key: "k".repeat(16) }), /INVALID_INPUT/);
+});

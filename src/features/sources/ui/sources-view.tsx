@@ -14,8 +14,8 @@ import {
 import { acceptFirstPage, appendSourcePage, appendVersionPage, canLoadMore, listKey, type SourceList, type VersionList } from "./source-pages";
 import { editSourceCorrection, reconcileSourceCorrection, sourceCorrectionBody, type SourceCorrection } from "./source-correction";
 import SourceLines from "./source-lines";
+import { SOURCE_KIND_LABELS } from "./source-labels";
 
-const KIND_LABELS: Record<SourceHead["kind"], string> = { USER_TEXT: "Pasted", USER_UPLOAD: "Uploaded", PROMOTED_GRAPH: "Saved flow", QUESTION_ANSWER: "Answer", AI_PROMPT: "AI instruction" };
 const SCOPES: Array<[SourceScope, string]> = [["user", "Active"], ["archived", "Archived"], ["internal", "Internal"]];
 const EMPTY: Record<SourceScope, string> = { user: "No active sources", archived: "No archived sources", internal: "No internal evidence yet" };
 const NEW_TITLE = "specs:new-source:title", NEW_TEXT = "specs:new-source:text", NEW_UPLOAD_NAME = "specs:new-source:upload-name";
@@ -158,7 +158,7 @@ export default function SourcesView({ ui, update, drafts, setDraft, write, saved
             : <ul className="sources-list">{page.items.map((item) => <li key={item.id}>
               <button type="button" className="specs-card" data-source-id={item.id} onClick={() => { setRefocus((count) => count + 1); update(() => ({ selected: { kind: "source", sourceId: item.id, versionId: null, back: ui.selected } })); }}>
                 <strong>{item.displayNickname ?? item.title}</strong>
-                <span className="specs-badge">{KIND_LABELS[item.kind]} · v{item.currentSequence} · {item.versionCount} {item.versionCount === 1 ? "version" : "versions"}{item.archived ? " · Archived" : ""}</span>
+                <span className="specs-badge">{SOURCE_KIND_LABELS[item.kind]} · v{item.currentSequence} · {item.versionCount} {item.versionCount === 1 ? "version" : "versions"}{item.archived ? " · Archived" : ""}</span>
               </button></li>)}
             </ul>}
           {list.canLoadMore && <button type="button" className="button small" onClick={list.more}>Load more</button>}
@@ -301,7 +301,7 @@ function Reader({ selected, correction, head, headFailed, canEdit, update, refoc
   return <div className="source-reader">
     {back}
     <h3 ref={heading} tabIndex={-1}>{head.displayNickname ?? view?.title ?? head.title}</h3>
-    <p className="muted">{KIND_LABELS[head.kind]}{head.archived ? " · Archived" : ""}</p>
+    <p className="muted">{SOURCE_KIND_LABELS[head.kind]}{head.archived ? " · Archived" : ""}</p>
     {current?.error ? <p role="alert">{current.error} <button type="button" className="button small" onClick={() => setReadAttempt((value) => value + 1)}>Retry version</button></p> : !view ? <p role="status">Loading version…</p> : <>
       <div className="sources-filter">
         <p className="muted">Viewing v{view.sequence}; latest v{head.currentSequence}</p>

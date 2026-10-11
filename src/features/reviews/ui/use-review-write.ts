@@ -4,8 +4,8 @@ import { apiMutate, sessionEnded } from "@/client/api";
 import { useSync } from "@/features/collaboration/ui/sync-context";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import { studioDirtyCount } from "@/features/studio/ui/studio-ui";
-import type { FreezeResult, ReviewPreview, WithdrawResult } from "../contracts/review";
-import { previewMatches, reserveReview, settleReview, type ReviewReceipt, type ReviewRequestAttempt, type ReviewUi } from "./review-state";
+import type { DecisionResult, FreezeResult, ReviewDetail, ReviewPreview, WithdrawResult } from "../contracts/review";
+import { canDecideReview, previewMatches, reserveReview, settleReview, type ReviewReceipt, type ReviewRequestAttempt, type ReviewUi } from "./review-state";
 
 export function useReviewWrite(ui: ReviewUi, update: (change: (ui: ReviewUi) => Partial<ReviewUi>) => void, dirty: () => boolean, refresh: (receipt: ReviewReceipt) => Promise<boolean>, accessLost: () => void) {
   const { beforeWrite, fence, invalidate, revalidate, status } = useSync();
@@ -19,7 +19,8 @@ export function useReviewWrite(ui: ReviewUi, update: (change: (ui: ReviewUi) => 
     update(current => current.pending?.key === request.key ? {
       ...settleReview(current, request.key, "acknowledged", `${request.label} was acknowledged. Refresh saved changes to finish.`),
       pending: { ...current.pending, acknowledged: true, ...(receipt ? { receipt } : {}) },
-      ...(receipt ? { selectedReviewId: receipt.reviewId, section: "history" } : {}),
+      // Preserve an explicit History selection while the receipt settles independently.
+      ...(receipt && !current.selectedSnapshotId && (current.section === "current" || !current.selectedReviewId || current.selectedReviewId === receipt.reviewId) ? { selectedReviewId: receipt.reviewId, section: "history" } : {}),
     } : {});
   }
   async function acknowledged(request: ReviewRequestAttempt, receipt?: ReviewReceipt) {
@@ -27,7 +28,7 @@ export function useReviewWrite(ui: ReviewUi, update: (change: (ui: ReviewUi) => 
     // A response-less acknowledgement still needs exact receipt recovery; an unrelated history read proves nothing.
     if (receipt && await refresh(receipt)) settle(request, "saved", `${request.label}: saved.`);
   }
-  async function run(request: ReviewRequestAttempt, retry: boolean, preview?: ReviewPreview) {
+  async function run(request: ReviewRequestAttempt, retry: boolean, preview?: ReviewPreview, decision?: ReviewDetail) {
     if (sending.current) return;
     sending.current = true; setBusy(true);
     let release: (() => void) | null = null;
@@ -36,7 +37,8 @@ export function useReviewWrite(ui: ReviewUi, update: (change: (ui: ReviewUi) => 
       if (authority.kind !== "current") { settle(request, retry ? "uncertain" : "refused", "Could not check current access. Retry after refresh."); return; }
       const live = fence(authority.generation);
       if (!live()) { settle(request, retry ? "uncertain" : "refused", "The project changed. Nothing was sent."); return; }
-      if (!retry && (authority.status.status !== "ACTIVE" || !["OWNER", "EDITOR"].includes(authority.status.role) || latest.current.dirty() || latest.current.studio.busy || studioDirtyCount(latest.current.studio.ui) > 0)) { settle(request, "refused", "Resolve unsaved fields or writes before starting a review action. This project must be editable."); return; }
+      if (!retry && decision && (!canDecideReview(decision, authority.status) || latest.current.ui.selectedReviewId !== decision.review.reviewId)) { settle(request, "refused", "Only the current designated approver can decide this open candidate. Your input is retained."); return; }
+      if (!retry && !decision && (authority.status.status !== "ACTIVE" || !["OWNER", "EDITOR"].includes(authority.status.role) || latest.current.dirty() || latest.current.studio.busy || studioDirtyCount(latest.current.studio.ui) > 0)) { settle(request, "refused", "Resolve unsaved fields or writes before starting a review action. This project must be editable."); return; }
       if (!retry && preview) {
         if (!previewMatches(preview, authority.status, latest.current.studio.exportDirty)) { settle(request, "refused", "Saved changes affected this preview. Preview saved scope again."); return; }
         let receipt: FreezeResult | undefined;
@@ -54,7 +56,7 @@ export function useReviewWrite(ui: ReviewUi, update: (change: (ui: ReviewUi) => 
         if (!release) { settle(request, "refused", "Another project write is in progress. Try again after it finishes."); return; }
       }
       // An existing request recovers its receipt with current read access, even after downgrade or draft replacement.
-      const result = await apiMutate<FreezeResult | WithdrawResult>(`/api/projects/${studio.projectId}/${request.path}`, request.key, request.body, request.method);
+      const result = await apiMutate<FreezeResult | WithdrawResult | DecisionResult>(`/api/projects/${studio.projectId}/${request.path}`, request.key, request.body, request.method);
       if (!live()) { if (result.ok) settle(request, "acknowledged", `${request.label} was acknowledged. Refresh saved changes to finish.`); else settle(request, result.uncertain || result.status === 401 ? "uncertain" : "refused", `We couldn’t confirm ${request.label}. Retry sends the same request.`); return; }
       if (sessionEnded(result)) return;
       if (result.ok) { await acknowledged(request, result.data); void revalidate("manual"); }
@@ -62,11 +64,11 @@ export function useReviewWrite(ui: ReviewUi, update: (change: (ui: ReviewUi) => 
       else { settle(request, "refused", String(result.details?.reason ?? result.message)); if (result.status === 403 || result.status === 404) accessLost(); else void revalidate("manual"); }
     } finally { release?.(); sending.current = false; setBusy(false); }
   }
-  function send(path: string, body: Record<string, unknown>, label: string, preview?: ReviewPreview) {
+  function send(path: string, body: Record<string, unknown>, label: string, preview?: ReviewPreview, decision?: ReviewDetail) {
     if (ui.pending || sending.current) return;
     const request: ReviewRequestAttempt = { key: crypto.randomUUID(), method: "POST", path, body, label, acknowledged: false };
     update(current => reserveReview(current, request) ?? {});
-    return run(request, false, preview);
+    return run(request, false, preview, decision);
   }
   return { busy, send, retry: () => ui.pending ? run(ui.pending, true) : undefined };
 }

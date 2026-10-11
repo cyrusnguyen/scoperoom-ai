@@ -204,7 +204,7 @@ export default function ProjectDetails({ bootstrap, drafts, setDraft, onChanged,
         <h3 id="details-members" tabIndex={-1}>Members <span className="muted">{members.length} of {MAX_COLLABORATORS}</span></h3>
         {owner && !active && <p className="muted">Settings and role increases are unavailable; the owner can reduce or remove member access.</p>}
         <ul className="item-list">{members.map((member) => <li key={member.profileId} className="member-row">
-          <div><strong>{member.displayName}</strong><small>{member.role === "OWNER" ? "Owner" : `${roleLabel(member.role)}${member.designatedApprover ? " · Designated approver" : ""}`}</small></div>
+          <div><strong>{member.displayName}</strong><small>{roleLabel(member.role)}{member.designatedApprover ? " · Designated approver" : ""}</small></div>
           {owner && member.role !== "OWNER" && <>
             <label className="sr-only" htmlFor={`role-${member.profileId}`}>{`Role for ${member.displayName}`}</label>
             <select id={`role-${member.profileId}`} value={member.role} disabled={busy || Boolean(retry)} onChange={(event) => pickRole(member, event.target.value as ProjectMemberRole)}>

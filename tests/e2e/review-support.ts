@@ -29,7 +29,9 @@ export async function readyCandidate(page: Page, projectId: string, evidence = f
   }
   const flow = (await (await page.request.get(path)).json()).document.flows[flowId];
   expect((await page.request.post(`${path}/commands`, { headers:reviewHeaders(),data:{commandSchemaVersion:1,command:"CONFIRM_FLOW",expectedEntityVersion:flow.version,payload:{flowId}}})).status()).toBe(200);
-  const status = await (await page.request.get(`/api/projects/${projectId}/status`)).json();
+  const statusResponse = await page.request.get(`/api/projects/${projectId}/status`);
+  expect(statusResponse.status()).toBe(200);
+  const status = await statusResponse.json();
   expect((await page.request.patch(`/api/projects/${projectId}/approval-policy`,{headers:reviewHeaders(),data:{designatedApproverId:status.viewerId,expectedApprovalPolicyVersion:status.approvalPolicyVersion}})).status()).toBe(200);
   return {draftId,path,flowId,startId,outcomeId,source};
 }

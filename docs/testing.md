@@ -181,3 +181,21 @@ The transport regression inspects native multipart field names, including React'
 - Audit-fault fixtures in `ai-apply.test.ts` and `reviews.test.ts` take a transaction-scoped EXCLUSIVE lock on `app.project` before trigger setup/teardown. This drains project mutation locks before downstream audit/Realtime DDL. Both files participate in the existing sweep fixture guard so queued DDL cannot block a cleanup test before its row-level SKIP LOCKED check. Product concurrency checks remain concurrent, with unchanged retries and timeouts.
 
 Local replay/upgrade evidence, original failures and exact source qualification live in ignored evidence directories. The progress tracker records actual run results. Candidate capture and withdrawal do not establish Stage 9.2 decision/publication acceptance or hosted/manual qualification.
+
+
+## Stage 9.2 decisions and approved handoffs
+
+- `tests/review-decisions.test.ts` and `tests/integration/runtime-grants.test.ts` cover bounded decisions, append-only storage, exact actor/hash bindings and the restricted publication grants. The decision migrations extend the existing candidate authority without granting general draft or snapshot mutation.
+- `tests/integration/reviews.test.ts` covers designated approver/current-access checks, lock ordering, exact receipt replay, one terminal decision, rollback, immutable attribution and publication preserving every draft field except its baseline pointer. A historical negative-decision receipt is checked against its captured parent publication sequence, independently of the current baseline. Blank optional approval comments store as null while retaining the exact request hash.
+- The same integration owner covers approved-only snapshot detail, bounded history summaries, canonical project-scoped cursors, archived readers and immutable history after subsequent edits or publication. Candidate inspection remains distinct from approved snapshot access.
+- `tests/e2e/reviews.spec.ts` and `reviews-api.spec.ts` cover all three persisted outcomes, authorization and body limits, exact-key uncertain-response recovery, acknowledged refresh recovery, keyboard/narrow controls, saved and unsent input preservation, and exact historical baseline navigation. Held-response tests prove receipt settlement preserves an explicitly selected baseline and another candidate, including an in-flight candidate read and a different candidate selected before a delayed successful decision response.
+
+- `tests/approved-markdown.test.ts` pins deterministic captured-only output and hostile multiline text, graph/link/inclusion labels, intended verification and exact evidence. `tests/client-api.test.ts` covers text success through the existing JSON-error transport.
+- The owning review SQL and browser files cover approved-only export, safe attachment headers, immutable old Markdown after source/draft/project changes and newer publication, real download bytes, exact retry, archived readers and removal/sign-out/account/project fences. Identity-changing cases use independent per-test accounts so a real sign-out cannot invalidate a shared worker fixture.
+
+- `tests/review-pending.test.ts` compares saved included meaning and geometry against the current approved baseline, with stale/receipt-floor, metadata-only, insertion-order and A-to-B-to-A controls. `tests/ai-resources.test.ts` checks baseline-sequence refresh independently of draft revisions.
+- Real publication cases in `tests/integration/reviews.test.ts`, `tests/integration/ai-reads.test.ts` and the Review/AI browser owners cover unchanged saved and unsent work, historical selection, old-parent staleness/Apply refusal, new Generate/Improve admission and exact original-key Start recovery. The appended AI capture-parent migration keeps null and nonnull capture identity bound to the stored parent; direct mismatch and foreign-parent controls remain refused. No provider is called.
+
+The local Auth browser fixture requires loopback host `127.0.0.1` and an explicitly allowed test-stack port; Stage 9.2 uses `62321`. A new isolated stack must satisfy that guard before its signup suite can execute.
+
+Actual qualification, source identities and retained failures are recorded in the [progress tracker](context/progress-tracker.md). These tests do not establish hosted CI, manual NVDA or provider qualification.

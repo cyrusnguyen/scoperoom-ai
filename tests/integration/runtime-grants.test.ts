@@ -36,7 +36,7 @@ test("runtime roles cannot change project ownership or identity columns", { skip
   }
 });
 
-test("the web runtime may update only draft content, positions and their revisions; the worker none", { skip: !canRun }, async () => {
+test("the web runtime may update draft content, positions, revisions and baseline lineage; the worker none", { skip: !canRun }, async () => {
   const admin = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
   await admin.connect();
   try {
@@ -46,7 +46,7 @@ test("the web runtime may update only draft content, positions and their revisio
       cross join (select attname::text as col from pg_attribute where attrelid = 'app.scope_draft'::regclass and attnum > 0 and not attisdropped) as c
       where has_column_privilege(r.role, 'app.scope_draft', c.col, 'UPDATE')
       order by r.role, c.col`);
-    assert.deepEqual(rows, ["document_json", "document_revision", "layout_json", "layout_revision", "updated_at"].map((col) => ({ role: "app_web", col })));
+    assert.deepEqual(rows, ["base_snapshot_id", "document_json", "document_revision", "layout_json", "layout_revision", "updated_at"].map((col) => ({ role: "app_web", col })));
   } finally {
     await admin.end();
   }
@@ -103,16 +103,50 @@ test("AI storage grants are column- and function-exact for the web and worker ru
   }
 });
 
- test("review runtime roles expose only candidate creation, immutable reads and stage09a closure", {skip:!canRun}, async()=>{
-  const admin=new Client({connectionString:process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL!});await admin.connect();
-  try{
-   const {rows}=await admin.query<{role:string;tbl:string;column:string;privilege:string}>(`select r.role,t.tbl,a.attname as column,p.privilege from (values('app_web'),('app_worker')) r(role) cross join (values('scope_snapshot'),('review_request')) t(tbl) join pg_attribute a on a.attrelid=('app.'||t.tbl)::regclass and a.attnum>0 and not a.attisdropped cross join (values('UPDATE'),('INSERT'),('SELECT')) p(privilege) where has_column_privilege(r.role,'app.'||t.tbl,a.attname,p.privilege) order by r.role,t.tbl,p.privilege,a.attname`);
-   const updates=rows.filter(row=>row.privilege==='UPDATE');assert.deepEqual(updates.map(row=>`${row.role}.${row.tbl}.${row.column}`),['closed_reason','last_event_sequence','state','updated_at','version'].map(column=>`app_web.review_request.${column}`));assert.equal(rows.filter(row=>row.role==='app_worker'&&row.privilege==='INSERT').length,0);
-   const {rows:[cursor]}=await admin.query("select has_column_privilege('app_web','app.project','reviews_revision','UPDATE') reviews,has_column_privilege('app_web','app.project','baseline_sequence','UPDATE') baseline,has_column_privilege('app_web','app.scope_draft','base_snapshot_id','UPDATE') parent");assert.deepEqual(cursor,{reviews:true,baseline:false,parent:false});
-   for(const [url,role] of [[process.env.DATABASE_URL!,'app_web'],[process.env.WORKER_DATABASE_URL!,'app_worker']]){const runtime=new Client({connectionString:url});await runtime.connect();try{await runtime.query(`set role ${role}`);await runtime.query('select id from app.scope_snapshot limit 1');await assert.rejects(runtime.query("update app.scope_snapshot set payload=payload"),denied);await assert.rejects(runtime.query("delete from app.scope_snapshot"),denied);await assert.rejects(runtime.query("update app.review_request set published_at=current_timestamp"),denied);await assert.rejects(runtime.query("update app.project set baseline_sequence=1"),denied);if(role==='app_worker')await assert.rejects(runtime.query("insert into app.review_request(id) values(gen_random_uuid())"),denied);}finally{await runtime.end();}}
-  }finally{await admin.end();}
- });
-
+test("review runtime roles permit immutable decisions and only required publication updates", { skip: !canRun }, async () => {
+  const admin = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
+  await admin.connect();
+  try {
+    const { rows } = await admin.query<{ role: string; tbl: string; column: string; privilege: string }>(`
+      select r.role,t.tbl,a.attname as column,p.privilege
+      from (values('app_web'),('app_worker')) r(role)
+      cross join (values('scope_snapshot'),('review_request'),('review_decision')) t(tbl)
+      join pg_attribute a on a.attrelid=('app.'||t.tbl)::regclass and a.attnum>0 and not a.attisdropped
+      cross join (values('UPDATE'),('INSERT'),('SELECT')) p(privilege)
+      where has_column_privilege(r.role,'app.'||t.tbl,a.attname,p.privilege)
+      order by r.role,t.tbl,p.privilege,a.attname`);
+    assert.deepEqual(rows.filter(row => row.privilege === "UPDATE").map(row => `${row.role}.${row.tbl}.${row.column}`),
+      ["closed_reason", "last_event_sequence", "publication_sequence", "published_at", "state", "updated_at", "version"].map(column => `app_web.review_request.${column}`));
+    assert.equal(rows.filter(row => row.role === "app_worker" && row.privilege === "INSERT").length, 0);
+    const { rows: decisions } = await admin.query<{ role: string; privilege: string }>(`
+      select r.role,p.privilege from (values('app_web'),('app_worker'),('app_web_runtime'),('app_worker_runtime')) r(role)
+      cross join (values('SELECT'),('INSERT'),('UPDATE'),('DELETE'),('TRUNCATE'),('REFERENCES'),('TRIGGER')) p(privilege)
+      where has_table_privilege(r.role,'app.review_decision',p.privilege) order by r.role,p.privilege`);
+    assert.deepEqual(decisions, [{ role: "app_web", privilege: "INSERT" }, { role: "app_web", privilege: "SELECT" }, { role: "app_worker", privilege: "SELECT" }]);
+    const { rows: [cursor] } = await admin.query("select has_column_privilege('app_web','app.project','reviews_revision','UPDATE') reviews,has_column_privilege('app_web','app.project','baseline_sequence','UPDATE') baseline,has_column_privilege('app_web','app.project','approved_snapshot_id','UPDATE') approved,has_column_privilege('app_web','app.scope_draft','base_snapshot_id','UPDATE') parent");
+    assert.deepEqual(cursor, { reviews: true, baseline: true, approved: true, parent: true });
+    for (const [url, role] of [[process.env.DATABASE_URL!, "app_web"], [process.env.WORKER_DATABASE_URL!, "app_worker"]]) {
+      const runtime = new Client({ connectionString: url });
+      await runtime.connect();
+      try {
+        await runtime.query(`set role ${role}`);
+        await runtime.query("select id from app.scope_snapshot limit 1");
+        await runtime.query("select id from app.review_decision limit 1");
+        await assert.rejects(runtime.query("update app.scope_snapshot set payload=payload"), denied);
+        await assert.rejects(runtime.query("delete from app.scope_snapshot"), denied);
+        await assert.rejects(runtime.query("update app.review_decision set comment=comment"), denied);
+        await assert.rejects(runtime.query("delete from app.review_decision"), denied);
+        await assert.rejects(runtime.query("update app.review_request set candidate_snapshot_id=candidate_snapshot_id"), denied);
+        if (role === "app_worker") {
+          await assert.rejects(runtime.query("insert into app.review_request(id) values(gen_random_uuid())"), denied);
+          await assert.rejects(runtime.query("insert into app.review_decision(id) values(gen_random_uuid())"), denied);
+          await assert.rejects(runtime.query("update app.project set baseline_sequence=1"), denied);
+          await assert.rejects(runtime.query("update app.scope_draft set base_snapshot_id=null"), denied);
+        }
+      } finally { await runtime.end(); }
+    }
+  } finally { await admin.end(); }
+});
 test("web INSERT cannot forge baseline authority or draft lineage", { skip: !canRun }, async (t) => {
   const admin = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
   const runtime = new Client({ connectionString: process.env.DATABASE_URL! });

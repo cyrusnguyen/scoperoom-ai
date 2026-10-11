@@ -53,3 +53,35 @@ test("competing covering reads settle only the exact trusted acknowledgement and
   assert.equal(settleCoveredReview({...ui,pending:{...attempt,acknowledged:true}},"one",page,detail).pending?.key,"one");
   assert.equal(settleCoveredReview({...ui,pending:{...attempt,acknowledged:false,receipt}},"one",page,detail).pending?.key,"one");
 });
+
+test("decision eligibility binds current and captured actor without inspecting newer draft revisions", async () => {
+  const { canDecideReview } = await import("../src/features/reviews/ui/review-state.ts");
+  const detail = { review: { state: "OPEN" as const }, snapshot: { policySnapshot: { designatedApproverId: "actor", approvalPolicyVersion: 2 } }, draftChanges: { replaced: false } };
+  const status = { viewerId: "actor", designatedApproverId: "actor", role: "REVIEWER" as const, status: "ACTIVE" as const, approvalPolicyVersion: 2 };
+  assert.equal(canDecideReview(detail, status), true);
+  for (const change of [{ viewerId: "other" }, { designatedApproverId: "other" }, { role: "VIEWER" }, { status: "ARCHIVED" }, { approvalPolicyVersion: 3 }] as const) assert.equal(canDecideReview(detail, { ...status, ...change }), false);
+  assert.equal(canDecideReview({ ...detail, review: { state: "APPROVED" } }, status), false);
+  assert.equal(canDecideReview({ ...detail, draftChanges: { replaced: true } }, status), false);
+});
+
+test("decision exact request recovery preserves newer input and a refusal preserves submitted input", () => {
+  const pending = { ...attempt, path: "reviews/r/decision", body: { decision: "REQUEST_CHANGES", expectedReviewVersion: 1, expectedReviewHash: "a".repeat(64), reason: "Submitted" }, label: "Request changes" };
+  const ui = reserveReview({ ...defaultReviewUi, reason: "Submitted" }, pending)!;
+  const unknown = settleReview(ui, pending.key, "uncertain", "Retry");
+  assert.equal(unknown.pending, pending);
+  assert.equal(settleReview(ui, pending.key, "refused", "Not permitted").reason, "Submitted");
+  assert.equal(settleReview({ ...unknown, reason: "Newer text" }, pending.key, "saved", "Saved").reason, "Newer text");
+});
+
+
+test("baseline page joins retain exact history identity and reject a changed publication sequence", async () => {
+  const {joinSnapshotPage}=await import("../src/features/reviews/ui/review-state.ts");
+  const item={snapshotId:"old",reviewId:"r",publicationSequence:1,publishedAt:"time",publishedBy:"actor",reviewHash:"hash"};
+  const first={items:[item],nextCursor:"next",baselineSequence:2};
+  const next={items:[item,{...item,snapshotId:"older"}],nextCursor:null,baselineSequence:2};
+  assert.deepEqual(joinSnapshotPage(first,next,"next").items,[item,next.items[1]]);
+  assert.equal(joinSnapshotPage(first,next,"wrong"),first);
+  assert.equal(joinSnapshotPage(first,{...next,baselineSequence:3},"next"),first);
+  const ui={...defaultReviewUi,selectedSnapshotId:"old"};
+  assert.equal(settleReview(ui,"unrelated","saved","Saved").selectedSnapshotId,"old");
+});

@@ -1,3 +1,4 @@
+import { readyCandidate, freezeViaApi, reviewHeaders } from "./review-support";
 import { seedSnapshot } from "../support/snapshot-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -1554,4 +1555,74 @@ test("an uncommitted uncertain Apply clears exact recovery after a real consumed
     await expect(panel(page).getByRole('button',{name:'Retry Apply with the same selection',exact:true})).toHaveCount(0);expect(await warnsBeforeUnload(page)).toBe(false);
     expect((await applications()).rows[0].count).toBe(1);expect((await(await page.request.get(`/api/projects/${projectId}/bootstrap`)).json()).draft).toEqual(saved);
   }finally{await page.unroute(applyUrl);}
+});
+
+
+test("real approval refreshes old-parent proposal and new Generate and Improve capture the published baseline", async ({ page, workerAccount }) => {
+  const projectId = await createProjectViaApi(page, "AI real published baseline"), { draftId, path, flowId, startId } = await readyCandidate(page, projectId);
+  const completed = await storedSyntheticCompletion(page, workerAccount.database, projectId), frozen = await freezeViaApi(page, projectId, draftId);
+  await page.goto(`/app/projects/${projectId}?run=${completed.runId}`);
+  await expect(panel(page).getByRole("button", { name: "Apply all changes", exact: true })).toBeEnabled();
+  await panel(page).getByLabel("Instruction", { exact: true }).fill("Keep my newer instruction");
+  const before = await (await page.request.get(path)).json();
+  expect((await page.request.post(`/api/projects/${projectId}/reviews/${frozen.reviewId}/decision`, { headers: reviewHeaders(), data: { decision: "APPROVE", expectedReviewVersion: 1, expectedReviewHash: frozen.reviewHash } })).status()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(panel(page).getByText(/can’t be applied.*baseline changed/i)).toBeVisible();
+  await expect(panel(page).getByRole("button", { name: "Apply all changes", exact: true })).toBeDisabled();
+  await expect(panel(page).getByLabel("Instruction", { exact: true })).toHaveValue("Keep my newer instruction");
+  expect(await (await page.request.get(path)).json()).toEqual(before);
+  expect((await page.request.post(`/api/projects/${projectId}/ai-runs/${completed.runId}/apply`, { headers: mutation(), data: completed.body })).status()).toBe(409);
+  await page.locator(".studio-toolbar").getByRole("button", { name: "List", exact: true }).click(); await page.getByRole("checkbox", { name: "Select Begin", exact: true }).check();
+  const startUrl = `${appUrl}/api/projects/${projectId}/ai-runs`;
+  for (const improve of [false, true]) {
+    await panel(page).getByLabel("Action", { exact: true }).selectOption(improve ? "REFINE_FLOW_SELECTION" : "PROPOSE_FLOW");
+    await panel(page).getByLabel("Instruction", { exact: true }).fill(improve ? "Improve on the agreement" : "Generate on the agreement");
+    const response = page.waitForResponse(r => r.url() === startUrl && r.request().method() === "POST");
+    await panel(page).getByRole("button", { name: improve ? "Improve selection" : "Generate", exact: true }).click();
+    const accepted = await response; expect(accepted.status()).toBe(202);
+    expect(accepted.request().postDataJSON()).toMatchObject({ draftId, expectedDocumentRevision: before.documentRevision, expectedParentSnapshotId: frozen.snapshotId, context: { selection: improve ? { flowId, nodeIds: [startId] } : null } });
+    const runId = (await accepted.json()).runId, captured = await (await page.request.get(`${startUrl}/${runId}`)).json();
+    expect(captured.parentSnapshotId).toBe(frozen.snapshotId); expect(captured.capture.parentSnapshotId).toBe(frozen.snapshotId);
+    expect((await page.request.post(`${startUrl}/${runId}/cancel`, { headers: mutation(), data: {} })).status()).toBe(200);
+    // Fixture-only settlement through the installed guard; no worker/provider execution is claimed.
+    await workerAccount.database.query("select app.finish_ai_run($1, 'CANCELLED', null)", [runId]);
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(panel(page).locator(".run-state")).toHaveText("Cancelled");
+  }
+  expect((await workerAccount.database.query("select count(*)::int n from app.ai_run_attempt a join app.ai_run r on r.id=a.run_id where r.project_id=$1", [projectId])).rows[0].n).toBe(0);
+  expect(await (await page.request.get(path)).json()).toEqual(before);
+});
+
+test("uncertain committed old-parent Start replays exact URL bytes and key after real publication without another admission", async ({ page, workerAccount }) => {
+  const projectId = await createProjectViaApi(page, "Published Start recovery"), { draftId, path } = await readyCandidate(page, projectId);
+  const frozen = await freezeViaApi(page, projectId, draftId);
+  await page.goto(`/app/projects/${projectId}`); await openAi(page);
+  const startUrl = `${appUrl}/api/projects/${projectId}/ai-runs`, sent: Array<{ method: string; url: string; bytes: string | null; key: string | undefined }> = [];
+  let committedId = "", replayed = false;
+  await page.route(startUrl, async route => {
+    if (route.request().method() !== "POST") { await route.fallback(); return; }
+    const request = route.request(); sent.push({ method: request.method(), url: request.url(), bytes: request.postData(), key: request.headers()["idempotency-key"] });
+    const response = await route.fetch(); expect(response.status()).toBe(sent.length === 1 ? 202 : 200); const body = await response.json();
+    if (sent.length === 1) committedId = body.runId; else expect(body.runId).toBe(committedId);
+    if (sent.length === 1) await route.abort("failed"); else { replayed = body.replayed; await route.fulfill({ response }); }
+  });
+  try {
+    await panel(page).getByLabel("Instruction", { exact: true }).fill("Original parent request"); await panel(page).getByRole("button", { name: "Generate", exact: true }).click();
+    await expect(panel(page).getByRole("button", { name: "Retry this request", exact: true })).toBeVisible(); expect(sent).toHaveLength(1);
+    const before = await (await page.request.get(path)).json();
+    expect((await page.request.post(`/api/projects/${projectId}/reviews/${frozen.reviewId}/decision`, { headers: reviewHeaders(), data: { decision: "APPROVE", expectedReviewVersion: 1, expectedReviewHash: frozen.reviewHash } })).status()).toBe(200);
+    await panel(page).getByLabel("Instruction", { exact: true }).fill("Newer instruction survives receipt");
+    await panel(page).getByRole("tab", { name: "Details", exact: true }).click(); await panel(page).getByRole("tab", { name: "AI", exact: true }).click();
+    await page.evaluate(() => { window.dispatchEvent(new Event("blur")); window.dispatchEvent(new Event("focus")); });
+    const done = page.waitForResponse(r => r.url() === startUrl && r.request().method() === "POST");
+    await panel(page).getByRole("button", { name: "Retry this request", exact: true }).click(); expect((await done).status()).toBe(200);
+    await expect(panel(page).locator(".run-state")).toHaveText("Generating");
+    expect(replayed).toBe(true); expect(sent).toHaveLength(2); expect(sent[1]).toEqual(sent[0]);
+    expect(JSON.parse(sent[0]!.bytes!).expectedParentSnapshotId).toBeNull();
+    await expect(panel(page).getByLabel("Instruction", { exact: true })).toHaveValue("Newer instruction survives receipt");
+    const view = await (await page.request.get(`${startUrl}/${committedId}`)).json(); expect(view.parentSnapshotId).toBeNull();
+    expect((await workerAccount.database.query("select count(*)::int n from app.ai_run where project_id=$1", [projectId])).rows[0].n).toBe(1);
+    expect((await workerAccount.database.query("select count(*)::int n from app.ai_run_attempt a join app.ai_run r on r.id=a.run_id where r.project_id=$1", [projectId])).rows[0].n).toBe(0);
+    expect(await (await page.request.get(path)).json()).toEqual(before);
+  } finally { await page.unroute(startUrl); }
 });

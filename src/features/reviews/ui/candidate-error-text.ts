@@ -12,7 +12,7 @@ export const candidateErrorText: Record<CandidateErrorCode, string> = {
   UNLABELLED_BRANCH: "Give this decision branch a label.",
   START_HAS_INCOMING: "A start step cannot have an incoming connection.",
   OUTCOME_HAS_OUTGOING: "An outcome step cannot have an outgoing connection.",
-  ACTION_OUTGOING_COUNT: "This action needs one outgoing connection.",
+  ACTION_OUTGOING_COUNT: "This action or data store needs one outgoing connection.",
   DECISION_OUTGOING_COUNT: "This decision needs at least two outgoing branches.",
   DUPLICATE_BRANCH_LABEL: "Use a different label for each decision branch.",
   UNREACHABLE_FROM_START: "This step needs a path from a start step.",

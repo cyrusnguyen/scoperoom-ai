@@ -233,3 +233,16 @@ test("lowering the limit blocks restore without touching active projects", { ski
     assert.equal((await getProjectStatus(owner, archived)).status, "ARCHIVED");
   });
 });
+
+test("invalid rename and archive text returns INVALID_INPUT without effects", { skip: !canRun }, async () => {
+  await withFixture(async f => {
+    const owner = await f.user(), projectId = await f.project(owner);
+    const state = async () => (await f.database.query("select to_jsonb(p) project,(select count(*)::int from app.audit_event where project_id=p.id) events,(select count(*)::int from app.mutation_receipt where scope_id=p.id) receipts from app.project p where id=$1", [projectId])).rows[0];
+    const before = await state();
+    for (const value of ["Bad\u0000text", "Bad\ud800text", "Bad\udc00text"]) {
+      await assert.rejects(updateProjectSettings(owner, projectId, { name: value, expectedSettingsVersion: 1, key: randomUUID() }), code("INVALID_INPUT"));
+      await assert.rejects(archiveProject(owner, projectId, { reason: value, expectedProjectVersion: 1, key: randomUUID() }), code("INVALID_INPUT"));
+    }
+    assert.deepEqual(await state(), before);
+  });
+});
