@@ -31,7 +31,7 @@ Hosted Supabase signs database certificates with its own root CA. Download it fr
 | `AI_TOTAL_RUN_LIMIT`, `AI_DAILY_RUN_LIMIT` | Vercel, optional | default-plan AI limits for every account; blank keeps 5 total and 30 per day |
 | `TRIGGER_SECRET_KEY` | Vercel, Trigger `prod` | the Trigger `prod` runtime key (left off Vercel for the first deployment, see the 12b plan) |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Trigger `prod` | the Gemini key; never on Vercel |
-| `TRIGGER_ACCESS_TOKEN`, `TRIGGER_PROJECT_REF` | GitHub environment `worker-synthetic` | worker deploy credentials |
+| `TRIGGER_ACCESS_TOKEN`, `TRIGGER_PROJECT_REF` | GitHub environment `worker-pilot` | the pilot Trigger project's deploy credentials; never the `worker-synthetic` project |
 | `SMOKE_URL`, `SMOKE_{OWNER,EDITOR,VIEWER}_{EMAIL,PASSWORD}`, `SMOKE_AI` | `.env.smoke.local` | production origin, three synthetic accounts, `1` only when an AI budget is authorized |
 
 Never set bootstrap, migrator, worker or Google credentials on Vercel.
@@ -73,7 +73,7 @@ Never run `db:reset` or destructive SQL against this target without a separate e
 
 1. Confirm green main-push CI for the SHA (`static-unit-build`, `database-integration`, `chromium`).
 2. Migrate (section 3).
-3. Deploy the worker: `gh workflow run deploy-worker.yml -f environment=worker-synthetic -f sha=<sha>`.
+3. Deploy the worker: `gh workflow run deploy-worker.yml -f environment=worker-pilot -f sha=<sha>`. The `worker-pilot` GitHub environment must exist first (section 2), with required reviewers where the account supports them.
 4. Deploy the web from a clean detached worktree at the SHA. `vercel.json` turns off Git deployments, so this is the only path:
 
    ```powershell

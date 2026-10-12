@@ -14,7 +14,7 @@ Evidence: lint 0, typecheck 0, unit 672/672, build 0, after a fresh-context revi
 
 Limitations: listed in the runbook, section 8.
 
-Next: PR #33 review comments and CI, then merge; then 12b, which needs the operator to add `SCOPEROOM_SUPABASE_PROJECT_REF` and the target's Supabase URL and publishable key to `.env.hosted.local`, and each hosted step needs its own authorization.
+Next: PR #33 review comments and CI, then merge; then 12b, which needs the operator to add `SCOPEROOM_SUPABASE_PROJECT_REF` and the target's Supabase URL and publishable key to `.env.hosted.local` and to create a `worker-pilot` GitHub environment (user decision on PR #33: the pilot worker deploys through its own target, never `worker-synthetic`) with the pilot Trigger project's `TRIGGER_ACCESS_TOKEN` and `TRIGGER_PROJECT_REF`; each hosted step needs its own authorization.
 
 ## Stage 12 plans (2026-10-12)
 

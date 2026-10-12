@@ -21,11 +21,11 @@ Configure worker runtime values in the intended Trigger project/environment: `WO
 
 ## Worker deployment
 
-`.github/workflows/deploy-worker.yml` is the single worker deployment owner. It is manual (`workflow_dispatch`) and accepts only `worker-synthetic`, a dedicated synthetic project's production environment. Keep pilot configuration in a separate project; this workflow does not authorize a pilot deployment.
+`.github/workflows/deploy-worker.yml` is the single worker deployment owner. It is manual (`workflow_dispatch`) and accepts only `worker-synthetic`, a dedicated synthetic project's production environment, and `worker-pilot`, the hosted pilot's production environment ([hosted pilot runbook](hosted-pilot.md)). Keep their configuration in separate GitHub environments and Trigger projects; choosing a target does not authorize a deployment, which still needs its own release approval.
 
 - Start the workflow from `main`. Its full lowercase `sha` must be an ancestor of `main`.
 - It queries the actual `ci.yml` workflow for that exact SHA's latest `push` run on `main`, requires that run to succeed, then requires `static-unit-build`, `database-integration` and `chromium` each to succeed in its latest attempt. A similarly named check or earlier successful attempt cannot satisfy the gate. These queries use GitHub's [workflow-run](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-workflow) and [workflow-job](https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run-attempt) APIs with `actions: read`.
-- The `worker-synthetic` GitHub environment holds `TRIGGER_ACCESS_TOKEN` as a secret and `TRIGGER_PROJECT_REF` as a variable. Configure required reviewers where the account supports them; their availability and enforcement remain unverified.
+- The `worker-synthetic` and `worker-pilot` GitHub environments each hold `TRIGGER_ACCESS_TOKEN` as a secret and `TRIGGER_PROJECT_REF` as a variable for their own Trigger project. Configure required reviewers where the account supports them; their availability and enforcement remain unverified.
 - Workflow concurrency allows one worker deploy at a time and never cancels one already started.
 - The exact-pinned CLI deploys the checked commit with `trigger deploy --env prod --external-id <sha> --skip-update-check --skip-telemetry`. The execution binding always equals that SHA; arbitrary reusable release tags are not accepted.
 - The summary records target, SHA/external id, provider-returned deployment version and required CI run.

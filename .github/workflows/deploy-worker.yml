@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: GitHub environment holding this synthetic target's Trigger configuration
+        description: GitHub environment holding the target's Trigger configuration (synthetic project or the hosted pilot)
         type: choice
-        options: [worker-synthetic]
+        options: [worker-synthetic, worker-pilot]
         required: true
       sha:
         description: Full lowercase commit SHA on main with the latest exact main-push CI run green
@@ -35,7 +35,7 @@ jobs:
           TARGET: ${{ inputs.environment }}
         run: |
           [ "$WORKFLOW_REF" = "refs/heads/main" ] || { echo "Run this workflow from main only."; exit 1; }
-          [ "$TARGET" = "worker-synthetic" ] || { echo "Unsupported worker target."; exit 1; }
+          case "$TARGET" in worker-synthetic|worker-pilot) ;; *) echo "Unsupported worker target."; exit 1 ;; esac
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: main
