@@ -2,7 +2,7 @@
 
 ## Stage 12a hosted tooling (2026-10-12)
 
-Branch `feat/stage-12a-hosted-tooling` from main `e36933b`, uncommitted (no commit, push or PR authorized yet). Implemented inline from the [12a plan](../superpowers/plans/2026-10-12-stage-12a-hosted-tooling.md).
+Branch `feat/stage-12a-hosted-tooling` from main `e36933b`, committed and pushed with user authorization as PR #33 (`feat: add hosted database target, hosted smoke and release config`). Implemented inline from the [12a plan](../superpowers/plans/2026-10-12-stage-12a-hosted-tooling.md).
 
 Task 1, read-only hosted check. The hosted target is the Supabase project named in the operator's ignored `.env.hosted.local` (user decision; an earlier check on a different project gave the same result). It runs PostgreSQL 17.11, connects as `postgres` through the session pooler with TLS verified against the Supabase root CA (fingerprint checked against the served chain), has no `app` schema and no Auth users, has Realtime RLS on, and `postgres` can create roles. Hosted `postgres` holds no grant option on the `auth` schema, `auth.users`, `auth.uid()`, `auth.jwt()` or `realtime.send`, but can pass on Realtime schema usage and `realtime.messages` SELECT and INSERT. PUBLIC already executes the three functions, and `postgres` holds ADMIN on `anon`, which can use `auth`.
 
@@ -14,7 +14,7 @@ Evidence: lint 0, typecheck 0, unit 672/672, build 0, after a fresh-context revi
 
 Limitations: listed in the runbook, section 8.
 
-Next: the user authorizes commit, push and PR (`feat: add hosted database target, hosted smoke and release config`); then 12b.
+Next: PR #33 review comments and CI, then merge; then 12b, which needs the operator to add `SCOPEROOM_SUPABASE_PROJECT_REF` and the target's Supabase URL and publishable key to `.env.hosted.local`, and each hosted step needs its own authorization.
 
 ## Stage 12 plans (2026-10-12)
 
