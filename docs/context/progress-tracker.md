@@ -1,5 +1,34 @@
 # Progress tracker
 
+## Stage 12a hosted tooling (2026-10-12)
+
+Branch `feat/stage-12a-hosted-tooling` from main `e36933b`, uncommitted (no commit, push or PR authorized yet). Implemented inline from the [12a plan](../superpowers/plans/2026-10-12-stage-12a-hosted-tooling.md).
+
+Task 1, read-only hosted check. The hosted target is the Supabase project named in the operator's ignored `.env.hosted.local` (user decision; an earlier check on a different project gave the same result). It runs PostgreSQL 17.11, connects as `postgres` through the session pooler with TLS verified against the Supabase root CA (fingerprint checked against the served chain), has no `app` schema and no Auth users, has Realtime RLS on, and `postgres` can create roles. Hosted `postgres` holds no grant option on the `auth` schema, `auth.users`, `auth.uid()`, `auth.jwt()` or `realtime.send`, but can pass on Realtime schema usage and `realtime.messages` SELECT and INSERT. PUBLIC already executes the three functions, and `postgres` holds ADMIN on `anon`, which can use `auth`.
+
+User decisions after Task 1: `app_migrator` and `app_realtime_reader` join `anon` on hosted for `auth` schema access; the hosted bootstrap applies the baseline as `app_migrator` without its single `auth.users` foreign key, which `postgres` re-adds verbatim in the same transaction, then Prisma records the baseline as applied; deployed web and worker verify database TLS through `SCOPEROOM_DATABASE_CA_PEM`; default-plan AI limits are configurable with `AI_TOTAL_RUN_LIMIT` and `AI_DAILY_RUN_LIMIT` (invalid values fail closed).
+
+Delivered: hosted mode in `guard.mjs`, `realtime.mjs` and `bootstrap.mjs`; `test:smoke:hosted` with one serial journey; `vercel.json` disabling Git deployments; `releaseId` from `VERCEL_GIT_COMMIT_SHA`; `poolConfig` CA support in `src/server/db.ts`; [hosted pilot runbook](../hosted-pilot.md).
+
+Evidence: lint 0, typecheck 0, unit 672/672, build 0, after a fresh-context review (0 critical, 3 important, 4 minor, all fixed with failing-first tests where executable). The revised hosted capability check reported no problems on the target (read-only), and the CA configuration connected to the hosted pooler while the same connection without the CA was refused (`SELF_SIGNED_CERT_IN_CHAIN`). The smoke config refused an `http` `SMOKE_URL` and listed one test for an HTTPS one; the main e2e listing (480 tests) contains no smoke spec. Not run here: local `db:migrate`/`db:guard` and the integration, workers, Realtime and browser suites, because this checkout has no configured local stack; CI's database-integration job (fresh `db:bootstrap`) covers the changed local paths. The hosted bootstrap and smoke are first exercised in 12b.
+
+Limitations: listed in the runbook, section 8.
+
+Next: the user authorizes commit, push and PR (`feat: add hosted database target, hosted smoke and release config`); then 12b.
+
+## Stage 12 plans (2026-10-12)
+
+The user confirms Stage 9 is done and merged and defers Stages 10 and 11 for MVP. Local `main` is `e36933b`. Two local plans are prepared, nothing is implemented, committed or pushed:
+
+1. [12a: hosted database tooling, hosted smoke and release config](../superpowers/plans/2026-10-12-stage-12a-hosted-tooling.md): a read-only hosted grant-option check first, then `SCOPEROOM_DB_TARGET=hosted` for the guarded DB scripts (project-ref and TLS check, provider grants as hosted `postgres`, Realtime private-only proven by joining a public channel), one serial Playwright smoke against a deployed URL, `vercel.json` disabling Git deployments, the release id in logs, and `docs/hosted-pilot.md`.
+2. [12b: hosted pilot qualification and release checklist](../superpowers/plans/2026-10-12-stage-12b-hosted-pilot-release.md): authorized operations from target ledger to bootstrap, worker deploy, first web deploy, smoke, AI qualification with repair after a failed first dispatch, operational checks and the invite decision.
+
+User decisions: one hosted target (existing Supabase project, synthetic data, invited users); native provider logs, no Axiom sink; AI exposed; no new request-rate limiter; the first release is qualified on the production URL before it is shared, then inviting users needs a second authorization. Vercel, Trigger `prod`, Supabase and a Gemini key exist.
+
+Findings that shaped the plans: all DB tooling was loopback/Docker-only (`guard.mjs`, `realtime.mjs` provider grants via `supabase_admin`, tenant API) and the group roles come from the local-only `supabase/seed.sql`; hosted `realtime.messages` grant options are unverified (12a Task 1 is the go/no-go); the app sends no invitation email (copyable link only); writes are accepted only from `NEXT_PUBLIC_APP_URL`, so a per-deployment candidate URL cannot be smoke-tested.
+
+Next: user review of both plans; then 12a Task 1 needs read-only hosted DB access authorization.
+
 ## Default account plan (2026-10-12)
 
 Branch `feat/default-account-plan` from main `82b01da`. User decisions on 2026-10-12: any verified account creates projects without an operator grant; the default plan keeps the 10 active owned projects cap and allows 5 AI requests in total; AI usage stays charged to the project owner; limits are customisable per account (members and staff), and staff are currently unlimited; an Admin Dashboard will edit them, planned only, to build after the hosted pilot stage (see `docs/admin-dashboard-plan.md`); the local database migration was approved.
