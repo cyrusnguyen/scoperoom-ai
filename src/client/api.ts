@@ -29,8 +29,15 @@ async function settle<T>(request: () => Promise<Response>, textSuccess = false):
 const READ_TIMEOUT_MS = 20_000;
 
 export function apiRead<T>(url: string, signal?: AbortSignal, timeoutMs = READ_TIMEOUT_MS): Promise<ApiResult<T>> {
-  const deadline = AbortSignal.timeout(timeoutMs);
-  return settle<T>(() => fetch(url, { cache: "no-store", signal: signal ? AbortSignal.any([signal, deadline]) : deadline }));
+  // Combined by hand: AbortSignal.any is missing before Safari 17.4, and Next.js 16 supports Safari 16.4.
+  const read = new AbortController();
+  const follow = () => read.abort(signal?.reason);
+  const timer = setTimeout(() => read.abort(new DOMException("The read timed out.", "TimeoutError")), timeoutMs);
+  if (signal?.aborted) follow(); else signal?.addEventListener("abort", follow, { once: true });
+  return settle<T>(() => fetch(url, { cache: "no-store", signal: read.signal })).finally(() => {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", follow);
+  });
 }
 
 /** Authenticated text success with the same JSON error envelope and session handling. */

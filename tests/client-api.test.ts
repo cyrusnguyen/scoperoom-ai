@@ -102,3 +102,24 @@ test("every read carries a deadline, and a caller's own abort still ends it", as
     assert.equal(controller.signal.aborted, true);
   } finally { restore(); }
 });
+
+test("reads work in browsers without AbortSignal.any (Safari before 17.4)", async () => {
+  const any = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+  delete (AbortSignal as { any?: unknown }).any;
+  let restore = stubFetch(async () => Response.json({ id: "p1" }));
+  try {
+    assert.deepEqual(await apiRead("/api/x", new AbortController().signal), { ok: true, data: { id: "p1" } });
+  } finally { restore(); }
+  restore = stubFetch(hanging);
+  try {
+    const controller = new AbortController();
+    const pending = apiRead("/api/x", controller.signal);
+    controller.abort();
+    assert.equal((await pending).ok, false);
+    const late = await apiRead("/api/x", new AbortController().signal, 20);
+    assert.equal(!late.ok && late.code, "NETWORK");
+  } finally {
+    restore();
+    if (any) Object.defineProperty(AbortSignal, "any", any);
+  }
+});
