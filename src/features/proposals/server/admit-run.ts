@@ -3,10 +3,11 @@ import type { Prisma } from "../../../../prisma/generated/client.ts";
 import { asJson } from "../../drafts/server/execute-command.ts";
 import { keyPattern, uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import {
-  checkReceipt, entitlementActive, findReceipt, lockActor, lockProject, profileFor, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
+  checkReceipt, findReceipt, lockActor, lockProject, profileFor, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
   withDatabase, type ProjectRow, type Transaction,
 } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
+import { accountPlan } from "../../projects/server/plan.ts";
 import { assertSourceCapacity, insertPromptEvidence } from "../../sources/server/source-versions.ts";
 import { AI_LIMITS, parseStartRunInput, startBody, startBodyBytes, type StartRunInput, type TaskKind } from "../contracts/tasks.ts";
 import { evidenceStats } from "../domain/capture.ts";
@@ -81,15 +82,21 @@ async function admitLocked(tx: Transaction, project: ProjectRow, actorId: string
   if (!owner || owner.active >= AI_LIMITS.ownerConcurrentRuns) throw new ProjectError("AI_BUSY", { scope: "OWNER" });
   const [clock] = await tx.$queryRaw<Array<{ now: Date; day: string }>>`SELECT transaction_timestamp() AS now, ((transaction_timestamp() AT TIME ZONE 'UTC')::date)::text AS day`;
   if (!clock) throw new ProjectError("UNAVAILABLE");
-  const reserved = await tx.$queryRaw<Array<{ reserved_runs: number }>>`
+  const [reserved] = await tx.$queryRaw<Array<{ day_runs: number }>>`
     INSERT INTO app.ai_budget_day (owner_id, day, reserved_runs) VALUES (${project.ownerId}::uuid, ${clock.day}::date, 1)
     ON CONFLICT (owner_id, day) DO UPDATE SET reserved_runs = ai_budget_day.reserved_runs + 1
-    WHERE ai_budget_day.reserved_runs + ai_budget_day.consumed_runs < ${AI_LIMITS.ownerDailyRuns}
-    RETURNING reserved_runs`;
-  if (!reserved.length) throw new ProjectError("AI_BUDGET_EXCEEDED");
+    RETURNING reserved_runs + consumed_runs AS day_runs`;
+  if (!reserved) throw new ProjectError("UNAVAILABLE");
   // Read last, after every wait: a revocation committed while this admission queued is seen. The provider claim rechecks authority again.
-  const entitlement = await tx.pilotEntitlement.findUnique({ where: { profileId: project.ownerId } });
-  if (!entitlementActive(entitlement)) throw new ProjectError("ENTITLEMENT_REQUIRED");
+  // The limits come from the same read. Counts include this reservation; a refusal rolls it back with the savepoint.
+  const plan = accountPlan(await tx.pilotEntitlement.findUnique({ where: { profileId: project.ownerId } }));
+  if (!plan.allowed) throw new ProjectError("ENTITLEMENT_REQUIRED");
+  if (plan.aiDailyRuns !== null && reserved.day_runs > plan.aiDailyRuns) throw new ProjectError("AI_BUDGET_EXCEEDED");
+  if (plan.aiTotalRuns !== null) {
+    // Refunded reservations leave both counters, so only runs that consumed or still hold the owner budget count.
+    const [total] = await tx.$queryRaw<Array<{ runs: number }>>`SELECT coalesce(sum(reserved_runs + consumed_runs), 0)::integer AS runs FROM app.ai_budget_day WHERE owner_id = ${project.ownerId}::uuid`;
+    if (!total || total.runs > plan.aiTotalRuns) throw new ProjectError("AI_ALLOWANCE_EXCEEDED");
+  }
 
   const promptVersionId = await insertPromptEvidence(tx, project.id, actorId, prompt);
   const runId = randomUUID();

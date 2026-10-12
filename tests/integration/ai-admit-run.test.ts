@@ -6,6 +6,7 @@ import { Client } from "pg";
 import { emptyDraft } from "../../src/features/drafts/contracts/scope-document.ts";
 import { AI_LIMITS, parseStartRunInput, type StartRunInput } from "../../src/features/proposals/contracts/tasks.ts";
 import { canonicalJson, captureInput, sha256 } from "../../src/features/proposals/domain/capture.ts";
+import { createProject } from "../../src/features/projects/server/projects.ts";
 import { admissionSubject, admitRun, aiConfiguration } from "../../src/features/proposals/server/admit-run.ts";
 import { canRun, withFixture, type Fixture, type Identity } from "./support/fixture.ts";
 import { serializeSweeps } from "./support/sweep-lock.ts";
@@ -286,6 +287,44 @@ test("the 31st owner/day reservation fails for any model or collaborator; midnig
     assert.deepEqual(stale.map((row) => row.state), ["QUEUED", "QUEUED"]);
     const { rows } = await database.query("select day::text from app.ai_budget_day where owner_id = $1 order by day", [owner.profile]);
     assert.equal(rows.length, 2);
+  });
+});
+
+test("the default plan admits five AI requests in total across days for any collaborator, and only an unexpired override lifts it", { skip: !canRun }, async () => {
+  await withAdmission(async ({ person, join, database }) => {
+    const owner = await person(), editor = await person();
+    const created = async (name: string) => (await createProject(owner.identity, { name, key: randomUUID() })).id;
+    const p1 = await created("Default plan one"), p2 = await created("Default plan two");
+    await join(owner.identity, p2, editor.identity);
+    await database.query("insert into app.ai_owner_allowance (owner_id) values ($1)", [owner.profile]);
+    await database.query("insert into app.ai_budget_day (owner_id, day, consumed_runs) values ($1, (now() at time zone 'UTC')::date - 3, 3)", [owner.profile]);
+    await database.query("insert into app.ai_budget_day (owner_id, day, consumed_runs) values ($1, (now() at time zone 'UTC')::date, 1)", [owner.profile]);
+    await admitRun(owner.identity, p1, await start(database, p1), CONFIG); // the fifth
+    const before = await footprint(database, p2, owner.profile);
+    await assert.rejects(admitRun(editor.identity, p2, await start(database, p2), OTHER_CONFIG), refused("AI_ALLOWANCE_EXCEEDED"));
+    assert.deepEqual(await footprint(database, p2, owner.profile), before);
+    await database.query("insert into app.pilot_entitlement (profile_id, granted_by_operator, ai_total_run_limit, ai_daily_run_limit, expires_at) values ($1, gen_random_uuid(), null, null, now() - interval '1 minute')", [owner.profile]);
+    await assert.rejects(admitRun(editor.identity, p2, await start(database, p2), OTHER_CONFIG), refused("AI_ALLOWANCE_EXCEEDED"));
+    await database.query("update app.pilot_entitlement set expires_at = null where profile_id = $1", [owner.profile]);
+    await admitRun(editor.identity, p2, await start(database, p2), OTHER_CONFIG);
+    const { rows: [today] } = await database.query("select reserved_runs, consumed_runs from app.ai_budget_day where owner_id = $1 and day = (now() at time zone 'UTC')::date", [owner.profile]);
+    assert.deepEqual([today.reserved_runs, today.consumed_runs], [2, 1]);
+  });
+});
+
+test("an override without a daily limit admits past 30 a day, and a zero total limit refuses the first request", { skip: !canRun }, async () => {
+  await withAdmission(async ({ person, projectFor, database }) => {
+    const owner = await person(); const projectId = await projectFor(owner);
+    await database.query("update app.pilot_entitlement set ai_daily_run_limit = null where profile_id = $1", [owner.profile]);
+    await database.query("insert into app.ai_owner_allowance (owner_id) values ($1)", [owner.profile]);
+    await database.query("insert into app.ai_budget_day (owner_id, day, consumed_runs) values ($1, (now() at time zone 'UTC')::date, 30)", [owner.profile]);
+    await admitRun(owner.identity, projectId, await start(database, projectId), CONFIG); // the 31st today
+
+    const capped = await person(); const cappedProject = await projectFor(capped);
+    await database.query("update app.pilot_entitlement set ai_total_run_limit = 0 where profile_id = $1", [capped.profile]);
+    const before = await footprint(database, cappedProject, capped.profile);
+    await assert.rejects(admitRun(capped.identity, cappedProject, await start(database, cappedProject), CONFIG), refused("AI_ALLOWANCE_EXCEEDED"));
+    assert.deepEqual(await footprint(database, cappedProject, capped.profile), before);
   });
 });
 
