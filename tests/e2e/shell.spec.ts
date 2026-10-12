@@ -184,6 +184,9 @@ test.describe("project shell", () => {
     const right = page.getByRole("separator", { name: "Resize project panel" });
     await expect(left).toHaveAttribute("aria-valuenow", "300");
     await expect(right).toHaveAttribute("aria-valuenow", "360");
+    // The reported maximum is reachable: the right panel stops where the editor keeps 560 px beside the 300 px sidebar.
+    await expect(right).toHaveAttribute("aria-valuemax", "580");
+    await expect(left).toHaveAttribute("aria-valuemax", "480");
     const panelWidth = () => panel.evaluate((element) => Math.round(element.getBoundingClientRect().width));
     const drag = async (by: number) => {
       const box = (await right.boundingBox())!;
@@ -209,13 +212,19 @@ test.describe("project shell", () => {
     await expect(left).toHaveAttribute("aria-valuenow", "220");
     expect(await sidebar(page).evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(220);
     expect(await editorWidth(page)).toBe(640);
+    await expect(left).toHaveAttribute("aria-valuemax", "300");
+    await expect(right).toHaveAttribute("aria-valuemax", "660");
+    await right.focus();
+    await page.keyboard.press("End");
+    await expect(right).toHaveAttribute("aria-valuenow", "660");
+    expect(await editorWidth(page)).toBe(560);
 
     await page.reload();
     await expect(page.getByRole("heading", { level: 1, name: "Alpha plan" })).toBeVisible();
     await page.getByRole("button", { name: "Inspect" }).click();
-    await expect(right).toHaveAttribute("aria-valuenow", "580");
+    await expect(right).toHaveAttribute("aria-valuenow", "660");
     await expect(left).toHaveAttribute("aria-valuenow", "220");
-    expect(await editorWidth(page)).toBe(640);
+    expect(await editorWidth(page)).toBe(560);
 
     await right.dblclick();
     await expect(right).toHaveAttribute("aria-valuenow", "360");

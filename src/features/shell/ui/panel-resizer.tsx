@@ -11,7 +11,8 @@ type Props = { side: PanelSide; width: number; clamp: (width: number) => number;
 /**
  * Window splitter on a docked panel's inner edge. Dragging previews through `onPreview` once per frame, so the shell
  * can move the layout without re-rendering the editor; the width is committed on release. Arrows move 16 px (Shift 64),
- * Home and End jump to the limits, and Enter or a double click restores the initial width.
+ * Home and End jump to the limits, and Enter or a double click restores the initial width. The reported and End maximum is
+ * the reachable one: `clamp` also keeps the editor at least min(W, 560) wide beside the other docked panel.
  */
 export default function PanelResizer({ side, width, clamp, onPreview, onCommit }: Props) {
   const drag = useRef<{ x: number; start: number; current: number; frame: number; shell: HTMLElement | null } | null>(null);
@@ -29,6 +30,7 @@ export default function PanelResizer({ side, width, clamp, onPreview, onCommit }
   // Moving the splitter right widens the left panel and narrows the right one.
   const sign = side === "left" ? 1 : -1;
   const { initial, min, max } = PANEL_WIDTHS[side];
+  const reachable = clamp(max);
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
@@ -63,7 +65,7 @@ export default function PanelResizer({ side, width, clamp, onPreview, onCommit }
     const next = event.key === "ArrowRight" ? width + sign * step
       : event.key === "ArrowLeft" ? width - sign * step
       : event.key === "Home" ? min
-      : event.key === "End" ? max
+      : event.key === "End" ? reachable
       : event.key === "Enter" ? initial
       : null;
     if (next === null) return;
@@ -72,7 +74,7 @@ export default function PanelResizer({ side, width, clamp, onPreview, onCommit }
   }
 
   return <div role="separator" tabIndex={0} className="panel-resizer" data-side={side} aria-orientation="vertical" aria-label={LABELS[side]}
-    aria-controls={CONTROLS[side]} aria-valuenow={width} aria-valuemin={min} aria-valuemax={max}
+    aria-controls={CONTROLS[side]} aria-valuenow={width} aria-valuemin={min} aria-valuemax={reachable}
     onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish}
     onDoubleClick={() => onCommit(clamp(initial))} onKeyDown={onKeyDown} />;
 }
