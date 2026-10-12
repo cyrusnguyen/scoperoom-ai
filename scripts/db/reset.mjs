@@ -3,9 +3,10 @@ import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { inspectLocalContainer, localConfig } from "./guard.mjs";
+import { inspectLocalContainer, localConfig, targetKind } from "./guard.mjs";
 
 export function resetLocal(env = process.env) {
+  if (targetKind(env) !== "local") throw new Error("Database reset is local only; unset SCOPEROOM_DB_TARGET.");
   const configPath = resolve(env.SCOPEROOM_SUPABASE_CONFIG ?? fileURLToPath(new URL("../../supabase/config.toml", import.meta.url)));
   const canonical = realpathSync(configPath);
   const samePath = process.platform === "win32" ? configPath.toLowerCase() === canonical.toLowerCase() : configPath === canonical;

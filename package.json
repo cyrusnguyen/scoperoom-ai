@@ -24,7 +24,8 @@
     "test:workers": "node --env-file-if-exists=.env.local --experimental-strip-types --test tests/workers/*.test.ts",
     "test:realtime": "node --env-file-if-exists=.env.local --experimental-strip-types --test --test-concurrency=1 tests/realtime/*.test.ts",
     "test:e2e:chromium": "playwright test --project=chromium",
-    "test:e2e:production": "node --env-file-if-exists=.env.local scripts/e2e/production.mjs"
+    "test:e2e:production": "node --env-file-if-exists=.env.local scripts/e2e/production.mjs",
+    "test:smoke:hosted": "playwright test -c playwright.smoke.config.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "4.0.87",
