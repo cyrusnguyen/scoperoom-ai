@@ -5,7 +5,7 @@ import { projectErrors } from "@/features/projects/contracts/errors";
 import { ProjectError } from "@/features/projects/server/errors";
 import { createLogger } from "@/server/logger";
 
-const logger = createLogger({ environment: process.env.APP_ENV });
+const logger = createLogger({ environment: process.env.APP_ENV, releaseId: process.env.VERCEL_GIT_COMMIT_SHA });
 
 export function requestIdFor(request: Request) {
   const incoming = request.headers.get("x-request-id");

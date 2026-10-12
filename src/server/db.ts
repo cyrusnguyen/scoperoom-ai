@@ -1,11 +1,23 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../../prisma/generated/client.ts";
 
+/**
+ * Hosted Supabase signs database certificates with its own root CA. SCOPEROOM_DATABASE_CA_PEM (a public certificate) makes every pooled
+ * connection verify against it; the URL's TLS parameters are dropped because pg would otherwise let them replace this setting.
+ */
+export function poolConfig(connectionString: string, env: Partial<NodeJS.ProcessEnv> = process.env) {
+  const ca = env.SCOPEROOM_DATABASE_CA_PEM?.trim() ? env.SCOPEROOM_DATABASE_CA_PEM : undefined;
+  if (!ca) return { connectionString };
+  const url = new URL(connectionString);
+  for (const name of ["sslmode", "sslrootcert", "sslcert", "sslkey", "ssl", "uselibpqcompat", "sslnegotiation"]) url.searchParams.delete(name);
+  return { connectionString: url.toString(), ssl: { ca, rejectUnauthorized: true } };
+}
+
 export async function createDatabase(connectionString = process.env.DATABASE_URL, expectedEnvironmentId = process.env.SCOPEROOM_ENVIRONMENT_ID) {
   if (!connectionString) throw new Error("DATABASE_URL is required for database access.");
   if (!expectedEnvironmentId) throw new Error("SCOPEROOM_ENVIRONMENT_ID is required for database access.");
   // allowExitOnIdle lets scripts and test processes exit; servers keep the pool warm while busy.
-  const database = new PrismaClient({ adapter: new PrismaPg({ connectionString, allowExitOnIdle: true }) });
+  const database = new PrismaClient({ adapter: new PrismaPg({ ...poolConfig(connectionString), allowExitOnIdle: true }) });
   try {
     const identity = await database.environmentIdentity.findUnique({ where: { id: 1 }, select: { environmentId: true } });
     if (identity?.environmentId !== expectedEnvironmentId) throw new Error("Database environment identity does not match this process.");

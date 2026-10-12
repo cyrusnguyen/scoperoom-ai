@@ -136,3 +136,10 @@ test("importing reset launches no command", () => {
   const result = childProcess.spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(new URL("../scripts/db/reset.mjs", import.meta.url).href)})`], { encoding: "utf8", env: { ...process.env, SCOPEROOM_SUPABASE_CONFIG: "missing-config" } });
   assert.deepEqual([result.status, result.stdout, result.stderr], [0, "", ""]);
 });
+
+test("reset refuses a hosted or misspelled target kind before any command", (t) => {
+  const { env, calls } = fixture(t);
+  assert.throws(() => resetLocal({ ...env, SCOPEROOM_DB_TARGET: "hosted" }), /local only/);
+  assert.throws(() => resetLocal({ ...env, SCOPEROOM_DB_TARGET: "Hosted" }), /local or hosted/);
+  assert.equal(calls.length, 0);
+});

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { BASELINE_MIGRATION, targetKind } from "./guard.mjs";
 
 const node = process.execPath;
 const corepack = process.platform === "win32" ? "corepack.cmd" : "corepack";
@@ -16,6 +17,11 @@ run(node, ["scripts/db/realtime.mjs", "prepare", "--initial"]);
 const migrationUrl = new URL(process.env.MIGRATION_DATABASE_URL);
 migrationUrl.searchParams.set("schema", "app");
 process.env.MIGRATION_DATABASE_URL = migrationUrl.toString();
+if (targetKind() === "hosted") {
+  // Hosted postgres cannot pass on REFERENCES to auth.users: guard applies the baseline with postgres adding that one foreign key.
+  run(node, ["scripts/db/guard.mjs", "--hosted-baseline"]);
+  run(corepack, ["pnpm", "exec", "prisma", "migrate", "resolve", "--applied", BASELINE_MIGRATION]);
+}
 run(corepack, ["pnpm", "exec", "prisma", "migrate", "deploy"]);
 run(node, ["scripts/db/guard.mjs", "--bind"]);
 run(node, ["scripts/db/guard.mjs"]);

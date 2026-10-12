@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { Client } from "pg";
-import { inspectLocalContainer, localConfig, targetInput, verifyTarget } from "./guard.mjs";
+import { inspectLocalContainer, localConfig, providerSql, targetInput, targetKind, verifyTarget } from "./guard.mjs";
 
 // Guarded operator setup for private Realtime (Stage 04.1, scoped credential role from 04.3). Idempotent configuration, not a second migration ledger:
 //   prepare  before Prisma deploy: fixed roles and the app_private schema (owned by app_migrator); lends the reader to app_migrator when a
@@ -37,13 +37,6 @@ const POLICIES = {
   scoperoom_rt_hint: `create policy scoperoom_rt_hint on realtime.messages for insert to ${NOTIFIER} with check (
     extension = 'broadcast' and private and event = 'PROJECT_CHANGED' and topic ~ '${HINT_TOPIC}')`,
 };
-
-/** Runs statements as the provider superuser inside the exact local database container (postgres cannot delegate provider grants). */
-function providerSql(sql) {
-  const { projectId, dbPort } = localConfig();
-  const { docker } = inspectLocalContainer(projectId, dbPort);
-  execFileSync(docker, ["exec", `supabase_db_${projectId}`, "psql", "-U", "supabase_admin", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", sql], { stdio: ["ignore", "ignore", "inherit"] });
-}
 
 /** Calls the local Realtime tenant API inside the exact loopback container; the management secret never leaves memory. */
 function tenantApi() {
@@ -86,6 +79,7 @@ export function requestLocalTenant({ docker, projectId, secret, method, body = u
 }
 
 async function requirePrivateOnly(configure) {
+  if (targetKind() === "hosted") return requireHostedPrivateOnly();
   const api = tenantApi();
   let tenant = api("GET");
   if (tenant.status !== 200) throw new Error(`Realtime setup found no local tenant (status ${tenant.status}).`);
@@ -95,6 +89,31 @@ async function requirePrivateOnly(configure) {
     tenant = api("GET");
   }
   if (tenant.status !== 200 || tenant.data?.private_only !== true) throw new Error("Realtime tenant still allows public channels.");
+}
+
+/** Hosted tenants are configured in the Dashboard (Realtime settings, "Allow public access" off); prove it by joining a public channel. */
+async function requireHostedPrivateOnly() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  if (!url || !key) throw new Error("Hosted Realtime check needs NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY.");
+  if (new URL(url).hostname !== `${process.env.SCOPEROOM_SUPABASE_PROJECT_REF}.supabase.co`) throw new Error("Hosted Realtime check rejected a Supabase URL for another project.");
+  const { createClient } = await import("@supabase/supabase-js"); // loaded only for hosted runs
+  const supabase = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  try {
+    const [status, error] = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(["TIMED_OUT"]), 15_000);
+      supabase.channel(`scoperoom-public-probe-${randomUUID()}`, { config: { private: false } }).subscribe((state, err) => {
+        if (state === "SUBSCRIBED" || state === "CHANNEL_ERROR") {
+          clearTimeout(timer);
+          resolve([state, err]);
+        }
+      });
+    });
+    if (status === "SUBSCRIBED") throw new Error("Hosted Realtime still allows public channels: turn off Allow public access in the Supabase Realtime settings.");
+    // ponytail: matches the provider's refusal wording; 12b Step 3 records the real message. Widen only to that exact text.
+    if (status !== "CHANNEL_ERROR" || !/private/i.test(error?.message ?? "")) throw new Error(`Hosted Realtime private-only check was inconclusive (${status}).`);
+  } finally {
+    await supabase.removeAllChannels();
+  }
 }
 
 async function prepare(client) {
@@ -240,7 +259,12 @@ async function apply(client) {
   await release(client); // the migration is done: the reader is no longer lent to app_migrator
   if (!(await client.query(`select to_regprocedure('${HELPER}') as fn, to_regprocedure('${ADAPTER}') as adapter, to_regprocedure('${TRIGGER_FN}') as trigger`)).rows.every((row) => row.fn && row.adapter && row.trigger)) throw new Error("Realtime setup needs the private Realtime migration applied first.");
   await requireProviderTable(client);
-  providerSql(`GRANT USAGE ON SCHEMA realtime TO ${CLIENT}; GRANT SELECT, INSERT ON realtime.messages TO ${CLIENT}; GRANT USAGE ON SCHEMA auth TO ${READER}; GRANT EXECUTE ON FUNCTION auth.uid(), auth.jwt() TO ${READER}; GRANT USAGE ON SCHEMA realtime TO ${NOTIFIER}; GRANT EXECUTE ON FUNCTION realtime.send(jsonb, text, text, boolean) TO ${NOTIFIER}; GRANT INSERT ON realtime.messages TO ${NOTIFIER};`);
+  // Hosted postgres cannot pass on Auth grants or realtime.send: the reader reads auth through anon, and PUBLIC already executes those functions
+  // (guard.mjs checks both at --initial; helperProblems below checks the effective access).
+  const providerGrants = targetKind() === "hosted"
+    ? `GRANT anon TO ${READER} WITH INHERIT TRUE, SET FALSE;`
+    : `GRANT USAGE ON SCHEMA auth TO ${READER}; GRANT EXECUTE ON FUNCTION auth.uid(), auth.jwt() TO ${READER}; GRANT EXECUTE ON FUNCTION realtime.send(jsonb, text, text, boolean) TO ${NOTIFIER};`;
+  await providerSql(client, `GRANT USAGE ON SCHEMA realtime TO ${CLIENT}; GRANT SELECT, INSERT ON realtime.messages TO ${CLIENT}; GRANT USAGE ON SCHEMA realtime TO ${NOTIFIER}; GRANT INSERT ON realtime.messages TO ${NOTIFIER}; ${providerGrants}`);
   await client.query(`
     grant usage on schema app to ${READER};
     grant usage on schema app_private to ${NOTIFIER};
