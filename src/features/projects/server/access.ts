@@ -4,6 +4,7 @@ import { getDatabase } from "../../../server/db.ts";
 import { resolveProfile } from "../../access/server/profile.ts";
 import { uuid, type ProjectAccessRole, type ProjectIdentity } from "../contracts/project.ts";
 import { ProjectError } from "./errors.ts";
+import { accountPlan } from "./plan.ts";
 
 export type Transaction = Prisma.TransactionClient;
 export const RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -141,21 +142,17 @@ export async function lockProject(tx: Transaction, profileId: string, projectId:
   return { ...project, role: await projectRole(tx, project, profileId) };
 }
 
-/** Lock order 2: the owner capacity guard shared by project creation and restore. Operators lock the same row. */
+/** Lock order 2: the owner capacity guard shared by project creation and restore. Operators lock the same row; owners on the default plan, who have none, serialize on its per-owner transaction lock. */
 export async function lockOwnerCapacity(tx: Transaction, ownerId: string) {
   await tx.$queryRaw`SELECT app.lock_pilot_entitlement(${ownerId}::uuid)::text AS locked`;
 }
 
-export function entitlementActive(entitlement: { active: boolean; expiresAt: Date | null; revokedAt: Date | null } | null): boolean {
-  return Boolean(entitlement?.active && !entitlement.revokedAt && (!entitlement.expiresAt || entitlement.expiresAt > new Date()));
-}
-
 /** Call after lockOwnerCapacity in the same READ COMMITTED transaction so the count includes every committed project. */
 export async function assertOwnerCapacity(tx: Transaction, ownerId: string) {
-  const entitlement = await tx.pilotEntitlement.findUnique({ where: { profileId: ownerId } });
-  if (!entitlement || !entitlementActive(entitlement)) throw new ProjectError("ENTITLEMENT_REQUIRED");
+  const plan = accountPlan(await tx.pilotEntitlement.findUnique({ where: { profileId: ownerId } }));
+  if (!plan.allowed) throw new ProjectError("ENTITLEMENT_REQUIRED");
   const activeOwned = await tx.project.count({ where: { ownerId, status: "ACTIVE" } });
-  if (activeOwned >= entitlement.maxOwnedProjects) throw new ProjectError("OWNED_PROJECT_LIMIT", { activeOwned, maxOwned: entitlement.maxOwnedProjects });
+  if (activeOwned >= plan.maxOwnedProjects) throw new ProjectError("OWNED_PROJECT_LIMIT", { activeOwned, maxOwned: plan.maxOwnedProjects });
 }
 
 export function requireOwner(project: ProjectRow) {

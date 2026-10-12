@@ -1,5 +1,24 @@
 # Progress tracker
 
+## Default account plan (2026-10-12)
+
+Branch `feat/default-account-plan` from main `82b01da`. User decisions on 2026-10-12: any verified account creates projects without an operator grant; the default plan keeps the 10 active owned projects cap and allows 5 AI requests in total; AI usage stays charged to the project owner; limits are customisable per account (members and staff), and staff are currently unlimited; an Admin Dashboard will edit them, planned only, to build after the hosted pilot stage (see `docs/admin-dashboard-plan.md`); the local database migration was approved.
+
+Design: no `pilot_entitlement` row is the default plan (10 projects, 5 AI requests in total, 30 a day), defined once in `accountPlan` (`src/features/projects/server/plan.ts`). A row is an override: while active and unexpired it sets `max_owned_projects`, `ai_total_run_limit` and `ai_daily_run_limit` (NULL is unlimited); an inactive or revoked row blocks ownership and AI; an expired row falls back to the default plan. Existing rows keep no total limit and 30 a day. Migration `20261012000100_default_account_plan` adds the two columns, relaxes the fixed `<= 30` day-counter check to non-negative counters, adds a per-owner advisory lock to `lock_pilot_entitlement` so default-plan creates stay serialized, and lets `ai_actor_may_run` accept owners without a row. Admission reads the plan last, after the owner/day reservation, and refuses with `AI_BUDGET_EXCEEDED` (daily) or the new `AI_ALLOWANCE_EXCEEDED` (429, total across days; refunded reservations do not count). The migration was applied locally through `corepack pnpm db:migrate` (target verified local); the local database now has 33 migrations.
+
+Evidence, one gate at a time against the local 623xx stack:
+
+- Lint 0, typecheck 0, unit 658/658.
+- Integration run 1: 376/380. One failure was the old `0..30` counter assertion this change replaces (test updated, its file then 14/14). Three `ai-reads` tests failed only because the run crossed 00:00 UTC while they seed runs at now and ten minutes ago on one assumed day.
+- Integration run 2 after the update: 379/380. The failure was a transient Supabase Auth `Database error creating new user` (500) while `realtime.test.ts` created a fixture user; no migration touches Auth, and that file passed alone 8/8.
+- Integration run 3: 380/380, 237 s, exit 0. This is the clean complete run; runs 1 and 2 are reported separately and not combined.
+- Workers 30/30; serial Realtime 13/13.
+- Browser (unfiltered production): 492/493; the failure was `connect ETIMEDOUT 127.0.0.1:62300` in `invitation-api.spec.ts` (local loopback transport), and that test passed alone.
+
+Limitations: hosted CI is pending; the AI tab does not show remaining requests yet (Admin Dashboard plan); overrides are changed by operator SQL until the dashboard exists.
+
+Next: pull request review of `feat/default-account-plan` into main.
+
 ## Resizable side panels (2026-10-11)
 
 Branch `feat/resizable-panels` from main `82b01da` (Stage 9.2 merged as #30). Requested by the user: the docked Projects sidebar and right panel are resizable through an accessible window splitter (`src/features/shell/ui/panel-resizer.tsx`) by pointer, arrows, Home, End, Enter and double click. Pure limits live in `dock.ts` (`PANEL_WIDTHS`, `clampPanelWidth`, `parsePanelWidths`): sidebar 220 to 480 px, right panel 320 to 720 px, and the editor never drops below min(W, 560). Widths persist per browser in localStorage. Drag previews update the CSS width variables directly and commit once, so the Studio is not re-rendered per frame. No server, contract, migration or dependency change.
@@ -8,7 +27,7 @@ Evidence: lint 0, typecheck 0, unit 657/657 (three new dock tests), `corepack pn
 
 Review follow-up: commit `6dd2119` makes `aria-valuemax` and End use the reachable maximum from the same room-aware clamp (580 px rather than 720 px beside a 300 px sidebar at 1440 px). The extended shell test failed on the previous source (Received 720, Expected 580) and `tests/e2e/shell.spec.ts` now passes 10/10.
 
-Next: pull request review of `feat/resizable-panels` into main.
+Merged into main as #31 (`233aa9e`) on 2026-10-12.
 
 ## Stage 9.2 review completion and Review UI refresh (2026-10-10)
 

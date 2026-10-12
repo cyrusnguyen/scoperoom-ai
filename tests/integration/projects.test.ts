@@ -48,9 +48,12 @@ test("an invalid saved draft makes an authorized bootstrap unavailable", { skip:
     assert.deepEqual((await getProjectBootstrap(owner, projectId)).draft.document, saved.documentJson);
   });
 });
-test("owning a project requires an active entitlement; accepting never does", { skip: !canRun }, async () => {
-  await withFixture(async ({ user }) => {
+test("owning a project needs no entitlement row, but an inactive override denies it", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, entitle, database, profileId }) => {
     const person = await user();
+    assert.equal((await createProject(person, { name: "Default plan", key: randomUUID() })).replayed, false);
+    await entitle(person);
+    await database.query("update app.pilot_entitlement set active = false where profile_id = $1", [await profileId(person)]);
     await assert.rejects(createProject(person, { name: "Denied", key: randomUUID() }), code("ENTITLEMENT_REQUIRED"));
   });
 });

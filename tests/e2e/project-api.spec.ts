@@ -30,7 +30,11 @@ test("a project is created once, owned by its creator and private to others", as
     const keyless = await page.request.post("/api/projects", { headers: { Origin: appUrl }, data: { name: "No key" } });
     expect(keyless.status()).toBe(400);
     expect((await keyless.json() as { error: { code: string } }).error.code).toBe("INVALID_INPUT");
-    const denied = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { name: "No entitlement" } });
+    // A new account is on the default plan; only an inactive override denies ownership.
+    expect((await (await page.request.get("/api/projects")).json() as { capacity: unknown }).capacity).toEqual({ entitled: true, activeOwned: 0, maxOwned: 10, canCreate: true });
+    await entitle(database, authUserId);
+    await database.query("update app.pilot_entitlement set active = false where profile_id = (select id from app.user_profile where auth_user_id = $1)", [authUserId]);
+    const denied = await page.request.post("/api/projects", { headers: { Origin: appUrl, "Idempotency-Key": randomUUID() }, data: { name: "Inactive override" } });
     expect(denied.status()).toBe(403);
     expect((await denied.json() as { error: { code: string } }).error.code).toBe("ENTITLEMENT_REQUIRED");
     await entitle(database, authUserId);

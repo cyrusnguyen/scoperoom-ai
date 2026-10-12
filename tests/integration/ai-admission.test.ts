@@ -73,13 +73,15 @@ const run = async (admin: Client, runId: string) => (await admin.query("select s
 const RESULT = { schemaVersion: 1, kind: "clarification", message: "need more" };
 const HASH = "a".repeat(64);
 
-test("one nonterminal run per project, owner-day counters stay inside 0..30, attempts stay 1..2", { skip: !canRun }, async () => {
+test("one nonterminal run per project, owner-day counters stay non-negative with no fixed ceiling, attempts stay 1..2", { skip: !canRun }, async () => {
   await withContext(async ({ admin, seed }) => {
     const first = await seed();
     await assert.rejects(seed({ owner: first.owner, projectId: first.projectId }), code(UNIQUE));
-    for (const [reserved, consumed] of [[-1, 0], [0, -1], [20, 11], [31, 0]]) {
+    for (const [reserved, consumed] of [[-1, 0], [0, -1]]) {
       await assert.rejects(admin.query("update app.ai_budget_day set reserved_runs = $2, consumed_runs = $3 where owner_id = $1", [first.owner, reserved, consumed]), code(CHECK));
     }
+    // Daily limits belong to the owner's plan and are checked at admission, so the counters have no fixed ceiling.
+    await admin.query("update app.ai_budget_day set reserved_runs = 31, consumed_runs = 40 where owner_id = $1", [first.owner]);
     await admin.query("update app.ai_budget_day set reserved_runs = 20, consumed_runs = 10 where owner_id = $1", [first.owner]);
     for (const number of [0, 3]) await assert.rejects(admin.query("insert into app.ai_run_attempt (run_id, attempt_number, deadline_at) values ($1, $2, now() + interval '1 minute')", [first.runId, number]), code(CHECK));
     await admin.query("insert into app.ai_run_attempt (run_id, attempt_number, deadline_at) values ($1, 1, now() + interval '1 minute')", [first.runId]);

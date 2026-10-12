@@ -14,7 +14,7 @@ export const AI_LIMITS = {
   runPageSize: 50, startBodyBytes: 64 * 1024, captureBytes: 256 * 1024, resultBytes: 128 * 1024,
   // Before/after subsets of two valid 2 MiB documents, plus bounded IDs, assumptions and citations.
   applicationEvidenceBytes: 5 * 1024 * 1024,
-  ownerConcurrentRuns: 2, ownerDailyRuns: 30, applicableResults: 10,
+  ownerConcurrentRuns: 2, applicableResults: 10,
   // Operational default, not a product promise: start attempts per actor per minute, counted by the keyed AI_ADMISSION bucket.
   admissionAttemptsPerMinute: 30,
   operations: 100, dependsOn: 100, assumptions: 20, assumptionCodePoints: 2_000, citations: 100, excerptCodePoints: 2_000,
