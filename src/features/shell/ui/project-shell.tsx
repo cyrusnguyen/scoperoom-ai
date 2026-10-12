@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition, type CSSProperties, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
 import { accountChanged, apiRead, SESSION_ENDED, sessionEnded } from "@/client/api";
@@ -17,13 +17,14 @@ import { StudioProvider } from "@/features/studio/ui/studio-context";
 import { emptyOutbox, pendingCount } from "@/features/studio/ui/outbox";
 import { admits, afterDraftRead, type StudioUi } from "@/features/studio/ui/studio-ui";
 import Dialog, { CancelFocus } from "./dialog";
-import { resolveDock } from "./dock";
+import { clampPanelWidth, parsePanelWidths, resolveDock, type PanelSide, type PanelWidths } from "./dock";
 import { Icon } from "./icon";
 import LifecycleDialog, { type LifecycleKind } from "./lifecycle-dialog";
 import NewProjectDialog from "./new-project-dialog";
 import ProjectEditor, { NoProjectOpen, ProjectUnavailable } from "./project-editor";
 import { currentAiRun, anyDirty, dirtyCount, discardDrafts, dropProject, setDraft, setRightOpen, setRightTab, uiFor, updateUi, type RightTab, type UiStore } from "./project-ui";
 import ProjectsSidebar, { LIST_TABS, type InviteRow, type ListTab } from "./projects-sidebar";
+import PanelResizer from "./panel-resizer";
 import RightPanel from "./right-panel";
 import AiActions from "@/features/proposals/ui/ai-actions";
 import SpecsPanel from "@/features/scope/ui/specs-panel";
@@ -38,6 +39,7 @@ type Target = { id: string; name: string };
 type ShellDialog = { kind: "create" } | { kind: "switch"; target: string } | { kind: LifecycleKind; project: Target };
 
 const prefsKey = "scoperoom_shell";
+const widthsKey = "scoperoom_panel_widths";
 const runIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const doneVerb: Record<LifecycleKind, string> = { archive: "Archived", restore: "Restored", leave: "Left" };
 
@@ -49,6 +51,12 @@ function readPrefs(): Prefs {
     if (value && typeof value === "object") saved = value as Partial<Prefs>;
   } catch { /* Storage is unavailable or holds something else: use the defaults. */ }
   return { leftOpen: saved.leftOpen !== false, listTab: LIST_TABS.includes(saved.listTab as ListTab) ? saved.listTab as ListTab : "owned" };
+}
+
+/** Docked panel widths are a per-browser layout preference, so they outlive the session. */
+function readWidths(): PanelWidths {
+  try { return parsePanelWidths(typeof window === "undefined" ? null : JSON.parse(localStorage.getItem(widthsKey) ?? "null")); }
+  catch { return parsePanelWidths(null); }
 }
 
 export default function ProjectShell({ signOut, children }: { signOut: () => Promise<void>; children: ReactNode }) {
@@ -64,6 +72,8 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   const projectIdRef = useRef(projectId);
   const [width, setWidth] = useState<number | null>(null);
   const [prefs, setPrefs] = useState(readPrefs);
+  const [widths, setWidths] = useState(readWidths);
+  const editorRef = useRef<HTMLElement>(null);
   const [lastOpened, setLastOpened] = useState<"left" | "right" | null>(null);
   const [lists, setLists] = useState<ProjectLists | null>(null);
   const [invites, setInvites] = useState<{ items: InviteRow[]; truncated: boolean } | null>(null);
@@ -108,6 +118,9 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   useEffect(() => {
     try { sessionStorage.setItem(prefsKey, JSON.stringify(prefs)); } catch { /* Preferences are optional. */ }
   }, [prefs]);
+  useEffect(() => {
+    try { localStorage.setItem(widthsKey, JSON.stringify(widths)); } catch { /* Preferences are optional. */ }
+  }, [widths]);
 
   const loadLists = useCallback(async () => {
     const [projects, mine] = await Promise.all([apiRead<ProjectLists>("/api/projects"), apiRead<{ items: MyInvitation[]; truncated: boolean }>("/api/invitations")]);
@@ -208,7 +221,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
   }, [unsaved]);
 
   const ui = uiFor(store, projectId);
-  const dock = resolveDock(width ?? 0, { leftOpen: prefs.leftOpen, rightOpen: Boolean(projectId) && ui.rightOpen, lastOpened });
+  const dock = resolveDock(width ?? 0, { leftOpen: prefs.leftOpen, rightOpen: Boolean(projectId) && ui.rightOpen, lastOpened, leftW: widths.left, rightW: widths.right });
   const current = projectId && opened?.projectId === projectId ? opened : null;
   const bootstrap = current?.bootstrap;
   const capacity = lists?.capacity ?? null;
@@ -239,6 +252,19 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (!projectId) return;
     setStore((previous) => setRightTab(previous, projectId, tab));
     setLastOpened("right");
+  }
+  /** The window and the other panel while it is docked: what a resize must leave for the editor. */
+  function room(side: PanelSide) {
+    return { W: width ?? 0, other: side === "left" ? (dock.right === "docked" ? widths.right : 0) : (dock.left === "docked" ? widths.left : 0) };
+  }
+  // While dragging, move the layout directly so the editor and canvas are not re-rendered on every frame; the commit re-renders once.
+  function previewWidth(side: PanelSide, value: number) {
+    shellRef.current?.style.setProperty(side === "left" ? "--sidebar-width" : "--rpanel-width", `${value}px`);
+    if (editorRef.current && width !== null) editorRef.current.style.width = `${width - value - room(side).other}px`;
+  }
+  function resizer(side: PanelSide) {
+    return <PanelResizer side={side} width={widths[side]} clamp={(value) => clampPanelWidth(side, value, room(side))} onPreview={(value) => previewWidth(side, value)}
+      onCommit={(value) => setWidths((previous) => ({ ...previous, [side]: value }))} />;
   }
   function navigate(id: string | null) {
     if (dock.left === "overlay") setPrefs((previous) => ({ ...previous, leftOpen: false }));
@@ -340,9 +366,12 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     </RightPanel>
     : null;
 
-  const main = <main id="editor-main" tabIndex={-1} className="editor-slot" style={{ width: dock.editor }}>{editor}</main>;
+  const main = <main ref={editorRef} id="editor-main" tabIndex={-1} className="editor-slot" style={{ width: dock.editor }}>{editor}</main>;
+  const rightResizer = panel && dock.right === "docked" ? resizer("right") : null;
 
-  return <div className="app-shell" ref={shellRef}>
+  const panelWidths = width === null ? undefined : { "--sidebar-width": `${widths.left}px`, "--rpanel-width": `${widths.right}px` } as CSSProperties;
+
+  return <div className="app-shell" ref={shellRef} style={panelWidths}>
     <a className="skip-link" href="#editor-main">Skip to editor</a>
     <div className="app-main">
       {width !== null && <>
@@ -355,14 +384,15 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
             onAction={(kind, item) => setDialog({ kind, project: { id: item.id, name: item.name } })}
             onInviteSettled={(text, error) => { notify(text, error); void loadLists(); }} />
         </div>
+        {dock.left === "docked" && resizer("left")}
         {projectId && bootstrap
           ? <SyncProvider key={projectId} projectId={projectId} initial={bootstrap.status} live={() => liveOf(projectId)} bootstrap={(fence) => loadProject(projectId, undefined, fence)}>
             <StudioProvider key={projectId} projectId={projectId} draft={bootstrap.draft} role={bootstrap.project.role} archived={bootstrap.project.status === "ARCHIVED"}
               narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={projectChanged} onInspect={() => openRightTab("details")} saveRef={saveChangesRef}>
-              {main}{panel}
+              {main}{rightResizer}{panel}
             </StudioProvider>
           </SyncProvider>
-          : <>{main}{panel}</>}
+          : <>{main}{rightResizer}{panel}</>}
       </>}
     </div>
     <footer className="app-footer">
