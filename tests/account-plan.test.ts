@@ -18,7 +18,7 @@ test("environment variables set the default AI limits", () => {
   assert.deepEqual(accountPlan(null, now, env), { allowed: true, maxOwnedProjects: 10, aiTotalRuns: 50, aiDailyRuns: 0 });
   assert.deepEqual(accountPlan(override({ expiresAt: now }), now, env).aiTotalRuns, 50);
   assert.deepEqual(accountPlan(override({ aiTotalRunLimit: 7 }), now, env).aiTotalRuns, 7);
-  for (const bad of ["-1", "1.5", "ten", "1e3", "unlimited"]) {
+  for (const bad of ["-1", "1.5", "ten", "1e3", "unlimited", "1".repeat(400), "9007199254740993"]) {
     assert.throws(() => accountPlan(null, now, { AI_DAILY_RUN_LIMIT: bad }), /AI_DAILY_RUN_LIMIT must be a non-negative integer/);
   }
 });

@@ -10,8 +10,10 @@ type PlanEnv = Partial<NodeJS.ProcessEnv>;
 function envLimit(env: PlanEnv, name: "AI_TOTAL_RUN_LIMIT" | "AI_DAILY_RUN_LIMIT", fallback: number): number {
   const value = env[name]?.trim();
   if (!value) return fallback;
-  if (!/^\d+$/.test(value)) throw new Error(`${name} must be a non-negative integer.`); // Fail closed: a typo must not grant the default.
-  return Number(value);
+  const limit = Number(value);
+  // Fail closed: a typo must not grant the default, and an overflow must not become Infinity (unlimited).
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(limit)) throw new Error(`${name} must be a non-negative integer.`);
+  return limit;
 }
 
 export type EntitlementOverride = {
