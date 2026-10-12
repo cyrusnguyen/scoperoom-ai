@@ -1,5 +1,15 @@
 # Progress tracker
 
+## Resizable side panels (2026-10-11)
+
+Branch `feat/resizable-panels` from main `82b01da` (Stage 9.2 merged as #30). Requested by the user: the docked Projects sidebar and right panel are resizable through an accessible window splitter (`src/features/shell/ui/panel-resizer.tsx`) by pointer, arrows, Home, End, Enter and double click. Pure limits live in `dock.ts` (`PANEL_WIDTHS`, `clampPanelWidth`, `parsePanelWidths`): sidebar 220 to 480 px, right panel 320 to 720 px, and the editor never drops below min(W, 560). Widths persist per browser in localStorage. Drag previews update the CSS width variables directly and commit once, so the Studio is not re-rendered per frame. No server, contract, migration or dependency change.
+
+Evidence: lint 0, typecheck 0, unit 657/657 (three new dock tests), `corepack pnpm test:e2e:production tests/e2e/shell.spec.ts` 10/10 including the new resize test, and a dev-server check of drag, the 560 px editor floor, keyboard limits, reload persistence, resets, no splitter at 390 px and no console errors.
+
+Review follow-up: commit `6dd2119` makes `aria-valuemax` and End use the reachable maximum from the same room-aware clamp (580 px rather than 720 px beside a 300 px sidebar at 1440 px). The extended shell test failed on the previous source (Received 720, Expected 580) and `tests/e2e/shell.spec.ts` now passes 10/10.
+
+Next: pull request review of `feat/resizable-panels` into main.
+
 ## Stage 9.2 review completion and Review UI refresh (2026-10-10)
 
 Branch `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan`, from main `46ea382`. The Stage 9.2 decisions, publication and approved Markdown work, including its external-review corrections, was copied byte for byte from the Stage 9.2 implementation worktree as baseline `0bfaabb`. Code commits `0996f91` through `38f950c` finish the review fixes and refresh the Review and Approval UI; docs commits `0fb5cc0` and `8351aac` record the review completion, qualification and external review follow-up; the final-review polish commit `705aa19` (Review tones, labels and counters) and the docs commits that follow it close the whole-branch review's Minor findings. No migration, dependency, API route, server service, SQL or contract changed after the baseline; the local database keeps its 32 migrations.
@@ -42,7 +52,7 @@ Limitations: hosted CI, deployment, live providers and manual screen reader pass
 
 Manual happy-path walkthrough (2026-10-11) against the local dev server on 127.0.0.1:3100 with two local test accounts: an owner and an invited Reviewer as designated approver. It covered flow confirmation, invitation, approver assignment, preview, freeze, request changes, approval and publication, approved history, approved Markdown copy and download (byte-identical), saved work pending against baseline 1, rejection, withdrawal and the 320 px reader without horizontal overflow. It found one defect: opening an approved baseline rendered `CandidateReader` and `ApprovedMarkdown` as siblings with the same snapshot key, which React reports only in development. Commit `3156487` keys them once through a Fragment and adds `tests/jsx-keys.test.ts`, which failed on the previous source and passes now. After the fix: lint 0, typecheck 0, unit 654/654, `corepack pnpm test:e2e:production tests/e2e/reviews.spec.ts` 47/47 passed in 4.7 m, and no console errors on the Review panel at 1440 and 320 px. The walkthrough needed the operator pilot entitlement for the owner account and `NEXT_PUBLIC_APP_URL` set to the dev server origin, because writes from any other origin are refused. Screenshots stay local and uncommitted. A later pass showed History rendering an empty Approved baselines heading while the first baseline read was in flight; commit `9cedb7e` adds a Loading baselines status with a browser test that failed on the previous source and passes now. The Review spec then passed 47 of 48; the other, the narrow keyboard preview test, failed on `net::ERR_NO_BUFFER_SPACE` during `page.goto` (local loopback socket exhaustion) and passed alone.
 
-Next: pull request review of `feat/stage-9.2-decisions-and-approve-markdown-implementation-plan` into main.
+Merged into main as #30 (`82b01da`) on 2026-10-11.
 
 ## External review findings follow-up (2026-10-10, closed)
 
