@@ -6,6 +6,8 @@ Branch `feat/resizable-panels` from main `82b01da` (Stage 9.2 merged as #30). Re
 
 Evidence: lint 0, typecheck 0, unit 657/657 (three new dock tests), `corepack pnpm test:e2e:production tests/e2e/shell.spec.ts` 10/10 including the new resize test, and a dev-server check of drag, the 560 px editor floor, keyboard limits, reload persistence, resets, no splitter at 390 px and no console errors.
 
+Review follow-up: commit `6dd2119` makes `aria-valuemax` and End use the reachable maximum from the same room-aware clamp (580 px rather than 720 px beside a 300 px sidebar at 1440 px). The extended shell test failed on the previous source (Received 720, Expected 580) and `tests/e2e/shell.spec.ts` now passes 10/10.
+
 Next: pull request review of `feat/resizable-panels` into main.
 
 ## Stage 9.2 review completion and Review UI refresh (2026-10-10)
