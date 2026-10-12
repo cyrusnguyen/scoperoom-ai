@@ -73,3 +73,32 @@ test("text reads preserve exact UTF8 success, no-store and abort while JSON erro
   restore = stubFetch(async () => { throw new TypeError("Failed to fetch"); });
   try { const result = await apiReadText("/api/export"); assert.equal(result.ok, false); if (!result.ok) assert.equal(result.code, "NETWORK"); } finally { restore(); }
 });
+
+// A fetch that only ends when its signal aborts, like a request whose response never arrives.
+const hanging = async (_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+  init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+});
+
+test("a read whose response never arrives settles as an uncertain network failure at its deadline", async () => {
+  const restore = stubFetch(hanging);
+  try {
+    const result = await apiRead("/api/x", undefined, 20);
+    assert.equal(result.ok, false);
+    if (!result.ok) { assert.equal(result.code, "NETWORK"); assert.equal(result.uncertain, true); }
+  } finally { restore(); }
+});
+
+test("every read carries a deadline, and a caller's own abort still ends it", async () => {
+  let seen: AbortSignal | null | undefined;
+  let restore = stubFetch(async (_url, init) => { seen = init?.signal; return Response.json({}); });
+  try { await apiRead("/api/x"); assert.ok(seen instanceof AbortSignal, "a read without a caller signal still has a deadline"); } finally { restore(); }
+  restore = stubFetch(hanging);
+  try {
+    const controller = new AbortController();
+    const pending = apiRead("/api/x", controller.signal);
+    controller.abort();
+    const result = await pending;
+    assert.equal(result.ok, false);
+    assert.equal(controller.signal.aborted, true);
+  } finally { restore(); }
+});

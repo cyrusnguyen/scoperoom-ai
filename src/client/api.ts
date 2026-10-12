@@ -25,8 +25,12 @@ async function settle<T>(request: () => Promise<Response>, textSuccess = false):
   return error?.details ? { ...result, details: error.details } : result;
 }
 
-export function apiRead<T>(url: string, signal?: AbortSignal): Promise<ApiResult<T>> {
-  return settle<T>(() => fetch(url, { cache: "no-store", signal }));
+/** A read that gets no response gives up and reports a retryable network failure, so it cannot hold a save or form open forever. */
+const READ_TIMEOUT_MS = 20_000;
+
+export function apiRead<T>(url: string, signal?: AbortSignal, timeoutMs = READ_TIMEOUT_MS): Promise<ApiResult<T>> {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return settle<T>(() => fetch(url, { cache: "no-store", signal: signal ? AbortSignal.any([signal, deadline]) : deadline }));
 }
 
 /** Authenticated text success with the same JSON error envelope and session handling. */
