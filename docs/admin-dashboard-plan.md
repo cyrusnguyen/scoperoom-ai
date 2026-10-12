@@ -11,7 +11,7 @@ Give platform administrators one screen to see every account's plan and usage an
 - An account without a `pilot_entitlement` row is on the default plan in `src/features/projects/server/plan.ts`: 10 active owned projects, 5 AI requests in total and at most 30 a day.
 - A row is an override. While active and unexpired it sets `max_owned_projects`, `ai_total_run_limit` and `ai_daily_run_limit`; NULL AI limits are unlimited. An inactive or revoked row blocks project ownership and AI. An expired row falls back to the default plan.
 - AI usage is charged to the project owner and counted from `ai_budget_day` (consumed plus still reserved runs; refunded reservations leave no count).
-- Until the dashboard exists, an operator changes an account with SQL on the migrator connection, for example `insert into app.pilot_entitlement (profile_id, granted_by_operator, ai_total_run_limit, ai_daily_run_limit) values ($1, $2, null, null) on conflict (profile_id) do update set ai_total_run_limit = null, ai_daily_run_limit = null, active = true, revoked_at = null` to make an account unlimited.
+- Until the dashboard exists, an operator changes an account with SQL on the migrator connection, for example `insert into app.pilot_entitlement (profile_id, granted_by_operator, ai_total_run_limit, ai_daily_run_limit) values ($1, $2, null, null) on conflict (profile_id) do update set ai_total_run_limit = null, ai_daily_run_limit = null, active = true, revoked_at = null, expires_at = null` to make an account unlimited. Clearing `expires_at` matters: an expired override falls back to the default plan.
 
 ## Scope
 
