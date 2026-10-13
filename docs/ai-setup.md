@@ -12,6 +12,8 @@ Stage 06.1 implements durable AI admission, execution and inspection. The web ap
 | `INNGEST_SIGNING_KEY` | Worker only | Inngest signing key (Production); verifies Inngest's calls to `/api/inngest`. The web project never holds it. `INNGEST_DEV` is never set on either project. |
 | `SCOPEROOM_SERVICE` | Worker project only | `worker` makes the project serve `/api/inngest` and answer 404 elsewhere; the web project returns 404 for `/api/inngest`. |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Worker; explicitly authorized direct probe | Model credential. Configure it on the worker Vercel project only, never the browser, the web project or PR jobs. |
+| `WORKER_DATABASE_URL` | Worker project | Restricted `app_worker_runtime` login. Never a bootstrap or migrator credential. |
+| `SCOPEROOM_ENVIRONMENT_ID` | Web and worker projects | Must equal the database environment identity. Worker cleanup also checks it inside SQL. |
 
 The template `.env.example` supplies empty placeholders for these values. Local development and every test suite run with the Inngest values blank: managed e2e servers blank provider secrets, and automated worker tests inject fake ports. PR jobs receive no hosted provider keys.
 
