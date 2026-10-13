@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { NonRetriableError } from "inngest";
 import { deliverRun, MAX_DELIVERY_ROUNDS } from "../src/features/proposals/server/deliver-run.ts";
 
 const data = { runId: "00000000-0000-4000-8000-000000000001", dispatchId: "00000000-0000-4000-8000-000000000002", executionBinding: "sha-a", deadlineAt: new Date(Date.now() + 200_000).toISOString() };
@@ -9,12 +8,12 @@ function fakeStep() {
   return { runs, sleeps, step: { run: async (id: string, fn: () => Promise<string | null>) => { runs.push(id); return fn(); }, sleepUntil: async (id: string, at: string) => { sleeps.push([id, at]); } } };
 }
 
-test("a worker built for another binding refuses before any SQL claim or model call", async () => {
+test("a worker built for another binding returns before any step, SQL claim or model call, without failing the run", async () => {
   const { step, runs } = fakeStep();
   let executed = 0;
-  await assert.rejects(deliverRun(data, step, { binding: "sha-b", execute: async () => { executed += 1; } }), NonRetriableError);
+  await deliverRun(data, step, { binding: "sha-b", execute: async () => { executed += 1; } });
   assert.deepEqual([executed, runs.length], [0, 0]);
-  await assert.rejects(deliverRun(data, step, { binding: "", execute: async () => { executed += 1; } }), NonRetriableError); // an unset binding (undefined would fall back to process.env)
+  await deliverRun(data, step, { binding: "", execute: async () => { executed += 1; } }); // an unset binding (undefined would fall back to process.env)
   assert.deepEqual([executed, runs.length], [0, 0]);
 });
 
