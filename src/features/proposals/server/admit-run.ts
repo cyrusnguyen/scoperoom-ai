@@ -28,7 +28,8 @@ export function aiConfiguration(env: Partial<NodeJS.ProcessEnv> = process.env): 
   const { AI_MODEL: model, AI_EXECUTION_BINDING: executionBinding } = env;
   const valid = (value: string | undefined, max: number): value is string => Boolean(value) && value!.length <= max && /^[\x21-\x7e]+$/.test(value!);
   // The binding is the release SHA bound at admission; 128 characters is the admission limit.
-  if (!valid(model, 200) || !valid(executionBinding, 128)) throw new ProjectError("UNAVAILABLE");
+  // A quoted model id (copied with its quotes into a provider setting) would reach the provider after a run is reserved.
+  if (!valid(model, 200) || /["'`]/.test(model) || !valid(executionBinding, 128)) throw new ProjectError("UNAVAILABLE");
   return { model, executionBinding };
 }
 

@@ -214,6 +214,8 @@ test("an archived project and an unconfigured or oversized request are refused w
     assert.deepEqual(aiConfiguration({ AI_MODEL: "m", AI_EXECUTION_BINDING: "b" }), { model: "m", executionBinding: "b" });
     assert.throws(() => aiConfiguration({ AI_MODEL: "m", AI_EXECUTION_BINDING: "b".repeat(129) }), refused("UNAVAILABLE")); // the release SHA binding is at most 128 characters
     assert.equal(aiConfiguration({ AI_MODEL: "m", AI_EXECUTION_BINDING: "b".repeat(128) }).executionBinding.length, 128);
+    for (const model of ['"gemini-3.8-flash"', "'gemini-3.8-flash'", "`gemini`", "gemini 3", "gemini\n3"]) assert.throws(() => aiConfiguration({ AI_MODEL: model, AI_EXECUTION_BINDING: "b" }), refused("UNAVAILABLE"), model);
+    assert.equal(aiConfiguration({ AI_MODEL: "models/gemini-3.8-flash:latest", AI_EXECUTION_BINDING: "b" }).model, "models/gemini-3.8-flash:latest");
     const input = await start(database, projectId);
     const many = Array.from({ length: 600 }, () => ({ sourceVersionId: randomUUID(), expectedCurrentVersionId: randomUUID() }));
     assert.throws(() => parseStartRunInput({ taskType: "PROPOSE_FLOW", prompt: "x", draftId: input.draftId, expectedDocumentRevision: 1, expectedParentSnapshotId: null, context: { selection: null, sources: many } }, randomUUID()));
