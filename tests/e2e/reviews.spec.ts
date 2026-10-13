@@ -1082,11 +1082,13 @@ test("late decision acknowledgement settles off-selection when a status refresh 
   const started = new Promise<void>(resolve => { entered = resolve; }), held = new Promise<void>(resolve => { release = resolve; });
   const endpoint = `**/api/projects/${projectId}/reviews/${second.reviewId}/decision`;
   await page.route(endpoint, async route => { const response = await route.fetch(); entered(); await held; await route.fulfill({ response }); });
+  // A hidden page pauses polls and hints, so no status read can start a list read of its own until the focus below.
+  await page.evaluate(() => { Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" }); document.dispatchEvent(new Event("visibilitychange")); });
   await page.getByRole("button", { name: "Approve candidate", exact: true }).click(); await started;
   await page.getByRole("button", { name: "Back to history", exact: true }).click(); await page.locator(`#review-row-${first.reviewId}`).click();
   const reader = page.getByRole("article", { name: "Frozen candidate", exact: true });
   await expect(reader.getByText(first.reviewId, { exact: true })).toBeVisible();
-  // The receipt's list read is held until a status-driven list read has replaced it.
+  // The receipt's list read (the only one until the focus) is held until a status-driven list read has replaced it.
   let listEntered!: () => void, listRelease!: () => void, holding = true;
   const listStarted = new Promise<void>(resolve => { listEntered = resolve; }), listHeld = new Promise<void>(resolve => { listRelease = resolve; });
   const list = `**/api/projects/${projectId}/reviews`;
