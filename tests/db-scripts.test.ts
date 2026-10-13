@@ -14,8 +14,9 @@ test("guarded database CLIs run through a linked checkout path and stay inert wh
   try {
     const linked = join(dir, "db");
     symlinkSync(resolve("scripts/db"), linked, process.platform === "win32" ? "junction" : "dir");
-    for (const [script, args] of [["guard.mjs", []], ["realtime.mjs", ["verify"]]] as const) {
-      const result = spawnSync(process.execPath, [join(linked, script), ...args], { env, encoding: "utf8" });
+    for (const [script, args] of [["guard.mjs", []], ["realtime.mjs", ["verify"]], ["schedule.mjs", ["verify"]]] as const) {
+      // schedule.mjs is hosted-only and refuses a local target before it reads any configuration
+      const result = spawnSync(process.execPath, [join(linked, script), ...args], { env: script === "schedule.mjs" ? { ...env, SCOPEROOM_DB_TARGET: "hosted" } : env, encoding: "utf8" });
       assert.notEqual(result.status, 0, script);
       assert.match(result.stderr, /needs SCOPEROOM_BOOTSTRAP_DATABASE_URL/, script);
       const imported = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(new URL(`../scripts/db/${script}`, import.meta.url).href)})`], { env, encoding: "utf8" });
