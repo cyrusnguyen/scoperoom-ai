@@ -6,43 +6,37 @@ Stage 06.1 implements durable AI admission, execution and inspection. The web ap
 
 | Variable | Read by | Notes |
 | --- | --- | --- |
-| `AI_MODEL` | Web admission; direct probe | Model id recorded on each run. New admission is `UNAVAILABLE` when absent or invalid. The worker reads the captured model from PostgreSQL. Not a secret. |
-| `AI_EXECUTION_BINDING` | Web admission | Opaque Trigger external deployment id, at most 128 printable characters. Set it to the checked SHA used by the deploy workflow. Not a secret. |
-| `TRIGGER_SECRET_KEY` | Web dispatch; worker repair and cancel | Environment-scoped runtime credential. Without a dispatcher, runs remain `PENDING` until their SQL deadline; never-claimed reservations refund once. `SCOPEROOM_E2E` disables web dispatch. |
-| `TRIGGER_PROJECT_REF` | Worker build and deploy (`trigger.config.ts`) | Nonsecret project reference. The config throws if it is missing. Store it as the GitHub environment variable for deployment. |
-| `TRIGGER_ACCESS_TOKEN` | Trusted deploy workflow; explicitly authorized local dev CLI | CLI personal access token held as a GitHub environment secret for deploys or loaded locally for an authorized dev worker. Excluded from task runtime; never an application or PR secret. |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Worker; explicitly authorized direct probe | Model credential. Configure it in the intended Trigger environment, never the browser, Vercel web build or PR jobs. |
-| `WORKER_DATABASE_URL` | Worker | Restricted `app_worker_runtime` login. Never a bootstrap or migrator credential. |
-| `SCOPEROOM_ENVIRONMENT_ID` | Web and worker | Must equal the database environment identity. Worker cleanup also checks it inside SQL. |
+| `AI_MODEL` | Web admission; direct probe | Model id recorded on each run. New admission is `UNAVAILABLE` when absent or invalid. It must be the bare model id: spaces, line breaks or quotes make admission answer 503. The worker reads the captured model from PostgreSQL. Not a secret. |
+| `AI_EXECUTION_BINDING` | Web admission; worker delivery | Opaque release identity, at most 128 printable characters. Set it to the release SHA as a Production variable on both Vercel projects before deploying. The worker only executes runs admitted under its own value. Not a secret. |
+| `INNGEST_EVENT_KEY` | Web dispatch; worker repair | Inngest event key (Production). Sends `scoperoom/ai.run.requested` with the run's dispatch id as the event id, so Inngest drops duplicates. Without it runs remain `PENDING` until their SQL deadline; never-claimed reservations refund once. `SCOPEROOM_E2E` disables web dispatch. |
+| `INNGEST_SIGNING_KEY` | Worker only | Inngest signing key (Production); verifies Inngest's calls to `/api/inngest`. The web project never holds it. `INNGEST_DEV` is never set on either project. |
+| `SCOPEROOM_SERVICE` | Worker project only | `worker` makes the project serve `/api/inngest` and answer 404 elsewhere; the web project returns 404 for `/api/inngest`. |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Worker; explicitly authorized direct probe | Model credential. Configure it on the worker Vercel project only, never the browser, the web project or PR jobs. |
 
-The template `.env.example` supplies empty placeholders for these values. Managed e2e servers blank provider secrets, including the CLI token; automated worker tests inject fake ports. PR jobs receive no hosted provider keys.
+The template `.env.example` supplies empty placeholders for these values. Local development and every test suite run with the Inngest values blank: managed e2e servers blank provider secrets, and automated worker tests inject fake ports. PR jobs receive no hosted provider keys.
 
-Configure worker runtime values in the intended Trigger project/environment: `WORKER_DATABASE_URL`, `SCOPEROOM_ENVIRONMENT_ID` and `GOOGLE_GENERATIVE_AI_API_KEY`. Trigger supplies its runtime `TRIGGER_SECRET_KEY`; verify that behavior in the intended account before hosting. Bootstrap/migration credentials belong only to protected operator or isolated CI commands.
+The worker project's runtime values are `WORKER_DATABASE_URL`, `SCOPEROOM_ENVIRONMENT_ID`, `SCOPEROOM_DATABASE_CA_PEM`, `GOOGLE_GENERATIVE_AI_API_KEY`, `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`, `AI_EXECUTION_BINDING` and `SCOPEROOM_SERVICE=worker`. Bootstrap/migration credentials belong only to protected operator or isolated CI commands.
+
+Each Vercel project's Function Region must be the region closest to the Supabase database. From a distant region the AI admission transaction (about 25 sequential queries) exceeded Prisma's 5 second interactive-transaction timeout and surfaced as 503 `UNAVAILABLE`. Keep the Vercel Supabase (or any database) integration disconnected from both projects: it re-adds privileged `POSTGRES_*` and `SUPABASE_*` variables.
 
 ## Worker deployment
 
-`.github/workflows/deploy-worker.yml` is the single worker deployment owner. It is manual (`workflow_dispatch`) and accepts only `worker-synthetic`, a dedicated synthetic project's production environment, and `worker-pilot`, the hosted pilot's production environment ([hosted pilot runbook](hosted-pilot.md)). Keep their configuration in separate GitHub environments and Trigger projects; choosing a target does not authorize a deployment, which still needs its own release approval.
+The worker is a second Vercel project built from the same repository and commit as the web project, with `SCOPEROOM_SERVICE=worker` and its own Function Region (the one closest to the database). It serves only `/api/inngest`: the proxy answers 404 for every other path (Next framework static assets are outside the proxy matcher and are served as usual). Inngest calls it over HTTPS, verified by the signing key, and runs two functions defined in `src/worker/functions.ts`:
 
-- Start the workflow from `main`. Its full lowercase `sha` must be an ancestor of `main`.
-- It queries the actual `ci.yml` workflow for that exact SHA's latest `push` run on `main`, requires that run to succeed, then requires `static-unit-build`, `database-integration` and `chromium` each to succeed in its latest attempt. A similarly named check or earlier successful attempt cannot satisfy the gate. These queries use GitHub's [workflow-run](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-workflow) and [workflow-job](https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run-attempt) APIs with `actions: read`.
-- The `worker-synthetic` and `worker-pilot` GitHub environments each hold `TRIGGER_ACCESS_TOKEN` as a secret and `TRIGGER_PROJECT_REF` as a variable for their own Trigger project. Configure required reviewers where the account supports them; their availability and enforcement remain unverified.
-- Workflow concurrency allows one worker deploy at a time and never cancels one already started.
-- The exact-pinned CLI deploys the checked commit with `trigger deploy --env prod --external-id <sha> --skip-update-check --skip-telemetry`. The execution binding always equals that SHA; arbitrary reusable release tags are not accepted.
-- The summary records target, SHA/external id, provider-returned deployment version and required CI run.
+- `run-ai`: triggered by `scoperoom/ai.run.requested`, up to 2 retries. The event carries identities and the SQL deadline only, never prompt or capture content. `runAi` executes inside `step.run`; a BUSY claim waits with `step.sleepUntil` at the SQL attempt deadline, for at most 4 rounds.
+- `repair-runs`: the cron in Maintenance below.
 
-Trigger's [external deployment identity](https://trigger.dev/docs/deployment/atomic-deployment) pins a run to the deployment carrying that identity. The adapter passes each run's captured binding as `externalDeploymentId`, including repaired dispatches. A missing deployment may wait up to one hour in Trigger, while the application's 300-second SQL deadline remains authoritative. The web build never resolves Trigger metadata.
+`vercel.json` turns off Git deployments, so deploy with the Vercel CLI from a clean detached worktree at the checked SHA, linked to the worker project (`vercel link --yes --project <worker project>`, then `vercel deploy --prod --yes`). After every deploy, sync the functions with Inngest: `curl -X PUT https://<worker origin>/api/inngest`. The Inngest dashboard then lists both functions.
 
-The same external id short-circuits an already completed deploy. Changed environment configuration can therefore leave the previous image in place when redeploying the same SHA. Treat configuration changes as a new reviewed release with a new SHA and recorded configuration revision; do not silently reuse the binding for different inputs. Trigger documents this behavior under [reusing an id and changed build inputs](https://trigger.dev/docs/deployment/atomic-deployment#reusing-an-id).
+Both projects carry the same `AI_EXECUTION_BINDING`: the release SHA, set as a Production variable on each project before deploying. `vercel deploy -e` did not reach the runtime with CLI 48, so do not rely on it. A worker whose binding differs from a run's captured binding (a run admitted before a release) fails that run's function with `NonRetriableError` before any SQL claim or model call. The run then settles at its SQL deadline as `TIMED_OUT` with the never-claimed reservation refunded. A new SHA needs the matching value on both projects first.
 
 Before any authorized hosted release:
 
-1. Confirm the intended synthetic project/environment, compatible migration head, runtime role and environment identity. Apply compatible migrations with the protected migration credential before the worker, following [the release procedure](../.codex/docs/implementation/v1.6/delivery/03-ci-cd-and-release.md).
-2. Disable Trigger's GitHub and Vercel auto-deploy integrations, so this workflow owns worker deployment. Vercel continues to own web builds.
-3. Configure the GitHub environment, its credential, project reference and supported approval protection.
-4. Run the approved deployment for the checked SHA. Set the matching web build's `AI_EXECUTION_BINDING` to that SHA. Record web/worker identities, target, configuration revision and migration head.
-5. Qualify the exact deployed binding and one maintenance schedule using bounded synthetic runs before claiming hosted readiness.
+1. Confirm the intended project/environment, compatible migration head, runtime role and environment identity. Apply compatible migrations with the protected migration credential before the worker, following [the release procedure](../.codex/docs/implementation/v1.6/delivery/03-ci-cd-and-release.md).
+2. Set `AI_EXECUTION_BINDING` on both projects, then deploy the worker, sync Inngest and deploy the web project ([hosted pilot runbook](hosted-pilot.md), section 4).
+3. Qualify the exact deployed binding and the maintenance schedule using bounded synthetic runs before claiming hosted readiness.
 
-The workflow has not run. Account changes and deployment require explicit session authorization.
+Account changes and deployment require explicit session authorization.
 
 ### Incompatible worker change
 
@@ -50,25 +44,25 @@ Follow [Data 04](../.codex/docs/implementation/v1.6/data/04-jobs-and-provenance.
 
 1. Pause new AI admission by unsetting `AI_MODEL` in the web environment and redeploying it. Existing receipt recovery and graph editing remain available.
 2. Finish or terminally settle old runs under their captured binding. Confirm no `app.ai_run` remains `QUEUED`, `RUNNING` or `VALIDATING`; the SQL deadline is at most 300 seconds from admission. Do not replay uncertain calls on a different worker/provider.
-3. Apply compatible migrations and deploy the upgraded worker through the maintenance window under the new checked SHA. Configure the new `AI_MODEL` and matching `AI_EXECUTION_BINDING` for the web build.
+3. Apply compatible migrations and deploy the upgraded worker through the maintenance window under the new checked SHA. Configure the new `AI_MODEL` and matching `AI_EXECUTION_BINDING` on both projects.
 4. Resume admission. Retire old deployments only once their admitted runs are terminal.
 
-Compatible updates preserve the task envelope and availability of handlers for runs admitted under prior bindings.
+Compatible updates preserve the event envelope and availability of handlers for runs admitted under prior bindings.
 
 ## Maintenance and retention
 
-`src/trigger/repair-runs.ts` declares one scheduled task, `repair-runs`, at `* * * * *` (target 60 seconds). Hosted cadence, eligibility and uniqueness per intended environment remain unverified. Each tick calls `runMaintenance`; both bounded steps run even if one fails, then the first failure is reported:
+`repair-runs` in `src/worker/functions.ts` is an Inngest cron function running every 5 minutes (`*/5 * * * *`) with concurrency 1 and no retries: overlapping ticks never run together and the next tick is the retry. Hosted cadence and uniqueness per intended environment remain unverified until qualification. Each tick calls `runMaintenance`; both bounded steps run even if one fails, then the first failure is reported:
 
 1. `repairRuns` settles overdue runs, handles cancellation intent and re-delivers pending dispatches under the original dispatch id and execution binding. Never-claimed reservations refund once; possibly started calls stay consumed against their original owner and admission day.
 2. `workerCleanup` sweeps up to 100 eligible rows per transient category, including AI bodies, through `app.run_worker_cleanup(environment id, batch)`.
 
-SQL validates the environment identity and batch bound for worker cleanup. The worker cannot execute raw cleanup functions or directly update retained bodies/receipts. The [local operator command](maintenance.md) keeps its loopback and bootstrap-credential guard; bootstrap credentials are never deployed. Tick logs contain schedule time, lag and counts, with no prompt or result body. SQL deadlines still apply when delivery is late or duplicated.
+SQL validates the environment identity and batch bound for worker cleanup. The worker cannot execute raw cleanup functions or directly update retained bodies/receipts. The [local operator command](maintenance.md) keeps its loopback and bootstrap-credential guard; bootstrap credentials are never deployed. The function returns cleanup counts only, with no prompt or result body. SQL deadlines still apply when delivery is late or duplicated.
 
 Retention applies from the first persisted run: unneeded terminal capture/result bodies expire after seven days, with applied evidence preserved; unused `AVAILABLE` results become `EXPIRED`. Run identity, hashes, attribution, usage, prompt and cited source versions survive. Improve history stores its immutable selected flow id separately from the expiring capture, including after that flow is deleted. Migration backfills only retained captures; already purged captures cannot reconstruct a missing flow id. Receipts, including the start manifest, live 30 days. Late output cannot restore purged bodies. PR 2 owns permanent application evidence and its first consumer.
 
 If a worker exits during result validation, its current attempt remains busy until settled or its attempt window expires. Recovery marks an abandoned attempt `UNKNOWN` and requires a fresh second token/pointer within the original deadline; late output from the first attempt stays fenced. A run that used both attempts settles without a third model call. The recovery migration preserves the original owner/day charge. Pre-call input rejection rechecks cancellation, the SQL deadline and current authority after all blocking locks before terminal settlement, refunds an unused reservation once and makes no model call.
 
-A Trigger retry that encounters a busy attempt keeps its delivery alive with `wait.until` at the SQL attempt deadline, capped by the original run deadline. It then re-enters the same claim service. Validation and recovery state changes advance `aiRevision` atomically; duplicate deliveries do not add a state event. Run reads derive seven-day applicability expiry from the SQL snapshot clock even when cleanup has not removed the body yet.
+A delivery retry that encounters a busy attempt keeps the run alive with `step.sleepUntil` at the SQL attempt deadline, capped by the original run deadline. It then re-enters the same claim service. Validation and recovery state changes advance `aiRevision` atomically; duplicate deliveries do not add a state event. Run reads derive seven-day applicability expiry from the SQL snapshot clock even when cleanup has not removed the body yet.
 
 ## Direct model probe
 
