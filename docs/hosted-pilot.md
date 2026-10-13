@@ -140,7 +140,7 @@ Later releases may use `vercel rollback` only to an earlier deployment whose sch
 | Realtime unavailable or quota pause | Expect "Live updates delayed"; saves and status polling continue | Supabase Realtime reports |
 | Worker or model outage | Runs show queued or failed with bounded attempts; manual work continues | The worker project's logs, the Inngest run list, Gemini quota |
 | Auth or SMTP failure | Protected operations fail while verification is unavailable; retest with an operator mailbox | Supabase Auth logs, Resend |
-| Inngest function paused | Inngest Free pauses a function after 20 consecutive failures. `repair-runs` and `run-ai` report expected failures as results, so they should not reach it. After any outage, check that both functions are not paused in the Inngest dashboard and resume them if needed: events received while paused are not reprocessed automatically, and repair re-sends pending runs | Inngest dashboard, function list |
+| Inngest function paused | Inngest Free pauses a function after 20 consecutive failures. `repair-runs` and `run-ai` report expected failures (including a `run-ai` step that exhausts its retries) as results, so they should not reach it. After any outage, check that both functions are not paused in the Inngest dashboard and resume them if needed: events received while paused are not reprocessed automatically, and repair re-sends pending runs | Inngest dashboard, function list |
 | Inngest executions exhausted | Inngest pauses execution until the next month when the monthly executions run out; check usage in the Inngest dashboard | Inngest dashboard, usage |
 | Bad migration | Stop releases; inspect Prisma state, prefer a corrective forward migration | `app._prisma_migrations` |
 

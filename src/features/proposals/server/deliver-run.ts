@@ -1,3 +1,4 @@
+import { StepError } from "inngest";
 import type { JobRequest } from "./ports.ts";
 import { modelGateway } from "./providers.ts";
 import { runAi } from "./run-ai.ts";
@@ -8,12 +9,20 @@ export type DeliveryStep = { run(id: string, fn: () => Promise<string | null>): 
 /**
  * The `run-ai` function body. Only the build whose AI_EXECUTION_BINDING equals the run's binding may execute it; any other build returns without a step. Each round is one
  * `step.run` (one Vercel invocation, under the 300 s limit; Inngest retries it if it crashes); a BUSY claim sleeps durably until the
- * SQL-owned window ends. Rounds are bounded; SQL grants every model call and the deadline settles anything left.
+ * SQL-owned window ends. Rounds are bounded; SQL grants every model call and the deadline settles anything left. A step that exhausts its retries
+ * (database or model key unavailable) ends the delivery as a result, not a failed run: Inngest Free pauses a function after 20 consecutive failures.
  */
 export async function deliverRun(data: JobRequest, step: DeliveryStep, { binding = process.env.AI_EXECUTION_BINDING, execute = (runId: string) => runAi(runId, modelGateway()) }: { binding?: string; execute?: (runId: string) => Promise<Date | void> } = {}): Promise<void> {
   if (!binding || data.executionBinding !== binding) return; // expected after a release: not a failed run (Inngest Free pauses a function after 20 consecutive failures); the SQL deadline settles it
   for (let round = 1; round <= MAX_DELIVERY_ROUNDS; round += 1) {
-    const retryAt = await step.run(`attempt-${round}`, async () => (await execute(data.runId))?.toISOString() ?? null);
+    let retryAt: string | null;
+    try {
+      retryAt = await step.run(`attempt-${round}`, async () => (await execute(data.runId))?.toISOString() ?? null);
+    } catch (error) {
+      if (!(error instanceof StepError)) throw error;
+      console.error(JSON.stringify({ delivery: "failed" })); // fixed line: no error text, ids or data; the SQL deadline settles the run
+      return;
+    }
     if (!retryAt || round === MAX_DELIVERY_ROUNDS) return; // the SQL deadline settles what is left; no sleep after the last round
     await step.sleepUntil(`busy-${round}`, retryAt);
   }
