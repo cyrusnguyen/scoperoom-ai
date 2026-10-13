@@ -15,7 +15,7 @@ export async function deliverRun(data: JobRequest, step: DeliveryStep, { binding
   if (!binding || data.executionBinding !== binding) throw new NonRetriableError("This worker build is not the run's execution binding.");
   for (let round = 1; round <= MAX_DELIVERY_ROUNDS; round += 1) {
     const retryAt = await step.run(`attempt-${round}`, async () => (await execute(data.runId))?.toISOString() ?? null);
-    if (!retryAt) return;
+    if (!retryAt || round === MAX_DELIVERY_ROUNDS) return; // the SQL deadline settles what is left; no sleep after the last round
     await step.sleepUntil(`busy-${round}`, retryAt);
   }
 }

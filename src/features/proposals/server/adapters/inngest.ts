@@ -2,6 +2,7 @@ import type { JobDispatcher, JobRequest } from "../ports.ts";
 
 export const RUN_AI_EVENT = "scoperoom/ai.run.requested";
 export const INNGEST_APP_ID = "scoperoom";
+/** Mirrors the 128-character limit admission applies to the execution binding. */
 export const BINDING_MAX = 128;
 
 /** The narrow slice of the Inngest client this adapter uses, so tests inject a fake and nothing else sees SDK types. */

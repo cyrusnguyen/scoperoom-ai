@@ -27,7 +27,7 @@ export type AiConfiguration = { model: string; executionBinding: string };
 export function aiConfiguration(env: Partial<NodeJS.ProcessEnv> = process.env): AiConfiguration {
   const { AI_MODEL: model, AI_EXECUTION_BINDING: executionBinding } = env;
   const valid = (value: string | undefined, max: number): value is string => Boolean(value) && value!.length <= max && /^[\x21-\x7e]+$/.test(value!);
-  // The binding is a Trigger external deployment id, whose own limit is 128 characters.
+  // The binding is the release SHA bound at admission; 128 characters is the admission limit.
   if (!valid(model, 200) || !valid(executionBinding, 128)) throw new ProjectError("UNAVAILABLE");
   return { model, executionBinding };
 }

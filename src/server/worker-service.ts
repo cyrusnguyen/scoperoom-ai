@@ -11,3 +11,8 @@ export function routeAllowed(service: "web" | "worker", pathname: string) {
   const inngest = pathname === INNGEST_PATH || pathname.startsWith(`${INNGEST_PATH}/`);
   return service === "worker" ? pathname === INNGEST_PATH : !inngest;
 }
+
+/** Image-suffixed paths the web service lets through untouched (the worker 404s them first, via routeAllowed). */
+export function isStaticAssetPath(pathname: string) {
+  return /\.(?:svg|png|jpg|jpeg|gif|webp|ico)$/.test(pathname);
+}

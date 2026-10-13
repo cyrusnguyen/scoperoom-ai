@@ -242,7 +242,7 @@ test("refusal fails the run without a second call, while unavailable and unknown
     const hopeless = await seed({ createdAt: ago(5) });
     const c = fakeGateway(() => ({ kind: "unknown" }));
     await runAi(hopeless.runId, c.gateway);
-    await runAi(hopeless.runId, c.gateway); // a Trigger retry re-enters but cannot grant a third call
+    await runAi(hopeless.runId, c.gateway); // an Inngest retry re-enters but cannot grant a third call
     await runAi(hopeless.runId, c.gateway);
     assert.equal(c.requests.length, 2);
     assert.equal((await attempts(hopeless.runId)).length, 2);
@@ -293,7 +293,7 @@ test("a BUSY attempt returns its SQL wake time instead of completing the retry d
     const { rows: [window] } = await admin.query("select a.deadline_at from app.ai_run r join app.ai_run_attempt a on a.id = r.current_attempt_id where r.id = $1", [runId]);
     const { gateway, requests } = fakeGateway(() => completed());
     const wakeAt: unknown = await runAi(runId, gateway);
-    assert.ok(wakeAt instanceof Date, "the Trigger handler must retain execution until SQL permits another claim");
+    assert.ok(wakeAt instanceof Date, "the Inngest run-ai function must retain execution until SQL permits another claim");
     assert.equal(wakeAt.getTime(), window.deadline_at.getTime() + 1);
     assert.equal(requests.length, 0);
     assert.equal((await attempts(runId)).length, 1);

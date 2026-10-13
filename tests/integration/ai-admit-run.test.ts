@@ -212,7 +212,7 @@ test("an archived project and an unconfigured or oversized request are refused w
     const before = await footprint(database, projectId, owner.profile);
     assert.throws(() => aiConfiguration({}), refused("UNAVAILABLE"));
     assert.deepEqual(aiConfiguration({ AI_MODEL: "m", AI_EXECUTION_BINDING: "b" }), { model: "m", executionBinding: "b" });
-    assert.throws(() => aiConfiguration({ AI_MODEL: "m", AI_EXECUTION_BINDING: "b".repeat(129) }), refused("UNAVAILABLE")); // a Trigger external deployment id is at most 128 characters
+    assert.throws(() => aiConfiguration({ AI_MODEL: "m", AI_EXECUTION_BINDING: "b".repeat(129) }), refused("UNAVAILABLE")); // the release SHA binding is at most 128 characters
     assert.equal(aiConfiguration({ AI_MODEL: "m", AI_EXECUTION_BINDING: "b".repeat(128) }).executionBinding.length, 128);
     const input = await start(database, projectId);
     const many = Array.from({ length: 600 }, () => ({ sourceVersionId: randomUUID(), expectedCurrentVersionId: randomUUID() }));

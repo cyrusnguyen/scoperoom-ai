@@ -73,7 +73,7 @@ export async function runAi(runId: string, gateway: ModelGateway, db?: Sql): Pro
     if (claim?.out_status === "DENIED") { await finishRun(sql, runId, "FAILED", "ACCESS_REVOKED"); return; }
     if (claim?.out_status === "CEILING") { await finishRun(sql, runId, "FAILED", "ATTEMPTS_EXHAUSTED"); return; }
     if (claim?.out_status === "BUSY") {
-      // A retry can arrive before its crashed predecessor's call window closes. Keep the delivery alive: the Trigger handler waits
+      // A retry can arrive before its crashed predecessor's call window closes. Keep the delivery alive: the Inngest run-ai function waits
       // durably until this SQL-owned window ends, then re-enters for a fresh claim. Returning success here would abandon the run.
       const [window] = await sql.$queryRaw<Array<{ retry_at: Date }>>`
         SELECT LEAST(COALESCE(attempt.deadline_at, run.deadline_at), run.deadline_at) AS retry_at

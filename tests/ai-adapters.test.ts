@@ -210,6 +210,9 @@ test("dispatch is unavailable for a failed send, no event id, an expired deadlin
   const long = fakeInngest();
   assert.deepEqual(await long.dispatcher.dispatch({ ...job, executionBinding: "b".repeat(129) }), { kind: "unavailable" });
   assert.equal(long.sent.length, 0);
+  const edge = fakeInngest();
+  assert.equal((await edge.dispatcher.dispatch({ ...job, executionBinding: "b".repeat(128) })).kind, "accepted"); // exactly the admission limit is allowed
+  assert.equal(edge.sent.length, 1);
 });
 
 test("cancel is unknown: SQL cancel intent and fences decide, the event is never recalled", async () => {

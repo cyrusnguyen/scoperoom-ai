@@ -14,8 +14,8 @@ test("a worker built for another binding refuses before any SQL claim or model c
   let executed = 0;
   await assert.rejects(deliverRun(data, step, { binding: "sha-b", execute: async () => { executed += 1; } }), NonRetriableError);
   assert.deepEqual([executed, runs.length], [0, 0]);
-  await assert.rejects(deliverRun(data, step, { binding: undefined, execute: async () => { executed += 1; } }), NonRetriableError);
-  assert.equal(executed, 0);
+  await assert.rejects(deliverRun(data, step, { binding: "", execute: async () => { executed += 1; } }), NonRetriableError); // an unset binding (undefined would fall back to process.env)
+  assert.deepEqual([executed, runs.length], [0, 0]);
 });
 
 test("a finished execution ends the delivery after one step", async () => {
@@ -37,5 +37,5 @@ test("the rounds are bounded: a run that stays BUSY is left to its SQL deadline"
   const { step, runs, sleeps } = fakeStep();
   await deliverRun(data, step, { binding: "sha-a", execute: async () => new Date(Date.now() + 1_000) });
   assert.equal(runs.length, MAX_DELIVERY_ROUNDS);
-  assert.equal(sleeps.length, MAX_DELIVERY_ROUNDS);
+  assert.equal(sleeps.length, MAX_DELIVERY_ROUNDS - 1); // no sleep after the last round
 });

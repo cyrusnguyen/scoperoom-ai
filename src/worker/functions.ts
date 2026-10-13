@@ -16,6 +16,6 @@ export const runAiFunction = inngest.createFunction(
 
 /** The bounded repair and cleanup sweep. One at a time; no retries, because the next tick is the retry. Returns counts only. */
 export const repairFunction = inngest.createFunction(
-  { id: "repair-runs", retries: 0, concurrency: 1, triggers: cron("*/5 * * * *") },
+  { id: "repair-runs", retries: 0, concurrency: 1, triggers: cron("* * * * *") },
   async () => ({ cleaned: await runMaintenance(jobDispatcher()) }),
 );
