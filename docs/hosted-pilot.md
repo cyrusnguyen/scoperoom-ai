@@ -4,7 +4,7 @@ Operator procedure for the single hosted pilot target (Stage 12). The [release](
 
 ## 1. Target
 
-- One hosted target: the Supabase project named by `SCOPEROOM_SUPABASE_PROJECT_REF` in `.env.hosted.local`, one Vercel production project, the Trigger `prod` environment. It is the pilot. Record the Vercel project, production URL, Trigger project ref, released SHA, migration head, operator and contact in the [progress tracker](context/progress-tracker.md), never credentials.
+- One hosted target: the Supabase project named by `SCOPEROOM_SUPABASE_PROJECT_REF` in `.env.hosted.local`, one Vercel web project and one Vercel worker project (same repository, Production environment), and one Inngest app. It is the pilot. Record the Vercel projects, production URLs, released SHA, migration head, operator and contact in the [progress tracker](context/progress-tracker.md), never credentials.
 - Synthetic data and invited users only. Before any private or customer data, the private-data gate needs actual evidence: safe permanent project deletion, an isolated restore with post-backup deletion and revocation reconciliation, and a review of provider data-handling terms and operator access.
 
 ## 2. Configuration
@@ -13,28 +13,42 @@ Credentials live only in ignored `.env.hosted.local` and `.env.smoke.local` (mat
 
 Hosted Supabase signs database certificates with its own root CA. Download it from Dashboard, Project Settings, Database, SSL Configuration (`prod-ca-2021.crt`); it is public, not a secret. `pg` treats `sslmode=require` as full verification, so every database connection needs that CA.
 
-| Variable | Where | Value |
-|---|---|---|
-| `SCOPEROOM_DB_TARGET` | `.env.hosted.local` | `hosted` |
-| `SCOPEROOM_SUPABASE_PROJECT_REF` | `.env.hosted.local` | the 20-letter project ref |
-| `SCOPEROOM_ENVIRONMENT_ID` | `.env.hosted.local`, Vercel, Trigger | a fresh UUID for this target, never a local value |
-| `SCOPEROOM_BOOTSTRAP_DATABASE_URL` | `.env.hosted.local` | session pooler (IPv4, port 5432), user `postgres.<ref>`, `?sslmode=require&sslrootcert=<absolute path to the CA>` |
-| `MIGRATION_DATABASE_URL` | `.env.hosted.local` | same host, port, `sslmode` and `sslrootcert` as the bootstrap URL plus `schema=app` (Prisma keeps its history in `app`), user `app_migrator_runtime.<ref>`; no other query parameters |
-| `SCOPEROOM_MIGRATOR_PASSWORD`, `SCOPEROOM_WEB_RUNTIME_PASSWORD`, `SCOPEROOM_WORKER_RUNTIME_PASSWORD` | `.env.hosted.local` | fresh random values; bootstrap provisions the login roles with them |
-| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | `.env.hosted.local`, Vercel | `https://<ref>.supabase.co` and its publishable key |
-| `APP_ENV`, `NEXT_PUBLIC_APP_URL` | Vercel | `production` and the bare HTTPS production origin |
-| `DATABASE_URL` | Vercel | transaction pooler (port 6543), user `app_web_runtime.<ref>` |
-| `WORKER_DATABASE_URL` | Trigger `prod` | transaction pooler (port 6543), user `app_worker_runtime.<ref>` |
-| `SCOPEROOM_DATABASE_CA_PEM` | Vercel, Trigger `prod` | the CA file's PEM text; runtime connections then verify the server whatever TLS parameters the URL carries |
-| `SCOPEROOM_REALTIME_SIGNING_ALG`, `_KEY`, `_KID` | Vercel | `ES256`, the imported key's PKCS8 PEM and its key id ([Realtime setup](realtime-setup.md)) |
-| `AI_MODEL` | Vercel | the model id; empty pauses AI admission |
-| `AI_TOTAL_RUN_LIMIT`, `AI_DAILY_RUN_LIMIT` | Vercel, optional | default-plan AI limits for every account; blank keeps 5 total and 30 per day |
-| `TRIGGER_SECRET_KEY` | Vercel, Trigger `prod` | the Trigger `prod` runtime key (left off Vercel for the first deployment, see the 12b plan) |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Trigger `prod` | the Gemini key; never on Vercel |
-| `TRIGGER_ACCESS_TOKEN`, `TRIGGER_PROJECT_REF` | GitHub environment `worker-pilot` | the pilot Trigger project's deploy credentials; never the `worker-synthetic` project |
-| `SMOKE_URL`, `SMOKE_{OWNER,EDITOR,VIEWER}_{EMAIL,PASSWORD}`, `SMOKE_AI` | `.env.smoke.local` | production origin, three synthetic accounts, `1` only when an AI budget is authorized |
+| Variable | Local file | Web project | Worker project | Value |
+|---|---|---|---|---|
+| `SCOPEROOM_DB_TARGET` | `.env.hosted.local` | | | `hosted` |
+| `SCOPEROOM_SUPABASE_PROJECT_REF` | `.env.hosted.local` | | | the 20-letter project ref |
+| `SCOPEROOM_ENVIRONMENT_ID` | `.env.hosted.local` | yes | yes | a fresh UUID for this target, never a local value |
+| `SCOPEROOM_BOOTSTRAP_DATABASE_URL` | `.env.hosted.local` | | | session pooler (IPv4, port 5432), user `postgres.<ref>`, `?sslmode=require&sslrootcert=<absolute path to the CA>` |
+| `MIGRATION_DATABASE_URL` | `.env.hosted.local` | | | same host, port, `sslmode` and `sslrootcert` as the bootstrap URL plus `schema=app` (Prisma keeps its history in `app`), user `app_migrator_runtime.<ref>`; no other query parameters |
+| `SCOPEROOM_MIGRATOR_PASSWORD`, `SCOPEROOM_WEB_RUNTIME_PASSWORD`, `SCOPEROOM_WORKER_RUNTIME_PASSWORD` | `.env.hosted.local` | | | fresh random values; bootstrap provisions the login roles with them |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | `.env.hosted.local` | yes | | `https://<ref>.supabase.co` and its publishable key |
+| `APP_ENV`, `NEXT_PUBLIC_APP_URL` | | yes | | `production` and the bare HTTPS production origin |
+| `DATABASE_URL` | | yes | | transaction pooler (port 6543), user `app_web_runtime.<ref>` |
+| `WORKER_DATABASE_URL` | | | yes | transaction pooler (port 6543), user `app_worker_runtime.<ref>` |
+| `SCOPEROOM_DATABASE_CA_PEM` | | yes | yes | the CA file's PEM text; runtime connections then verify the server whatever TLS parameters the URL carries |
+| `SCOPEROOM_REALTIME_SIGNING_ALG`, `_KEY`, `_KID` | | yes | | `ES256`, the imported key's PKCS8 PEM and its key id ([Realtime setup](realtime-setup.md)) |
+| `AI_MODEL` | | yes | | the bare model id (no spaces, line breaks or quotes); removing it pauses AI admission |
+| `AI_TOTAL_RUN_LIMIT`, `AI_DAILY_RUN_LIMIT` | | optional | | default-plan AI limits for every account; blank keeps 5 total and 30 per day |
+| `AI_EXECUTION_BINDING` | | yes | yes | the release SHA, the same on both projects, set before deploying (section 4) |
+| `INNGEST_EVENT_KEY` | | yes | yes | the Inngest Production event key; added to the web project by hand, synced to the worker by the integration |
+| `INNGEST_SIGNING_KEY` | | | yes | the Inngest Production signing key, synced by the integration; never on the web project |
+| `SCOPEROOM_SERVICE` | | | yes | `worker` |
+| `SCOPEROOM_WORKER_SECRET` | `.env.hosted.local` | | yes | at least 32 random characters; the bearer token the pg_cron jobs send to the worker's maintenance endpoints. Never on the web project |
+| `SCOPEROOM_WORKER_URL` | `.env.hosted.local` | | | the worker's bare https origin, read by `scripts/db/schedule.mjs` |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | | | yes | the Gemini key; never on the web project |
+| `SMOKE_URL`, `SMOKE_{OWNER,EDITOR,VIEWER}_{EMAIL,PASSWORD}`, `SMOKE_AI` | `.env.smoke.local` | | | production origin, three synthetic accounts, `1` only when an AI budget is authorized |
 
-Never set bootstrap, migrator, worker or Google credentials on Vercel.
+Never set bootstrap or migrator credentials on a Vercel project. The web project never holds `WORKER_DATABASE_URL`, `GOOGLE_GENERATIVE_AI_API_KEY`, `INNGEST_SIGNING_KEY` or `SCOPEROOM_WORKER_SECRET`. The worker project holds only the variables marked above (plus Vercel system variables). `INNGEST_DEV` is never set on either project.
+
+Vercel settings that cost a release during the first cutover:
+
+- Each project's Function Region must be the region closest to the Supabase database. From a distant region the AI admission transaction (about 25 sequential queries) exceeded Prisma's 5 second interactive-transaction timeout and surfaced as 503 `UNAVAILABLE`.
+- `AI_MODEL` must be the bare model id. Admission rejects anything else (spaces, line breaks, quotes) with 503.
+- `AI_EXECUTION_BINDING` must be a Production environment variable on both projects. `vercel deploy -e` did not reach the runtime with CLI 48.
+- Sign up for Inngest through the Vercel Marketplace (free plan: up to 50K executions a month, used by AI runs only; each run is a few executions) and grant the Inngest integration access to the worker project ONLY. Add `INNGEST_EVENT_KEY` to the web project by hand; the web project never gets `INNGEST_SIGNING_KEY`. After granting, check that the worker project holds nothing beyond the worker column's variables and that the web project has no `INNGEST_SIGNING_KEY`.
+- Keep Vercel Standard Deployment Protection on the worker project so old per-deployment URLs cannot be re-synced by anyone calling `PUT /api/inngest`. If the integration's sync needs it, use Vercel's Protection Bypass for Automation (verify at cutover).
+- Keep the Vercel Supabase (and any database) integration disconnected from both projects: it re-adds privileged `POSTGRES_*` and `SUPABASE_*` variables.
+- Vercel accepts multi-line values, so paste the CA PEM and the ES256 signing key with their line breaks.
 
 ## 3. Bootstrap and migrate
 
@@ -72,19 +86,27 @@ Never run `db:reset` or destructive SQL against this target without a separate e
 ## 4. Release
 
 1. Confirm green main-push CI for the SHA (`static-unit-build`, `database-integration`, `chromium`).
-2. Migrate (section 3).
-3. Deploy the worker: `gh workflow run deploy-worker.yml -f environment=worker-pilot -f sha=<sha>`. The `worker-pilot` GitHub environment must exist first (section 2), with required reviewers where the account supports them.
-4. Deploy the web from a clean detached worktree at the SHA. `vercel.json` turns off Git deployments, so this is the only path:
+2. Set `AI_EXECUTION_BINDING` to the SHA as a Production variable on both Vercel projects (section 2).
+3. Migrate (section 3).
+4. Deploy the worker from a clean detached worktree at the SHA. `vercel.json` turns off Git deployments, so the CLI is the only path:
 
    ```powershell
    git worktree add --detach ..\scoperoom-release <sha>
    cd ..\scoperoom-release
-   vercel link --yes --project <vercel project>
-   vercel deploy --prod --yes -e AI_EXECUTION_BINDING=<sha>
+   vercel link --yes --project <worker project>
+   vercel deploy --prod --yes
    ```
 
-5. `GET <origin>/api/health` returns `{"status":"ok","service":"scoperoom-ai","apiVersion":"v1"}`. Runtime logs carry `releaseId` (the SHA, or `unknown` when the CLI upload has no Git metadata; then identify the release by deployment ID).
-6. `corepack pnpm test:smoke:hosted`, then record the deployment IDs and results in the tracker.
+5. The Inngest integration syncs the function on each worker deploy. Confirm the Inngest dashboard shows `run-ai` on the current deployment and in the Production environment, not a branch environment (the SDK may derive a branch name from the git ref on CLI deploys; verify at cutover). If the sync did not happen, use the fallback:
+
+   ```powershell
+   curl -X PUT https://<worker origin>/api/inngest
+   ```
+
+6. Deploy the web project: relink the same worktree (`vercel link --yes --project <web project>`), then `vercel deploy --prod --yes`. Do not repeat `git worktree add`.
+7. Create the maintenance schedule once the worker is deployed (after step 5) with `node --env-file=.env.hosted.local scripts/db/schedule.mjs apply`; it stores the secret in Supabase Vault and creates the repair (every minute) and cleanup (hourly) pg_cron jobs. Then run `node --env-file=.env.hosted.local scripts/db/schedule.mjs verify` and expect `schedule=verify-ok`: it checks both jobs and runs each job's command once, which needs a 202 from each endpoint (so verify also performs one repair sweep and one cleanup). To rotate the secret, update the worker variable, redeploy the worker, then rerun `apply`.
+8. `GET <origin>/api/health` on the web origin returns `{"status":"ok","service":"scoperoom-ai","apiVersion":"v1"}`. The worker serves only `/api/inngest`, the two maintenance endpoints, `/_next/static` and `/_next/image`: its origin returns 404 for `/`, `/api/health`, `/api/projects`, image-suffixed paths and an unauthenticated POST to a maintenance endpoint, and the web origin returns 404 for `/api/inngest` and `/api/internal/worker/*`. The web logger writes only failed requests, so `releaseId` cannot be read from healthy traffic; identify a release by its deployment ID.
+9. `corepack pnpm test:smoke:hosted`, then record the deployment IDs and results in the tracker.
 
 Changed environment values mean a new deployment and a new smoke.
 
@@ -104,8 +126,8 @@ on conflict (profile_id) do update set ai_total_run_limit = 50, ai_daily_run_lim
 
 The first release has no predecessor to roll back to.
 
-- Pause AI: redeploy the same SHA with `-e AI_MODEL=`. Admission then answers `UNAVAILABLE`; editing stays available.
-- Pause everything: pause the Vercel project.
+- Pause AI: remove `AI_MODEL` from the web project's Production variables and redeploy the same SHA. Admission then answers `UNAVAILABLE`; editing stays available. Pausing `run-ai` in the Inngest dashboard also pauses delivery: only never-claimed runs are refunded at their SQL deadline; a claimed call stays consumed.
+- Pause everything: pause the Vercel web project.
 - Then fix forward with a new SHA through the full release.
 
 Later releases may use `vercel rollback` only to an earlier deployment whose schema and worker binding are still compatible.
@@ -114,12 +136,15 @@ Later releases may use `vercel rollback` only to an earlier deployment whose sch
 
 | Incident | Action on this target | Check |
 |---|---|---|
-| Credential or access exposure | Rotate the key in its provider, redeploy what reads it, run the smoke | Supabase API keys and database password, Vercel and Trigger environment settings |
-| Bad web or worker release | Pause AI or the project (section 6), correct forward | Vercel deployments, Trigger deployments |
+| Credential or access exposure | Rotate the key in its provider, redeploy what reads it, run the smoke | Supabase API keys and database password, Vercel and Inngest settings, both Vercel projects |
+| Bad web or worker release | Pause AI or the project (section 6), correct forward | Vercel deployments for both projects |
 | Database unavailable or locked | Saves fail clearly; inspect pool and locks, reconcile through receipts | Supabase database reports and logs |
 | Realtime unavailable or quota pause | Expect "Live updates delayed"; saves and status polling continue | Supabase Realtime reports |
-| Worker or model outage | Runs show queued or failed with bounded attempts; manual work continues | Trigger runs, Gemini quota |
+| Worker or model outage | Runs show queued or failed with bounded attempts; manual work continues | The worker project's logs, the Inngest run list, Gemini quota |
 | Auth or SMTP failure | Protected operations fail while verification is unavailable; retest with an operator mailbox | Supabase Auth logs, Resend |
+| Maintenance not running | Repair (every minute) and cleanup (hourly) are Supabase pg_cron jobs, not Inngest functions. Rerun `schedule.mjs verify`; a failing sweep logs `{"maintenance":"repair","ok":false}` and the next tick retries | `cron.job_run_details` and `net._http_response` in the database, the worker project's logs |
+| Inngest function paused | Inngest Free pauses a function after 20 consecutive failures. `run-ai` reports expected failures (including a step that exhausts its retries) as results, so it should not reach it. After any outage, check that `run-ai` is not paused in the Inngest dashboard and resume it if needed: events received while paused are not reprocessed automatically, and repair re-sends pending runs | Inngest dashboard, function list |
+| Inngest executions exhausted | Inngest pauses execution until the next month when the monthly executions run out; check usage in the Inngest dashboard | Inngest dashboard, usage |
 | Bad migration | Stop releases; inspect Prisma state, prefer a corrective forward migration | `app._prisma_migrations` |
 
 ## 8. Known limitations
@@ -130,3 +155,6 @@ Later releases may use `vercel rollback` only to an earlier deployment whose sch
 - Rollback has no predecessor for the first release; abort is disable plus correct forward.
 - Backups are as recorded in the tracker; no restore has been performed.
 - `app_migrator` and `app_realtime_reader` inherit `anon` privileges on hosted (Supabase gives `postgres` no other way to grant `auth` access).
+- Inngest orchestration runs in the US; our code and its database queries run in the region closest to the database. Each run pays that round trip.
+- The Inngest free plan allows up to 50K executions a month (Vercel Marketplace signup). Only AI runs spend them (each run uses a few executions: the function run plus its steps); repair and cleanup run from Supabase pg_cron and spend none.
+- A worker with a different `AI_EXECUTION_BINDING` than a run (a run admitted before a release) returns without executing and without counting as a failed run; the run times out with a refund.

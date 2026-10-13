@@ -115,7 +115,7 @@ test("boundary checker covers relative, aliases, re-exports, dynamic imports and
   const { checkBoundaries } = await import("../scripts/check-boundaries.mjs");
   const root = await mkdtemp(join(tmpdir(), "scoperoom-boundaries-"));
   try {
-    for (const path of ["src/app/api/health", "src/client", "src/server/web", "src/trigger", "src/features/access/server"]) await mkdir(join(root, path), { recursive: true });
+    for (const path of ["src/app/api/health", "src/client", "src/server/web", "src/worker", "src/features/access/server"]) await mkdir(join(root, path), { recursive: true });
     await writeFile(join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["./src/*"] } } }));
     await writeFile(join(root, "src/server/web/session.ts"), "export const secret = true;");
     await writeFile(join(root, "src/features/access/server/session.ts"), "export const secret = true;");
@@ -132,9 +132,9 @@ test("boundary checker covers relative, aliases, re-exports, dynamic imports and
     await writeFile(leaf, "'use client'; const target = '@/server/web/session'; export const x = import(target);");
     assert.match(checkBoundaries(root).join("\n"), /computed dynamic import/);
     await writeFile(leaf, "'use client'; export const x = true;");
-    await writeFile(join(root, "src/trigger/job.ts"), "export { secret } from '@/server/web/session';");
+    await writeFile(join(root, "src/worker/job.ts"), "export { secret } from '@/server/web/session';");
     assert.match(checkBoundaries(root).join("\n"), /worker import reaches Next/);
-    await writeFile(join(root, "src/trigger/job.ts"), "import { cookies } from 'next/headers'; export const job = cookies;");
+    await writeFile(join(root, "src/worker/job.ts"), "import { cookies } from 'next/headers'; export const job = cookies;");
     assert.match(checkBoundaries(root).join("\n"), /worker import reaches Next/);
     const script = fileURLToPath(new URL("../scripts/check-boundaries.mjs", import.meta.url));
     const result = spawnSync(process.execPath, [script], { cwd: root, encoding: "utf8" });
@@ -163,20 +163,20 @@ test("boundary checker keeps worker services off Next and web modules, providers
   const root = await mkdtemp(join(tmpdir(), "scoperoom-boundaries-"));
   const put = (path: string, text: string) => writeFile(join(root, path), text);
   try {
-    for (const path of ["src/server/web", "src/client", "src/trigger", "src/features/proposals/server/adapters", "src/features/proposals/domain"]) await mkdir(join(root, path), { recursive: true });
+    for (const path of ["src/server/web", "src/client", "src/worker", "src/features/proposals/server/adapters", "src/features/proposals/domain"]) await mkdir(join(root, path), { recursive: true });
     await put("tsconfig.json", JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["./src/*"] } } }));
     await put("src/server/web/session.ts", "export const cookies = true;");
     await put("src/features/proposals/domain/pure.ts", "export const pure = 1;");
     await put("src/features/proposals/server/adapters/model.ts", "import { generateText } from 'ai'; import { createGoogleGenerativeAI } from '@ai-sdk/google'; export const x = [generateText, createGoogleGenerativeAI];");
-    await put("src/features/proposals/server/adapters/trigger.ts", "import { TriggerClient } from '@trigger.dev/sdk'; export const x = TriggerClient;");
-    await put("src/features/proposals/server/providers.ts", "import './adapters/model.ts'; import './adapters/trigger.ts'; export const providers = 1;");
+    await put("src/features/proposals/server/adapters/inngest.ts", "import { Inngest } from 'inngest'; export const x = Inngest;");
+    await put("src/features/proposals/server/providers.ts", "import './adapters/model.ts'; import './adapters/inngest.ts'; export const providers = 1;");
     await put("src/features/proposals/server/run-ai.ts", "import { pure } from '../domain/pure.ts'; import { createHash } from 'node:crypto'; export const run = [pure, createHash];");
-    await put("src/trigger/run-ai.ts", "import { task } from '@trigger.dev/sdk'; import { run } from '../features/proposals/server/run-ai.ts'; export const t = [task, run];");
+    await put("src/worker/run-ai.ts", "import { cron } from 'inngest'; import { run } from '../features/proposals/server/run-ai.ts'; export const t = [cron, run];");
     assert.deepEqual(checkBoundaries(root), []);
 
     await put("src/features/proposals/server/run-ai.ts", "export { cookies } from '@/server/web/session';"); // a worker service, reached or not by an entrypoint
     assert.match(checkBoundaries(root).join("\n"), /worker import reaches Next module/);
-    await put("src/trigger/run-ai.ts", "export const t = 1;"); // no entrypoint reaches it any more: it is still a worker root
+    await put("src/worker/run-ai.ts", "export const t = 1;"); // no entrypoint reaches it any more: it is still a worker root
     assert.match(checkBoundaries(root).join("\n"), /run-ai\.ts worker import reaches Next module/);
     await put("src/features/proposals/server/run-ai.ts", "import { next } from 'next/headers'; export const run = next;");
     assert.match(checkBoundaries(root).join("\n"), /worker import reaches Next module next\/headers/);
@@ -193,8 +193,8 @@ test("boundary checker keeps worker services off Next and web modules, providers
     assert.match(checkBoundaries(root).join("\n"), /client import reaches trusted module src\/features\/proposals\/server\/providers\.ts/);
     await put("src/client/panel.tsx", "'use client'; import { generateText } from 'ai'; export const x = generateText;");
     assert.match(checkBoundaries(root).join("\n"), /client import reaches server-only ai/);
-    await put("src/client/panel.tsx", "'use client'; import { TriggerClient } from '@trigger.dev/sdk'; export const x = TriggerClient;");
-    assert.match(checkBoundaries(root).join("\n"), /client import reaches server-only @trigger\.dev\/sdk/);
+    await put("src/client/panel.tsx", "'use client'; import { Inngest } from 'inngest'; export const x = Inngest;");
+    assert.match(checkBoundaries(root).join("\n"), /client import reaches server-only inngest/);
     await put("src/client/panel.tsx", "export const x = 1;");
 
     await put("src/features/proposals/server/other.ts", "import { generateText } from 'ai'; export const x = generateText;");

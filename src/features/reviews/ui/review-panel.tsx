@@ -126,6 +126,9 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
     if (listChanged) await refresh(undefined, status, live);
     else await readCurrentBaseline(status, live);
     if (current.current.ui.selectedReviewId && (listChanged || signature !== detailSignature.current)) await readDetail(current.current.ui.selectedReviewId, live);
+    // A receipt read replaced by a concurrent list read settles here; the selected reader above only covers its own review.
+    const pending = current.current.ui.pending;
+    if (pending?.acknowledged && pending.receipt && pending.receipt.reviewId !== current.current.ui.selectedReviewId) await readDetail(pending.receipt.reviewId, live, pending.receipt);
     if (current.current.ui.selectedSnapshotId && (listChanged || snapshotSignature.current !== current.current.ui.selectedSnapshotId)) await readPublishedSnapshot(current.current.ui.selectedSnapshotId, live);
   }, [refresh, readDetail, readPublishedSnapshot, readCurrentBaseline]);
   useReviewSyncReader(reconcile);

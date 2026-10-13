@@ -205,7 +205,7 @@ function retain(summary: unknown) {
 }
 function liveEnvironment(path = journalPath, authority?: RenewedAuthority) {
   if (process.env.AI_MODEL !== MODEL || !process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim()
-    || process.env.TRIGGER_SECRET_KEY?.trim() || process.env.TRIGGER_ACCESS_TOKEN?.trim()) throw new Error("LIVE_ENVIRONMENT_INVALID");
+    || process.env.INNGEST_EVENT_KEY?.trim() || process.env.INNGEST_SIGNING_KEY?.trim()) throw new Error("LIVE_ENVIRONMENT_INVALID");
   // Confirm the existing authority without changing it. Deterministic runs never read this journal.
   readBudget(path, authority);
   return process.env.GOOGLE_GENERATIVE_AI_API_KEY;

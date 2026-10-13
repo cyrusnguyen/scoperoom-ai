@@ -1,8 +1,13 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { sessionCookieOptions } from "@/features/access/session-cookies";
+import { isStaticAssetPath, isWorkerService, routeAllowed } from "@/server/worker-service";
 
 export async function proxy(request: NextRequest) {
+  const service = isWorkerService() ? "worker" : "web";
+  if (!routeAllowed(service, request.nextUrl.pathname)) return new NextResponse(null, { status: 404 });
+  if (service === "worker") return NextResponse.next({ request }); // no browser session on the worker; Inngest signs its own requests
+  if (isStaticAssetPath(request.nextUrl.pathname)) return NextResponse.next(); // the matcher no longer skips these, so the worker gate above runs first
   let response = NextResponse.next({ request });
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -26,5 +31,6 @@ export async function proxy(request: NextRequest) {
   return response;
 }
 
-// Every non-static path, so refresh-token rotation from Server Components and API routes is always persisted.
-export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"] };
+// Every path except Next's own static assets, so the worker gate sees image-suffixed paths too; the web service skips them in proxy().
+// Refresh-token rotation from Server Components and API routes is always persisted.
+export const config = { matcher: ["/((?!_next/static|_next/image).*)"] };

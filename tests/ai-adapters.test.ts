@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { AI_LIMITS, type CapturedInput } from "../src/features/proposals/contracts/tasks.ts";
 import { buildModelRequest, estimateInputTokens, OUTPUT_SCHEMA } from "../src/features/proposals/domain/model-request.ts";
 import { MAX_RESPONSE_BYTES, boundedFetch, createModelGateway } from "../src/features/proposals/server/adapters/model.ts";
-import { RUN_AI_TASK_ID, createJobDispatcher, type TriggerApi } from "../src/features/proposals/server/adapters/trigger.ts";
+import { createJobDispatcher, RUN_AI_EVENT } from "../src/features/proposals/server/adapters/inngest.ts";
 import type { ModelRequest } from "../src/features/proposals/server/ports.ts";
 import { jobDispatcher, modelGateway } from "../src/features/proposals/server/providers.ts";
 import { PROVIDER_SECRET_NAMES, withoutProviderSecrets } from "../scripts/e2e/provider-env.mjs";
@@ -184,74 +184,63 @@ test("response bytes are bounded before JSON parsing, by body size and by genera
 });
 
 const job = { runId: "9f0a1111-1111-4111-8111-111111111111", dispatchId: "7d0b2222-2222-4222-8222-222222222222", executionBinding: "20261003.1", deadlineAt: new Date(Date.now() + 200_000).toISOString() };
-function fakeTrigger(over: Partial<TriggerApi> = {}) {
-  const calls = { trigger: [] as Array<{ id: string; payload: unknown; options: unknown }>, cancel: [] as string[] };
-  const api: TriggerApi = {
-    trigger: async (id, payload, options) => { calls.trigger.push({ id, payload, options }); return { id: "task-1" }; },
-    status: async () => "EXECUTING", cancel: async (taskId) => { calls.cancel.push(taskId); }, ...over,
-  };
-  return { calls, dispatcher: createJobDispatcher(api) };
+function fakeInngest(send: (event: { name: string; id: string; data: unknown }) => Promise<{ ids: string[] }> = async () => ({ ids: ["01EVENT"] })) {
+  const sent: Array<{ name: string; id: string; data: unknown }> = [];
+  return { sent, dispatcher: createJobDispatcher({ send: async (event) => { sent.push(event); return send(event); } }) };
 }
 
-test("dispatch maps dispatchId to the idempotency key, pins the captured binding and sends only identities and the deadline", async () => {
-  const { dispatcher, calls } = fakeTrigger();
-  assert.deepEqual(await dispatcher.dispatch(job), { kind: "accepted", taskId: "task-1" });
-  assert.deepEqual(await dispatcher.dispatch({ ...job }), { kind: "accepted", taskId: "task-1" }); // repair re-delivers the same identity
-  assert.equal(calls.trigger.length, 2);
-  for (const call of calls.trigger) {
-    assert.equal(call.id, RUN_AI_TASK_ID);
-    assert.deepEqual(call.payload, job); // exactly {runId, dispatchId, executionBinding, deadlineAt}
-    const options = call.options as { idempotencyKey: string; externalDeploymentId: string; ttl: number };
-    assert.equal(options.idempotencyKey, job.dispatchId);
-    assert.equal(options.externalDeploymentId, job.executionBinding); // the external deployment id from `trigger.dev deploy --external-id`
-    assert.ok(!("version" in options), "no numeric version is ever sent");
-    assert.ok(options.ttl >= 1 && options.ttl <= 200);
+test("dispatch sends one event whose id is the dispatchId and whose data is only the job identities and deadline", async () => {
+  const { dispatcher, sent } = fakeInngest();
+  assert.deepEqual(await dispatcher.dispatch(job), { kind: "accepted", taskId: "01EVENT" });
+  assert.deepEqual(await dispatcher.dispatch({ ...job }), { kind: "accepted", taskId: "01EVENT" }); // repair re-sends the same id; Inngest drops the duplicate
+  assert.equal(sent.length, 2);
+  for (const event of sent) {
+    assert.equal(event.name, RUN_AI_EVENT);
+    assert.equal(event.id, job.dispatchId);
+    assert.deepEqual(event.data, job); // exactly {runId, dispatchId, executionBinding, deadlineAt}
   }
 });
 
-test("dispatch is unavailable for an unknown binding, a provider failure or an expired deadline, and never throws", async () => {
-  assert.deepEqual(await fakeTrigger({ trigger: async () => { throw new Error("version not found"); } }).dispatcher.dispatch(job), { kind: "unavailable" });
-  assert.deepEqual(await fakeTrigger({ trigger: async () => ({ id: "" }) }).dispatcher.dispatch(job), { kind: "unavailable" });
-  const expired = fakeTrigger();
+test("dispatch is unavailable for a failed send, no event id, an expired deadline or an over-long binding, and never throws", async () => {
+  assert.deepEqual(await fakeInngest(async () => { throw new Error("network"); }).dispatcher.dispatch(job), { kind: "unavailable" });
+  assert.deepEqual(await fakeInngest(async () => ({ ids: [] })).dispatcher.dispatch(job), { kind: "unavailable" });
+  const expired = fakeInngest();
   assert.deepEqual(await expired.dispatcher.dispatch({ ...job, deadlineAt: new Date(Date.now() - 1_000).toISOString() }), { kind: "unavailable" });
-  assert.equal(expired.calls.trigger.length, 0, "no call past the deadline");
-  const long = fakeTrigger(); // Trigger ignores an id over 128 characters, which would run the task on whatever deployment is current
+  assert.equal(expired.sent.length, 0, "no event past the deadline");
+  const long = fakeInngest();
   assert.deepEqual(await long.dispatcher.dispatch({ ...job, executionBinding: "b".repeat(129) }), { kind: "unavailable" });
-  assert.equal(long.calls.trigger.length, 0);
-  assert.deepEqual(await long.dispatcher.dispatch({ ...job, executionBinding: "b".repeat(128) }), { kind: "accepted", taskId: "task-1" });
+  assert.equal(long.sent.length, 0);
+  const edge = fakeInngest();
+  assert.equal((await edge.dispatcher.dispatch({ ...job, executionBinding: "b".repeat(128) })).kind, "accepted"); // exactly the admission limit is allowed
+  assert.equal(edge.sent.length, 1);
 });
 
-test("cancel distinguishes requested, terminal and unknown, and a request never claims the task stopped", async () => {
-  const live = fakeTrigger();
-  assert.equal(await live.dispatcher.cancel("task-1"), "requested");
-  assert.deepEqual(live.calls.cancel, ["task-1"]);
-  const done = fakeTrigger({ status: async () => "COMPLETED" });
-  assert.equal(await done.dispatcher.cancel("task-1"), "terminal");
-  assert.deepEqual(done.calls.cancel, []);
-  assert.equal(await fakeTrigger({ status: async () => { throw new Error("404"); } }).dispatcher.cancel("task-1"), "unknown");
-  assert.equal(await fakeTrigger({ cancel: async () => { throw new Error("network"); } }).dispatcher.cancel("task-1"), "unknown");
+test("cancel is unknown: SQL cancel intent and fences decide, the event is never recalled", async () => {
+  const { dispatcher, sent } = fakeInngest();
+  assert.equal(await dispatcher.cancel("01EVENT"), "unknown");
+  assert.equal(sent.length, 0);
 });
 
 test("the composition module treats blank keys as absent and the test environment never reaches a real provider", () => {
   assert.equal(jobDispatcher({}), undefined);
-  assert.equal(jobDispatcher({ TRIGGER_SECRET_KEY: "  " }), undefined);
+  assert.equal(jobDispatcher({ INNGEST_EVENT_KEY: "  " }), undefined);
   assert.throws(() => modelGateway({}), /GOOGLE_GENERATIVE_AI_API_KEY/);
   assert.throws(() => modelGateway({ GOOGLE_GENERATIVE_AI_API_KEY: "" }));
-  const blanked = withoutProviderSecrets({ GOOGLE_GENERATIVE_AI_API_KEY: "x", TRIGGER_SECRET_KEY: "y", TRIGGER_ACCESS_TOKEN: "z", KEEP: "1" });
+  const blanked = withoutProviderSecrets({ GOOGLE_GENERATIVE_AI_API_KEY: "x", INNGEST_EVENT_KEY: "y", INNGEST_SIGNING_KEY: "z", KEEP: "1" });
   assert.deepEqual(PROVIDER_SECRET_NAMES.map((name) => blanked[name]), ["", "", ""]);
   assert.equal(blanked.KEEP, "1");
   assert.equal(jobDispatcher(blanked), undefined);
-  assert.equal(jobDispatcher({ TRIGGER_SECRET_KEY: "would-be-real", SCOPEROOM_E2E: "1" }), undefined); // the hand-started dev e2e server is safe too
-  assert.ok(jobDispatcher({ TRIGGER_SECRET_KEY: "fake-key-for-construction-only" }), "a configured production process gets its dispatcher (constructed, never called)");
+  assert.equal(jobDispatcher({ INNGEST_EVENT_KEY: "would-be-real", SCOPEROOM_E2E: "1" }), undefined); // the hand-started dev e2e server is safe too
+  assert.ok(jobDispatcher({ INNGEST_EVENT_KEY: "fake-key-for-construction-only" }), "a configured production process gets its dispatcher (constructed, never called)");
   // The servers and suites that must stay network-free blank the keys; Next would otherwise load them from .env.local itself.
   assert.match(readFileSync("scripts/e2e/production.mjs", "utf8"), /withoutProviderSecrets\(\{/);
   assert.match(readFileSync("playwright.config.ts", "utf8"), /env: withoutProviderSecrets\(/);
-  // Only the composition module's own tests and the Trigger entrypoints compose real providers: no suite imports it with the process env.
+  // Only the composition module's own tests and the worker entrypoints compose real providers: no suite imports it with the process env.
   const suites = ["tests", "tests/integration", "tests/workers", "tests/integration/support"].flatMap((dir) => {
     try { return readdirSync(dir).filter((name) => name.endsWith(".ts")).map((name) => `${dir}/${name}`); } catch { return []; }
   });
   for (const file of suites) {
     if (file === "tests/ai-adapters.test.ts") continue;
-    assert.doesNotMatch(readFileSync(file, "utf8"), /^\s*(?:import|export)[^\n]*from\s+["'][^"']*(?:server\/providers|adapters\/(?:model|trigger))(?:\.ts)?["']/m, `${file} must use injected fakes`);
+    assert.doesNotMatch(readFileSync(file, "utf8"), /^\s*(?:import|export)[^\n]*from\s+["'][^"']*(?:server\/providers|adapters\/(?:model|inngest))(?:\.ts)?["']/m, `${file} must use injected fakes`);
   }
 });

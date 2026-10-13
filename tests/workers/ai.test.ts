@@ -2,14 +2,13 @@ import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
 import { Client } from "pg";
-import { wait } from "@trigger.dev/sdk";
 import { MAX_VERSION } from "../../src/features/drafts/contracts/strict.ts";
 import { canonicalJson, sha256 } from "../../src/features/proposals/domain/capture.ts";
+import { deliverRun } from "../../src/features/proposals/server/deliver-run.ts";
 import { dispatchAi } from "../../src/features/proposals/server/dispatch-ai.ts";
 import type { JobDispatcher, JobRequest, ModelGateway, ModelReply, ModelRequest } from "../../src/features/proposals/server/ports.ts";
 import { repairRuns } from "../../src/features/proposals/server/repair-runs.ts";
 import { runAi } from "../../src/features/proposals/server/run-ai.ts";
-import { runAiDelivery } from "../../src/trigger/run-ai.ts";
 import { seedRun } from "../integration/support/ai-runs.ts";
 import { insertProfile, insertProject, removeSchemaRows } from "../integration/support/schema-fixture.ts";
 import { edgeOp, nodeOp, flowOp, proposal, resultFixture } from "../support/ai-results.ts";
@@ -243,7 +242,7 @@ test("refusal fails the run without a second call, while unavailable and unknown
     const hopeless = await seed({ createdAt: ago(5) });
     const c = fakeGateway(() => ({ kind: "unknown" }));
     await runAi(hopeless.runId, c.gateway);
-    await runAi(hopeless.runId, c.gateway); // a Trigger retry re-enters but cannot grant a third call
+    await runAi(hopeless.runId, c.gateway); // an Inngest retry re-enters but cannot grant a third call
     await runAi(hopeless.runId, c.gateway);
     assert.equal(c.requests.length, 2);
     assert.equal((await attempts(hopeless.runId)).length, 2);
@@ -294,7 +293,7 @@ test("a BUSY attempt returns its SQL wake time instead of completing the retry d
     const { rows: [window] } = await admin.query("select a.deadline_at from app.ai_run r join app.ai_run_attempt a on a.id = r.current_attempt_id where r.id = $1", [runId]);
     const { gateway, requests } = fakeGateway(() => completed());
     const wakeAt: unknown = await runAi(runId, gateway);
-    assert.ok(wakeAt instanceof Date, "the Trigger handler must retain execution until SQL permits another claim");
+    assert.ok(wakeAt instanceof Date, "the Inngest run-ai function must retain execution until SQL permits another claim");
     assert.equal(wakeAt.getTime(), window.deadline_at.getTime() + 1);
     assert.equal(requests.length, 0);
     assert.equal((await attempts(runId)).length, 1);
@@ -307,14 +306,11 @@ test("the task waits through a crashed attempt and recovers its acknowledged del
     const priorKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
     process.env.GOOGLE_GENERATIVE_AI_API_KEY = "synthetic-recovery-test-no-real-key";
     let calls = 0, waits = 0;
+    // Emulate only the durable sleep; the delivery function, provider adapter, SQL claim, validation and settlement remain real.
+    const redeliver = (delivery: JobRequest) => deliverRun(delivery, { run: (_id, fn) => fn(), sleepUntil: async (_id, at) => { waits += 1; await sleep(Math.max(0, Date.parse(at) - Date.now())); } }, { binding: delivery.executionBinding });
     context.mock.method(globalThis, "fetch", async () => {
       calls += 1;
       return new Response(JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text: JSON.stringify(GOOD) }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 7 }, responseId: "recovered-request" }), { headers: { "content-type": "application/json" } });
-    });
-    context.mock.method(wait, "until", async ({ date }: { date: Date }) => {
-      waits += 1;
-      // Emulate only the external wait; the task, provider adapter, SQL claim, validation and settlement remain real.
-      await sleep(Math.max(0, date.getTime() - Date.now()));
     });
     try {
       for (const state of ["RUNNING", "VALIDATING"]) {
@@ -322,13 +318,13 @@ test("the task waits through a crashed attempt and recovers its acknowledged del
         await admin.query("update app.ai_run set state = $2::text::app.ai_run_state, dispatch_state = 'DISPATCHED', task_id = 'crashed-task' where id = $1", [runId, state]);
         const delivery = { runId, dispatchId: "unused-diagnostic-id", executionBinding: "seed-binding", deadlineAt: new Date(Date.now() + 175_000).toISOString() };
         const beforeCalls = calls, beforeWaits = waits;
-        await runAiDelivery(delivery);
+        await redeliver(delivery);
         assert.equal(calls, beforeCalls + 1, `${state}: only a fresh claim may call the model`);
         assert.equal(waits, beforeWaits + 1, `${state}: BUSY must not complete the delivery`);
         assert.deepEqual((await attempts(runId)).map((attempt) => [attempt.attempt_number, attempt.outcome]), [[1, "UNKNOWN"], [2, "COMPLETED"]]);
         assert.deepEqual([(await row(runId)).state, (await row(runId)).dispatch_state, (await row(runId)).result], ["SUCCEEDED", "DISPATCHED", GOOD]);
         assert.deepEqual(await budget(owner), { reserved_runs: 0, consumed_runs: 1 });
-        await runAiDelivery(delivery);
+        await redeliver(delivery);
         assert.equal(calls, beforeCalls + 1, "a duplicate after recovery cannot repeat either consumed call");
         assert.equal(waits, beforeWaits + 1);
       }

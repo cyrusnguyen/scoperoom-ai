@@ -1045,8 +1045,11 @@ test("trace explanation conflicts offer explicit reconciliation and removed link
   const initial = await readDraft(), original = Object.values(initial.document.traceLinks)[0]!;
   const path = `/api/projects/${projectId}/drafts/${initial.id}/commands`, explanation = page.locator(`#link-${original.id}`);
   await explanation.fill("My explanation");
+  // Stays registered and passes through after one use: unrouting while the 409's draft and status reads are in flight can leave one hung.
+  let raced = false;
   await page.route(`**${path}`, async (route) => {
-    if (route.request().method() === "POST" && route.request().postDataJSON().command === "UPDATE_TRACE_LINK") {
+    if (!raced && route.request().method() === "POST" && route.request().postDataJSON().command === "UPDATE_TRACE_LINK") {
+      raced = true;
       const remote = await page.request.post(path, {
         headers: { Origin: appUrl, "Idempotency-Key": randomUUID() },
         data: { commandSchemaVersion: 1, command: "UPDATE_TRACE_LINK", expectedEntityVersion: original.version, payload: { linkId: original.id, explanation: "Remote explanation" } },
@@ -1058,7 +1061,6 @@ test("trace explanation conflicts offer explicit reconciliation and removed link
   const refused = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith(path) && response.request().postDataJSON().command === "UPDATE_TRACE_LINK");
   await page.getByRole("button", { name: "Edit explanation" }).click();
   const conflict = await refused;
-  await page.unroute(`**${path}`);
   expect(conflict.status()).toBe(409);
   expect(conflict.request().postDataJSON().expectedEntityVersion).toBe(original.version);
   await expect(page.getByLabel("Current saved explanation")).toHaveValue("Remote explanation");
