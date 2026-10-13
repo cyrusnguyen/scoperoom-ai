@@ -33,17 +33,19 @@ Hosted Supabase signs database certificates with its own root CA. Download it fr
 | `INNGEST_EVENT_KEY` | | yes | yes | the Inngest Production event key; added to the web project by hand, synced to the worker by the integration |
 | `INNGEST_SIGNING_KEY` | | | yes | the Inngest Production signing key, synced by the integration; never on the web project |
 | `SCOPEROOM_SERVICE` | | | yes | `worker` |
+| `SCOPEROOM_WORKER_SECRET` | `.env.hosted.local` | | yes | at least 32 random characters; the bearer token the pg_cron jobs send to the worker's maintenance endpoints. Never on the web project |
+| `SCOPEROOM_WORKER_URL` | `.env.hosted.local` | | | the worker's bare https origin, read by `scripts/db/schedule.mjs` |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | | | yes | the Gemini key; never on the web project |
 | `SMOKE_URL`, `SMOKE_{OWNER,EDITOR,VIEWER}_{EMAIL,PASSWORD}`, `SMOKE_AI` | `.env.smoke.local` | | | production origin, three synthetic accounts, `1` only when an AI budget is authorized |
 
-Never set bootstrap or migrator credentials on a Vercel project. The web project never holds `WORKER_DATABASE_URL`, `GOOGLE_GENERATIVE_AI_API_KEY` or `INNGEST_SIGNING_KEY`. The worker project holds only the variables marked above (plus Vercel system variables). `INNGEST_DEV` is never set on either project.
+Never set bootstrap or migrator credentials on a Vercel project. The web project never holds `WORKER_DATABASE_URL`, `GOOGLE_GENERATIVE_AI_API_KEY`, `INNGEST_SIGNING_KEY` or `SCOPEROOM_WORKER_SECRET`. The worker project holds only the variables marked above (plus Vercel system variables). `INNGEST_DEV` is never set on either project.
 
 Vercel settings that cost a release during the first cutover:
 
 - Each project's Function Region must be the region closest to the Supabase database. From a distant region the AI admission transaction (about 25 sequential queries) exceeded Prisma's 5 second interactive-transaction timeout and surfaced as 503 `UNAVAILABLE`.
 - `AI_MODEL` must be the bare model id. Admission rejects anything else (spaces, line breaks, quotes) with 503.
 - `AI_EXECUTION_BINDING` must be a Production environment variable on both projects. `vercel deploy -e` did not reach the runtime with CLI 48.
-- Sign up for Inngest through the Vercel Marketplace (free plan: up to 50K executions a month; repair every 2 minutes uses about 22K, leaving about 28K for AI runs) and grant the Inngest integration access to the worker project ONLY. Add `INNGEST_EVENT_KEY` to the web project by hand; the web project never gets `INNGEST_SIGNING_KEY`. After granting, check that the worker project holds nothing beyond the worker column's variables and that the web project has no `INNGEST_SIGNING_KEY`.
+- Sign up for Inngest through the Vercel Marketplace (free plan: up to 50K executions a month, used by AI runs only; each run is a few executions) and grant the Inngest integration access to the worker project ONLY. Add `INNGEST_EVENT_KEY` to the web project by hand; the web project never gets `INNGEST_SIGNING_KEY`. After granting, check that the worker project holds nothing beyond the worker column's variables and that the web project has no `INNGEST_SIGNING_KEY`.
 - Keep Vercel Standard Deployment Protection on the worker project so old per-deployment URLs cannot be re-synced by anyone calling `PUT /api/inngest`. If the integration's sync needs it, use Vercel's Protection Bypass for Automation (verify at cutover).
 - Keep the Vercel Supabase (and any database) integration disconnected from both projects: it re-adds privileged `POSTGRES_*` and `SUPABASE_*` variables.
 - Vercel accepts multi-line values, so paste the CA PEM and the ES256 signing key with their line breaks.
@@ -95,15 +97,15 @@ Never run `db:reset` or destructive SQL against this target without a separate e
    vercel deploy --prod --yes
    ```
 
-5. The Inngest integration syncs the functions on each worker deploy. Confirm the Inngest dashboard shows both functions (`run-ai`, `repair-runs`) on the current deployment and in the Production environment, not a branch environment (the SDK may derive a branch name from the git ref on CLI deploys; verify at cutover). If the sync did not happen, use the fallback:
+5. The Inngest integration syncs the function on each worker deploy. Confirm the Inngest dashboard shows `run-ai` on the current deployment and in the Production environment, not a branch environment (the SDK may derive a branch name from the git ref on CLI deploys; verify at cutover). If the sync did not happen, use the fallback:
 
    ```powershell
    curl -X PUT https://<worker origin>/api/inngest
    ```
 
 6. Deploy the web project: relink the same worktree (`vercel link --yes --project <web project>`), then `vercel deploy --prod --yes`. Do not repeat `git worktree add`.
-7. `GET <origin>/api/health` on the web origin returns `{"status":"ok","service":"scoperoom-ai","apiVersion":"v1"}`. The worker origin returns 404 for `/`, `/api/health`, `/api/projects` and image-suffixed paths, and the web origin returns 404 for `/api/inngest`. The web logger writes only failed requests, so `releaseId` cannot be read from healthy traffic; identify a release by its deployment ID.
-8. A `repair-runs` run completes within about two minutes in the Inngest dashboard.
+7. Create the maintenance schedule once the worker is deployed (after step 5) with `node --env-file=.env.hosted.local scripts/db/schedule.mjs apply`; it stores the secret in Supabase Vault and creates the repair (every minute) and cleanup (hourly) pg_cron jobs. After two minutes run `node --env-file=.env.hosted.local scripts/db/schedule.mjs verify` and expect `schedule=verify-ok`. To rotate the secret, update the worker variable, redeploy the worker, then rerun `apply`.
+8. `GET <origin>/api/health` on the web origin returns `{"status":"ok","service":"scoperoom-ai","apiVersion":"v1"}`. The worker serves only `/api/inngest`, the two maintenance endpoints, `/_next/static` and `/_next/image`: its origin returns 404 for `/`, `/api/health`, `/api/projects`, image-suffixed paths and an unauthenticated POST to a maintenance endpoint, and the web origin returns 404 for `/api/inngest` and `/api/internal/worker/*`. The web logger writes only failed requests, so `releaseId` cannot be read from healthy traffic; identify a release by its deployment ID.
 9. `corepack pnpm test:smoke:hosted`, then record the deployment IDs and results in the tracker.
 
 Changed environment values mean a new deployment and a new smoke.
@@ -140,7 +142,8 @@ Later releases may use `vercel rollback` only to an earlier deployment whose sch
 | Realtime unavailable or quota pause | Expect "Live updates delayed"; saves and status polling continue | Supabase Realtime reports |
 | Worker or model outage | Runs show queued or failed with bounded attempts; manual work continues | The worker project's logs, the Inngest run list, Gemini quota |
 | Auth or SMTP failure | Protected operations fail while verification is unavailable; retest with an operator mailbox | Supabase Auth logs, Resend |
-| Inngest function paused | Inngest Free pauses a function after 20 consecutive failures. `repair-runs` and `run-ai` report expected failures (including a `run-ai` step that exhausts its retries) as results, so they should not reach it. After any outage, check that both functions are not paused in the Inngest dashboard and resume them if needed: events received while paused are not reprocessed automatically, and repair re-sends pending runs | Inngest dashboard, function list |
+| Maintenance not running | Repair (every minute) and cleanup (hourly) are Supabase pg_cron jobs, not Inngest functions. Rerun `schedule.mjs verify`; a failing sweep logs `{"maintenance":"repair","ok":false}` and the next tick retries | `cron.job_run_details` and `net._http_response` in the database, the worker project's logs |
+| Inngest function paused | Inngest Free pauses a function after 20 consecutive failures. `run-ai` reports expected failures (including a step that exhausts its retries) as results, so it should not reach it. After any outage, check that `run-ai` is not paused in the Inngest dashboard and resume it if needed: events received while paused are not reprocessed automatically, and repair re-sends pending runs | Inngest dashboard, function list |
 | Inngest executions exhausted | Inngest pauses execution until the next month when the monthly executions run out; check usage in the Inngest dashboard | Inngest dashboard, usage |
 | Bad migration | Stop releases; inspect Prisma state, prefer a corrective forward migration | `app._prisma_migrations` |
 
@@ -153,5 +156,5 @@ Later releases may use `vercel rollback` only to an earlier deployment whose sch
 - Backups are as recorded in the tracker; no restore has been performed.
 - `app_migrator` and `app_realtime_reader` inherit `anon` privileges on hosted (Supabase gives `postgres` no other way to grant `auth` access).
 - Inngest orchestration runs in the US; our code and its database queries run in the region closest to the database. Each run pays that round trip.
-- The Inngest free plan allows up to 50K executions a month (Vercel Marketplace signup). Repair every 2 minutes uses about 22K, leaving about 28K for AI runs (each run uses a few executions: the function run plus its steps).
+- The Inngest free plan allows up to 50K executions a month (Vercel Marketplace signup). Only AI runs spend them (each run uses a few executions: the function run plus its steps); repair and cleanup run from Supabase pg_cron and spend none.
 - A worker with a different `AI_EXECUTION_BINDING` than a run (a run admitted before a release) returns without executing and without counting as a failed run; the run times out with a refund.
