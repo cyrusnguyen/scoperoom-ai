@@ -4,7 +4,7 @@ import { targetInput, targetKind, verifyTarget } from "./guard.mjs";
 // Hosted-only operator setup for the worker maintenance schedule: Supabase pg_cron calls the worker's secret-protected endpoints through
 // pg_net, the bearer read from Vault when each job runs.
 //   apply   installs the extensions, stores the secret in Vault and (re)creates both jobs
-//   verify  both jobs active with the expected schedule and command, and the worker answered 202 recently
+//   verify  both jobs active with the expected schedule and command, and each endpoint answers a probe of its own command with 202
 const SECRET_NAME = "scoperoom_worker_secret";
 export const JOBS = [
   { name: "scoperoom-repair", schedule: "* * * * *", path: "/api/internal/worker/repair" },
@@ -36,15 +36,31 @@ async function apply(client) {
   }
 }
 
-/** Both jobs active with the expected schedule and command, and the worker answered 202 recently. */
+/**
+ * Runs one job's exact command now and waits for that request's response: a 202 proves the endpoint, the origin and the Vault secret.
+ * net._http_response has no URL, so only the returned request id ties a response to a job.
+ */
+export async function probeJob(client, origin, job, { attempts = 30, wait = () => new Promise((resolve) => setTimeout(resolve, 1_000)) } = {}) {
+  const { rows: [{ id }] } = await client.query(`${scheduleCommand(origin, job.path)} as id`);
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const { rows: [response] } = await client.query("select status_code, error_msg from net._http_response where id = $1", [id]);
+    if (response) {
+      if (response.status_code === 202) return;
+      throw new Error(`${job.name} answered ${response.status_code ?? `no status (${response.error_msg})`}.`);
+    }
+    await wait();
+  }
+  throw new Error(`${job.name} got no response within ${attempts} checks.`);
+}
+
+/** Both jobs active with the expected schedule and command, and each endpoint answers its own probe with 202. */
 async function verify(client) {
   const origin = process.env.SCOPEROOM_WORKER_URL?.trim() ?? "";
   for (const job of JOBS) {
     const { rows: [row] } = await client.query("select schedule, active, command from cron.job where jobname = $1", [job.name]);
     if (!row || !row.active || row.schedule !== job.schedule || row.command !== scheduleCommand(origin, job.path)) throw new Error(`${job.name} is missing, inactive or differs.`);
   }
-  const { rows: [recent] } = await client.query("select count(*) filter (where status_code = 202)::int as ok, count(*)::int as total from net._http_response where created > now() - interval '5 minutes'");
-  if (!recent.ok) throw new Error(`No 202 from the worker in the last 5 minutes (${recent.total} responses).`);
+  for (const job of JOBS) await probeJob(client, origin, job);
 }
 
 if (import.meta.main) {

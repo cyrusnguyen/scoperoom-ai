@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JOBS, scheduleCommand } from "../scripts/db/schedule.mjs";
+import { JOBS, probeJob, scheduleCommand } from "../scripts/db/schedule.mjs";
 
 test("the jobs are repair every minute and cleanup hourly", () => {
   assert.deepEqual(JOBS, [
@@ -21,4 +21,19 @@ test("only a bare https origin and a known path are accepted, so nothing can be 
     assert.throws(() => scheduleCommand(bad, "/api/internal/worker/repair"), /bare https origin/, bad);
   }
   assert.throws(() => scheduleCommand("https://worker.example.test", "/api/internal/worker/x'); drop table app.project; --"), /known maintenance path/);
+});
+
+test("verify probes each endpoint with its own job command and needs that request's 202", async () => {
+  const origin = "https://worker.example.test", job = JOBS[1]!;
+  const fake = (responses: Array<Record<string, unknown> | undefined>) => {
+    const sent: string[] = [];
+    return { sent, query: async (sql: string) => { sent.push(sql); return { rows: sql.startsWith("select net.http_post") ? [{ id: 7 }] : [responses.shift()].filter(Boolean) }; } };
+  };
+  const ok = fake([undefined, { status_code: 202, error_msg: null }]);
+  await probeJob(ok, origin, job, { attempts: 3, wait: async () => {} });
+  assert.equal(ok.sent[0], `${scheduleCommand(origin, job.path)} as id`);
+  assert.equal(ok.sent.length, 3, "polls the request id until its response lands");
+  await assert.rejects(probeJob(fake([{ status_code: 404, error_msg: null }]), origin, job, { attempts: 3, wait: async () => {} }), /scoperoom-cleanup answered 404/);
+  await assert.rejects(probeJob(fake([{ status_code: null, error_msg: "Timeout" }]), origin, job, { attempts: 3, wait: async () => {} }), /scoperoom-cleanup answered no status \(Timeout\)/);
+  await assert.rejects(probeJob(fake([]), origin, job, { attempts: 2, wait: async () => {} }), /scoperoom-cleanup got no response/);
 });

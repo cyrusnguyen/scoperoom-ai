@@ -9,7 +9,8 @@ The [tracker](progress-tracker.md) distinguishes planned architecture from obser
 | Supabase Auth | Verified identity/session; backend services decide project capability |
 | Supabase PostgreSQL / Prisma | Saved document and layout, authority, evidence, snapshots, jobs, receipts and audit |
 | Supabase Realtime | Private presence, temporary motion and minimal committed-change hints |
-| Inngest | Durable AI dispatch and repair cron, served by the separate worker Vercel project, introduced with the first AI consumer |
+| Inngest | Durable AI dispatch only (`run-ai`), served by the separate worker Vercel project |
+| Supabase pg_cron / pg_net | Maintenance schedule: repair every minute and cleanup hourly, POSTing to the worker's secret-protected endpoints |
 | Explicit model provider / AI SDK / Zod | Captured typed proposals with human review and bounded costs |
 | Vercel / GitHub | Native web deployments; required production checks and coordinated migrations/workers |
 | Safe operational sink / SQL audit | Separate diagnostics from durable project actions and job truth |
