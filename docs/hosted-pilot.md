@@ -30,8 +30,8 @@ Hosted Supabase signs database certificates with its own root CA. Download it fr
 | `AI_MODEL` | | yes | | the bare model id (no spaces, line breaks or quotes); removing it pauses AI admission |
 | `AI_TOTAL_RUN_LIMIT`, `AI_DAILY_RUN_LIMIT` | | optional | | default-plan AI limits for every account; blank keeps 5 total and 30 per day |
 | `AI_EXECUTION_BINDING` | | yes | yes | the release SHA, the same on both projects, set before deploying (section 4) |
-| `INNGEST_EVENT_KEY` | | yes | yes | the Inngest Production event key |
-| `INNGEST_SIGNING_KEY` | | | yes | the Inngest Production signing key; never on the web project |
+| `INNGEST_EVENT_KEY` | | yes | yes | the Inngest Production event key; added to the web project by hand, synced to the worker by the integration |
+| `INNGEST_SIGNING_KEY` | | | yes | the Inngest Production signing key, synced by the integration; never on the web project |
 | `SCOPEROOM_SERVICE` | | | yes | `worker` |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | | | yes | the Gemini key; never on the web project |
 | `SMOKE_URL`, `SMOKE_{OWNER,EDITOR,VIEWER}_{EMAIL,PASSWORD}`, `SMOKE_AI` | `.env.smoke.local` | | | production origin, three synthetic accounts, `1` only when an AI budget is authorized |
@@ -43,6 +43,8 @@ Vercel settings that cost a release during the first cutover:
 - Each project's Function Region must be the region closest to the Supabase database. From a distant region the AI admission transaction (about 25 sequential queries) exceeded Prisma's 5 second interactive-transaction timeout and surfaced as 503 `UNAVAILABLE`.
 - `AI_MODEL` must be the bare model id. Admission rejects anything else (spaces, line breaks, quotes) with 503.
 - `AI_EXECUTION_BINDING` must be a Production environment variable on both projects. `vercel deploy -e` did not reach the runtime with CLI 48.
+- Sign up for Inngest through the Vercel Marketplace and grant the Inngest integration access to the worker project ONLY. Add `INNGEST_EVENT_KEY` to the web project by hand; the web project never gets `INNGEST_SIGNING_KEY`. After granting, check that the worker project holds nothing beyond the worker column's variables and that the web project has no `INNGEST_SIGNING_KEY`.
+- Keep Vercel Standard Deployment Protection on the worker project so old per-deployment URLs cannot be re-synced by anyone calling `PUT /api/inngest`. If the integration's sync needs it, use Vercel's Protection Bypass for Automation (verify at cutover).
 - Keep the Vercel Supabase (and any database) integration disconnected from both projects: it re-adds privileged `POSTGRES_*` and `SUPABASE_*` variables.
 - Vercel accepts multi-line values, so paste the CA PEM and the ES256 signing key with their line breaks.
 
@@ -93,15 +95,15 @@ Never run `db:reset` or destructive SQL against this target without a separate e
    vercel deploy --prod --yes
    ```
 
-5. Sync Inngest with the new worker deployment, and expect both functions (`run-ai`, `repair-runs`) in the Inngest dashboard:
+5. The Inngest integration syncs the functions on each worker deploy. Confirm the Inngest dashboard shows both functions (`run-ai`, `repair-runs`) on the current deployment and in the Production environment, not a branch environment (the SDK may derive a branch name from the git ref on CLI deploys; verify at cutover). If the sync did not happen, use the fallback:
 
    ```powershell
    curl -X PUT https://<worker origin>/api/inngest
    ```
 
-6. Deploy the web project the same way (`vercel link --yes --project <web project>`, `vercel deploy --prod --yes`).
-7. `GET <origin>/api/health` on the web origin returns `{"status":"ok","service":"scoperoom-ai","apiVersion":"v1"}`. The worker origin returns 404 for `/`, `/api/health` and `/api/projects`, and the web origin returns 404 for `/api/inngest`. The web logger writes only failed requests, so `releaseId` cannot be read from healthy traffic; identify a release by its deployment ID.
-8. A `repair-runs` run completes within 5 minutes in the Inngest dashboard.
+6. Deploy the web project: relink the same worktree (`vercel link --yes --project <web project>`), then `vercel deploy --prod --yes`. Do not repeat `git worktree add`.
+7. `GET <origin>/api/health` on the web origin returns `{"status":"ok","service":"scoperoom-ai","apiVersion":"v1"}`. The worker origin returns 404 for `/`, `/api/health`, `/api/projects` and image-suffixed paths, and the web origin returns 404 for `/api/inngest`. The web logger writes only failed requests, so `releaseId` cannot be read from healthy traffic; identify a release by its deployment ID.
+8. A `repair-runs` run completes within about a minute in the Inngest dashboard.
 9. `corepack pnpm test:smoke:hosted`, then record the deployment IDs and results in the tracker.
 
 Changed environment values mean a new deployment and a new smoke.
@@ -122,7 +124,7 @@ on conflict (profile_id) do update set ai_total_run_limit = 50, ai_daily_run_lim
 
 The first release has no predecessor to roll back to.
 
-- Pause AI: remove `AI_MODEL` from the web project's Production variables and redeploy the same SHA. Admission then answers `UNAVAILABLE`; editing stays available. Disabling `run-ai` in the Inngest dashboard also pauses delivery: queued runs then time out at their SQL deadline with a refund.
+- Pause AI: remove `AI_MODEL` from the web project's Production variables and redeploy the same SHA. Admission then answers `UNAVAILABLE`; editing stays available. Pausing `run-ai` in the Inngest dashboard also pauses delivery: only never-claimed runs are refunded at their SQL deadline; a claimed call stays consumed.
 - Pause everything: pause the Vercel web project.
 - Then fix forward with a new SHA through the full release.
 
@@ -149,6 +151,5 @@ Later releases may use `vercel rollback` only to an earlier deployment whose sch
 - Backups are as recorded in the tracker; no restore has been performed.
 - `app_migrator` and `app_realtime_reader` inherit `anon` privileges on hosted (Supabase gives `postgres` no other way to grant `auth` access).
 - Inngest orchestration runs in the US; our code and its database queries run in the region closest to the database. Each run pays that round trip.
-- Repair runs every 5 minutes. A run whose first event send failed may reach its 300-second deadline before repair re-sends it; it then settles `TIMED_OUT` and its reservation is refunded.
-- The Inngest free plan allows 50k executions a month; the repair cron alone uses about 8,600.
+- The Inngest free plan allows 100k executions a month via the Vercel Marketplace signup; repair uses about 43k.
 - A worker with a different `AI_EXECUTION_BINDING` than a run (a run admitted before a release) fails that run's function without retry; the run times out with a refund.

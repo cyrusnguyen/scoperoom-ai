@@ -9,7 +9,7 @@ The [tracker](progress-tracker.md) distinguishes planned architecture from obser
 | Supabase Auth | Verified identity/session; backend services decide project capability |
 | Supabase PostgreSQL / Prisma | Saved document and layout, authority, evidence, snapshots, jobs, receipts and audit |
 | Supabase Realtime | Private presence, temporary motion and minimal committed-change hints |
-| Trigger.dev | Durable AI dispatch/repair and bounded maintenance, introduced with the first AI consumer |
+| Inngest | Durable AI dispatch and repair cron, served by the separate worker Vercel project, introduced with the first AI consumer |
 | Explicit model provider / AI SDK / Zod | Captured typed proposals with human review and bounded costs |
 | Vercel / GitHub | Native web deployments; required production checks and coordinated migrations/workers |
 | Safe operational sink / SQL audit | Separate diagnostics from durable project actions and job truth |
@@ -24,7 +24,7 @@ The [tracker](progress-tracker.md) distinguishes planned architecture from obser
 - `src/features/shell/ui` (the `/app` shell), `src/client` (browser fetch helper) and `src/styles/tokens.css`: shared presentation and tokens with safe props.
 - `src/contracts`: runtime-neutral common wire schemas.
 - `src/server`: trusted shared Node infrastructure; `src/server/web` isolates Next request/session wrappers.
-- `src/trigger`: thin durable tasks; feature services stay usable without Next request state.
+- `src/worker`: thin Inngest functions served by the worker Vercel project; feature services stay usable without Next request state.
 - Root configs, `.github/workflows`, `scripts`, `prisma`, `supabase` and optional Dockerfile: development/deployment tooling, outside application source.
 
 UI may render on the server; browser helpers are not a home for every component. Enforce resolved imports against secret leaks and worker→Next coupling. Install packages/create folders with actual consumers. [Full source map](../../.codex/docs/implementation/v1.6/02-architecture-and-agent-playbook.md#source-layout-and-runtime-boundaries).

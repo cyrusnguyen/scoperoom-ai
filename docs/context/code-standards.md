@@ -11,7 +11,7 @@
 
 - Keep Next server composition in `src/app` and use `'use client'` at interactive boundaries. Feature UI and shared visual primitives may render as Server Components; `src/client` holds shared browser adapters/hooks/providers, not every component.
 - Keep handlers thin: bound/parse input, resolve identity, invoke the feature service, return the documented envelope.
-- Keep credentials and privileged clients out of browser imports. Next cookie/session/HTTP wrappers belong in `src/server/web` with `server-only`; shared `src/server` infrastructure and feature services stay compatible with plain Node/Trigger.
+- Keep credentials and privileged clients out of browser imports. Next cookie/session/HTTP wrappers belong in `src/server/web` with `server-only`; shared `src/server` infrastructure and feature services stay compatible with plain Node/Inngest worker.
 - A Server Component may render a Client Component. Client Components still need safe server prerendering: access browser APIs in effects/events or an explicit browser-only loading boundary, not module initialization or initial render. Pass authorized, serializable view data across the boundary.
 - Private authenticated data must not enter public caching. Follow the installed framework/Auth integration contract.
 - Use semantic tokens from [UI context](ui-context.md). Reuse accessible controls and field editors as they gain real consumers.
