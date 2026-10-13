@@ -1,8 +1,12 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { sessionCookieOptions } from "@/features/access/session-cookies";
+import { isWorkerService, routeAllowed } from "@/server/worker-service";
 
 export async function proxy(request: NextRequest) {
+  const service = isWorkerService() ? "worker" : "web";
+  if (!routeAllowed(service, request.nextUrl.pathname)) return new NextResponse(null, { status: 404 });
+  if (service === "worker") return NextResponse.next({ request }); // no browser session on the worker; Inngest signs its own requests
   let response = NextResponse.next({ request });
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;

@@ -104,7 +104,7 @@ test("one maintenance tick repairs due dispatches and cleans bodies; each step s
     assert.equal(await purged(admin, old), true);
 
     const old2 = await seed({ hours: 9 * 24, shape: "FAILED" });
-    await assert.rejects(runMaintenance(undefined), /TRIGGER_SECRET_KEY/); // repair cannot deliver, and that is reported...
+    await assert.rejects(runMaintenance(undefined), /INNGEST_EVENT_KEY/); // repair cannot deliver, and that is reported...
     assert.equal(await purged(admin, old2), true, "...after cleanup still ran");
 
     const old3 = await seed({ hours: 9 * 24, shape: "FAILED" });

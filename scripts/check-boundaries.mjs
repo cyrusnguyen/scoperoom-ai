@@ -4,15 +4,15 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 const sourceExtensions = new Set([".ts", ".tsx", ".mts", ".cts"]);
-const trustedPaths = ["src/server/", "src/trigger/", "src/app/api/", "scripts/", "prisma/", "supabase/"];
+const trustedPaths = ["src/server/", "src/worker/", "src/app/api/", "scripts/", "prisma/", "supabase/"];
 const nextPaths = ["src/app/", "src/server/web/"];
 // The local operator sweep holds a bootstrap credential; a worker may only reach cleanup through its restricted role.
 const bootstrapOnly = ["src/server/maintenance/cleanup-transient.ts"];
-// Provider SDKs are server-only and may be imported only by their adapters and the Trigger entrypoints.
-const sdkPattern = /^(?:ai|@ai-sdk\/[^/]+|@trigger\.dev\/sdk)(?:\/|$)/;
-const sdkOwners = ["src/features/proposals/server/adapters/model.ts", "src/features/proposals/server/adapters/trigger.ts", "src/trigger/"];
-// Worker services run inside Trigger, so they are checked as workers whether or not an entrypoint reaches them yet.
-const workerRoots = ["src/trigger/", "src/features/proposals/server/run-ai.ts", "src/features/proposals/server/dispatch-ai.ts", "src/features/proposals/server/repair-runs.ts", "src/features/proposals/server/providers.ts", "src/features/proposals/server/adapters/"];
+// Provider SDKs are server-only and may be imported only by their adapters and the Inngest entrypoints.
+const sdkPattern = /^(?:ai|@ai-sdk\/[^/]+|inngest)(?:\/|$)/;
+const sdkOwners = ["src/features/proposals/server/adapters/model.ts", "src/features/proposals/server/adapters/inngest.ts", "src/features/proposals/server/providers.ts", "src/features/proposals/server/deliver-run.ts", "src/worker/", "src/app/api/inngest/"];
+// Worker services run inside Inngest, so they are checked as workers whether or not an entrypoint reaches them yet.
+const workerRoots = ["src/worker/", "src/features/proposals/server/deliver-run.ts", "src/features/proposals/server/maintenance.ts", "src/features/proposals/server/run-ai.ts", "src/features/proposals/server/dispatch-ai.ts", "src/features/proposals/server/repair-runs.ts", "src/features/proposals/server/providers.ts", "src/features/proposals/server/adapters/"];
 
 function filesAt(directory) {
   if (!existsSync(directory)) return [];

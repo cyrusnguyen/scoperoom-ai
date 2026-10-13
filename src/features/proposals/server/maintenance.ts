@@ -15,7 +15,7 @@ const CLEANUP_BATCH = 100;
 export async function runMaintenance(dispatcher: JobDispatcher | undefined, db?: Sql & WorkerCleanupDatabase): Promise<WorkerCleanupResult> {
   let failure: unknown;
   try {
-    if (!dispatcher) throw new Error("TRIGGER_SECRET_KEY is required to repair AI dispatch.");
+    if (!dispatcher) throw new Error("INNGEST_EVENT_KEY is required to repair AI dispatch.");
     await repairRuns(dispatcher, { batchSize: REPAIR_BATCH }, db);
   } catch (error) {
     failure = error;
