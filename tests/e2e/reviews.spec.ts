@@ -727,9 +727,16 @@ test("a decision refused after an approver policy change retains submitted and n
   await expect(page.getByText("This action isn't available for your account.", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
   expect(attempts).toHaveLength(1); expect(JSON.parse(attempts[0]!.body).reason).toBe("Retain my refused request");
+  // Preview sends the policy version the page holds: wait until the page shows the unassigned policy, then the reassigned one.
+  await page.getByRole("tab", { name: "Current", exact: true }).click();
+  const approver = page.locator("dt:text-is('Designated approver') + dd");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(approver).toHaveText("Not assigned");
   const status = await (await page.request.get(`/api/projects/${projectId}/status`)).json();
   expect((await page.request.patch(`/api/projects/${projectId}/approval-policy`, { headers: reviewHeaders(), data: { designatedApproverId: status.viewerId, expectedApprovalPolicyVersion: status.approvalPolicyVersion } })).status()).toBe(200);
-  await page.getByRole("tab", { name: "Current", exact: true }).click(); await freezeInUi(page);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(approver).not.toHaveText("Not assigned");
+  await freezeInUi(page);
   await expect(page.getByLabel("Reason", { exact: true })).toHaveValue("Newer text after sending");
 });
 
@@ -1062,6 +1069,40 @@ test("late decision acknowledgement preserves a different candidate selected bef
   await expect(reader.getByText(first.reviewId, { exact: true })).toBeVisible();
   expect((await workerAccount.database.query("select count(*)::int n from app.review_decision where project_id=$1", [projectId])).rows[0].n).toBe(1);
   await page.unroute(endpoint);
+});
+
+test("late decision acknowledgement settles off-selection when a status refresh replaces its receipt read", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Superseded receipt read"), { draftId } = await readyCandidate(page, projectId);
+  const first = await freezeViaApi(page, projectId, draftId);
+  expect((await page.request.post(`/api/projects/${projectId}/reviews/${first.reviewId}/withdraw`, { headers: reviewHeaders(), data: { expectedReviewVersion: 1, reason: "Older inspected candidate" } })).status()).toBe(200);
+  const second = await freezeViaApi(page, projectId, draftId);
+  await openReview(page, projectId); await page.getByRole("tab", { name: "History", exact: true }).click(); await page.locator(`#review-row-${second.reviewId}`).click();
+  await expect(page.getByRole("button", { name: "Approve candidate", exact: true })).toBeVisible();
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; }), held = new Promise<void>(resolve => { release = resolve; });
+  const endpoint = `**/api/projects/${projectId}/reviews/${second.reviewId}/decision`;
+  await page.route(endpoint, async route => { const response = await route.fetch(); entered(); await held; await route.fulfill({ response }); });
+  await page.getByRole("button", { name: "Approve candidate", exact: true }).click(); await started;
+  await page.getByRole("button", { name: "Back to history", exact: true }).click(); await page.locator(`#review-row-${first.reviewId}`).click();
+  const reader = page.getByRole("article", { name: "Frozen candidate", exact: true });
+  await expect(reader.getByText(first.reviewId, { exact: true })).toBeVisible();
+  // The receipt's list read is held until a status-driven list read has replaced it.
+  let listEntered!: () => void, listRelease!: () => void, holding = true;
+  const listStarted = new Promise<void>(resolve => { listEntered = resolve; }), listHeld = new Promise<void>(resolve => { listRelease = resolve; });
+  const list = `**/api/projects/${projectId}/reviews`;
+  await page.route(list, async route => {
+    if (!holding) return route.continue();
+    holding = false; const response = await route.fetch(); listEntered(); await listHeld; await route.fulfill({ response });
+  });
+  release(); await listStarted;
+  try {
+    const replacement = page.waitForResponse(response => response.request().method() === "GET" && response.url().endsWith(`/api/projects/${projectId}/reviews`));
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    expect((await replacement).status()).toBe(200);
+  } finally { listRelease(); }
+  await expect(page.getByText("Approve candidate: saved.", { exact: true })).toBeVisible();
+  await expect(reader.getByText(first.reviewId, { exact: true })).toBeVisible();
+  await page.unroute(list); await page.unroute(endpoint);
 });
 
 
