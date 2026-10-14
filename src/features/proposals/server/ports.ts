@@ -12,6 +12,8 @@ export type ModelReply =
   | { kind: "refused" | "incomplete" | "unavailable" | "unknown";
       retryAfterMs?: number; requestId?: string };
 export interface ModelGateway {
+  /** True when this worker can route `model` (an `AI_MODEL` value) and holds its provider's key: checked before any SQL claim. */
+  supports(model: string): boolean;
   generate(request: ModelRequest, signal: AbortSignal): Promise<ModelReply>;
 }
 export type JobRequest = Readonly<{

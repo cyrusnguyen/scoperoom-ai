@@ -201,7 +201,7 @@ test("late provider output cannot recreate a purged body or reach a model", { sk
     await assert.rejects(admin.query("update app.ai_run set result = $2::jsonb where id = $1", [failed.runId, RESULT]), { code: "23514" });
     // A redelivered task for the purged run does nothing: no capture means no request and no model call.
     let calls = 0;
-    const gateway: ModelGateway = { generate: async () => { calls += 1; return { kind: "unknown" }; } };
+    const gateway: ModelGateway = { supports: () => true, generate: async () => { calls += 1; return { kind: "unknown" }; } };
     await runAi(failed.runId, gateway);
     assert.equal(calls, 0);
     assert.equal((await row(failed.runId)).no_capture, true);
@@ -338,7 +338,7 @@ test("project deletion refunds only proved-undispatched reservations once and fe
     for (const target of targets) {
       assert.equal((await admin.query("delete from app.project where id = $1", [target.projectId])).rowCount, 0);
       assert.equal((await worker.query("select app.finish_ai_run($1, 'TIMED_OUT', null) as outcome", [target.runId])).rows[0].outcome, "MISSING");
-      await runAi(target.runId, { generate: async () => { throw new Error("deleted runs must never call the model"); } });
+      await runAi(target.runId, { supports: () => true, generate: async () => { throw new Error("deleted runs must never call the model"); } });
       assert.equal((await admin.query("select id from app.ai_run where id = $1", [target.runId])).rowCount, 0);
     }
     assert.deepEqual(await budget(person), after, "repeat deletion and late settlement cannot refund twice");

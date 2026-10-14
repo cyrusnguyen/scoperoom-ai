@@ -1,7 +1,9 @@
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { APICallError, generateText, type OutputInterface } from "ai";
 import { AI_LIMITS } from "../../contracts/tasks.ts";
 import { estimateInputTokens } from "../../domain/model-request.ts";
+import { modelRoute } from "../../domain/model-route.ts";
 import type { Json, ModelGateway, ModelReply, ModelRequest } from "../ports.ts";
 
 /** Whole HTTP body ceiling, enforced while reading and before the SDK parses a byte of it: four times the stored result cap. */
@@ -54,17 +56,37 @@ function normalize(error: unknown): ModelReply {
   return { kind: "unknown" }; // timeout, abort, network failure, other 4xx or anything unrecognized: the call may have run
 }
 
-export type ModelAdapterOptions = { apiKey: string; fetch?: typeof fetch };
+/** `apiKey` is Google's (the original single provider); `anthropicApiKey` adds Anthropic. A provider without a key is not supported. */
+export type ModelAdapterOptions = { apiKey?: string; anthropicApiKey?: string; fetch?: typeof fetch };
 
-export function createModelGateway({ apiKey, fetch: transport = fetch }: ModelAdapterOptions): ModelGateway {
-  const provider = createGoogleGenerativeAI({ apiKey, fetch: boundedFetch(transport) });
+/** Provider-reported token counts only: the SDK turns an absent count into 0, so a field the provider did not send stays null. */
+function reportedUsage(provider: "google" | "anthropic", metadata: Record<string, Record<string, unknown>> | undefined, usage: { inputTokens?: number; outputTokens?: number }) {
+  const raw = (provider === "google" ? metadata?.google?.usageMetadata : metadata?.anthropic?.usage) as Record<string, unknown> | undefined ?? {};
+  const [input, output] = provider === "google" ? ["promptTokenCount", "candidatesTokenCount"] : ["input_tokens", "output_tokens"];
+  return { inputTokens: typeof raw[input] === "number" ? usage.inputTokens ?? null : null, outputTokens: typeof raw[output] === "number" ? usage.outputTokens ?? null : null };
+}
+
+export function createModelGateway({ apiKey, anthropicApiKey, fetch: transport = fetch }: ModelAdapterOptions): ModelGateway {
+  const bounded = boundedFetch(transport);
+  const providers = {
+    google: apiKey ? createGoogleGenerativeAI({ apiKey, fetch: bounded }) : null,
+    anthropic: anthropicApiKey ? createAnthropic({ apiKey: anthropicApiKey, fetch: bounded }) : null,
+  };
+  const resolve = (model: string) => {
+    const route = modelRoute(model), provider = route && providers[route.provider];
+    return route && provider ? { name: route.provider, model: provider(route.id) } : null;
+  };
   return {
+    supports: (model) => resolve(model) !== null,
     async generate(request: ModelRequest, signal: AbortSignal): Promise<ModelReply> {
       // The ceiling is enforced here too, so no caller can send more than the configured input.
       if (estimateInputTokens(request) > request.maxInputTokens) return { kind: "refused" };
+      // Backstop for a caller that skipped `supports`: never route a model to another provider.
+      const target = resolve(request.model);
+      if (!target) return { kind: "refused" };
       try {
         const result = await generateText({
-          model: provider(request.model),
+          model: target.model,
           system: request.systemInstruction,
           prompt: `${request.prompt}\n\n<context>\n${JSON.stringify(request.context)}\n</context>`,
           output: rawJson(request.outputSchema),
@@ -78,12 +100,7 @@ export function createModelGateway({ apiKey, fetch: transport = fetch }: ModelAd
         if (Buffer.byteLength(result.text, "utf8") > AI_LIMITS.resultBytes) return { kind: "incomplete", requestId };
         let output: unknown;
         try { output = JSON.parse(result.text); } catch { return { kind: "incomplete", requestId }; }
-        // Missing usage is null, never zero: the SDK turns an absent provider count into 0, so trust it only when the provider reported the field.
-        const raw = (result.providerMetadata?.google?.usageMetadata ?? {}) as Record<string, unknown>;
-        const usage = {
-          inputTokens: typeof raw.promptTokenCount === "number" ? result.usage.inputTokens ?? null : null,
-          outputTokens: typeof raw.candidatesTokenCount === "number" ? result.usage.outputTokens ?? null : null,
-        };
+        const usage = reportedUsage(target.name, result.providerMetadata as Record<string, Record<string, unknown>> | undefined, result.usage);
         return { kind: "completed", output, requestId, usage };
       } catch (error) {
         return normalize(error);

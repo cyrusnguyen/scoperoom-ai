@@ -147,6 +147,7 @@ function reserve(path: string, record: Omit<Reservation, "slot" | "reservedAt">,
 
 export function budgetGateway(options: { journal: string; id: string; kind: "corpus" | "journey"; apiKey: string; transport: typeof fetch; syncFile?: typeof fsyncSync; onDenied?: () => void } & Partial<RenewedAuthority>): ModelGateway {
   return {
+    supports: () => true, // the evaluation journal only ever routes its own Google model
     async generate(request, signal) {
       let denied = false;
       const deny = () => { if (!denied) options.onDenied?.(); denied = true; };
@@ -246,7 +247,7 @@ async function journey(args: string[]) {
     const assessmentInput = { capture, saved: { document: savedPair.document } as SavedContext, layout: savedPair.layout };
     const results: unknown[] = []; let budgetDenied = false;
     const gateway = budgetGateway({ journal: path, ...authority, id: callId ?? `journey:${capture.taskType}`, kind: "journey", apiKey, transport: fetch, onDenied: () => { budgetDenied = true; } });
-    const observed: ModelGateway = { generate: async (request, signal) => {
+    const observed: ModelGateway = { supports: () => true, generate: async (request, signal) => {
       if (request.runId !== runId || request.model !== run.model || canonicalJson(request.context) !== canonicalJson(buildModelRequest({id: runId, model: MODEL, capture}, request.timeoutMs).context)) throw new Error("JOURNEY_REQUEST_INVALID");
       const started = performance.now(); const reply = await gateway.generate(request, signal);
       results.push({ outcome: budgetDenied ? "budget_denied" : reply.kind, latencyMs: Math.round(performance.now() - started), usage: reply.kind === "completed" ? reply.usage : {inputTokens:null,outputTokens:null}, output: reply.kind === "completed" ? reply.output : null, assessment: reply.kind === "completed" ? assess(assessmentInput, reply.output) : null });

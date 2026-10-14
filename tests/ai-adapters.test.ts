@@ -226,9 +226,9 @@ test("the composition module treats blank keys as absent and the test environmen
   assert.equal(jobDispatcher({}), undefined);
   assert.equal(jobDispatcher({ INNGEST_EVENT_KEY: "  " }), undefined);
   assert.throws(() => modelGateway({}), /GOOGLE_GENERATIVE_AI_API_KEY/);
-  assert.throws(() => modelGateway({ GOOGLE_GENERATIVE_AI_API_KEY: "" }));
-  const blanked = withoutProviderSecrets({ GOOGLE_GENERATIVE_AI_API_KEY: "x", INNGEST_EVENT_KEY: "y", INNGEST_SIGNING_KEY: "z", KEEP: "1" });
-  assert.deepEqual(PROVIDER_SECRET_NAMES.map((name) => blanked[name]), ["", "", ""]);
+  assert.throws(() => modelGateway({ GOOGLE_GENERATIVE_AI_API_KEY: "", ANTHROPIC_API_KEY: " " }));
+  const blanked = withoutProviderSecrets({ GOOGLE_GENERATIVE_AI_API_KEY: "x", ANTHROPIC_API_KEY: "w", INNGEST_EVENT_KEY: "y", INNGEST_SIGNING_KEY: "z", KEEP: "1" });
+  assert.deepEqual(PROVIDER_SECRET_NAMES.map((name) => blanked[name]), ["", "", "", ""]);
   assert.equal(blanked.KEEP, "1");
   assert.equal(jobDispatcher(blanked), undefined);
   assert.equal(jobDispatcher({ INNGEST_EVENT_KEY: "would-be-real", SCOPEROOM_E2E: "1" }), undefined); // the hand-started dev e2e server is safe too
@@ -251,4 +251,56 @@ test("AI_MODEL names its provider; a bare id stays Google and anything else is u
   assert.deepEqual(modelRoute("google/gemini-3.8-flash"), { provider: "google", id: "gemini-3.8-flash" });
   assert.deepEqual(modelRoute("anthropic/claude-sonnet-5-5"), { provider: "anthropic", id: "claude-sonnet-5-5" });
   for (const bad of ["", "anthropc/claude-sonnet-5-5", "openai/x", "anthropic/", "models/gemini-3.8-flash", "anthropic/a/b", "/x"]) assert.equal(modelRoute(bad), null, bad);
+});
+
+const claude = (text: string, stopReason = "end_turn", usage: unknown = { input_tokens: 12, output_tokens: 34 }) =>
+  ({ id: "msg-1", type: "message", role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "text", text }], stop_reason: stopReason, stop_sequence: null, ...(usage ? { usage } : {}) });
+const anthropicGateway = (handler: (url: string, init?: RequestInit) => Promise<Response> | Response) => {
+  const calls: Array<{ url: string; body: string }> = [];
+  const stub = (async (input: RequestInfo | URL, init?: RequestInit) => { calls.push({ url: String(input), body: String(init?.body ?? "") }); return handler(String(input), init); }) as typeof fetch;
+  return { calls, gateway: createModelGateway({ anthropicApiKey: "test-key-not-real", fetch: stub }) };
+};
+const claudeRequest = (over: Partial<ModelRequest> = {}) => request({ model: "anthropic/claude-sonnet-5-5", ...over });
+
+test("an Anthropic model gets one bounded structured-output call and the same normalized reply", async () => {
+  const { gateway: model, calls } = anthropicGateway(() => respond(claude('{"schemaVersion":1,"kind":"clarification","message":"hi"}')));
+  assert.deepEqual(await model.generate(claudeRequest(), signal()), {
+    kind: "completed", output: { schemaVersion: 1, kind: "clarification", message: "hi" }, requestId: "msg-1", usage: { inputTokens: 12, outputTokens: 34 },
+  });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0]!.url, /\/v1\/messages$/);
+  const body = JSON.parse(calls[0]!.body);
+  assert.equal(body.model, "claude-sonnet-5-5", "the provider prefix is not sent");
+  assert.equal(body.max_tokens, AI_LIMITS.maxOutputTokens);
+  assert.equal(body.output_format?.type ?? body.output_config?.format?.type, "json_schema", "provider-side structured output is requested");
+});
+
+test("Anthropic refusal, truncation, malformed output and a reply without usage are normalized, never thrown", async () => {
+  const reply = async (body: unknown) => (await anthropicGateway(() => respond(body)).gateway.generate(claudeRequest(), signal()));
+  assert.equal((await reply(claude("", "refusal"))).kind, "refused");
+  assert.equal((await reply(claude('{"schemaVersion":1,"ope', "max_tokens"))).kind, "incomplete");
+  assert.equal((await reply(claude("{not json"))).kind, "incomplete");
+  // The Anthropic SDK requires `usage` on every message, so a reply without it is malformed: the call may have run (unknown), never a zero count.
+  assert.deepEqual(await reply(claude('{"a":1}', "end_turn", null)), { kind: "unknown" });
+  const overloaded = anthropicGateway(() => respond({ type: "error", error: { type: "overloaded_error", message: "busy" } }, 529));
+  assert.equal((await overloaded.gateway.generate(claudeRequest(), signal())).kind, "unavailable");
+  assert.equal(overloaded.calls.length, 1, "no hidden retry");
+});
+
+test("a gateway supports a model only when it can route it and holds that provider's key", async () => {
+  const google = createModelGateway({ apiKey: "g" }), anthropic = createModelGateway({ anthropicApiKey: "a" }), both = createModelGateway({ apiKey: "g", anthropicApiKey: "a" });
+  assert.deepEqual(["gemini-3.8-flash", "google/gemini-3.8-flash", "anthropic/claude-sonnet-5-5", "openai/x"].map((m) => [google.supports(m), anthropic.supports(m), both.supports(m)]),
+    [[true, false, true], [true, false, true], [false, true, true], [false, false, false]]);
+  // Backstop: an unsupported model is refused without any call, never routed to the other provider.
+  const { gateway: model, calls } = gateway(() => respond(gemini("{}")));
+  assert.equal((await model.generate(claudeRequest(), signal())).kind, "refused");
+  assert.equal(calls.length, 0);
+});
+
+test("the composition module builds a gateway from either key and blanks both in tests", () => {
+  assert.throws(() => modelGateway({}), /GOOGLE_GENERATIVE_AI_API_KEY or ANTHROPIC_API_KEY/);
+  assert.equal(modelGateway({ ANTHROPIC_API_KEY: "fake-for-construction-only" }).supports("anthropic/claude-sonnet-5-5"), true);
+  assert.equal(modelGateway({ ANTHROPIC_API_KEY: "fake-for-construction-only" }).supports("gemini-3.8-flash"), false);
+  assert.ok(PROVIDER_SECRET_NAMES.includes("ANTHROPIC_API_KEY"));
+  assert.equal(withoutProviderSecrets({ ANTHROPIC_API_KEY: "x" }).ANTHROPIC_API_KEY, "");
 });

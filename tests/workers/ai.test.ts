@@ -26,7 +26,7 @@ const completed = (output: unknown = GOOD, usage: { inputTokens: number | null; 
 
 function fakeGateway(handler: (request: ModelRequest, call: number) => Promise<ModelReply> | ModelReply) {
   const requests: ModelRequest[] = [];
-  const gateway: ModelGateway = { generate: async (request) => { requests.push(request); return handler(request, requests.length); } };
+  const gateway: ModelGateway = { supports: () => true, generate: async (request) => { requests.push(request); return handler(request, requests.length); } };
   return { gateway, requests };
 }
 function fakeDispatcher(handler: (request: JobRequest, call: number) => Promise<{ kind: "accepted"; taskId: string } | { kind: "unavailable" }> = async (_, call) => ({ kind: "accepted", taskId: `task-${call}` })) {
