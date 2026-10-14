@@ -285,6 +285,10 @@ test("Anthropic refusal, truncation, malformed output and a reply without usage 
   const overloaded = anthropicGateway(() => respond({ type: "error", error: { type: "overloaded_error", message: "busy" } }, 529));
   assert.equal((await overloaded.gateway.generate(claudeRequest(), signal())).kind, "unavailable");
   assert.equal(overloaded.calls.length, 1, "no hidden retry");
+  // The body bound holds on this provider's path too: an oversized reply is cut off before the SDK parses it.
+  const huge = anthropicGateway(() => new Response(`{"id":"msg-1","pad":"${"x".repeat(MAX_RESPONSE_BYTES)}"}`, { status: 200 }));
+  assert.deepEqual(await huge.gateway.generate(claudeRequest(), signal()), { kind: "incomplete" });
+  assert.equal((await reply(claude(JSON.stringify({ message: "m".repeat(AI_LIMITS.resultBytes) })))).kind, "incomplete");
 });
 
 test("a gateway supports a model only when it can route it and holds that provider's key", async () => {
