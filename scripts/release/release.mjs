@@ -1,6 +1,7 @@
 // Production release steps for .github/workflows/release.yml (and an operator shell). Prints names, ids and statuses, never values.
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { join } from "node:path";
 
 const VERCEL = "https://api.vercel.com";
@@ -14,7 +15,8 @@ export function releaseSha(value) {
 export function releaseOrigin(name, value) {
   let url;
   try { url = new URL(value ?? ""); } catch { url = null; }
-  const local = url && /^(?:localhost|.*\.localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1?\])$/.test(url.hostname);
+  // A production origin is a domain name: any IP literal (every loopback spelling included) and localhost names are refused.
+  const local = url && (isIP(url.hostname.replace(/^\[|\]$/g, "")) !== 0 || /^(?:.*\.)?localhost$/.test(url.hostname));
   if (!url || local || url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash) throw new Error(`${name} must be the production site's bare https origin.`);
   return url.origin;
 }

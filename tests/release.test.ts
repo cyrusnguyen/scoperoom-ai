@@ -50,5 +50,5 @@ test("the release SHA is a full lower-case commit id", () => {
 test("the release origins must be bare https origins, so a local or mistyped value stops before any request", () => {
   assert.equal(releaseOrigin("WEB_URL", "https://web.example.test"), "https://web.example.test");
   assert.equal(releaseOrigin("WEB_URL", "https://web.example.test/"), "https://web.example.test");
-  for (const bad of [undefined, "", "http://127.0.0.1:3100", "https://127.0.0.1:3100", "https://localhost", "https://app.localhost", "https://[::1]", "https://0.0.0.0", "https://web.example.test/app", "https://web.example.test?x=1", "not a url"]) assert.throws(() => releaseOrigin("WEB_URL", bad), /WEB_URL must be/, String(bad));
+  for (const bad of [undefined, "", "http://127.0.0.1:3100", "https://127.0.0.1:3100", "https://localhost", "https://app.localhost", "https://[::1]", "https://0.0.0.0", "https://[::ffff:127.0.0.1]", "https://2130706433", "https://203.0.113.7", "https://web.example.test/app", "https://web.example.test?x=1", "not a url"]) assert.throws(() => releaseOrigin("WEB_URL", bad), /WEB_URL must be/, String(bad));
 });
