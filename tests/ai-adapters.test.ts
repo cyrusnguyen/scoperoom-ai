@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { AI_LIMITS, type CapturedInput } from "../src/features/proposals/contracts/tasks.ts";
 import { buildModelRequest, estimateInputTokens, OUTPUT_SCHEMA } from "../src/features/proposals/domain/model-request.ts";
+import { modelRoute } from "../src/features/proposals/domain/model-route.ts";
 import { MAX_RESPONSE_BYTES, boundedFetch, createModelGateway } from "../src/features/proposals/server/adapters/model.ts";
 import { createJobDispatcher, RUN_AI_EVENT } from "../src/features/proposals/server/adapters/inngest.ts";
 import type { ModelRequest } from "../src/features/proposals/server/ports.ts";
@@ -243,4 +244,11 @@ test("the composition module treats blank keys as absent and the test environmen
     if (file === "tests/ai-adapters.test.ts") continue;
     assert.doesNotMatch(readFileSync(file, "utf8"), /^\s*(?:import|export)[^\n]*from\s+["'][^"']*(?:server\/providers|adapters\/(?:model|inngest))(?:\.ts)?["']/m, `${file} must use injected fakes`);
   }
+});
+
+test("AI_MODEL names its provider; a bare id stays Google and anything else is unroutable", () => {
+  assert.deepEqual(modelRoute("gemini-3.8-flash"), { provider: "google", id: "gemini-3.8-flash" });
+  assert.deepEqual(modelRoute("google/gemini-3.8-flash"), { provider: "google", id: "gemini-3.8-flash" });
+  assert.deepEqual(modelRoute("anthropic/claude-sonnet-5-5"), { provider: "anthropic", id: "claude-sonnet-5-5" });
+  for (const bad of ["", "anthropc/claude-sonnet-5-5", "openai/x", "anthropic/", "models/gemini-3.8-flash", "anthropic/a/b", "/x"]) assert.equal(modelRoute(bad), null, bad);
 });
