@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiRead, sessionEnded } from "@/client/api";
+import { Icon } from "@/features/shell/ui/icon";
 import type { AccountView, AuditView, StaffRole } from "@/features/admin/contracts/admin";
 import { absoluteTime, accountTag, actionLabel, limitsLocked, MODERATOR_SCOPE_NOTE, planLabel, projectsLabel, relativeTime, roleName, shortId, snapshotLabel, usageLabel, utcDate } from "./format";
 import LimitsEditor from "./limits-editor";
@@ -50,14 +51,14 @@ export default function AccountDetail({ profileId, role, viewerId }: { profileId
   // staff screen for the workspace (the server gate decides what they may see there).
   const ownRoleSaved = useCallback(async () => {
     if (await load()) setSaved("Saved.");
-    else window.location.assign("/app");
+    else window.location.replace("/app");
   }, [load]);
 
   const account = detail?.account;
   // The viewer's own account carries their current role: a self-demotion takes effect here at once, not after a reload.
   const viewerRole = account?.profileId === viewerId ? account.staffRole ?? role : role;
   return <>
-    <p className="admin-back"><Link href="/app/admin">Back to accounts</Link></p>
+    <Link className="button quiet small admin-back" href="/app/admin"><Icon name="back" size={16} /><span>Back to accounts</span></Link>
     {account ? <h1>{account.displayName}</h1> : <h1>Account</h1>}
     {account && <p className="admin-note">{accountTag(account)}</p>}
     <p className="admin-saved" role="status">{saved}</p>

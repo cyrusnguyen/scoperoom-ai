@@ -1,21 +1,21 @@
 /* Staff screens. Controls, fields and errors come from the shell stylesheet and tokens; this file only lays out the pages.
    The layout reuses the .app-shell class for its element resets and overrides its fixed viewport height so the page scrolls. */
 .app-shell.admin-shell { display: block; height: auto; min-height: 100dvh; overflow: visible; }
-.admin-nav { display: flex; flex-wrap: wrap; gap: var(--space-2); width: 100%; max-width: 960px; margin: 0 auto; padding: var(--space-4) var(--space-4) 0; }
 .admin-main { width: 100%; max-width: 960px; min-width: 0; margin: 0 auto; padding: var(--space-6) var(--space-4) var(--space-10); }
 .admin-main h1 { margin-bottom: var(--space-4); font-size: 22px; overflow-wrap: anywhere; }
 .admin-main h2 { margin-bottom: var(--space-3); font-size: 15px; }
-.admin-back { margin-bottom: var(--space-3); font-size: var(--font-label); }
-.admin-back a, .admin-table a { color: var(--accent-hover); text-underline-offset: 3px; }
+.admin-back { margin-bottom: var(--space-4); text-decoration: none; }
+/* Text fields show focus the way the sign-in form does (accent border and a soft ring), not with an outline floating outside the border. */
+.admin-main :is(input:not([type="checkbox"]), select, textarea):focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+.admin-table a { color: var(--foreground); text-decoration: none; }
+.admin-table a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .admin-note { color: var(--foreground-muted); }
 .admin-tag { display: block; color: var(--foreground-muted); font-size: var(--font-label); font-weight: 400; }
 .admin-saved { min-height: 1.5em; margin-bottom: var(--space-3); color: var(--success-foreground); }
 .admin-saved:not(:empty) { padding: 8px 12px; border-left: 2px solid var(--success-border); background: var(--success-background); }
 
 .admin-search { margin-bottom: var(--space-4); }
-.admin-search > label { display: block; margin-bottom: 7px; color: var(--foreground-muted); font-size: var(--font-label); font-weight: 500; }
-.admin-search-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.admin-search-row input { flex: 1 1 14rem; }
+.admin-search input { width: 100%; max-width: 28rem; }
 
 .admin-table-scroll { width: 100%; margin-bottom: var(--space-4); overflow-x: auto; border: var(--panel-border); border-radius: var(--radius-card); }
 .admin-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px; }

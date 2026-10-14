@@ -39,7 +39,7 @@ export function useChange(onSaved: () => Promise<void>) {
     key.current = null;
     // Staff writes answer 404 only to a caller who is no longer staff (accounts are never deleted), including a retry of their own
     // self-revocation: leave the staff screen for the workspace, where the server gate decides what they see.
-    if (result.status === 404) { window.location.assign("/app"); return false; }
+    if (result.status === 404) { window.location.replace("/app"); return false; }
     // A 403 means the viewer's own role no longer allows this (for example another Admin demoted them while the page was open):
     // reload so the page is rendered again for the role the server now holds.
     if (result.status === 403) { window.location.reload(); return false; }

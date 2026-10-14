@@ -65,7 +65,7 @@ test.describe("staff screens", () => {
     await page.getByRole("link", { name: "Admin" }).click();
     await expect(page).toHaveURL(/\/app\/admin$/);
     await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Staff" }).getByRole("link", { name: "Back to projects" })).toHaveAttribute("href", "/app");
+    await expect(page.getByRole("link", { name: "Back to projects" })).toHaveAttribute("href", "/app");
 
     await search(page, `Zed Target ${word}`);
     const row = page.getByRole("row").filter({ hasText: targetName });

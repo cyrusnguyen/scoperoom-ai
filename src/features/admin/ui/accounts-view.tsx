@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type SubmitEvent } from "react";
 import { apiRead, sessionEnded } from "@/client/api";
+import { Icon } from "@/features/shell/ui/icon";
 import type { AccountView } from "@/features/admin/contracts/admin";
 import { absoluteTime, accountTag, planLabel, projectsLabel, relativeTime, roleName, usageLabel } from "./format";
 
@@ -48,21 +49,26 @@ export default function AccountsView() {
     return () => { window.clearTimeout(timer); controller.current?.abort(); };
   }, [load]);
 
-  const search = (event: SubmitEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const query = input.trim();
+  // Search as the name is typed, like the app's other filters (a short pause first); Enter searches at once.
+  const search = useCallback((value: string) => {
+    const query = value.trim();
     setApplied(query);
     void load(query);
-  };
+  }, [load]);
+  useEffect(() => {
+    if (input.trim() === applied) return;
+    const timer = window.setTimeout(() => search(input), 300);
+    return () => window.clearTimeout(timer);
+  }, [input, applied, search]);
+  const submit = (event: SubmitEvent<HTMLFormElement>) => { event.preventDefault(); search(input); };
 
   return <>
+    {/* One back action per page, in the app's own style (the Review panel's "Back to history"). */}
+    <Link className="button quiet small admin-back" href="/app"><Icon name="back" size={16} /><span>Back to projects</span></Link>
     <h1>Accounts</h1>
-    <form className="admin-search" role="search" onSubmit={search}>
-      <label htmlFor="admin-search">Search by name</label>
-      <div className="admin-search-row">
-        <input id="admin-search" type="search" value={input} maxLength={SEARCH_MAX} autoComplete="off" onChange={(event) => setInput(event.target.value)} />
-        <button type="submit" className="button primary">Search</button>
-      </div>
+    <form className="admin-search" role="search" onSubmit={submit}>
+      <label className="sr-only" htmlFor="admin-search">Search by name</label>
+      <input id="admin-search" type="search" value={input} maxLength={SEARCH_MAX} autoComplete="off" placeholder="Search by name" onChange={(event) => setInput(event.target.value)} />
     </form>
     {state === "loading" ? <p className="admin-note" role="status">Loading accounts…</p>
     : state === "error" ? <div className="error-message" role="alert"><p>{error}</p><button type="button" className="button small" onClick={() => void load(applied)}>Retry</button></div>
