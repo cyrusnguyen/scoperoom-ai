@@ -88,9 +88,9 @@ Never run `db:reset` or destructive SQL against this target without a separate e
 
 Releases run in GitHub Actions (`.github/workflows/release.yml`). Every successful push CI on `main` queues a release that waits for the operator's approval in the protected `release` environment (required reviewer: the operator; deployment branches: `main` only). Approving it runs, in order:
 
-1. Resolve the commit: it must be on `main` and have a successful push CI run.
-2. Set `AI_EXECUTION_BINDING` to the commit on both Vercel projects (`release.mjs binding`).
-3. Migrate (`release.mjs db node scripts/db/migrate.mjs`; the CA is written to a file and the database URLs reach only this command).
+1. Resolve the commit: it must be on `main` and have a successful push CI run; an automatic release must also still be the tip of `main`, so re-running an old commit's CI cannot queue a rollback.
+2. Migrate (`release.mjs db node scripts/db/migrate.mjs`; the CA is written to a file and the database URLs reach only this command).
+3. Set `AI_EXECUTION_BINDING` to the commit on both Vercel projects (`release.mjs binding`), after the migration so a failed one leaves it unchanged.
 4. Deploy the worker from a `git archive` export, and refuse a deployment that is not READY or carries a git ref (`release.mjs deploy worker`).
 5. Register the worker with Inngest (`release.mjs sync`: `PUT /api/inngest`, retried, must answer "Successfully registered").
 6. Deploy the web project the same way (`release.mjs deploy web`).
@@ -98,7 +98,7 @@ Releases run in GitHub Actions (`.github/workflows/release.yml`). Every successf
 8. Edge checks (`release.mjs checks`): web health, and 404 for every path the other project owns.
 9. The hosted smoke without AI.
 
-To release a chosen commit, or to add the paid AI smoke (about 2 model calls), run the workflow by hand (Actions, scoperoom-release, Run workflow) with the full SHA and the `ai_smoke` box. Releases queue and never cancel each other; while one runs, a newer waiting release replaces an older waiting one.
+To release a chosen commit (an older one included, which a manual run of a commit from before this workflow existed cannot do: use the manual fallback), or to add the paid AI smoke (about 2 model calls), run the workflow by hand (Actions, scoperoom-release, Run workflow) with the full SHA and the `ai_smoke` box. Releases queue and never cancel each other; while one runs, a newer waiting release replaces an older waiting one.
 
 The `release` environment holds these secrets: `VERCEL_TOKEN` (a team-scoped Vercel token), `SCOPEROOM_BOOTSTRAP_DATABASE_URL`, `MIGRATION_DATABASE_URL`, `SCOPEROOM_SUPABASE_PROJECT_REF`, `SCOPEROOM_ENVIRONMENT_ID`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SCOPEROOM_DATABASE_CA_PEM` and `SMOKE_{OWNER,EDITOR,VIEWER}_{EMAIL,PASSWORD}`; and these variables: `VERCEL_ORG_ID`, `VERCEL_WEB_PROJECT`, `VERCEL_WORKER_PROJECT`, `WEB_URL` and `WORKER_URL`. Set or rotate one with `gh secret set <NAME> --env release` (or `gh variable set`), which reads the value from stdin. The database URLs are the same as in `.env.hosted.local`; the workflow replaces their `sslrootcert` path with its own CA file.
 

@@ -45,6 +45,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Resolve and check the release commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -52,6 +53,8 @@ jobs:
           sha="${REQUESTED_SHA:-$(git rev-parse origin/main)}"
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Release SHA must be a full commit id." >&2; exit 1; }
           git merge-base --is-ancestor "$sha" origin/main || { echo "Release SHA is not on main." >&2; exit 1; }
+          # An automatic release is for the tip of main only, so re-running an old commit's CI cannot queue a rollback; a manual run may pick an older commit.
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_run" && "$sha" != "$(git rev-parse origin/main)" ]]; then echo "Release SHA is no longer the tip of main; nothing to release." >&2; exit 1; fi
           runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&event=push&status=success" --jq '.total_count')"
           [[ "$runs" -gt 0 ]] || { echo "Release SHA has no successful push CI run." >&2; exit 1; }
           git checkout --quiet "$sha"
@@ -62,10 +65,6 @@ jobs:
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm db:generate
       - run: npm install --global vercel@48.2.9
-      - name: Release binding on both projects
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: node scripts/release/release.mjs binding
       - name: Migrate
         env:
           SCOPEROOM_SUPABASE_PROJECT_REF: ${{ secrets.SCOPEROOM_SUPABASE_PROJECT_REF }}
@@ -81,6 +80,10 @@ jobs:
           echo "RELEASE_DIR=$RUNNER_TEMP/release" >> "$GITHUB_ENV"
           mkdir "$RUNNER_TEMP/release"
           git archive "$RELEASE_SHA" | tar -x -C "$RUNNER_TEMP/release"
+      - name: Release binding on both projects (after migrate, so a failed migration leaves it unchanged)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: node scripts/release/release.mjs binding
       - name: Deploy worker
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
