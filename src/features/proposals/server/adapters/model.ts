@@ -92,6 +92,9 @@ export function createModelGateway({ apiKey, anthropicApiKey, fetch: transport =
           output: rawJson(request.outputSchema),
           maxOutputTokens: request.maxOutputTokens,
           maxRetries: 0, // hidden SDK inference retries are never allowed: the SQL claim is the only authority for a call
+          // ponytail: one fixed effort for every Claude model. Sonnet 5.5 always thinks and its thinking counts toward the same
+          // maxOutputTokens as the JSON reply, so low effort leaves the budget to the answer; revisit with measured smoke usage.
+          ...(target.name === "anthropic" ? { providerOptions: { anthropic: { effort: "low" } } } : {}),
           abortSignal: AbortSignal.any([signal, AbortSignal.timeout(request.timeoutMs)]),
         });
         const requestId = result.response.id;

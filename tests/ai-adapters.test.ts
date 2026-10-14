@@ -250,7 +250,7 @@ test("AI_MODEL names its provider; a bare id stays Google and anything else is u
   assert.deepEqual(modelRoute("gemini-3.8-flash"), { provider: "google", id: "gemini-3.8-flash" });
   assert.deepEqual(modelRoute("google/gemini-3.8-flash"), { provider: "google", id: "gemini-3.8-flash" });
   assert.deepEqual(modelRoute("anthropic/claude-sonnet-5-5"), { provider: "anthropic", id: "claude-sonnet-5-5" });
-  for (const bad of ["", "anthropc/claude-sonnet-5-5", "openai/x", "anthropic/", "models/gemini-3.8-flash", "anthropic/a/b", "/x"]) assert.equal(modelRoute(bad), null, bad);
+  for (const bad of ["", "claude-sonnet-5-5", "anthropc/claude-sonnet-5-5", "openai/x", "anthropic/", "models/gemini-3.8-flash", "anthropic/a/b", "/x"]) assert.equal(modelRoute(bad), null, bad);
 });
 
 const claude = (text: string, stopReason = "end_turn", usage: unknown = { input_tokens: 12, output_tokens: 34 }) =>
@@ -273,6 +273,7 @@ test("an Anthropic model gets one bounded structured-output call and the same no
   assert.equal(body.model, "claude-sonnet-5-5", "the provider prefix is not sent");
   assert.equal(body.max_tokens, AI_LIMITS.maxOutputTokens);
   assert.equal(body.output_format?.type ?? body.output_config?.format?.type, "json_schema", "provider-side structured output is requested");
+  assert.equal(body.output_config?.effort, "low", "thinking shares max_tokens with the reply, so effort stays low");
 });
 
 test("Anthropic refusal, truncation, malformed output and a reply without usage are normalized, never thrown", async () => {

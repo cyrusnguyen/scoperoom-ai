@@ -6,7 +6,8 @@ export type ModelProvider = "google" | "anthropic";
  */
 export function modelRoute(model: string): { provider: ModelProvider; id: string } | null {
   const slash = model.indexOf("/");
-  if (slash === -1) return model ? { provider: "google", id: model } : null;
+  // A bare Claude id would go to Google and waste a claimed call: it must carry the `anthropic/` prefix.
+  if (slash === -1) return model && !model.startsWith("claude") ? { provider: "google", id: model } : null;
   const provider = model.slice(0, slash), id = model.slice(slash + 1);
   return (provider === "google" || provider === "anthropic") && id && !id.includes("/") ? { provider, id } : null;
 }
