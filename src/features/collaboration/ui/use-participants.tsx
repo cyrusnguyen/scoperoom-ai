@@ -2,7 +2,7 @@
 
 import { useId, useMemo, useRef, useState } from "react";
 import { roleLabel } from "@/features/projects/ui/format";
-import { resolveParticipants, selectorsByItem, type Person } from "./participants";
+import { peopleOnFlow, resolveParticipants, selectorsByItem, type Person } from "./participants";
 import { useSync } from "./sync-context";
 
 /** The other people here (one per profile) and, for a flow, who has each item selected. Advisory; a claim is not authorship. */
@@ -26,11 +26,15 @@ export function SelectedBy({ people }: { people: Person[] | undefined }) {
 /** The Studio header's count of other people here, expandable to a list. Names come from the members list; presence is a self-reported claim. */
 export function Participants({ flowId }: { flowId: string }) {
   const { people } = useParticipants(flowId);
+  const { roster } = useSync();
+  const onFlow = useMemo(() => peopleOnFlow(roster, flowId), [roster, flowId]);
   const [open, setOpen] = useState(false);
   const listId = useId();
   const toggle = useRef<HTMLButtonElement>(null);
   return <div className="participants" onKeyDown={(event) => { if (event.key === "Escape" && open) { setOpen(false); toggle.current?.focus(); } }}>
     <button ref={toggle} type="button" className="button quiet small" aria-expanded={open} aria-controls={listId} onClick={() => setOpen(!open)}>
+      {/* Each person's color is always visible: a live cursor only appears while they move a pointer over this flow. */}
+      {people.length > 0 && <span className="presence-marks">{people.map((person) => <span key={person.profileId} className="presence-dot" data-presence={person.color} aria-hidden="true" />)}</span>}
       {people.length === 1 ? "1 other person here" : `${people.length} other people here`}
     </button>
     <div id={listId} className="participants-list" hidden={!open}>
@@ -39,6 +43,7 @@ export function Participants({ flowId }: { flowId: string }) {
         <strong>{person.name}</strong>
         {person.role && <span className="muted"> {roleLabel(person.role)}</span>}
         {person.sessions > 1 && <span className="muted"> · {person.sessions} tabs</span>}
+        {!onFlow.has(person.profileId) && <span className="muted"> · on another flow or view</span>}
       </li>)}</ul> : <p className="muted">No one else has reported being here right now.</p>}
       <p className="muted">Names and roles come from the project’s member list. Who is here and what they have selected is reported by each browser; it is not verified and does not show who made a change.</p>
     </div>

@@ -17,9 +17,14 @@ test("a peer is counted and named from the member list, and their selection show
   const toggle = ownerPage.getByRole("button", { name: /other person here/ });
   await expect(toggle).toBeVisible({ timeout: 20_000 });
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  // An idle peer has no cursor, but their color shows beside the count without opening the list.
+  await expect(toggle.locator(".presence-dot")).toHaveCount(1);
+  await expect(toggle.locator(".presence-dot")).toBeVisible();
+  await expect(ownerPage.locator(".live-cursor")).toHaveCount(0);
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(ownerPage.locator(".participants-list")).toContainText("Collab editor");
+  await expect(ownerPage.locator(".participants-list")).not.toContainText("on another flow or view"); // both are on the only flow
   await editorPage.locator(`.react-flow__node[data-id="${startId}"]`).click();
   await expect(ownerPage.locator(`.react-flow__node[data-id="${startId}"]`)).toContainText("Also selected by Collab editor", { timeout: 15_000 });
 });

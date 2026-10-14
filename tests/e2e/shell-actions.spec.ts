@@ -332,6 +332,28 @@ test.describe("shell actions", () => {
     expect(bootstrapReads).toBeGreaterThan(readsBeforeDialog);
   });
 
+  test("an archive made elsewhere moves the open project from Owned to Archived without a reload", async ({ page }) => {
+    await signIn(page, admin, users, "Actions Test");
+    let archivedElsewhere = false;
+    const alpha = (state: string) => item(ids.alpha, "Alpha plan", state);
+    await page.route("**/api/projects", (route) => route.fulfill({ json: archivedElsewhere
+      ? { owned: group(), shared: group(), archived: group([alpha("ARCHIVED")]), capacity: capacity(0, 10) }
+      : { owned: group([alpha("ACTIVE")]), shared: group(), archived: group(), capacity: capacity(1, 10) } }));
+    await page.route("**/api/invitations", (route) => route.fulfill({ json: noInvites }));
+    await page.route(`**/api/projects/${ids.alpha}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { id: ids.alpha, name: "Alpha plan", status: archivedElsewhere ? "ARCHIVED" : "ACTIVE", role: "OWNER", ownerId: ids.alpha }, draft: emptyDraftView() }) }));
+    await page.route(`**/api/projects/${ids.alpha}/status`, (route) => route.fulfill({ json: status(archivedElsewhere ? 2 : 1, archivedElsewhere ? "ARCHIVED" : "ACTIVE") }));
+    await page.goto(`/app/projects/${ids.alpha}`);
+    await expect(page.getByRole("heading", { level: 1, name: "Alpha plan" })).toBeVisible();
+    await expect(sidebar(page).getByRole("button", { name: "Actions for Alpha plan" })).toBeVisible();
+    // Archived by the API, another tab or another member: only the shared status read notices it, never a dialog in this tab.
+    archivedElsewhere = true;
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page.getByText("Archived · read-only")).toBeVisible();
+    await expect(sidebar(page).getByRole("button", { name: "Actions for Alpha plan" })).toHaveCount(0);
+    await sidebar(page).getByRole("tab", { name: "Archived projects" }).click();
+    await expect(sidebar(page).getByRole("button", { name: "Actions for Alpha plan" })).toBeVisible();
+  });
+
   test("a lifecycle dialog stays open while its request is in flight, so an uncertain result keeps its key for Retry", async ({ page }) => {
     await signIn(page, admin, users, "Actions Test");
     let release = () => {};

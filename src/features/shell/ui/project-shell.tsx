@@ -122,9 +122,12 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     try { localStorage.setItem(widthsKey, JSON.stringify(widths)); } catch { /* Preferences are optional. */ }
   }, [widths]);
 
+  // Reads can overlap (a dialog's refresh and the sync's background refresh): only the latest one may update the lists.
+  const listsTicket = useRef(0);
   const loadLists = useCallback(async () => {
+    const ticket = ++listsTicket.current;
     const [projects, mine] = await Promise.all([apiRead<ProjectLists>("/api/projects"), apiRead<{ items: MyInvitation[]; truncated: boolean }>("/api/invitations")]);
-    if (sessionEnded(projects) || sessionEnded(mine) || endedRef.current) return;
+    if (sessionEnded(projects) || sessionEnded(mine) || endedRef.current || ticket !== listsTicket.current) return;
     if (!projects.ok || !mine.ok) { setListsState("error"); return; }
     const now = Date.now();
     setLists(projects.data);
@@ -386,7 +389,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
         </div>
         {dock.left === "docked" && resizer("left")}
         {projectId && bootstrap
-          ? <SyncProvider key={projectId} projectId={projectId} initial={bootstrap.status} live={() => liveOf(projectId)} bootstrap={(fence) => loadProject(projectId, undefined, fence)}>
+          ? <SyncProvider key={projectId} projectId={projectId} initial={bootstrap.status} live={() => liveOf(projectId)} bootstrap={(fence) => loadProject(projectId, undefined, fence).finally(() => void loadLists())}>
             <StudioProvider key={projectId} projectId={projectId} draft={bootstrap.draft} role={bootstrap.project.role} archived={bootstrap.project.status === "ARCHIVED"}
               narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={projectChanged} onInspect={() => openRightTab("details")} saveRef={saveChangesRef}>
               {main}{rightResizer}{panel}
