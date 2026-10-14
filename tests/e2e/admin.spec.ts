@@ -72,11 +72,13 @@ test.describe("staff screens", () => {
     await expect(row).toHaveCount(1);
     await expect(row).toContainText("Default");
     await expect(row).toContainText("2 of");
+    await expect(row).toContainText(`${targetId.slice(0, 8)} \u00b7 joined`);
     await shot(page, "admin-accounts");
 
     await row.getByRole("link", { name: targetName }).click();
     await expect(page).toHaveURL(new RegExp(`/app/admin/accounts/${targetId}$`));
     await expect(page.getByRole("heading", { level: 1, name: targetName })).toBeVisible();
+    await expect(page.getByText(`${targetId.slice(0, 8)} \u00b7 joined`)).toBeVisible();
     await expect(page.getByRole("heading", { name: "History" })).toBeVisible();
     await expect(page.getByText("No changes yet.")).toBeVisible();
     await shot(page, "admin-account-detail");

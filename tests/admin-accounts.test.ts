@@ -53,7 +53,7 @@ test("search term and cursor", () => {
 
 const row: SummaryRow = {
   profile_id: "0b6f6a53-4ad2-4c55-9f0d-6e9f2f7a1c11", display_name: "Ada", staff_role: null, plan_kind: "DEFAULT", override_max_owned: null, override_ai_total: null,
-  override_ai_daily: null, override_expires_at: null, active_owned_projects: 2, ai_used_total: 3, ai_used_today: 1, entitlement_version: 0, role_version: 0, last_activity: "2026-10-14T10:00:00.123456+00:00",
+  override_ai_daily: null, override_expires_at: null, active_owned_projects: 2, ai_used_total: 3, ai_used_today: 1, entitlement_version: 0, role_version: 0, last_activity: "2026-10-14T10:00:00.123456+00:00", created_at: "2026-10-03T08:30:00+00:00",
 };
 
 test("account view shows the limits that are enforced", () => {
@@ -61,6 +61,7 @@ test("account view shows the limits that are enforced", () => {
   assert.deepEqual(accountView(row, new Date(), env).limits, { maxOwnedProjects: 10, aiTotalRuns: 5, aiDailyRuns: 30 });
   assert.equal(accountView(row, new Date(), env).override, null);
   assert.equal(accountView(row, new Date(), env).lastActivityAt, "2026-10-14T10:00:00.123Z");
+  assert.equal(accountView(row, new Date(), env).createdAt, "2026-10-03T08:30:00.000Z");
   const custom = { ...row, plan_kind: "CUSTOM", override_max_owned: 4, override_ai_total: null, override_ai_daily: 9, entitlement_version: 2 };
   const view = accountView(custom, new Date(), env);
   assert.deepEqual(view.limits, { maxOwnedProjects: 4, aiTotalRuns: null, aiDailyRuns: 9 });
@@ -85,6 +86,7 @@ test("staff refusals map to the shared error codes", () => {
   assert.equal(staffError(driver("SR002")).code, "ADMIN_ROLE_REQUIRED");
   assert.equal(staffError(driver("SR003")).code, "CONFLICT");
   assert.equal(staffError(driver("SR004")).code, "LAST_ADMIN");
+  assert.equal(staffError(driver("SR006")).code, "STAFF_TARGET_FORBIDDEN");
   assert.equal(staffError(driver("22023")).code, "INVALID_INPUT");
   assert.equal(staffError({ code: "P2010", meta: { code: "SR004" } }).code, "LAST_ADMIN");
   assert.equal(staffError(new Error("ERROR: VERSION_CONFLICT")).code, "CONFLICT");

@@ -5,7 +5,7 @@ import { accountPlan } from "../../projects/server/plan.ts";
 export type SummaryRow = {
   profile_id: string; display_name: string; staff_role: string | null; plan_kind: string;
   override_max_owned: number | null; override_ai_total: number | null; override_ai_daily: number | null; override_expires_at: Date | string | null;
-  active_owned_projects: number; ai_used_total: number; ai_used_today: number; entitlement_version: number; role_version: number; last_activity: Date | string | null;
+  active_owned_projects: number; ai_used_total: number; ai_used_today: number; entitlement_version: number; role_version: number; last_activity: Date | string | null; created_at: Date | string;
 };
 
 const iso = (value: Date | string | null) => (value === null ? null : new Date(value).toISOString());
@@ -22,7 +22,7 @@ export function accountView(row: SummaryRow, now = new Date(), env: Partial<Node
     maxOwnedProjects: stored.maxOwnedProjects, aiTotalRunLimit: stored.aiTotalRuns, aiDailyRunLimit: stored.aiDailyRuns,
   }, now, env, staffRole !== null);
   return {
-    profileId: row.profile_id, displayName: row.display_name, staffRole, plan,
+    profileId: row.profile_id, displayName: row.display_name, createdAt: new Date(row.created_at).toISOString(), staffRole, plan,
     limits: { maxOwnedProjects: effective.maxOwnedProjects, aiTotalRuns: effective.aiTotalRuns, aiDailyRuns: effective.aiDailyRuns },
     override: stored, activeOwnedProjects: row.active_owned_projects, aiUsed: { total: row.ai_used_total, today: row.ai_used_today },
     entitlementVersion: row.entitlement_version, roleVersion: row.role_version, lastActivityAt: iso(row.last_activity),

@@ -263,3 +263,24 @@ test("lowering a limit below current usage refuses new projects and AI requests 
     assert.equal((await readAccount(admin.identity, owner.profile)).account.activeOwnedProjects, 2);
   });
 });
+
+test("a Moderator is refused STAFF_TARGET_FORBIDDEN on an Admin and on themselves; account reads carry the creation date and actor ids", { skip: !canRun }, async () => {
+  await withStaff(async ({ person, staff, database }) => {
+    const admin = await person(), moderator = await person(), target = await person();
+    await staff(admin, "ADMIN");
+    await staff(moderator, "MODERATOR");
+
+    await assert.rejects(setEntitlement(moderator.identity, admin.profile, limitsBody(0)), refusal("STAFF_TARGET_FORBIDDEN"));
+    await assert.rejects(setEntitlement(moderator.identity, moderator.profile, limitsBody(0)), refusal("STAFF_TARGET_FORBIDDEN"));
+    assert.deepEqual([await audits(database, admin.profile), await audits(database, moderator.profile)], [[], []]);
+    assert.equal((await setEntitlement(admin.identity, moderator.profile, limitsBody(0))).version, 1);
+
+    await setEntitlement(moderator.identity, target.profile, limitsBody(0));
+    const detail = await readAccount(admin.identity, target.profile);
+    const { rows: [created] } = await database.query<{ created_at: Date }>("select created_at from app.user_profile where id = $1", [target.profile]);
+    assert.equal(detail.account.createdAt, created!.created_at.toISOString());
+    assert.equal(detail.audit[0]!.actorId, moderator.profile);
+    const { accounts } = await listAccounts(admin.identity, { query: "" });
+    assert.ok(accounts.every((account) => typeof account.createdAt === "string"));
+  });
+});

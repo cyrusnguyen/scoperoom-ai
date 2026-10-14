@@ -2,6 +2,20 @@ import type { AccountView, StaffRole } from "../contracts/admin.ts";
 
 // Pure labels for the staff screens. Times are passed in so a render never reads the clock.
 
+export const shortId = (profileId: string) => profileId.slice(0, 8);
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "a1b2c3d4 (middle dot) joined 3 Oct 2026": the id and creation date staff use to tell apart accounts that share a display name (the date is UTC). */
+export function accountTag(account: Pick<AccountView, "profileId" | "createdAt">): string {
+  const created = new Date(account.createdAt);
+  return `${shortId(account.profileId)} \u00b7 joined ${created.getUTCDate()} ${MONTHS[created.getUTCMonth()]} ${created.getUTCFullYear()}`;
+}
+
+export const MODERATOR_SCOPE_NOTE = "Moderators cannot change their own limits or an Admin's.";
+/** A Moderator may not edit their own limits or an Admin's; the database refuses it too (SR006). */
+export const limitsLocked = (viewer: StaffRole, viewerId: string, account: Pick<AccountView, "profileId" | "staffRole">) =>
+  viewer === "MODERATOR" && (account.profileId === viewerId || account.staffRole === "ADMIN");
+
 export const roleName = (role: StaffRole | null) => (role === "ADMIN" ? "Admin" : role === "MODERATOR" ? "Moderator" : "None");
 
 /** Default, Custom, Blocked, or "Custom, expired" once the override's expiry has passed (the default plan applies then). */

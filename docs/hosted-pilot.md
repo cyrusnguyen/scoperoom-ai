@@ -135,7 +135,7 @@ Changed environment values mean a new deployment and a new smoke.
 
 ## 5. Staff and account limits
 
-Admins and Moderators change account limits in the Admin screen (`/app/admin`, linked from the footer for staff): AI total and daily limits, project limit, expiry, block, and reset to the default plan, each with a required reason and an audit entry. Only Admins grant or revoke the Admin and Moderator roles, and at least one Admin always remains. Staff have unlimited AI in projects they own.
+Admins and Moderators change account limits in the Admin screen (`/app/admin`, linked from the footer for staff): AI total and daily limits, project limit, expiry, block, and reset to the default plan, each with a required reason and an audit entry. Only Admins grant or revoke the Admin and Moderator roles, and at least one Admin always remains. A Moderator cannot change their own limits or an Admin's. Staff have unlimited AI in projects they own. Operator SQL changes to `pilot_entitlement` do not advance the entitlement version, so use the Admin screen once an Admin exists. The Admin screens show each account's short id and join date beside its display name, because display names are chosen by users and are not unique.
 
 The first Admin is granted once per target by the operator, for an account that has signed in at least once; the script refuses while any Admin exists:
 

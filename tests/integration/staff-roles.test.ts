@@ -12,7 +12,8 @@ import { withStaff } from "./support/staff.ts";
 import { grantFirstAdmin } from "../../scripts/db/grant-admin.mjs";
 
 // Staff roles (2026-10-14): the SECURITY DEFINER authority functions on the web runtime role, and unlimited AI for staff-owned projects.
-// Refusal SQLSTATEs: SR001 no staff role (the app answers NOT_FOUND), SR002 Admin required, SR003 version conflict, SR004 last Admin, SR005 unknown target.
+// Refusal SQLSTATEs: SR001 no staff role (the app answers NOT_FOUND), SR002 Admin required, SR003 version conflict, SR004 last Admin, SR005 unknown target,
+// SR006 a Moderator's own or an Admin's limits.
 const CONFIG = { model: "test-model", executionBinding: "binding-1" };
 type Outcome = { ok: true; value: { profileId: string; version: number; role?: string | null; override?: { blocked: boolean } | null } } | { ok: false; code: string; message: string };
 
@@ -205,6 +206,12 @@ test("the operator script grants the first Admin once, with one audit row, and r
   await withStaff(async ({ database, person }) => {
     const first = await person("First admin"); const second = await person("Second");
     await assert.rejects(grantFirstAdmin(database, "nobody-here@example.test"), /sign in to the app once first/);
+    // Only a confirmed, non-anonymous Auth user can be matched.
+    for (const [unmatched, restore] of [["email_confirmed_at = null", "email_confirmed_at = now()"], ["is_anonymous = true", "is_anonymous = false"]]) {
+      await database.query(`update auth.users set ${unmatched} where id = $1`, [first.identity.authUserId]);
+      await assert.rejects(grantFirstAdmin(database, first.identity.verifiedEmail), /sign in to the app once first/);
+      await database.query(`update auth.users set ${restore} where id = $1`, [first.identity.authUserId]);
+    }
     assert.equal(await grantFirstAdmin(database, first.identity.verifiedEmail.toUpperCase()), first.profile);
     const { rows: [role] } = await database.query("select role, revoked_at from app.platform_role where profile_id = $1", [first.profile]);
     assert.deepEqual([role.role, role.revoked_at], ["ADMIN", null]);
@@ -212,5 +219,51 @@ test("the operator script grants the first Admin once, with one audit row, and r
     assert.deepEqual([audit.n, audit.action], [1, "ROLE_SET"]);
     await assert.rejects(grantFirstAdmin(database, second.identity.verifiedEmail), /An Admin already exists/);
     assert.equal((await database.query("select count(*)::int n from app.platform_role where profile_id = $1", [second.profile])).rows[0].n, 0);
+  });
+});
+
+test("a Moderator cannot change an Admin's limits or their own, and leaves no audit row; an Admin can change a Moderator and themselves", { skip: !canRun }, async () => {
+  await withStaff(async ({ web, person, staff, database }) => {
+    const admin = await person(), moderator = await person(), target = await person();
+    await staff(admin, "ADMIN");
+    await staff(moderator, "MODERATOR");
+
+    const refusals = await Promise.all([setLimits(web, moderator.profile, admin.profile, 0), setLimits(web, moderator.profile, moderator.profile, 0)]);
+    assert.deepEqual(refusals.map(code), ["SR006", "SR006"]);
+    assert.deepEqual([await audits(database, admin.profile), await audits(database, moderator.profile)], [[], []]);
+    assert.equal((await database.query("select count(*)::int n from app.pilot_entitlement where profile_id = any($1::uuid[])", [[admin.profile, moderator.profile]])).rows[0].n, 0);
+    assert.ok((await setLimits(web, moderator.profile, target.profile, 0)).ok, "a normal account is still in scope");
+
+    assert.ok((await setLimits(web, admin.profile, moderator.profile, 0)).ok);
+    assert.ok((await setLimits(web, admin.profile, admin.profile, 0)).ok);
+    // A demoted Admin is no longer out of a Moderator's scope.
+    assert.ok((await setRole(web, admin.profile, moderator.profile, "ADMIN", 1)).ok);
+    assert.equal(code(await setLimits(web, admin.profile, moderator.profile, 1)), "OK");
+  });
+});
+
+test("an actor who loses their staff role while the call waits for the account lock is refused", { skip: !canRun }, async () => {
+  await withStaff(async ({ web, person, staff, database }) => {
+    const admin = await person(), moderator = await person(), target = await person();
+    await staff(admin, "ADMIN");
+    await staff(moderator, "MODERATOR");
+
+    await database.query("begin");
+    try {
+      await database.query("select app.lock_pilot_entitlement($1)", [target.profile]);
+      const pending = setLimits(web, moderator.profile, target.profile, 0);
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const { rows } = await database.query("select 1 from pg_stat_activity where wait_event_type = 'Lock' and query like '%admin_set_entitlement%'");
+        if (rows.length) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      await database.query("update app.platform_role set revoked_at = clock_timestamp(), version = version + 1 where profile_id = $1", [moderator.profile]);
+      await database.query("commit");
+      assert.equal(code(await pending), "SR001");
+    } catch (error) {
+      await database.query("rollback").catch(() => undefined);
+      throw error;
+    }
+    assert.deepEqual(await audits(database, target.profile), []);
   });
 });

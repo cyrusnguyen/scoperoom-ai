@@ -8,6 +8,7 @@
 --   SR003 (VERSION_CONFLICT)  the expected version is not the current one (0 when there is no row).
 --   SR004 (LAST_ADMIN)        the change would leave no active Admin.
 --   SR005 (TARGET_NOT_FOUND)  the target profile does not exist.
+--   SR006 (TARGET_FORBIDDEN)  a Moderator tried to change their own limits or an Admin's.
 --   22023                     invalid input: negative limit, unknown role, missing reason, nothing to change.
 
 CREATE TABLE app.platform_role (
@@ -64,6 +65,7 @@ DECLARE
   v_current app.pilot_entitlement%ROWTYPE;
   v_row app.pilot_entitlement%ROWTYPE;
   v_version integer;
+  v_actor_role text;
   v_has_override boolean;
   v_before jsonb;
   v_after jsonb;
@@ -81,6 +83,14 @@ BEGIN
 
   -- The lock project creation and AI admission take: a limit change is serialised with both.
   PERFORM app.lock_pilot_entitlement(p_target);
+  -- The shared side of the lock admin_set_role holds exclusively: the target's role cannot change under the scope check below.
+  -- The actor is checked again once the locks are held, and a Moderator may not touch their own limits or an Admin's.
+  PERFORM pg_advisory_xact_lock_shared(hashtextextended('app.platform_role', 0));
+  v_actor_role := app.staff_role(p_actor);
+  IF v_actor_role IS NULL THEN RAISE EXCEPTION 'STAFF_REQUIRED' USING ERRCODE = 'SR001'; END IF;
+  IF v_actor_role = 'MODERATOR' AND (p_target = p_actor OR app.staff_role(p_target) = 'ADMIN') THEN
+    RAISE EXCEPTION 'TARGET_FORBIDDEN' USING ERRCODE = 'SR006';
+  END IF;
   SELECT * INTO v_current FROM app.pilot_entitlement WHERE profile_id = p_target;
   v_has_override := FOUND;
   v_version := coalesce((SELECT version FROM app.account_entitlement_version WHERE profile_id = p_target), 0);
@@ -179,7 +189,7 @@ CREATE FUNCTION app.account_summary(p_profile uuid) RETURNS TABLE (
   profile_id uuid, display_name text, staff_role text, plan_kind text,
   override_max_owned integer, override_ai_total integer, override_ai_daily integer, override_expires_at timestamptz,
   active_owned_projects integer, ai_used_total integer, ai_used_today integer, entitlement_version integer, role_version integer,
-  last_activity timestamptz
+  last_activity timestamptz, created_at timestamptz
 )
 LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp
 AS $$
@@ -193,7 +203,8 @@ AS $$
       WHERE owner_id = profile.id AND day = (transaction_timestamp() AT TIME ZONE 'UTC')::date),
     coalesce(entitlement.version, 0), coalesce(staff.version, 0),
     greatest(profile.updated_at, (SELECT max(updated_at) FROM app.project WHERE owner_id = profile.id),
-      (SELECT (max(day)::timestamp AT TIME ZONE 'UTC') FROM app.ai_budget_day WHERE owner_id = profile.id))
+      (SELECT (max(day)::timestamp AT TIME ZONE 'UTC') FROM app.ai_budget_day WHERE owner_id = profile.id)),
+    profile.created_at
   FROM app.user_profile profile
   LEFT JOIN app.platform_role staff ON staff.profile_id = profile.id
   LEFT JOIN app.pilot_entitlement override ON override.profile_id = profile.id
@@ -206,7 +217,7 @@ RETURNS TABLE (
   profile_id uuid, display_name text, staff_role text, plan_kind text,
   override_max_owned integer, override_ai_total integer, override_ai_daily integer, override_expires_at timestamptz,
   active_owned_projects integer, ai_used_total integer, ai_used_today integer, entitlement_version integer, role_version integer,
-  last_activity timestamptz
+  last_activity timestamptz, created_at timestamptz
 )
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp
 AS $$

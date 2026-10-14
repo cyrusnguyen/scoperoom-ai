@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AccountView } from "../src/features/admin/contracts/admin.ts";
-import { actionLabel, expiryFor, limitsStart, parseLimit, planLabel, relativeTime, snapshotLabel, usageLabel } from "../src/features/admin/ui/format.ts";
+import { accountTag, actionLabel, expiryFor, limitsLocked, limitsStart, parseLimit, planLabel, relativeTime, snapshotLabel, usageLabel } from "../src/features/admin/ui/format.ts";
 
 const now = Date.parse("2026-10-14T12:00:00Z");
 const account = (plan: AccountView["plan"], expiresAt: string | null = null): Pick<AccountView, "plan" | "override"> =>
@@ -14,6 +14,21 @@ test("plan label: Default, Custom, Blocked and Custom, expired once the expiry h
   assert.equal(planLabel(account("CUSTOM", "2026-10-14T12:00:00Z"), now), "Custom, expired");
   assert.equal(planLabel(account("CUSTOM", "2026-01-01T00:00:00Z"), now), "Custom, expired");
   assert.equal(planLabel(account("BLOCKED", "2026-01-01T00:00:00Z"), now), "Blocked");
+});
+
+test("account tag: the short id and the UTC join date tell same-named accounts apart", () => {
+  assert.equal(accountTag({ profileId: "a1b2c3d4-0000-4000-8000-000000000000", createdAt: "2026-10-03T23:30:00Z" }), "a1b2c3d4 \u00b7 joined 3 Oct 2026");
+  assert.equal(accountTag({ profileId: "0b6f6a53-4ad2-4c55-9f0d-6e9f2f7a1c11", createdAt: "2027-01-31T00:00:00+02:00" }), "0b6f6a53 \u00b7 joined 30 Jan 2027");
+});
+
+test("a Moderator's limits editor is hidden for an Admin and for themselves only", () => {
+  const target = (staffRole: "ADMIN" | "MODERATOR" | null, profileId = "other") => ({ profileId, staffRole });
+  assert.equal(limitsLocked("MODERATOR", "me", target("ADMIN")), true);
+  assert.equal(limitsLocked("MODERATOR", "me", target(null, "me")), true);
+  assert.equal(limitsLocked("MODERATOR", "me", target("MODERATOR")), false);
+  assert.equal(limitsLocked("MODERATOR", "me", target(null)), false);
+  assert.equal(limitsLocked("ADMIN", "me", target("ADMIN")), false);
+  assert.equal(limitsLocked("ADMIN", "me", target(null, "me")), false);
 });
 
 test("usage reads 'used of limit' or 'used, unlimited'", () => {

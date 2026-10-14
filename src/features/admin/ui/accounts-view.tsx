@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type SubmitEvent } from "react";
 import { apiRead, sessionEnded } from "@/client/api";
 import type { AccountView } from "@/features/admin/contracts/admin";
-import { absoluteTime, planLabel, projectsLabel, relativeTime, roleName, usageLabel } from "./format";
+import { absoluteTime, accountTag, planLabel, projectsLabel, relativeTime, roleName, usageLabel } from "./format";
 
 type Page = { accounts: AccountView[]; nextCursor: string | null };
 // Mirrors QUERY_MAX in contracts/admin.ts (the contracts module also holds Node-only cursor helpers, so the browser keeps its own copy).
@@ -74,7 +74,7 @@ export default function AccountsView() {
           <th scope="col">AI total</th><th scope="col">AI today</th><th scope="col">Last activity</th>
         </tr></thead>
         <tbody>{accounts.map((account) => <tr key={account.profileId}>
-          <th scope="row"><Link href={`/app/admin/accounts/${account.profileId}`}>{account.displayName}</Link></th>
+          <th scope="row"><Link href={`/app/admin/accounts/${account.profileId}`}>{account.displayName}</Link><span className="admin-tag">{accountTag(account)}</span></th>
           <td>{account.staffRole ? roleName(account.staffRole) : ""}</td>
           <td>{planLabel(account, now)}</td>
           <td>{projectsLabel(account)}</td>

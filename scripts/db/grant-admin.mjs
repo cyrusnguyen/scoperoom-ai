@@ -24,7 +24,8 @@ export async function grantFirstAdmin(client, email) {
     const { rows: [admins] } = await client.query("select count(*)::int as n from app.platform_role where role = 'ADMIN' and revoked_at is null");
     if (admins.n > 0) throw new Error("An Admin already exists: grant roles from the Admin screen instead.");
     const { rows } = await client.query(
-      "select p.id from app.user_profile p join auth.users u on u.id = p.auth_user_id where lower(u.email) = $1", [email]);
+      `select p.id from app.user_profile p join auth.users u on u.id = p.auth_user_id
+       where lower(u.email) = $1 and u.email_confirmed_at is not null and not coalesce(u.is_anonymous, false)`, [email]);
     if (rows.length !== 1) throw new Error("No ScopeRoom account for that email: sign in to the app once first.");
     const profileId = rows[0].id;
     const { rows: [before] } = await client.query("select role from app.platform_role where profile_id = $1 and revoked_at is null", [profileId]);

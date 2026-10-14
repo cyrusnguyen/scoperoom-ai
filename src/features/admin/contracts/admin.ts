@@ -12,7 +12,7 @@ export type EntitlementInput =
 export type RoleInput = { key: string; expectedVersion: number; reason: string; role: StaffRole | null };
 
 export type AccountView = {
-  profileId: string; displayName: string; staffRole: StaffRole | null; plan: "DEFAULT" | "CUSTOM" | "BLOCKED";
+  profileId: string; displayName: string; createdAt: string; staffRole: StaffRole | null; plan: "DEFAULT" | "CUSTOM" | "BLOCKED";
   /** What is enforced today: the plan after expiry, a block and the staff exemption. A null AI limit is unlimited. */
   limits: { maxOwnedProjects: number; aiTotalRuns: number | null; aiDailyRuns: number | null };
   /** The stored override (what an editor starts from), or null on the default plan. */
