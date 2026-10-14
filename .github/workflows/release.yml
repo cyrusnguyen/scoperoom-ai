@@ -1,0 +1,123 @@
+name: scoperoom-release
+
+# Every successful push CI on main queues a release that waits for approval in the protected `release` environment.
+# A manual run releases a chosen main commit that passed push CI, and may add the paid AI smoke.
+on:
+  workflow_run:
+    workflows: [scoperoom-pr-ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full commit SHA on main (blank for the latest main commit)
+        required: false
+      ai_smoke:
+        description: Also run the AI smoke (paid model calls, about 2)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: release
+    env:
+      REQUESTED_SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+      SCOPEROOM_DB_TARGET: hosted
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_WEB_PROJECT: ${{ vars.VERCEL_WEB_PROJECT }}
+      VERCEL_WORKER_PROJECT: ${{ vars.VERCEL_WORKER_PROJECT }}
+      WEB_URL: ${{ vars.WEB_URL }}
+      WORKER_URL: ${{ vars.WORKER_URL }}
+      SCOPEROOM_WORKER_URL: ${{ vars.WORKER_URL }}
+    # Secrets are scoped to the steps that use them, never to install steps or third-party actions.
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Resolve and check the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="${REQUESTED_SHA:-$(git rev-parse origin/main)}"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Release SHA must be a full commit id." >&2; exit 1; }
+          git merge-base --is-ancestor "$sha" origin/main || { echo "Release SHA is not on main." >&2; exit 1; }
+          runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&event=push&status=success" --jq '.total_count')"
+          [[ "$runs" -gt 0 ]] || { echo "Release SHA has no successful push CI run." >&2; exit 1; }
+          git checkout --quiet "$sha"
+          echo "RELEASE_SHA=$sha" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.21.0
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm db:generate
+      - run: npm install --global vercel@48.2.9
+      - name: Release binding on both projects
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: node scripts/release/release.mjs binding
+      - name: Migrate
+        env:
+          SCOPEROOM_SUPABASE_PROJECT_REF: ${{ secrets.SCOPEROOM_SUPABASE_PROJECT_REF }}
+          SCOPEROOM_ENVIRONMENT_ID: ${{ secrets.SCOPEROOM_ENVIRONMENT_ID }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
+          SCOPEROOM_DATABASE_CA_PEM: ${{ secrets.SCOPEROOM_DATABASE_CA_PEM }}
+          SCOPEROOM_BOOTSTRAP_DATABASE_URL: ${{ secrets.SCOPEROOM_BOOTSTRAP_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+        run: node scripts/release/release.mjs db node scripts/db/migrate.mjs
+      - name: Export the release source without git metadata
+        run: |
+          echo "RELEASE_DIR=$RUNNER_TEMP/release" >> "$GITHUB_ENV"
+          mkdir "$RUNNER_TEMP/release"
+          git archive "$RELEASE_SHA" | tar -x -C "$RUNNER_TEMP/release"
+      - name: Deploy worker
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: node scripts/release/release.mjs deploy worker
+      - name: Register the worker with Inngest
+        run: node scripts/release/release.mjs sync
+      - name: Deploy web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: node scripts/release/release.mjs deploy web
+      - name: Maintenance schedule
+        env:
+          SCOPEROOM_SUPABASE_PROJECT_REF: ${{ secrets.SCOPEROOM_SUPABASE_PROJECT_REF }}
+          SCOPEROOM_ENVIRONMENT_ID: ${{ secrets.SCOPEROOM_ENVIRONMENT_ID }}
+          SCOPEROOM_DATABASE_CA_PEM: ${{ secrets.SCOPEROOM_DATABASE_CA_PEM }}
+          SCOPEROOM_BOOTSTRAP_DATABASE_URL: ${{ secrets.SCOPEROOM_BOOTSTRAP_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+        run: node scripts/release/release.mjs db node scripts/db/schedule.mjs verify
+      - name: Edge checks
+        run: node scripts/release/release.mjs checks
+      - run: corepack pnpm exec playwright install --with-deps chromium
+      - name: Hosted smoke
+        env:
+          SMOKE_URL: ${{ vars.WEB_URL }}
+          SMOKE_AI: ${{ github.event_name == 'workflow_dispatch' && inputs.ai_smoke && '1' || '0' }}
+          SMOKE_OWNER_EMAIL: ${{ secrets.SMOKE_OWNER_EMAIL }}
+          SMOKE_OWNER_PASSWORD: ${{ secrets.SMOKE_OWNER_PASSWORD }}
+          SMOKE_EDITOR_EMAIL: ${{ secrets.SMOKE_EDITOR_EMAIL }}
+          SMOKE_EDITOR_PASSWORD: ${{ secrets.SMOKE_EDITOR_PASSWORD }}
+          SMOKE_VIEWER_EMAIL: ${{ secrets.SMOKE_VIEWER_EMAIL }}
+          SMOKE_VIEWER_PASSWORD: ${{ secrets.SMOKE_VIEWER_PASSWORD }}
+        run: corepack pnpm test:smoke:hosted
+      - name: Keep the smoke report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: smoke-report
+          path: test-results/smoke-results.json
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,6 +1,6 @@
 // Production release steps for .github/workflows/release.yml (and an operator shell). Prints names, ids and statuses, never values.
 import { spawnSync } from "node:child_process";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const VERCEL = "https://api.vercel.com";
@@ -57,18 +57,20 @@ async function vercel(method, path, body) {
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const commands = {
-  /** Writes the CA to a file and exports both database URLs (masked) pointing at it. */
-  async env() {
+  /** Runs one command with both database URLs pointing at a CA file, so the URLs never reach GITHUB_ENV or later steps. */
+  async db(...command) {
+    if (!command.length) throw new Error("Usage: release.mjs db <command...>");
     const path = join(need("RUNNER_TEMP"), "supabase-ca.crt");
     const ca = need("SCOPEROOM_DATABASE_CA_PEM");
     if (!ca.includes("BEGIN CERTIFICATE")) throw new Error("SCOPEROOM_DATABASE_CA_PEM is not a PEM certificate.");
     writeFileSync(path, ca.endsWith("\n") ? ca : `${ca}\n`);
+    const env = { ...process.env };
     for (const name of ["SCOPEROOM_BOOTSTRAP_DATABASE_URL", "MIGRATION_DATABASE_URL"]) {
-      const url = withRootCert(need(name), path);
-      console.log(`::add-mask::${url}`);
-      appendFileSync(need("GITHUB_ENV"), `${name}=${url}\n`);
+      env[name] = withRootCert(need(name), path);
+      console.log(`::add-mask::${env[name]}`);
     }
-    console.log("release env: CA written, database URLs exported");
+    const result = spawnSync(command[0], command.slice(1), { stdio: "inherit", env });
+    if (result.status !== 0) throw new Error(`${command.join(" ")} failed (exit ${result.status}).`);
   },
   /** AI_EXECUTION_BINDING on both projects before either deploy (a `vercel deploy -e` value never reached the runtime). */
   async binding() {
@@ -119,7 +121,7 @@ const commands = {
 };
 
 if (import.meta.main) {
-  const [command, arg] = process.argv.slice(2);
-  if (!Object.hasOwn(commands, command ?? "")) throw new Error("Usage: release.mjs env | binding | deploy <web|worker> | sync | checks");
-  await commands[command](arg);
+  const [command, ...args] = process.argv.slice(2);
+  if (!Object.hasOwn(commands, command ?? "")) throw new Error("Usage: release.mjs db <command...> | binding | deploy <web|worker> | sync | checks");
+  await commands[command](...args);
 }
