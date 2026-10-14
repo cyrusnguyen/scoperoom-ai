@@ -32,14 +32,20 @@ CREATE TABLE app.account_audit_event (
 );
 CREATE INDEX account_audit_event_target_created ON app.account_audit_event (target_profile_id, created_at DESC);
 
--- Existing override rows start at version 1; a missing row is version 0.
-ALTER TABLE app.pilot_entitlement ADD COLUMN version integer NOT NULL DEFAULT 1;
+-- The entitlement version lives apart from the override row so a reset (which deletes the row) never restarts it: it only grows,
+-- one step per successful staff change, and no row means version 0.
+CREATE TABLE app.account_entitlement_version (
+  profile_id uuid PRIMARY KEY REFERENCES app.user_profile(id) ON DELETE RESTRICT,
+  version integer NOT NULL CHECK (version >= 1)
+);
 
 ALTER TABLE app.platform_role OWNER TO app_migrator;
 ALTER TABLE app.account_audit_event OWNER TO app_migrator;
+ALTER TABLE app.account_entitlement_version OWNER TO app_migrator;
 ALTER TABLE app.platform_role ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.account_audit_event ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON TABLE app.platform_role, app.account_audit_event FROM PUBLIC;
+ALTER TABLE app.account_entitlement_version ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE app.platform_role, app.account_audit_event, app.account_entitlement_version FROM PUBLIC;
 
 CREATE FUNCTION app.staff_role(p_profile uuid) RETURNS text
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp
@@ -58,6 +64,7 @@ DECLARE
   v_current app.pilot_entitlement%ROWTYPE;
   v_row app.pilot_entitlement%ROWTYPE;
   v_version integer;
+  v_has_override boolean;
   v_before jsonb;
   v_after jsonb;
 BEGIN
@@ -75,33 +82,39 @@ BEGIN
   -- The lock project creation and AI admission take: a limit change is serialised with both.
   PERFORM app.lock_pilot_entitlement(p_target);
   SELECT * INTO v_current FROM app.pilot_entitlement WHERE profile_id = p_target;
-  v_version := CASE WHEN FOUND THEN v_current.version ELSE 0 END;
+  v_has_override := FOUND;
+  v_version := coalesce((SELECT version FROM app.account_entitlement_version WHERE profile_id = p_target), 0);
   IF v_version <> p_expected_version THEN RAISE EXCEPTION 'VERSION_CONFLICT' USING ERRCODE = 'SR003'; END IF;
-  IF v_version > 0 THEN
+  IF v_has_override THEN
     v_before := jsonb_build_object('maxOwnedProjects', v_current.max_owned_projects, 'aiTotalRunLimit', v_current.ai_total_run_limit,
       'aiDailyRunLimit', v_current.ai_daily_run_limit, 'expiresAt', v_current.expires_at,
-      'blocked', NOT v_current.active OR v_current.revoked_at IS NOT NULL, 'version', v_current.version);
+      'blocked', NOT v_current.active OR v_current.revoked_at IS NOT NULL, 'version', v_version);
   END IF;
 
   IF p_reset THEN
-    IF v_version = 0 THEN RAISE EXCEPTION 'there is no override to reset' USING ERRCODE = '22023'; END IF;
+    IF NOT v_has_override THEN RAISE EXCEPTION 'there is no override to reset' USING ERRCODE = '22023'; END IF;
     DELETE FROM app.pilot_entitlement WHERE profile_id = p_target;
   ELSE
     INSERT INTO app.pilot_entitlement AS entitlement (profile_id, max_owned_projects, ai_total_run_limit, ai_daily_run_limit, expires_at, active, revoked_at, granted_by_operator)
     VALUES (p_target, p_max_owned, p_ai_total, p_ai_daily, p_expires_at, NOT p_blocked, CASE WHEN p_blocked THEN clock_timestamp() END, p_actor)
     ON CONFLICT (profile_id) DO UPDATE SET
       max_owned_projects = excluded.max_owned_projects, ai_total_run_limit = excluded.ai_total_run_limit, ai_daily_run_limit = excluded.ai_daily_run_limit,
-      expires_at = excluded.expires_at, active = excluded.active, revoked_at = excluded.revoked_at, granted_by_operator = excluded.granted_by_operator,
-      version = entitlement.version + 1
+      expires_at = excluded.expires_at, active = excluded.active, revoked_at = excluded.revoked_at, granted_by_operator = excluded.granted_by_operator
     RETURNING * INTO v_row;
+  END IF;
+
+  INSERT INTO app.account_entitlement_version AS account_version (profile_id, version) VALUES (p_target, 1)
+  ON CONFLICT (profile_id) DO UPDATE SET version = account_version.version + 1
+  RETURNING version INTO v_version;
+  IF NOT p_reset THEN
     v_after := jsonb_build_object('maxOwnedProjects', v_row.max_owned_projects, 'aiTotalRunLimit', v_row.ai_total_run_limit,
       'aiDailyRunLimit', v_row.ai_daily_run_limit, 'expiresAt', v_row.expires_at,
-      'blocked', NOT v_row.active OR v_row.revoked_at IS NOT NULL, 'version', v_row.version);
+      'blocked', NOT v_row.active OR v_row.revoked_at IS NOT NULL, 'version', v_version);
   END IF;
 
   INSERT INTO app.account_audit_event (actor_id, target_profile_id, action, before, after, reason, request_id)
   VALUES (p_actor, p_target, CASE WHEN p_reset THEN 'ENTITLEMENT_RESET' ELSE 'ENTITLEMENT_SET' END, v_before, v_after, v_reason, p_request_id);
-  RETURN jsonb_build_object('profileId', p_target, 'version', CASE WHEN p_reset THEN 0 ELSE v_row.version END, 'override', v_after);
+  RETURN jsonb_build_object('profileId', p_target, 'version', v_version, 'override', v_after);
 END;
 $$;
 

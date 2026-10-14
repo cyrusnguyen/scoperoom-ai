@@ -80,6 +80,7 @@ export async function withFixture(run: (fixture: Fixture) => Promise<void>) {
         await database.query(`delete from app.ai_owner_allowance where owner_id in ${profiles}`, [authIds]);
         await database.query(`delete from app.account_audit_event where target_profile_id in ${profiles} or actor_id in ${profiles}`, [authIds]);
         await database.query(`delete from app.platform_role where profile_id in ${profiles}`, [authIds]);
+        await database.query(`delete from app.account_entitlement_version where profile_id in ${profiles}`, [authIds]);
         await database.query(`delete from app.pilot_entitlement where profile_id in ${profiles}`, [authIds]);
         await database.query("delete from app.user_profile where auth_user_id = any($1::uuid[])", [authIds]);
         await Promise.all(authIds.map((id) => admin.auth.admin.deleteUser(id)));

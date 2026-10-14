@@ -79,8 +79,8 @@ test("role matrix: Admins and Moderators set limits, a normal account is refused
     assert.ok(byAdmin.ok && byAdmin.value.version === 1);
     const byModerator = await setLimits(web, moderator.profile, target.profile, 1, { max: 6, total: null, daily: null });
     assert.deepEqual(byModerator.ok && byModerator.value.override, { maxOwnedProjects: 6, aiTotalRunLimit: null, aiDailyRunLimit: null, expiresAt: null, blocked: false, version: 2 });
-    const { rows: [row] } = await database.query("select max_owned_projects, ai_total_run_limit, ai_daily_run_limit, granted_by_operator, version from app.pilot_entitlement where profile_id = $1", [target.profile]);
-    assert.deepEqual(row, { max_owned_projects: 6, ai_total_run_limit: null, ai_daily_run_limit: null, granted_by_operator: moderator.profile, version: 2 });
+    const { rows: [row] } = await database.query("select max_owned_projects, ai_total_run_limit, ai_daily_run_limit, granted_by_operator from app.pilot_entitlement where profile_id = $1", [target.profile]);
+    assert.deepEqual(row, { max_owned_projects: 6, ai_total_run_limit: null, ai_daily_run_limit: null, granted_by_operator: moderator.profile });
     const blocked = await setLimits(web, moderator.profile, target.profile, 2, { blocked: true });
     assert.ok(blocked.ok && blocked.value.override?.blocked === true);
     assert.deepEqual((await database.query("select active, revoked_at is not null as revoked from app.pilot_entitlement where profile_id = $1", [target.profile])).rows[0], { active: false, revoked: true });
@@ -150,17 +150,36 @@ test("the last Admin cannot be revoked or demoted, not even by themselves, and c
   });
 });
 
+test("the entitlement version only grows: a stale version from before a reset and recreate is a conflict", { skip: !canRun }, async () => {
+  await withStaff(async ({ web, person, staff, database }) => {
+    const admin = await person(), target = await person();
+    await staff(admin, "ADMIN");
+    const created = await setLimits(web, admin.profile, target.profile, 0);
+    assert.ok(created.ok && created.value.version === 1);
+    const reset = await setLimits(web, admin.profile, target.profile, 1, { reset: true });
+    assert.ok(reset.ok && reset.value.version === 2);
+    const recreated = await setLimits(web, admin.profile, target.profile, 2, { max: 3 });
+    assert.ok(recreated.ok && recreated.value.version === 3);
+    // An editor who read version 1 before the reset must not overwrite the recreated override.
+    assert.equal(code(await setLimits(web, admin.profile, target.profile, 1, { max: 99 })), "SR003");
+    assert.equal(code(await setLimits(web, admin.profile, target.profile, 1, { reset: true })), "SR003");
+    assert.equal((await database.query("select max_owned_projects as n from app.pilot_entitlement where profile_id = $1", [target.profile])).rows[0].n, 3);
+    assert.deepEqual(await audits(database, target.profile), ["ENTITLEMENT_SET", "ENTITLEMENT_RESET", "ENTITLEMENT_SET"]);
+    await assert.rejects(web.query("select * from app.account_entitlement_version"), { code: "42501" });
+  });
+});
+
 test("reset deletes the override, the account is back on the default plan, and it writes one audit row", { skip: !canRun }, async () => {
   await withStaff(async ({ web, person, staff, database }) => {
     const admin = await person(), target = await person();
     await staff(admin, "ADMIN");
     assert.ok((await setLimits(web, admin.profile, target.profile, 0, { max: 2, total: 50 })).ok);
     assert.deepEqual((await getMe(target.identity)).entitlement, { active: true, maxOwnedProjects: 2 });
-    assert.deepEqual(await setLimits(web, admin.profile, target.profile, 1, { reset: true }), { ok: true, value: { profileId: target.profile, version: 0, override: null } });
+    assert.deepEqual(await setLimits(web, admin.profile, target.profile, 1, { reset: true }), { ok: true, value: { profileId: target.profile, version: 2, override: null } });
     assert.equal((await database.query("select count(*)::int as n from app.pilot_entitlement where profile_id = $1", [target.profile])).rows[0].n, 0);
     assert.deepEqual((await getMe(target.identity)).entitlement, { active: true, maxOwnedProjects: 10 });
     assert.deepEqual(await audits(database, target.profile), ["ENTITLEMENT_SET", "ENTITLEMENT_RESET"]);
-    assert.equal(code(await setLimits(web, admin.profile, target.profile, 0, { reset: true })), "22023", "nothing to reset");
+    assert.equal(code(await setLimits(web, admin.profile, target.profile, 2, { reset: true })), "22023", "nothing to reset");
     assert.equal((await audits(database, target.profile)).length, 2);
   });
 });

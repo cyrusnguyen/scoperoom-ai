@@ -153,6 +153,7 @@ model UserProfile {
   updatedAt             DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   entitlement           PilotEntitlement?
   platformRole          PlatformRole?
+  entitlementVersion    AccountEntitlementVersion?
   ownedProjects         Project[]           @relation("project_owner")
   projectMemberships    ProjectMembership[]
   receipts              MutationReceipt[]
@@ -189,7 +190,6 @@ model PilotEntitlement {
   revokedAt         DateTime?   @map("revoked_at") @db.Timestamptz(6)
   aiTotalRunLimit   Int?        @map("ai_total_run_limit")
   aiDailyRunLimit   Int?        @default(30) @map("ai_daily_run_limit")
-  version           Int         @default(1)
   profile           UserProfile @relation(fields: [profileId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@map("pilot_entitlement")
@@ -206,6 +206,15 @@ model PlatformRole {
   profile    UserProfile @relation(fields: [profileId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@map("platform_role")
+  @@schema("app")
+}
+
+model AccountEntitlementVersion {
+  profileId String      @id @map("profile_id") @db.Uuid
+  version   Int
+  profile   UserProfile @relation(fields: [profileId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("account_entitlement_version")
   @@schema("app")
 }
 
