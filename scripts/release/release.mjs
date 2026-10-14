@@ -10,6 +10,14 @@ export function releaseSha(value) {
   return value;
 }
 
+/** A release origin is a bare https origin; a local or mistyped value (for example a copied local NEXT_PUBLIC_APP_URL) stops here. */
+export function releaseOrigin(name, value) {
+  let url;
+  try { url = new URL(value ?? ""); } catch { url = null; }
+  if (!url || url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash) throw new Error(`${name} must be the production site's bare https origin.`);
+  return url.origin;
+}
+
 /** pg reads sslrootcert from disk: both database URLs point at the CA file the release writes. */
 export function withRootCert(url, path) {
   const parsed = new URL(url);
@@ -103,7 +111,7 @@ const commands = {
   },
   /** The integration's sync-on-deploy is off for CLI deploys: register explicitly, retrying a cold start. */
   async sync() {
-    const url = `${need("WORKER_URL")}/api/inngest`;
+    const url = `${releaseOrigin("WORKER_URL", process.env.WORKER_URL)}/api/inngest`;
     for (let attempt = 1; attempt <= 5; attempt++) {
       // A network error or a hung cold start is a failed attempt, not the end of the release.
       const response = await fetch(url, { method: "PUT", signal: AbortSignal.timeout(30_000) }).catch((error) => ({ status: error.name, json: () => null }));
@@ -116,7 +124,7 @@ const commands = {
   },
   async checks() {
     const failures = [];
-    for (const [method, url, expected] of expectations(need("WEB_URL"), need("WORKER_URL"))) {
+    for (const [method, url, expected] of expectations(releaseOrigin("WEB_URL", process.env.WEB_URL), releaseOrigin("WORKER_URL", process.env.WORKER_URL))) {
       const response = await fetch(url, { method, redirect: "manual" });
       const body = expected === 200 ? await response.json().catch(() => null) : null;
       const ok = response.status === expected && (expected !== 200 || body?.status === "ok");
