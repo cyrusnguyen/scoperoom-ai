@@ -32,6 +32,9 @@ CREATE TABLE app.account_audit_event (
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE INDEX account_audit_event_target_created ON app.account_audit_event (target_profile_id, created_at DESC);
+CREATE INDEX account_audit_event_actor_created ON app.account_audit_event (actor_id, created_at DESC);
+-- The staff screens read each account's latest own project event (its last activity).
+CREATE INDEX audit_event_actor_created ON app.audit_event (actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
 
 -- The entitlement version lives apart from the override row so a reset (which deletes the row) never restarts it: it only grows,
 -- one step per successful staff change, and no row means version 0.
@@ -202,8 +205,9 @@ AS $$
     (SELECT coalesce(sum(reserved_runs + consumed_runs), 0)::integer FROM app.ai_budget_day
       WHERE owner_id = profile.id AND day = (transaction_timestamp() AT TIME ZONE 'UTC')::date),
     coalesce(entitlement.version, 0), coalesce(staff.version, 0),
-    greatest(profile.updated_at, (SELECT max(updated_at) FROM app.project WHERE owner_id = profile.id),
-      (SELECT (max(day)::timestamp AT TIME ZONE 'UTC') FROM app.ai_budget_day WHERE owner_id = profile.id)),
+    -- Last activity is what this account did itself (project events, AI runs it started, staff changes), not work others did in its projects.
+    greatest(profile.updated_at, (SELECT max(created_at) FROM app.audit_event WHERE actor_id = profile.id),
+      (SELECT max(created_at) FROM app.account_audit_event WHERE actor_id = profile.id)),
     profile.created_at
   FROM app.user_profile profile
   LEFT JOIN app.platform_role staff ON staff.profile_id = profile.id

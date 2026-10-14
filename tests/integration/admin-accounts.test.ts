@@ -300,3 +300,18 @@ test("a Moderator is refused STAFF_TARGET_FORBIDDEN on an Admin and on themselve
     assert.ok(accounts.every((account) => typeof account.createdAt === "string"));
   });
 });
+
+test("last activity is the account's own work: an editor's run in another owner's project moves the editor, not the owner", { skip: !canRun }, async () => {
+  await withStaff(async ({ person, staff, join, database }) => {
+    const admin = await person(), owner = await person(), editor = await person();
+    await staff(admin, "ADMIN");
+    const project = (await createProject(owner.identity, { name: "Shared work", key: randomUUID() })).id;
+    await join(owner.identity, project, editor.identity);
+    const activity = async (profileId: string) => (await readAccount(admin.identity, profileId)).account.lastActivityAt;
+    const ownerBefore = await activity(owner.profile);
+    const { runId } = await admitRun(editor.identity, project, await startInput(database, project), CONFIG);
+    const { rows: [run] } = await database.query<{ created_at: Date }>("select created_at from app.ai_run where id = $1", [runId]);
+    assert.equal(await activity(owner.profile), ownerBefore);
+    assert.ok(new Date((await activity(editor.profile))!).getTime() >= run!.created_at.getTime() - 1000);
+  });
+});
