@@ -89,7 +89,7 @@ Never run `db:reset` or destructive SQL against this target without a separate e
 
 Releases run in GitHub Actions (`.github/workflows/release.yml`). Every successful push CI on `main` queues a release that waits for the operator's approval in the protected `release` environment (required reviewer: the operator; deployment branches: `main` only). Approving it runs, in order:
 
-1. Resolve the commit: it must be on `main` and have a successful push CI run; an automatic release must also still be the tip of `main`, so re-running an old commit's CI cannot queue a rollback.
+1. Resolve the commit and check `WEB_URL` and `WORKER_URL` (`release.mjs preflight`) before any production change: the commit must be on `main` and have a successful push CI run; an automatic release must also still be the tip of `main`, so re-running an old commit's CI cannot queue a rollback.
 2. Migrate (`release.mjs db node scripts/db/migrate.mjs`; the CA is written to a file and the database URLs reach only this command).
 3. Set `AI_EXECUTION_BINDING` to the commit on both Vercel projects (`release.mjs binding`), after the migration so a failed one leaves it unchanged.
 4. Deploy the worker from a `git archive` export, and refuse a deployment that is not READY or carries a git ref (`release.mjs deploy worker`).

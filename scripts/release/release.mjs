@@ -74,6 +74,12 @@ async function vercel(method, path, body) {
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const commands = {
+  /** Before the migration or any Vercel change: a bad origin must stop the release while production is untouched. */
+  async preflight() {
+    releaseOrigin("WEB_URL", process.env.WEB_URL);
+    releaseOrigin("WORKER_URL", process.env.WORKER_URL);
+    console.log("preflight: both origins are bare https production origins");
+  },
   /** Runs one command with both database URLs pointing at a CA file, so the URLs never reach GITHUB_ENV or later steps. */
   async db(...command) {
     if (!command.length) throw new Error("Usage: release.mjs db <command...>");
@@ -141,6 +147,6 @@ const commands = {
 
 if (import.meta.main) {
   const [command, ...args] = process.argv.slice(2);
-  if (!Object.hasOwn(commands, command ?? "")) throw new Error("Usage: release.mjs db <command...> | binding | deploy <web|worker> | sync | checks");
+  if (!Object.hasOwn(commands, command ?? "")) throw new Error("Usage: release.mjs preflight | db <command...> | binding | deploy <web|worker> | sync | checks");
   await commands[command](...args);
 }

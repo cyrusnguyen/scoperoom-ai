@@ -61,6 +61,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.21.0
+      - name: Check the release origins before any production change
+        run: node scripts/release/release.mjs preflight
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm db:generate
       - run: npm install --global vercel@48.2.9
