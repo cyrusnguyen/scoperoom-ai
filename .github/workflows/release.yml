@@ -45,10 +45,15 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.21.0
       - name: Resolve and check the release commit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The origins are checked with main's script, before any production change and before switching to an older commit.
+          node scripts/release/release.mjs preflight
           sha="${REQUESTED_SHA:-$(git rev-parse origin/main)}"
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Release SHA must be a full commit id." >&2; exit 1; }
           git merge-base --is-ancestor "$sha" origin/main || { echo "Release SHA is not on main." >&2; exit 1; }
@@ -58,11 +63,6 @@ jobs:
           [[ "$runs" -gt 0 ]] || { echo "Release SHA has no successful push CI run." >&2; exit 1; }
           git checkout --quiet "$sha"
           echo "RELEASE_SHA=$sha" >> "$GITHUB_ENV"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 24.21.0
-      - name: Check the release origins before any production change
-        run: node scripts/release/release.mjs preflight
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm db:generate
       - run: npm install --global vercel@48.2.9
