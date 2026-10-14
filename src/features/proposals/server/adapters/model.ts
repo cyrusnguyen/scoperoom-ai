@@ -59,6 +59,14 @@ function normalize(error: unknown): ModelReply {
 /** `apiKey` is Google's (the original single provider); `anthropicApiKey` adds Anthropic. A provider without a key is not supported. */
 export type ModelAdapterOptions = { apiKey?: string; anthropicApiKey?: string; fetch?: typeof fetch };
 
+/**
+ * Anthropic's strict structured output compiles the schema into a grammar and refuses OUTPUT_SCHEMA as "Schema is too complex" (live,
+ * 2026-10-14), so Claude gets the schema in its system text instead. The provider schema only ever guided the model: validateResult is
+ * the authority either way. Without the grammar Claude may fence its JSON, so one surrounding fence is removed before parsing.
+ */
+const withSchema = (system: string, schema: Json) => `${system}\n\nThe reply is one JSON object and nothing else, matching this JSON Schema:\n${JSON.stringify(schema)}`;
+const unfenced = (text: string) => /^\s*```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(text)?.[1] ?? text;
+
 /** Claude models that accept `effort`: the Claude 5 generation (Opus, Sonnet, Haiku and Fable 5.x). */
 const CLAUDE_EFFORT = /^claude-(?:opus|sonnet|haiku|fable)-5(?:-|$)/;
 
@@ -90,9 +98,9 @@ export function createModelGateway({ apiKey, anthropicApiKey, fetch: transport =
       try {
         const result = await generateText({
           model: target.model,
-          system: request.systemInstruction,
+          system: target.name === "anthropic" ? withSchema(request.systemInstruction, request.outputSchema) : request.systemInstruction,
           prompt: `${request.prompt}\n\n<context>\n${JSON.stringify(request.context)}\n</context>`,
-          output: rawJson(request.outputSchema),
+          ...(target.name === "anthropic" ? {} : { output: rawJson(request.outputSchema) }),
           maxOutputTokens: request.maxOutputTokens,
           maxRetries: 0, // hidden SDK inference retries are never allowed: the SQL claim is the only authority for a call
           // ponytail: one fixed effort for the Claude 5 generation. Sonnet 5.5 always thinks and its thinking counts toward the same
@@ -106,7 +114,7 @@ export function createModelGateway({ apiKey, anthropicApiKey, fetch: transport =
         if (result.finishReason !== "stop") return { kind: "incomplete", requestId }; // length (truncated), error, other
         if (Buffer.byteLength(result.text, "utf8") > AI_LIMITS.resultBytes) return { kind: "incomplete", requestId };
         let output: unknown;
-        try { output = JSON.parse(result.text); } catch { return { kind: "incomplete", requestId }; }
+        try { output = JSON.parse(target.name === "anthropic" ? unfenced(result.text) : result.text); } catch { return { kind: "incomplete", requestId }; }
         const usage = reportedUsage(target.name, result.providerMetadata as Record<string, Record<string, unknown>> | undefined, result.usage);
         return { kind: "completed", output, requestId, usage };
       } catch (error) {

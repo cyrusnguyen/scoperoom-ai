@@ -273,7 +273,12 @@ test("an Anthropic model gets one bounded structured-output call and the same no
   const body = JSON.parse(calls[0]!.body);
   assert.equal(body.model, "claude-sonnet-5-5", "the provider prefix is not sent");
   assert.equal(body.max_tokens, AI_LIMITS.maxOutputTokens);
-  assert.equal(body.output_format?.type ?? body.output_config?.format?.type, "json_schema", "provider-side structured output is requested");
+  // Anthropic's strict structured output answers 400 "Schema is too complex" for OUTPUT_SCHEMA (live, 2026-10-14), so the schema
+  // travels in the system text instead and validateResult stays the authority.
+  assert.equal(body.output_format ?? body.output_config?.format, undefined, "no strict provider schema");
+  assert.equal(body.tools, undefined);
+  const system = typeof body.system === "string" ? body.system : (body.system as Array<{ text: string }>).map((block) => block.text).join("");
+  assert.ok(system.includes(JSON.stringify(OUTPUT_SCHEMA)), "the schema is stated in the system text");
   assert.equal(body.output_config?.effort, "low", "thinking shares max_tokens with the reply, so effort stays low");
   // Older Claude models reject the effort parameter after the claim, so only the Claude 5 generation gets it.
   const older = anthropicGateway(() => respond(claude('{"schemaVersion":1,"kind":"clarification","message":"hi"}')));
@@ -286,6 +291,9 @@ test("Anthropic refusal, truncation, malformed output and a reply without usage 
   assert.equal((await reply(claude("", "refusal"))).kind, "refused");
   assert.equal((await reply(claude('{"schemaVersion":1,"ope', "max_tokens"))).kind, "incomplete");
   assert.equal((await reply(claude("{not json"))).kind, "incomplete");
+  // Without a strict schema Claude may fence its JSON; one surrounding fence is accepted, anything else is not JSON.
+  assert.deepEqual(await reply(claude('```json\n{"schemaVersion":1,"kind":"clarification","message":"hi"}\n```')), { kind: "completed", output: { schemaVersion: 1, kind: "clarification", message: "hi" }, requestId: "msg-1", usage: { inputTokens: 12, outputTokens: 34 } });
+  assert.equal((await reply(claude('Here it is: {"schemaVersion":1}'))).kind, "incomplete");
   // The Anthropic SDK requires `usage` on every message, so a reply without it is malformed: the call may have run (unknown), never a zero count.
   assert.deepEqual(await reply(claude('{"a":1}', "end_turn", null)), { kind: "unknown" });
   const overloaded = anthropicGateway(() => respond({ type: "error", error: { type: "overloaded_error", message: "busy" } }, 529));
