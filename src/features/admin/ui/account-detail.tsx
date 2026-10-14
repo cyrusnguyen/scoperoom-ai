@@ -48,6 +48,8 @@ export default function AccountDetail({ profileId, role, viewerId }: { profileId
   const reload = useCallback(() => { setSaved(""); void load(); }, [load]);
 
   const account = detail?.account;
+  // The viewer's own account carries their current role: a self-demotion takes effect here at once, not after a reload.
+  const viewerRole = account?.profileId === viewerId ? account.staffRole ?? role : role;
   return <>
     <p className="admin-back"><Link href="/app/admin">Back to accounts</Link></p>
     {account ? <h1>{account.displayName}</h1> : <h1>Account</h1>}
@@ -56,10 +58,10 @@ export default function AccountDetail({ profileId, role, viewerId }: { profileId
     {error && <div className="error-message" role="alert"><p>{error}</p><button type="button" className="button small" disabled={reloading} onClick={reload}>Retry</button></div>}
     {!account ? (!error && <p className="admin-note">Loading account…</p>) : <>
       <Summary account={account} now={now} />
-      {limitsLocked(role, viewerId, account)
+      {limitsLocked(viewerRole, viewerId, account)
         ? <section className="admin-section" aria-labelledby="limits-heading"><h2 id="limits-heading">Limits</h2><p className="admin-note">{MODERATOR_SCOPE_NOTE}</p></section>
         : <LimitsEditor key={`limits-${account.entitlementVersion}`} account={account} defaults={detail.defaultLimits} reloading={reloading} onSaved={saveDone} onReload={reload} />}
-      {role === "ADMIN" && <RoleEditor key={`role-${account.roleVersion}`} account={account} reloading={reloading} onSaved={saveDone} onReload={reload} />}
+      {viewerRole === "ADMIN" && <RoleEditor key={`role-${account.roleVersion}`} account={account} reloading={reloading} onSaved={saveDone} onReload={reload} />}
       <History audit={detail.audit} />
     </>}
   </>;

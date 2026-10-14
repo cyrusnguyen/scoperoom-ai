@@ -209,6 +209,22 @@ test("the same Idempotency-Key replays the stored result and writes one audit ro
   });
 });
 
+test("an Admin who demoted themselves still recovers that change's stored success with the same key", { skip: !canRun }, async () => {
+  await withStaff(async ({ person, staff, database }) => {
+    const admin = await person(), other = await person();
+    await staff(admin, "ADMIN"); await staff(other, "ADMIN");
+    const demote = roleBody(1, "MODERATOR");
+    const first = await setRole(admin.identity, admin.profile, demote);
+    // The response was lost: the retry, now as a Moderator, gets the stored success, not ADMIN_ROLE_REQUIRED.
+    const retry = await setRole(admin.identity, admin.profile, { ...demote });
+    assert.deepEqual([first.replayed, retry.replayed], [false, true]);
+    assert.deepEqual(withoutReplay(retry), withoutReplay(first));
+    // A new role change still needs the Admin role.
+    await assert.rejects(setRole(admin.identity, admin.profile, roleBody(2, "ADMIN")), refusal("ADMIN_ROLE_REQUIRED"));
+    assert.deepEqual(await audits(database, admin.profile), ["ROLE_SET"]);
+  });
+});
+
 test("invalid bodies are INVALID_INPUT and write nothing", { skip: !canRun }, async () => {
   await withStaff(async ({ person, staff, database }) => {
     const admin = await person(), target = await person();

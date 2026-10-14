@@ -19,7 +19,7 @@ function stored(value: Prisma.JsonValue): Change {
  * The actor is exclusive-locked first, so two requests with one key serialise and the second replays instead of conflicting.
  * A conflict answers with the version now current, read after the failed transaction ended.
  */
-async function staffWrite(identity: ProjectIdentity, target: string, key: string, operation: string, hash: string, requireAdmin: boolean,
+async function staffWrite(identity: ProjectIdentity, target: string, key: string, operation: string, hash: string,
   versionOf: "entitlement_version" | "role_version", call: (tx: Transaction, actorId: string, requestId: string) => Promise<Prisma.JsonValue>) {
   return withDatabase(async (database) => {
     const profile = await profileFor(database, identity);
@@ -29,10 +29,10 @@ async function staffWrite(identity: ProjectIdentity, target: string, key: string
         const receipt = await findReceipt(tx, profile.id, "USER", profile.id, key);
         if (receipt) {
           checkReceipt(receipt, operation, hash);
-          // A receipt is only a lookup: the caller must still be staff (an Admin, for roles) to see the stored result.
+          // A receipt is only a lookup of the caller's own earlier result: they must still be staff to see it. An Admin who demoted
+          // themselves to Moderator still recovers that change's stored success; only a new role change needs the Admin role.
           const [current] = await tx.$queryRaw<Array<{ role: string | null }>>`SELECT app.staff_role(${profile.id}::uuid) AS role`;
           if (!current?.role) throw new ProjectError("NOT_FOUND");
-          if (requireAdmin && current.role !== "ADMIN") throw new ProjectError("ADMIN_ROLE_REQUIRED");
           return { ...stored(receipt.result), replayed: true };
         }
         const value = stored(await call(tx, profile.id, randomUUID()));
@@ -60,7 +60,7 @@ export async function setEntitlement(identity: ProjectIdentity, profileId: strin
   const { key, ...body } = v;
   const hash = requestHash(operation, { profileId: target, ...body });
   const limits = v.reset ? null : v;
-  return staffWrite(identity, target, key, operation, hash, false, "entitlement_version", async (tx, actorId, requestId) => {
+  return staffWrite(identity, target, key, operation, hash, "entitlement_version", async (tx, actorId, requestId) => {
     const [row] = await tx.$queryRaw<Array<{ result: Prisma.JsonValue }>>`
       SELECT app.admin_set_entitlement(${actorId}::uuid, ${target}::uuid, ${limits?.maxOwnedProjects ?? null}::integer, ${limits?.aiTotalRuns ?? null}::integer,
         ${limits?.aiDailyRuns ?? null}::integer, ${limits?.expiresAt ?? null}::timestamptz, ${limits?.blocked ?? false}::boolean, ${v.reset}::boolean,
@@ -78,7 +78,7 @@ export async function setRole(identity: ProjectIdentity, profileId: string, inpu
   const operation = "ADMIN_SET_ROLE_V1";
   const { key, ...body } = v;
   const hash = requestHash(operation, { profileId: target, ...body });
-  return staffWrite(identity, target, key, operation, hash, true, "role_version", async (tx, actorId, requestId) => {
+  return staffWrite(identity, target, key, operation, hash, "role_version", async (tx, actorId, requestId) => {
     const [row] = await tx.$queryRaw<Array<{ result: Prisma.JsonValue }>>`
       SELECT app.admin_set_role(${actorId}::uuid, ${target}::uuid, ${v.role}::text, ${v.reason}::text, ${v.expectedVersion}::integer, ${requestId}::uuid) AS result`;
     return row!.result;
