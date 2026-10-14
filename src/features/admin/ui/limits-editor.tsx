@@ -88,13 +88,14 @@ function ResetDialog({ url, version, reloading, onSaved, onReload, onClose }: { 
   const change = useChange(async () => { await onSaved(); onClose(); });
   const length = reasonLength(reason);
   const locked = change.busy || change.uncertain;
-  const close = change.busy ? () => {} : onClose;
+  // An uncertain result keeps the request's key for Retry: closing would lose it, so the dialog stays open until it is settled.
+  const close = locked ? () => {} : onClose;
   const submit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     void change.send(url, "PATCH", { expectedVersion: version, reason: reason.trim(), reset: true });
   };
   return <Dialog title="Reset to the default plan?" onClose={close} footer={<>
-    <CancelFocus label="Cancel" onClick={close} disabled={change.busy} />
+    <CancelFocus label="Cancel" onClick={close} disabled={locked} />
     <button type="submit" form="reset-form" className="button danger" disabled={change.busy || !length}>{change.busy ? "Working…" : change.uncertain ? "Retry" : "Reset"}</button>
   </>}>
     <form id="reset-form" onSubmit={submit} noValidate>

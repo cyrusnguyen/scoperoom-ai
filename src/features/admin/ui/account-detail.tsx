@@ -46,6 +46,12 @@ export default function AccountDetail({ profileId, role, viewerId }: { profileId
     setSaved(refreshed ? "Saved." : "Saved. The latest details could not be loaded.");
   }, [load]);
   const reload = useCallback(() => { setSaved(""); void load(); }, [load]);
+  // A change to the viewer's own role: when the read that follows fails, they are most likely no longer staff, so leave the
+  // staff screen for the workspace (the server gate decides what they may see there).
+  const ownRoleSaved = useCallback(async () => {
+    if (await load()) setSaved("Saved.");
+    else window.location.assign("/app");
+  }, [load]);
 
   const account = detail?.account;
   // The viewer's own account carries their current role: a self-demotion takes effect here at once, not after a reload.
@@ -61,7 +67,7 @@ export default function AccountDetail({ profileId, role, viewerId }: { profileId
       {limitsLocked(viewerRole, viewerId, account)
         ? <section className="admin-section" aria-labelledby="limits-heading"><h2 id="limits-heading">Limits</h2><p className="admin-note">{MODERATOR_SCOPE_NOTE}</p></section>
         : <LimitsEditor key={`limits-${account.entitlementVersion}`} account={account} defaults={detail.defaultLimits} reloading={reloading} onSaved={saveDone} onReload={reload} />}
-      {viewerRole === "ADMIN" && <RoleEditor key={`role-${account.roleVersion}`} account={account} reloading={reloading} onSaved={saveDone} onReload={reload} />}
+      {viewerRole === "ADMIN" && <RoleEditor key={`role-${account.roleVersion}`} account={account} reloading={reloading} onSaved={account.profileId === viewerId ? ownRoleSaved : saveDone} onReload={reload} />}
       <History audit={detail.audit} />
     </>}
   </>;
