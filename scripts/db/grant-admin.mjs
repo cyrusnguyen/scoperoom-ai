@@ -16,7 +16,8 @@ export function parseEmail(value) {
 }
 
 /** Grants the first Admin on a connection that can read auth.users (the bootstrap `postgres` role). Returns the profile id. */
-export async function grantFirstAdmin(client, email) {
+export async function grantFirstAdmin(client, rawEmail) {
+  const email = parseEmail(rawEmail); // every caller gets the same trimmed, lower-cased match
   await client.query("BEGIN");
   try {
     // The same transaction lock app.admin_set_role takes: serialises with role changes and with a second run of this script.
