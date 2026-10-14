@@ -294,3 +294,34 @@ test("a limit lowered while an admission waits is the limit that admission enfor
     assert.equal((await database.query("select count(*)::int n from app.ai_run where project_id = $1", [project])).rows[0].n, 0);
   });
 });
+
+test("a viewer's refused admission does not hold the owner's lock while it waits for the project", { skip: !canRun }, async () => {
+  await withStaff(async ({ person, join, database }) => {
+    const owner = await person(), viewer = await person();
+    const project = (await createProject(owner.identity, { name: "Viewer waits", key: randomUUID() })).id;
+    await join(owner.identity, project, viewer.identity);
+    await database.query("update app.project_membership set role = 'VIEWER' where project_id = $1 and profile_id = $2", [project, viewer.profile]);
+    const input = await startInput(database, project);
+    const holder = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
+    const probe = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
+    await holder.connect(); await probe.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT id FROM app.project WHERE id = $1 FOR UPDATE", [project]);
+      const admission = admitRun(viewer.identity, project, input, CONFIG);
+      const outcome = assert.rejects(admission, refused("FORBIDDEN"));
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      // The owner's capacity lock stays free for staff changes, project creation and the owner's other admissions.
+      await probe.query("BEGIN");
+      await probe.query("SET LOCAL lock_timeout = '2s'");
+      await probe.query("SELECT app.lock_pilot_entitlement($1)", [owner.profile]);
+      await probe.query("COMMIT");
+      await holder.query("COMMIT");
+      await outcome;
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await probe.query("ROLLBACK").catch(() => undefined);
+      await holder.end(); await probe.end();
+    }
+  });
+});

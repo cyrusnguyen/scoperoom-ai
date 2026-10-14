@@ -138,9 +138,10 @@ export async function admitRun(identity: ProjectIdentity, projectId: string, inp
       await lockActor(tx, profile.id, identity.authUserId, true);
       // The owner's limits are read under the lock staff limit changes take, so a change cannot interleave with this admission.
       // ownerId is immutable, so an unlocked read may choose the guard before the project lock (lock order 2 then 3, as restore does).
-      // Only a current member takes that owner-wide lock; requireMember below stays the authoritative check under the project lock.
+      // Only a current member who can edit takes that owner-wide lock; the checks below under the project lock stay authoritative.
       const owner = await tx.project.findUnique({ where: { id: projectId }, select: { id: true, ownerId: true } });
-      if (owner && await projectRole(tx, owner, profile.id)) await lockOwnerCapacity(tx, owner.ownerId);
+      const early = owner && await projectRole(tx, owner, profile.id);
+      if (early === "OWNER" || early === "EDITOR") await lockOwnerCapacity(tx, owner!.ownerId);
       let project = await lockProject(tx, profile.id, projectId);
       const role = requireMember(project);
       const receipt = await findReceipt(tx, profile.id, "PROJECT", project.id, input.key);
