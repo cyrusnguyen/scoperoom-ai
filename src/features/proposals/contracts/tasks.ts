@@ -131,6 +131,10 @@ export type RunView = RunSummary & {
   capture: CapturedInput | null; result: ValidatedProposal | null; resultHash: string | null; attempts: RunAttemptView[];
   applicability: RunApplicability; applicabilityReasons: RunApplicabilityReason[]; diff: ProposalDiff | null; application: RunApplication | null; expiresAt: string | null;
 };
+/** One AI limit: runs counted against it (consumed plus still reserved) and what is left; null limit and left mean unlimited. */
+export type AllowanceCount = { used: number; limit: number | null; left: number | null };
+/** The project owner's AI allowance, which every member's AI request spends (admission charges the owner). */
+export type AiAllowance = { allowed: boolean; viewerIsOwner: boolean; total: AllowanceCount; today: AllowanceCount };
 export type RunPage = { runs: RunSummary[]; nextCursor: string | null };
 
 /** Capture projection only: positions, origin and trust absent from the capture are never invented as diff facts. */
