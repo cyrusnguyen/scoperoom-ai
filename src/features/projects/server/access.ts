@@ -149,8 +149,13 @@ export async function lockOwnerCapacity(tx: Transaction, ownerId: string) {
 
 /** The account's plan, with unlimited AI for an active Admin or Moderator, read in the caller's transaction. Pass the project owner for AI and capacity. */
 export async function ownerPlan(tx: Transaction, profileId: string) {
+  return accountPlan(await tx.pilotEntitlement.findUnique({ where: { profileId } }), new Date(), process.env, (await staffRole(tx, profileId)) !== null);
+}
+
+/** The account's active platform role, or null. */
+export async function staffRole(tx: Transaction, profileId: string): Promise<"ADMIN" | "MODERATOR" | null> {
   const [staff] = await tx.$queryRaw<Array<{ role: string | null }>>`SELECT app.staff_role(${profileId}::uuid) AS role`;
-  return accountPlan(await tx.pilotEntitlement.findUnique({ where: { profileId } }), new Date(), process.env, staff?.role != null);
+  return staff?.role === "ADMIN" || staff?.role === "MODERATOR" ? staff.role : null;
 }
 
 /** Call after lockOwnerCapacity in the same READ COMMITTED transaction so the count includes every committed project. */

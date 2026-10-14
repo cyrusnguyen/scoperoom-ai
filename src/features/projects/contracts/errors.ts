@@ -36,6 +36,8 @@ export const projectErrors = {
   AI_BUDGET_EXCEEDED: { status: 429, message: "This project owner has used the daily AI request limit. It resets at 00:00 UTC." },
   AI_ALLOWANCE_EXCEEDED: { status: 429, message: "This project owner has used all the AI requests included in their plan." },
   RATE_LIMITED: { status: 429, message: "Too many AI requests. Wait a minute and try again." },
+  ADMIN_ROLE_REQUIRED: { status: 403, message: "Only Admins can change roles." },
+  LAST_ADMIN: { status: 409, message: "At least one Admin must remain." },
   EXPORT_REVISION_CHANGED: { status: 409, message: "The saved flow changed. Refresh and prepare the export again." },
 } as const;
 
