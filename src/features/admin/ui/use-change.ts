@@ -37,6 +37,9 @@ export function useChange(onSaved: () => Promise<void>) {
     setUncertain(result.uncertain);
     if (result.uncertain) { setError("We could not confirm this change. Retry uses the same request."); return false; }
     key.current = null;
+    // Staff writes answer 404 only to a caller who is no longer staff (accounts are never deleted), including a retry of their own
+    // self-revocation: leave the staff screen for the workspace, where the server gate decides what they see.
+    if (result.status === 404) { window.location.assign("/app"); return false; }
     if (result.code === "CONFLICT") setConflict(true); else setError(result.message);
     return false;
   }
