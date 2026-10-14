@@ -49,7 +49,7 @@ test.describe("staff screens", () => {
 
   async function search(page: Page, term: string) {
     await page.getByLabel("Search by name").fill(term);
-    await page.getByLabel("Search by name").press("Enter");
+    await page.getByRole("button", { name: "Search" }).click();
   }
 
   test("an Admin searches, opens an account, raises its AI total, sees the history and grants Moderator", async ({ page }) => {

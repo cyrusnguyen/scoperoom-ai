@@ -14,8 +14,8 @@
 .admin-saved { min-height: 1.5em; margin-bottom: var(--space-3); color: var(--success-foreground); }
 .admin-saved:not(:empty) { padding: 8px 12px; border-left: 2px solid var(--success-border); background: var(--success-background); }
 
-.admin-search { margin-bottom: var(--space-4); }
-.admin-search input { width: 100%; max-width: 28rem; }
+.admin-search { display: flex; gap: var(--space-2); max-width: 34rem; margin-bottom: var(--space-4); }
+.admin-search input { flex: 1; min-width: 0; }
 
 .admin-table-scroll { width: 100%; margin-bottom: var(--space-4); overflow-x: auto; border: var(--panel-border); border-radius: var(--radius-card); }
 .admin-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px; }

@@ -49,7 +49,7 @@ export default function AccountsView() {
     return () => { window.clearTimeout(timer); controller.current?.abort(); };
   }, [load]);
 
-  // Search as the name is typed, like the app's other filters (a short pause first); Enter searches at once.
+  // Search as the name is typed, like the app's other filters (a short pause first); Enter or the Search button searches at once.
   const search = useCallback((value: string) => {
     const query = value.trim();
     setApplied(query);
@@ -68,7 +68,8 @@ export default function AccountsView() {
     <h1>Accounts</h1>
     <form className="admin-search" role="search" onSubmit={submit}>
       <label className="sr-only" htmlFor="admin-search">Search by name</label>
-      <input id="admin-search" type="search" value={input} maxLength={SEARCH_MAX} autoComplete="off" placeholder="Search by name" onChange={(event) => setInput(event.target.value)} />
+      <input id="admin-search" type="search" value={input} maxLength={SEARCH_MAX} autoComplete="off" placeholder="Search by name" enterKeyHint="search" onChange={(event) => setInput(event.target.value)} />
+      <button type="submit" className="button"><Icon name="search" /><span>Search</span></button>
     </form>
     {state === "loading" ? <p className="admin-note" role="status">Loading accounts…</p>
     : state === "error" ? <div className="error-message" role="alert"><p>{error}</p><button type="button" className="button small" onClick={() => void load(applied)}>Retry</button></div>
