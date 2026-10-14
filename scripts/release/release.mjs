@@ -1,6 +1,7 @@
 // Production release steps for .github/workflows/release.yml (and an operator shell). Prints names, ids and statuses, never values.
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { join } from "node:path";
 
 const VERCEL = "https://api.vercel.com";
@@ -8,6 +9,17 @@ const VERCEL = "https://api.vercel.com";
 export function releaseSha(value) {
   if (!/^[0-9a-f]{40}$/.test(value ?? "")) throw new Error("The release SHA must be a full 40-character lower-case commit id.");
   return value;
+}
+
+/** A release origin is a bare https origin; a local or mistyped value (for example a copied local NEXT_PUBLIC_APP_URL) stops here. */
+export function releaseOrigin(name, value) {
+  let url;
+  try { url = new URL(value ?? ""); } catch { url = null; }
+  // A production origin is a domain name: any IP literal (every loopback spelling included) and localhost names are refused.
+  const host = url?.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, ""); // brackets of an IPv6 literal, and a fully qualified trailing dot
+  const local = url && (isIP(host) !== 0 || /^(?:.*\.)?localhost$/.test(host));
+  if (!url || local || url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash) throw new Error(`${name} must be the production site's bare https origin.`);
+  return url.origin;
 }
 
 /** pg reads sslrootcert from disk: both database URLs point at the CA file the release writes. */
@@ -62,6 +74,12 @@ async function vercel(method, path, body) {
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const commands = {
+  /** Before the migration or any Vercel change: a bad origin must stop the release while production is untouched. */
+  async preflight() {
+    releaseOrigin("WEB_URL", process.env.WEB_URL);
+    releaseOrigin("WORKER_URL", process.env.WORKER_URL);
+    console.log("preflight: both origins are bare https production origins");
+  },
   /** Runs one command with both database URLs pointing at a CA file, so the URLs never reach GITHUB_ENV or later steps. */
   async db(...command) {
     if (!command.length) throw new Error("Usage: release.mjs db <command...>");
@@ -103,7 +121,7 @@ const commands = {
   },
   /** The integration's sync-on-deploy is off for CLI deploys: register explicitly, retrying a cold start. */
   async sync() {
-    const url = `${need("WORKER_URL")}/api/inngest`;
+    const url = `${releaseOrigin("WORKER_URL", process.env.WORKER_URL)}/api/inngest`;
     for (let attempt = 1; attempt <= 5; attempt++) {
       // A network error or a hung cold start is a failed attempt, not the end of the release.
       const response = await fetch(url, { method: "PUT", signal: AbortSignal.timeout(30_000) }).catch((error) => ({ status: error.name, json: () => null }));
@@ -116,7 +134,7 @@ const commands = {
   },
   async checks() {
     const failures = [];
-    for (const [method, url, expected] of expectations(need("WEB_URL"), need("WORKER_URL"))) {
+    for (const [method, url, expected] of expectations(releaseOrigin("WEB_URL", process.env.WEB_URL), releaseOrigin("WORKER_URL", process.env.WORKER_URL))) {
       const response = await fetch(url, { method, redirect: "manual" });
       const body = expected === 200 ? await response.json().catch(() => null) : null;
       const ok = response.status === expected && (expected !== 200 || body?.status === "ok");
@@ -129,6 +147,6 @@ const commands = {
 
 if (import.meta.main) {
   const [command, ...args] = process.argv.slice(2);
-  if (!Object.hasOwn(commands, command ?? "")) throw new Error("Usage: release.mjs db <command...> | binding | deploy <web|worker> | sync | checks");
+  if (!Object.hasOwn(commands, command ?? "")) throw new Error("Usage: release.mjs preflight | db <command...> | binding | deploy <web|worker> | sync | checks");
   await commands[command](...args);
 }

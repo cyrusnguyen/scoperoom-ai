@@ -1,5 +1,13 @@
 # Progress tracker
 
+## First automated releases (2026-10-14)
+
+The `release` environment was created (operator as required reviewer, `main` only) and filled by the operator. The first release (`63ae6b3`) stopped twice at its first Vercel call with 404: the Vercel token was limited to specific projects and could not see the worker project; the operator widened its access. The release of `8f9e240` (the release workflow and the Anthropic provider) then applied migration `20261014000000_ai_preclaim_authority`, set the binding, deployed both projects, registered the worker with Inngest and verified the schedule, but its edge checks reached a local address: `WEB_URL` had been filled from a local template value. With `WEB_URL` corrected, the re-run passed every step: no pending migrations (34), edge checks 14/14, non-AI smoke in 40.5 s. Production runs `8f9e240` with `AI_MODEL` still a bare Gemini id.
+
+Follow-up (branch `fix/release-hardening`): `release.mjs` refuses a `WEB_URL` or `WORKER_URL` that is not a bare https origin before any request (`tests/release.test.ts` 7/7), and `VERCEL_ORG_ID` moves from a variable, which job logs print, to a secret passed only to the three Vercel steps. The operator stores the secret before this merges.
+
+Next: the operator deletes the Trigger project and revokes the Trigger token printed in session output, and corrects `NEXT_PUBLIC_APP_URL` in `.env.hosted.local`. Switching to Claude: `ANTHROPIC_API_KEY` on the worker project, then `AI_MODEL=anthropic/claude-sonnet-5-5` on the web project, then a manual release with the AI smoke under an authorized budget, checking output tokens, finish reasons and schema acceptance.
+
 ## Anthropic provider (2026-10-14)
 
 Branch `feat/anthropic-provider` from main `63ae6b3`. User decisions: AI runs are not limited to Google; `AI_MODEL` names the provider (`anthropic/<id>` or `google/<id>`; an id with no `/` stays Google, so the current production value is unchanged), one provider at a time; default Claude model `claude-sonnet-5-5`; `ANTHROPIC_API_KEY` is worker-only.
