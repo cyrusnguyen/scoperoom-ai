@@ -139,7 +139,8 @@ test("the last Admin cannot be revoked or demoted, not even by themselves, and c
     try {
       const results = await Promise.all([setRole(web, first.profile, second.profile, null, 1), setRole(other, second.profile, first.profile, null, 1)]);
       assert.equal(results.filter((result) => result.ok).length, 1, JSON.stringify(results));
-      assert.ok(results.some((result) => !result.ok && ["SR002", "SR004"].includes(result.code)));
+      // The loser is refused as no longer staff: SR001 when the winner committed before its call began, SR002 when it waited on the lock.
+      assert.ok(results.some((result) => !result.ok && ["SR001", "SR002"].includes(result.code)), JSON.stringify(results));
     } finally { await other.end(); }
     const { rows: remaining } = await database.query<{ profile_id: string }>("select profile_id from app.platform_role where role = 'ADMIN' and revoked_at is null");
     assert.equal(remaining.length, 1);
