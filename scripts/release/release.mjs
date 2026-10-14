@@ -29,6 +29,11 @@ export function expectations(web, worker) {
   ];
 }
 
+/** A GitHub Actions mask command; outside Actions it would print the secret itself, so it is empty there. */
+export function maskCommand(value, actions = process.env.GITHUB_ACTIONS === "true") {
+  return actions ? `::add-mask::${value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}` : "";
+}
+
 export function synced(status, body) {
   return status === 200 && body?.message === "Successfully registered";
 }
@@ -67,7 +72,8 @@ const commands = {
     const env = { ...process.env };
     for (const name of ["SCOPEROOM_BOOTSTRAP_DATABASE_URL", "MIGRATION_DATABASE_URL"]) {
       env[name] = withRootCert(need(name), path);
-      console.log(`::add-mask::${env[name]}`);
+      const mask = maskCommand(env[name]);
+      if (mask) console.log(mask);
     }
     const result = spawnSync(command[0], command.slice(1), { stdio: "inherit", env });
     if (result.status !== 0) throw new Error(`${command.join(" ")} failed (exit ${result.status}).`);
@@ -99,8 +105,9 @@ const commands = {
   async sync() {
     const url = `${need("WORKER_URL")}/api/inngest`;
     for (let attempt = 1; attempt <= 5; attempt++) {
-      const response = await fetch(url, { method: "PUT" });
-      const body = await response.json().catch(() => null);
+      // A network error or a hung cold start is a failed attempt, not the end of the release.
+      const response = await fetch(url, { method: "PUT", signal: AbortSignal.timeout(30_000) }).catch((error) => ({ status: error.name, json: () => null }));
+      const body = await Promise.resolve(response.json()).catch(() => null);
       if (synced(response.status, body)) return console.log("inngest sync: registered");
       console.log(`inngest sync attempt ${attempt}: ${response.status} ${body?.message ?? ""}`);
       if (attempt < 5) await wait(5_000);

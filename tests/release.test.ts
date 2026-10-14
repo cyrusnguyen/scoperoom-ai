@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deploymentProblem, expectations, releaseSha, synced, withRootCert } from "../scripts/release/release.mjs";
+import { deploymentProblem, expectations, maskCommand, releaseSha, synced, withRootCert } from "../scripts/release/release.mjs";
+
+test("a database URL is masked only inside GitHub Actions, escaped so the runner masks the printed form", () => {
+  const url = "postgresql://u:p%25w@db.example.test:5432/postgres?sslrootcert=%2Ftmp%2Fca.crt";
+  assert.equal(maskCommand(url, false), "", "an operator shell must not print the URL");
+  assert.equal(maskCommand(url, true), "::add-mask::postgresql://u:p%2525w@db.example.test:5432/postgres?sslrootcert=%252Ftmp%252Fca.crt");
+  assert.equal(maskCommand("a\nb", true), "::add-mask::a%0Ab");
+});
 
 test("database URLs point at the written CA file and keep their other parameters", () => {
   const url = withRootCert("postgresql://u:p@db.example.test:5432/postgres?sslmode=require&sslrootcert=C%3A%2Fold.crt", "/tmp/ca.crt");
