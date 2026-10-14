@@ -62,11 +62,11 @@ export default function LimitsEditor({ account, defaults, reloading, onSaved, on
       <div className="field">
         <label htmlFor="limit-expires">Expires</label>
         <input id="limit-expires" type="date" value={expires} disabled={locked} aria-describedby="limit-expires-hint" onChange={(event) => setExpires(event.target.value)} />
-        <small id="limit-expires-hint">Optional. Ends at the end of that day, UTC. After that the default plan applies.</small>
+        <small id="limit-expires-hint">{blocked ? "Optional. Expiry applies to custom limits only: a block stays until it is removed here." : "Optional. Ends at the end of that day, UTC. After that the default plan applies."}</small>
       </div>
       <div className="field">
         <label className="admin-check"><input type="checkbox" checked={blocked} disabled={locked} aria-describedby="limit-blocked-hint" onChange={(event) => setBlocked(event.target.checked)} />Blocked</label>
-        <small id="limit-blocked-hint">A blocked account cannot own projects or run AI.</small>
+        <small id="limit-blocked-hint">A blocked account cannot own projects or run AI. A block does not expire.</small>
       </div>
       <div className="field">
         <label htmlFor="limits-reason">Reason</label>
