@@ -135,8 +135,7 @@ export type RunView = RunSummary & {
 export type AllowanceCount = { used: number; limit: number | null; left: number | null };
 /** The project owner's AI allowance, which every member's AI request spends (admission charges the owner). */
 export type AiAllowance = { allowed: boolean; viewerIsOwner: boolean; total: AllowanceCount; today: AllowanceCount };
-/** `allowance` (first page only): the project owner's AI allowance, which every member's request spends. */
-export type RunPage = { runs: RunSummary[]; nextCursor: string | null; allowance?: AiAllowance };
+export type RunPage = { runs: RunSummary[]; nextCursor: string | null };
 
 /** Capture projection only: positions, origin and trust absent from the capture are never invented as diff facts. */
 export type ProposalDiff = {

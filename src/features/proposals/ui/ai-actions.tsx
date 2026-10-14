@@ -11,7 +11,30 @@ import { RunCard } from "./run-card";
 import { RunHistory } from "./run-history";
 import { acknowledgedInstruction, retryStartRequest } from "./ai-submit";
 import { allowanceText } from "../domain/allowance";
-import type { RunPage, RunView, StartRunInput, TaskKind } from "../contracts/tasks";
+import type { AiAllowance, RunPage, RunView, StartRunInput, TaskKind } from "../contracts/tasks";
+
+/**
+ * The owner's AI allowance is owner-wide: a run in another of their projects or the UTC day rollover changes it without this
+ * project's AI revision moving. So it is read on its own: on mount, whenever the runs page changes, on focus and every minute while
+ * visible. Advisory only: admission rechecks the limits, and only the latest read is shown.
+ */
+function useOwnerAllowance(projectId: string, page: RunPage) {
+  const [allowance, setAllowance] = useState<AiAllowance | null>(null);
+  useEffect(() => {
+    let live = true, latest = 0;
+    const read = async () => {
+      const ticket = ++latest;
+      const result = await apiRead<AiAllowance>(`/api/projects/${projectId}/ai-allowance`);
+      if (live && ticket === latest && result.ok) setAllowance(result.data);
+    };
+    void read();
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void read(); }, 60_000);
+    const onFocus = () => void read();
+    window.addEventListener("focus", onFocus);
+    return () => { live = false; window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
+  }, [projectId, page]);
+  return allowance;
+}
 
 const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -20,6 +43,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
   const { revalidate, setActiveJobVisible, beforeWrite, fence, status, failures } = useSync();
   const [pageState, setPageState] = useState({ page: { runs: [], nextCursor: null } as RunPage, version: 0 });
   const page = pageState.page;
+  const allowance = useOwnerAllowance(studio.projectId, page);
   const [reads, setReads] = useState<Record<"page" | "current" | "history", ReadState>>({ page: "uninitialized", current: "uninitialized", history: "uninitialized" });
   const [run, setRun] = useState<RunView | null>(null);
   const [historyRun, setHistoryRun] = useState<RunView | null>(null);
@@ -237,7 +261,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
 
   return <div className="ai-panel">
     <section className="ai-action" aria-labelledby="ai-action-heading">
-      <header className="ai-heading"><span className="ai-mark"><Icon name="ai" size={20} /></span><div><h2 id="ai-action-heading">AI actions</h2><p>Turn an idea into a flow.</p>{page.allowance && <p className="ai-allowance" data-exhausted={page.allowance.allowed && page.allowance.total.left !== 0 && page.allowance.today.left !== 0 ? undefined : "true"}>{allowanceText(page.allowance)}</p>}</div></header>
+      <header className="ai-heading"><span className="ai-mark"><Icon name="ai" size={20} /></span><div><h2 id="ai-action-heading">AI actions</h2><p>Turn an idea into a flow.</p>{allowance && <p className="ai-allowance" data-exhausted={allowance.allowed && allowance.total.left !== 0 && allowance.today.left !== 0 ? undefined : "true"}>{allowanceText(allowance)}</p>}</div></header>
       <div className="ai-run-tabs" role="tablist" aria-label="AI runs">{(["current", "history"] as const).map(id => <button key={id} type="button" role="tab" id={`ai-tab-${id}`} aria-controls={`ai-panel-${id}`} tabIndex={runTab === id ? 0 : -1} aria-selected={runTab === id} onClick={() => setRunTab(id)} onKeyDown={event => {
         const next = event.key === "ArrowRight" || event.key === "ArrowLeft" ? id === "current" ? "history" : "current" : event.key === "Home" ? "current" : event.key === "End" ? "history" : null;
         if (next) { event.preventDefault(); event.stopPropagation(); setRunTab(next); document.getElementById(`ai-tab-${next}`)?.focus(); }
@@ -290,7 +314,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
       setPageState((current) => {
         if (current.version !== version || current.page.nextCursor !== cursor) return current;
         const seen = new Set(current.page.runs.map((item) => item.id));
-        const next = { ...current.page, runs: [...current.page.runs, ...result.data.runs.filter((item) => !seen.has(item.id))], nextCursor: result.data.nextCursor }; // the allowance comes with the first page
+        const next = { runs: [...current.page.runs, ...result.data.runs.filter((item) => !seen.has(item.id))], nextCursor: result.data.nextCursor };
         return { page: next, version: current.version + 1 };
       });
     } finally {

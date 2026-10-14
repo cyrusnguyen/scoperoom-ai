@@ -2,7 +2,7 @@ import { Prisma } from "../../../../prisma/generated/client.ts";
 import { uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import { readAsMember, type Transaction } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
-import { AI_LIMITS, type RunApplication, type RunPage, type RunState, type RunDisposition, type RunSummary, type RunUsage, type RunView, type TaskKind } from "../contracts/tasks.ts";
+import { AI_LIMITS, type AiAllowance, type RunApplication, type RunPage, type RunState, type RunDisposition, type RunSummary, type RunUsage, type RunView, type TaskKind } from "../contracts/tasks.ts";
 import { inspectRun, sourcesChanged, type ApplicabilityRow } from "./applicability.ts";
 import { settleOverdueRuns } from "./settle-runs.ts";
 import { accountPlan } from "../../projects/server/plan.ts";
@@ -109,11 +109,16 @@ async function ownerAllowance(tx: Transaction, ownerId: string, viewerId: string
   return aiAllowance({ allowed: plan.allowed, total: plan.aiTotalRuns, daily: plan.aiDailyRuns }, { total: used?.total ?? 0, today: used?.today ?? 0 }, ownerId === viewerId);
 }
 
+/** The project owner's AI allowance for any member, with overdue runs settled first so a refunded reservation is not counted. */
+export async function readAllowance(identity: ProjectIdentity, projectId: string): Promise<AiAllowance> {
+  return readAsMember(identity, projectId, (tx: Transaction, project, profileId) => ownerAllowance(tx, project.ownerId, profileId), settleOverdueRuns);
+}
+
 /** Up to 50 summaries, newest first, with an opaque cursor over the exact (createdAt, id) order. Summaries carry no prompt or capture body. */
 export async function listRuns(identity: ProjectIdentity, projectId: string, options: { cursor?: string; flowId?: string }): Promise<RunPage> {
   if (options.flowId !== undefined && !uuid.test(options.flowId)) throw new ProjectError("INVALID_INPUT");
   const position = options.cursor === undefined ? null : decodeCursor(options.cursor);
-  return readAsMember(identity, projectId, async (tx: Transaction, project, profileId) => {
+  return readAsMember(identity, projectId, async (tx: Transaction, project) => {
     const rows = await tx.$queryRaw<RunRow[]>`
       SELECT ${summaryColumns} FROM app.ai_run run ${usageJoin}
       WHERE run.project_id = ${project.id}::uuid
@@ -125,7 +130,6 @@ export async function listRuns(identity: ProjectIdentity, projectId: string, opt
     return {
       runs: page.map(summaryOf),
       nextCursor: rows.length > page.length && last ? Buffer.from(JSON.stringify([last.created_cursor, last.id])).toString("base64url") : null,
-      ...(position ? {} : { allowance: await ownerAllowance(tx, project.ownerId, profileId) }),
     };
   }, settleOverdueRuns);
 }

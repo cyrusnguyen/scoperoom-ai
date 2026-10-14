@@ -14,7 +14,7 @@ import { discardRun } from "../../src/features/proposals/server/discard-run.ts";
 import { workerCleanup } from "../../src/server/maintenance/worker-cleanup.ts";
 import { AI_LIMITS, parseStartRunInput } from "../../src/features/proposals/contracts/tasks.ts";
 import { admitRun, startRun } from "../../src/features/proposals/server/admit-run.ts";
-import { listRuns, readRun } from "../../src/features/proposals/server/read-runs.ts";
+import { listRuns, readAllowance, readRun } from "../../src/features/proposals/server/read-runs.ts";
 import { cancelRun } from "../../src/features/proposals/server/settle-runs.ts";
 import { archiveProject } from "../../src/features/projects/server/management.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
@@ -762,20 +762,19 @@ test("real approval stales old-parent proposal and replays committed Start befor
   });
 });
 
-test("the first run page carries the owner's AI allowance, counted as admission counts it, for every member", { skip: !canRun }, async () => {
+test("the allowance is the owner's, counted as admission counts it, for every member and across the owner's projects", { skip: !canRun }, async () => {
   await withAi(async ({ person, projectFor, join, database }) => {
     const owner = await person(); const editor = await person();
-    const p = await projectFor(owner);
+    const p = await projectFor(owner); const q = await projectFor(owner);
     await join(owner.identity, p, editor.identity, "EDITOR");
     const { rows: [limits] } = await database.query("select ai_total_run_limit total, ai_daily_run_limit daily from app.pilot_entitlement where profile_id = $1", [owner.profile]);
     const expected = (used: number, limit: number | null) => ({ used, limit, left: limit === null ? null : Math.max(0, limit - used) });
-    const before = (await listRuns(owner.identity, p, {})).allowance!;
+    const before = await readAllowance(owner.identity, p);
     assert.deepEqual([before.allowed, before.viewerIsOwner, before.total, before.today], [true, true, expected(0, limits?.total ?? null), expected(0, limits?.daily ?? null)]);
     await admitted(database, editor.identity, p); // an editor's request is charged to the owner and still reserved
-    const forEditor = (await listRuns(editor.identity, p, {})).allowance!;
+    const forEditor = await readAllowance(editor.identity, p);
     assert.deepEqual([forEditor.viewerIsOwner, forEditor.total, forEditor.today], [false, expected(1, limits?.total ?? null), expected(1, limits?.daily ?? null)]);
-    const page = await listRuns(owner.identity, p, {});
-    assert.deepEqual(page.allowance!.total, forEditor.total);
-    if (page.nextCursor) assert.equal((await listRuns(owner.identity, p, { cursor: page.nextCursor })).allowance, undefined);
+    // Owner-wide: the owner's other project shows the same spend although its own AI revision never moved.
+    assert.deepEqual((await readAllowance(owner.identity, q)).total, forEditor.total);
   });
 });
