@@ -114,6 +114,10 @@ export async function cleanupUsers(database: Client, admin: SupabaseClient, user
   if (!users.length) return;
   const profiles = "(select id from app.user_profile where auth_user_id = any($1::uuid[]))";
   await database.query(`delete from app.mutation_receipt where actor_id in ${profiles}`, [users]);
+  // Staff rows (the admin screens' tests) restrict deleting a profile, and the audit log has no foreign key to remove.
+  await database.query(`delete from app.account_audit_event where actor_id in ${profiles} or target_profile_id in ${profiles}`, [users]);
+  await database.query(`delete from app.account_entitlement_version where profile_id in ${profiles}`, [users]);
+  await database.query(`delete from app.platform_role where profile_id in ${profiles}`, [users]);
   await database.query(`delete from app.project where owner_id in ${profiles}`, [users]);
   // AI runs went with their projects; the owner's allowance and day counters would still restrict deleting the profile.
   await database.query(`delete from app.ai_budget_day where owner_id in ${profiles}`, [users]);

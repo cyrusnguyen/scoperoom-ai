@@ -24,6 +24,7 @@ const paths = {
   trash: ["M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"],
   minus: ["M5 12h14"],
   fit: ["M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"],
+  search: ["M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14Zm5-2 5 5"],
 } as const;
 
 export type IconName = keyof typeof paths;

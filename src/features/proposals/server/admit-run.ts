@@ -3,11 +3,10 @@ import type { Prisma } from "../../../../prisma/generated/client.ts";
 import { asJson } from "../../drafts/server/execute-command.ts";
 import { keyPattern, uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import {
-  checkReceipt, findReceipt, lockActor, lockProject, profileFor, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
+  checkReceipt, findReceipt, lockActor, lockOwnerCapacity, lockProject, ownerPlan, projectRole, profileFor, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
   withDatabase, type ProjectRow, type Transaction,
 } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
-import { accountPlan } from "../../projects/server/plan.ts";
 import { assertSourceCapacity, insertPromptEvidence } from "../../sources/server/source-versions.ts";
 import { AI_LIMITS, parseStartRunInput, startBody, startBodyBytes, type StartRunInput, type TaskKind } from "../contracts/tasks.ts";
 import { evidenceStats } from "../domain/capture.ts";
@@ -91,7 +90,7 @@ async function admitLocked(tx: Transaction, project: ProjectRow, actorId: string
   if (!reserved) throw new ProjectError("UNAVAILABLE");
   // Read last, after every wait: a revocation committed while this admission queued is seen. The provider claim rechecks authority again.
   // The limits come from the same read. Counts include this reservation; a refusal rolls it back with the savepoint.
-  const plan = accountPlan(await tx.pilotEntitlement.findUnique({ where: { profileId: project.ownerId } }));
+  const plan = await ownerPlan(tx, project.ownerId);
   if (!plan.allowed) throw new ProjectError("ENTITLEMENT_REQUIRED");
   if (plan.aiDailyRuns !== null && reserved.day_runs > plan.aiDailyRuns) throw new ProjectError("AI_BUDGET_EXCEEDED");
   if (plan.aiTotalRuns !== null) {
@@ -137,6 +136,12 @@ export async function admitRun(identity: ProjectIdentity, projectId: string, inp
     const profile = await profileFor(database, identity);
     const outcome = await database.$transaction(async (tx) => {
       await lockActor(tx, profile.id, identity.authUserId, true);
+      // The owner's limits are read under the lock staff limit changes take, so a change cannot interleave with this admission.
+      // ownerId is immutable, so an unlocked read may choose the guard before the project lock (lock order 2 then 3, as restore does).
+      // Only a current member who can edit takes that owner-wide lock; the checks below under the project lock stay authoritative.
+      const owner = await tx.project.findUnique({ where: { id: projectId }, select: { id: true, ownerId: true } });
+      const early = owner && await projectRole(tx, owner, profile.id);
+      if (early === "OWNER" || early === "EDITOR") await lockOwnerCapacity(tx, owner!.ownerId);
       let project = await lockProject(tx, profile.id, projectId);
       const role = requireMember(project);
       const receipt = await findReceipt(tx, profile.id, "PROJECT", project.id, input.key);

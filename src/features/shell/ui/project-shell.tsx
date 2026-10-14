@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition, type CSSProperties, type ReactNode } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
 import { accountChanged, apiRead, SESSION_ENDED, sessionEnded } from "@/client/api";
@@ -206,6 +207,17 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     const timer = window.setTimeout(() => { void loadLists(); }, 0);
     return () => window.clearTimeout(timer);
   }, [loadLists]);
+  // Staff get an Admin link. This only decides whether the link shows; every staff route and API still checks the role itself.
+  const [staffRole, setStaffRole] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      const me = await apiRead<{ platformRole: string | null }>("/api/me", controller.signal);
+      if (controller.signal.aborted || sessionEnded(me) || !me.ok) return;
+      setStaffRole(me.data.platformRole);
+    }, 0);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, []);
   useEffect(() => {
     if (!projectId) return;
     // Aborting cancels only this UI observation; responses are also matched to their project below.
@@ -400,7 +412,10 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     </div>
     <footer className="app-footer">
       <span className={notice.error ? "footer-error" : undefined} role={notice.error ? "alert" : "status"} aria-live="polite">{notice.text}</span>
-      <form action={signOut} onSubmit={clearImportSessions}><button type="submit" className="button quiet small sign-out-button"><Icon name="signOut" size={15} /><span>Sign out</span></button></form>
+      <div className="footer-actions">
+        {(staffRole === "ADMIN" || staffRole === "MODERATOR") && <Link href="/app/admin" className="button quiet small admin-link">Admin</Link>}
+        <form action={signOut} onSubmit={clearImportSessions}><button type="submit" className="button quiet small sign-out-button"><Icon name="signOut" size={15} /><span>Sign out</span></button></form>
+      </div>
     </footer>
     {children}
     {dialog?.kind === "create" && <NewProjectDialog onClose={() => closeDialog()} onCreated={(project) => void created(project)} onRefused={() => void loadLists()} />}

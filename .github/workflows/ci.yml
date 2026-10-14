@@ -64,6 +64,14 @@ jobs:
       - run: bash scripts/ci/export-local-auth-env.sh
       - run: corepack pnpm db:bootstrap
       - run: corepack pnpm test:e2e:production
+      - name: Keep screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: screenshots
+          path: test-results/screenshots
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Supabase diagnostics
         if: failure()
         run: bash scripts/ci/print-local-supabase-logs.sh

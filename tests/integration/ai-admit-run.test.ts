@@ -339,13 +339,14 @@ test("an owner entitlement revoked while admission waits for its locks is honour
     await holder.connect();
     try {
       await holder.query("begin");
-      await holder.query("select owner_id from app.ai_owner_allowance where owner_id = $1 for update", [owner.profile]);
+      // Admission waits on the owner's entitlement lock (the one staff limit changes take); the revocation commits under it.
+      await holder.query("select app.lock_pilot_entitlement($1)", [owner.profile]);
       const { rows: [pid] } = await holder.query<{ pid: number }>("select pg_backend_pid() pid");
       const before = await footprint(database, projectId, owner.profile);
       const pending = admitRun(owner.identity, projectId, await start(database, projectId), CONFIG);
       const outcome = assert.rejects(pending, refused("ENTITLEMENT_REQUIRED"));
       await blockedBy(database, pid!.pid);
-      await database.query("update app.pilot_entitlement set active = false where profile_id = $1", [owner.profile]);
+      await holder.query("update app.pilot_entitlement set active = false where profile_id = $1", [owner.profile]);
       await holder.query("commit");
       await outcome;
       assert.deepEqual(await footprint(database, projectId, owner.profile), before);

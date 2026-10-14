@@ -26,3 +26,9 @@ test("guarded database CLIs run through a linked checkout path and stay inert wh
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the first-Admin script takes one plausible email, normalised, and refuses anything else", async () => {
+  const { parseEmail } = await import("../scripts/db/grant-admin.mjs");
+  assert.equal(parseEmail("  Owner@Example.TEST "), "owner@example.test");
+  for (const bad of [undefined, "", "owner", "a b@example.test", "@example.test", "owner@"]) assert.throws(() => parseEmail(bad), /Usage: grant-admin/, String(bad));
+});

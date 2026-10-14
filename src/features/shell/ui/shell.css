@@ -207,3 +207,6 @@
   :where(.app-shell) select option:disabled { color: var(--foreground-subtle); opacity: .65; }
   @media (max-width: 639px) { :where(.app-shell) select option { min-height: 44px; } }
 }
+.footer-actions { display: flex; flex-shrink: 0; align-items: center; gap: var(--space-2); }
+.app-footer .admin-link { padding: 6px 10px; border: var(--panel-border); color: var(--foreground-muted); font-weight: 500; text-decoration: none; }
+.app-footer .admin-link:hover { border-color: var(--foreground-subtle); background: var(--surface-raised); color: var(--foreground); }
