@@ -761,3 +761,21 @@ test("real approval stales old-parent proposal and replays committed Start befor
     assert.deepEqual((await database.query("select * from app.scope_draft where id=$1", [draftId])).rows[0], { ...before, base_snapshot_id: frozen.snapshotId });
   });
 });
+
+test("the first run page carries the owner's AI allowance, counted as admission counts it, for every member", { skip: !canRun }, async () => {
+  await withAi(async ({ person, projectFor, join, database }) => {
+    const owner = await person(); const editor = await person();
+    const p = await projectFor(owner);
+    await join(owner.identity, p, editor.identity, "EDITOR");
+    const { rows: [limits] } = await database.query("select ai_total_run_limit total, ai_daily_run_limit daily from app.pilot_entitlement where profile_id = $1", [owner.profile]);
+    const expected = (used: number, limit: number | null) => ({ used, limit, left: limit === null ? null : Math.max(0, limit - used) });
+    const before = (await listRuns(owner.identity, p, {})).allowance!;
+    assert.deepEqual([before.allowed, before.viewerIsOwner, before.total, before.today], [true, true, expected(0, limits?.total ?? null), expected(0, limits?.daily ?? null)]);
+    await admitted(database, editor.identity, p); // an editor's request is charged to the owner and still reserved
+    const forEditor = (await listRuns(editor.identity, p, {})).allowance!;
+    assert.deepEqual([forEditor.viewerIsOwner, forEditor.total, forEditor.today], [false, expected(1, limits?.total ?? null), expected(1, limits?.daily ?? null)]);
+    const page = await listRuns(owner.identity, p, {});
+    assert.deepEqual(page.allowance!.total, forEditor.total);
+    if (page.nextCursor) assert.equal((await listRuns(owner.identity, p, { cursor: page.nextCursor })).allowance, undefined);
+  });
+});

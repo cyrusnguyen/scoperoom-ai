@@ -5,6 +5,8 @@ import { ProjectError } from "../../projects/server/errors.ts";
 import { AI_LIMITS, type RunApplication, type RunPage, type RunState, type RunDisposition, type RunSummary, type RunUsage, type RunView, type TaskKind } from "../contracts/tasks.ts";
 import { inspectRun, sourcesChanged, type ApplicabilityRow } from "./applicability.ts";
 import { settleOverdueRuns } from "./settle-runs.ts";
+import { accountPlan } from "../../projects/server/plan.ts";
+import { aiAllowance } from "../domain/allowance.ts";
 
 const BODY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const CURSOR_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
@@ -94,11 +96,24 @@ export async function readRun(identity: ProjectIdentity, projectId: string, runI
   }, settleOverdueRuns);
 }
 
+/**
+ * The owner's AI allowance, counted as admission counts it: consumed plus still reserved runs in total, and for today's UTC day.
+ * Read inside the member snapshot, so it matches the page it is shown with; admission rechecks under its own locks.
+ */
+async function ownerAllowance(tx: Transaction, ownerId: string, viewerId: string) {
+  const plan = accountPlan(await tx.pilotEntitlement.findUnique({ where: { profileId: ownerId } }));
+  const [used] = await tx.$queryRaw<Array<{ total: number; today: number }>>`
+    SELECT coalesce(sum(reserved_runs + consumed_runs), 0)::integer AS total,
+      coalesce(sum(reserved_runs + consumed_runs) FILTER (WHERE day = (transaction_timestamp() AT TIME ZONE 'UTC')::date), 0)::integer AS today
+    FROM app.ai_budget_day WHERE owner_id = ${ownerId}::uuid`;
+  return aiAllowance({ allowed: plan.allowed, total: plan.aiTotalRuns, daily: plan.aiDailyRuns }, { total: used?.total ?? 0, today: used?.today ?? 0 }, ownerId === viewerId);
+}
+
 /** Up to 50 summaries, newest first, with an opaque cursor over the exact (createdAt, id) order. Summaries carry no prompt or capture body. */
 export async function listRuns(identity: ProjectIdentity, projectId: string, options: { cursor?: string; flowId?: string }): Promise<RunPage> {
   if (options.flowId !== undefined && !uuid.test(options.flowId)) throw new ProjectError("INVALID_INPUT");
   const position = options.cursor === undefined ? null : decodeCursor(options.cursor);
-  return readAsMember(identity, projectId, async (tx: Transaction, project) => {
+  return readAsMember(identity, projectId, async (tx: Transaction, project, profileId) => {
     const rows = await tx.$queryRaw<RunRow[]>`
       SELECT ${summaryColumns} FROM app.ai_run run ${usageJoin}
       WHERE run.project_id = ${project.id}::uuid
@@ -110,6 +125,7 @@ export async function listRuns(identity: ProjectIdentity, projectId: string, opt
     return {
       runs: page.map(summaryOf),
       nextCursor: rows.length > page.length && last ? Buffer.from(JSON.stringify([last.created_cursor, last.id])).toString("base64url") : null,
+      ...(position ? {} : { allowance: await ownerAllowance(tx, project.ownerId, profileId) }),
     };
   }, settleOverdueRuns);
 }

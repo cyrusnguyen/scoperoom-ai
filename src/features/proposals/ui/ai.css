@@ -4,6 +4,7 @@
 .ai-panel .ai-action { padding: 0; border: 0; }
 .ai-heading { display: flex; align-items: center; gap: var(--space-3); }
 .ai-heading p { margin-top: var(--space-1); color: var(--foreground-muted); font-size: 13px; }
+.ai-heading .ai-allowance[data-exhausted] { color: var(--warning-foreground); }
 .ai-mark { display: grid; place-items: center; flex-shrink: 0; width: 38px; height: 38px; border: 1px solid var(--accent-border); border-radius: var(--radius-overlay); background: var(--accent-soft); color: var(--accent-hover); }
 .ai-toggle[aria-pressed="true"] { color: var(--accent-hover); border-color: var(--accent-border); background: var(--accent-soft); }
 .ai-run-tabs { display: flex; gap: var(--space-4); margin-top: var(--space-3); border-bottom: var(--panel-border); }
