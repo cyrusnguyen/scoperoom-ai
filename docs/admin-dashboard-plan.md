@@ -1,6 +1,6 @@
 # Admin Dashboard plan
 
-Status: planned, not started. Implement after the hosted pilot stage (Stage 12) is complete. Decided by the user on 2026-10-12.
+Status: delivered on 2026-10-14 (branch `feat/staff-roles`), extended by the user's 2026-10-14 decisions: Admin and Moderator roles (both unlimited AI in projects they own; a Moderator can do everything an Admin can except grant or revoke roles), the first Admin granted by `scripts/db/grant-admin.mjs`, and no email addresses in v1 (the web runtime cannot read `auth.users`; staff search by display name). The sections below are the original plan; see the [hosted pilot runbook](hosted-pilot.md), section 5, for operation.
 
 ## Goal
 

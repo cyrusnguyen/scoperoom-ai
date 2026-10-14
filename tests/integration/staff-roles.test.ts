@@ -9,6 +9,7 @@ import { admitRun } from "../../src/features/proposals/server/admit-run.ts";
 import { readAllowance } from "../../src/features/proposals/server/read-runs.ts";
 import { canRun } from "./support/fixture.ts";
 import { withStaff } from "./support/staff.ts";
+import { grantFirstAdmin } from "../../scripts/db/grant-admin.mjs";
 
 // Staff roles (2026-10-14): the SECURITY DEFINER authority functions on the web runtime role, and unlimited AI for staff-owned projects.
 // Refusal SQLSTATEs: SR001 no staff role (the app answers NOT_FOUND), SR002 Admin required, SR003 version conflict, SR004 last Admin, SR005 unknown target.
@@ -197,5 +198,19 @@ test("a staff editor's run in a non-staff owner's project is still charged to th
     await assert.rejects(admitRun(editor.identity, second, await startInput(database, second), CONFIG), refused("AI_ALLOWANCE_EXCEEDED"));
     const allowance = await readAllowance(editor.identity, second);
     assert.deepEqual([allowance.total.limit, allowance.viewerIsOwner], [5, false]);
+  });
+});
+
+test("the operator script grants the first Admin once, with one audit row, and refuses while an Admin exists or for an unknown email", { skip: !canRun }, async () => {
+  await withStaff(async ({ database, person }) => {
+    const first = await person("First admin"); const second = await person("Second");
+    await assert.rejects(grantFirstAdmin(database, "nobody-here@example.test"), /sign in to the app once first/);
+    assert.equal(await grantFirstAdmin(database, first.identity.verifiedEmail.toUpperCase()), first.profile);
+    const { rows: [role] } = await database.query("select role, revoked_at from app.platform_role where profile_id = $1", [first.profile]);
+    assert.deepEqual([role.role, role.revoked_at], ["ADMIN", null]);
+    const { rows: [audit] } = await database.query("select count(*)::int n, min(action) action from app.account_audit_event where target_profile_id = $1", [first.profile]);
+    assert.deepEqual([audit.n, audit.action], [1, "ROLE_SET"]);
+    await assert.rejects(grantFirstAdmin(database, second.identity.verifiedEmail), /An Admin already exists/);
+    assert.equal((await database.query("select count(*)::int n from app.platform_role where profile_id = $1", [second.profile])).rows[0].n, 0);
   });
 });

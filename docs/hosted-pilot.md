@@ -133,9 +133,17 @@ When appending a line to `.env.hosted.local`, start with a newline: the file may
 
 Changed environment values mean a new deployment and a new smoke.
 
-## 5. Smoke owner AI override
+## 5. Staff and account limits
 
-The smoke owner gets a bounded override so qualification runs do not exhaust the default plan. Run as `postgres` on the session pooler (it can read `auth.users`; the migrator cannot):
+Admins and Moderators change account limits in the Admin screen (`/app/admin`, linked from the footer for staff): AI total and daily limits, project limit, expiry, block, and reset to the default plan, each with a required reason and an audit entry. Only Admins grant or revoke the Admin and Moderator roles, and at least one Admin always remains. Staff have unlimited AI in projects they own.
+
+The first Admin is granted once per target by the operator, for an account that has signed in at least once; the script refuses while any Admin exists:
+
+```powershell
+node --env-file=.env.hosted.local scripts/db/grant-admin.mjs <email>
+```
+
+Smoke owner AI override: the smoke owner gets a bounded override so qualification runs do not exhaust the default plan. Run as `postgres` on the session pooler (it can read `auth.users`; the migrator cannot):
 
 ```sql
 insert into app.pilot_entitlement (profile_id, granted_by_operator, ai_total_run_limit, ai_daily_run_limit)
@@ -143,7 +151,7 @@ select p.id, p.id, 50, 10 from app.user_profile p join auth.users u on u.id = p.
 on conflict (profile_id) do update set ai_total_run_limit = 50, ai_daily_run_limit = 10, active = true, revoked_at = null, expires_at = null;
 ```
 
-`AI_TOTAL_RUN_LIMIT` and `AI_DAILY_RUN_LIMIT` change the defaults for every account; a per-account override is the way to lift only the smoke owner. More override options are in the [Admin Dashboard plan](admin-dashboard-plan.md).
+`AI_TOTAL_RUN_LIMIT` and `AI_DAILY_RUN_LIMIT` change the defaults for every account; a per-account override is the way to lift only the smoke owner. Once an Admin exists, prefer the Admin screen over this SQL, so the change is audited.
 
 ## 6. Abort and correct forward
 
