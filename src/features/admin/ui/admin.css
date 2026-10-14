@@ -1,0 +1,50 @@
+/* Staff screens. Controls, fields and errors come from the shell stylesheet and tokens; this file only lays out the pages.
+   The layout reuses the .app-shell class for its element resets and overrides its fixed viewport height so the page scrolls. */
+.app-shell.admin-shell { display: block; height: auto; min-height: 100dvh; overflow: visible; }
+.admin-main { width: 100%; max-width: 960px; min-width: 0; margin: 0 auto; padding: var(--space-6) var(--space-4) var(--space-10); }
+.admin-main h1 { margin-bottom: var(--space-4); font-size: 22px; overflow-wrap: anywhere; }
+.admin-main h2 { margin-bottom: var(--space-3); font-size: 15px; }
+.admin-back { margin-bottom: var(--space-3); font-size: var(--font-label); }
+.admin-back a, .admin-table a { color: var(--accent-hover); text-underline-offset: 3px; }
+.admin-note { color: var(--foreground-muted); }
+.admin-saved { min-height: 1.5em; margin-bottom: var(--space-3); color: var(--success-foreground); }
+.admin-saved:not(:empty) { padding: 8px 12px; border-left: 2px solid var(--success-border); background: var(--success-background); }
+
+.admin-search { margin-bottom: var(--space-4); }
+.admin-search > label { display: block; margin-bottom: 7px; color: var(--foreground-muted); font-size: var(--font-label); font-weight: 500; }
+.admin-search-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.admin-search-row input { flex: 1 1 14rem; }
+
+.admin-table-scroll { width: 100%; margin-bottom: var(--space-4); overflow-x: auto; border: var(--panel-border); border-radius: var(--radius-card); }
+.admin-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px; }
+.admin-table :is(th, td) { padding: 9px 12px; border-bottom: var(--panel-border); text-align: left; vertical-align: top; }
+.admin-table thead th { background: var(--surface-muted); color: var(--foreground-muted); font-size: var(--font-label); font-weight: 600; white-space: nowrap; }
+.admin-table tbody th { font-weight: 500; overflow-wrap: anywhere; }
+.admin-table tbody tr:last-child :is(th, td) { border-bottom: 0; }
+.admin-table td { white-space: nowrap; }
+
+.admin-section { margin-bottom: var(--space-8); padding: var(--space-5); border: var(--panel-border); border-radius: var(--radius-card); background: var(--surface); }
+.admin-summary { display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: var(--space-3) var(--space-5); margin: 0; }
+.admin-summary dt, .admin-history dt { color: var(--foreground-muted); font-size: var(--font-label); font-weight: 500; }
+.admin-summary dd, .admin-history dd { margin: 0; overflow-wrap: anywhere; }
+
+.admin-section form { max-width: 28rem; }
+.admin-section textarea { resize: vertical; }
+.admin-limit-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.admin-limit-row input[type="number"] { flex: 0 1 12rem; width: auto; }
+.admin-main .admin-check { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--foreground); font-size: 13px; }
+.admin-main .admin-check input[type="checkbox"] { flex-shrink: 0; width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.admin-field-error { color: var(--danger-foreground); }
+.admin-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
+.admin-main .error-message p { margin: 0 0 var(--space-2); }
+
+.admin-history { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.admin-history li { padding: var(--space-3); border: var(--panel-border); border-radius: var(--radius-control); background: var(--surface-muted); }
+.admin-history-head { margin-bottom: var(--space-2); overflow-wrap: anywhere; }
+.admin-history-head time { display: block; color: var(--foreground-muted); font-size: var(--font-label); }
+.admin-history dl { display: grid; gap: var(--space-2); margin: 0; }
+
+@media (max-width: 480px) {
+  .admin-main { padding-inline: var(--space-3); }
+  .admin-section { padding: var(--space-4) var(--space-3); }
+}
