@@ -79,7 +79,8 @@ export function encodeAccountCursor(name: string, id: string) {
 
 export function decodeAccountCursor(cursor: string): [string, string] {
   try {
-    if (!/^[A-Za-z0-9_-]{1,400}$/.test(cursor)) throw new Error();
+    // Worst case: 120 code points each JSON-escaped to 6 bytes plus the id is 763 bytes, 1018 base64url characters.
+    if (!/^[A-Za-z0-9_-]{1,1024}$/.test(cursor)) throw new Error();
     const [name, id, ...rest] = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown[];
     if (typeof name !== "string" || typeof id !== "string" || rest.length || !name.isWellFormed() || name.includes("\u0000") || [...name].length > 120 || !uuid.test(id)) throw new Error();
     return [name, id.toLowerCase()];

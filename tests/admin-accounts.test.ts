@@ -43,6 +43,9 @@ test("search term and cursor", () => {
   const cursor = encodeAccountCursor("Zoë \"Q\"", id);
   assert.match(cursor, /^[A-Za-z0-9_-]+$/);
   assert.deepEqual(decodeAccountCursor(cursor), ["Zoë \"Q\"", id]);
+  // Any stored display name (1 to 120 code points) must round-trip, including multibyte and escaped characters.
+  for (const name of ["漢".repeat(120), "😀".repeat(120), "".repeat(120)]) assert.deepEqual(decodeAccountCursor(encodeAccountCursor(name, id)), [name, id]);
+  assert.throws(() => decodeAccountCursor("A".repeat(1025)), /INVALID_INPUT/);
   for (const bad of ["", "not base64!", Buffer.from("[1,2]").toString("base64url"), Buffer.from(JSON.stringify(["a", "nope"])).toString("base64url"), Buffer.from(JSON.stringify(["a", id, 1])).toString("base64url")]) {
     assert.throws(() => decodeAccountCursor(bad), /INVALID_INPUT/);
   }
@@ -72,14 +75,15 @@ test("account view shows the limits that are enforced", () => {
 });
 
 test("staff refusals map to the shared error codes", () => {
-  const driver = (code: string) => ({ code: "P2010", meta: { code } });
+  // The shape Prisma 7 with the pg adapter raises for a function's RAISE ... USING ERRCODE (checked against a local PostgreSQL 15).
+  const driver = (code: string) => ({ code: "P2010", meta: { driverAdapterError: { cause: { code } } } });
   assert.equal(staffError(driver("SR001")).code, "NOT_FOUND");
   assert.equal(staffError(driver("SR005")).code, "NOT_FOUND");
   assert.equal(staffError(driver("SR002")).code, "ADMIN_ROLE_REQUIRED");
   assert.equal(staffError(driver("SR003")).code, "CONFLICT");
   assert.equal(staffError(driver("SR004")).code, "LAST_ADMIN");
   assert.equal(staffError(driver("22023")).code, "INVALID_INPUT");
-  assert.equal(staffError({ meta: { driverAdapterError: { cause: { code: "SR004" } } } }).code, "LAST_ADMIN");
+  assert.equal(staffError({ code: "P2010", meta: { code: "SR004" } }).code, "LAST_ADMIN");
   assert.equal(staffError(new Error("ERROR: VERSION_CONFLICT")).code, "CONFLICT");
   assert.equal(staffError(driver("40P01")).code, "UNAVAILABLE");
   const own = new ProjectError("KEY_REUSED");
