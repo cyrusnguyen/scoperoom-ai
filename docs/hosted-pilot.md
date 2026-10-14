@@ -45,8 +45,9 @@ Vercel settings that cost a release during the first cutover:
 - Each project's Function Region must be the region closest to the Supabase database. From a distant region the AI admission transaction (about 25 sequential queries) exceeded Prisma's 5 second interactive-transaction timeout and surfaced as 503 `UNAVAILABLE`.
 - `AI_MODEL` must be the bare model id. Admission rejects anything else (spaces, line breaks, quotes) with 503.
 - `AI_EXECUTION_BINDING` must be a Production environment variable on both projects. `vercel deploy -e` did not reach the runtime with CLI 48.
-- Sign up for Inngest through the Vercel Marketplace (free plan: up to 50K executions a month, used by AI runs only; each run is a few executions) and grant the Inngest integration access to the worker project ONLY. Add `INNGEST_EVENT_KEY` to the web project by hand; the web project never gets `INNGEST_SIGNING_KEY`. After granting, check that the worker project holds nothing beyond the worker column's variables and that the web project has no `INNGEST_SIGNING_KEY`.
-- Keep Vercel Standard Deployment Protection on the worker project so old per-deployment URLs cannot be re-synced by anyone calling `PUT /api/inngest`. If the integration's sync needs it, use Vercel's Protection Bypass for Automation (verify at cutover).
+- Sign up for Inngest through the Vercel Marketplace (free plan: up to 50K executions a month, used by AI runs only; each run is a few executions) and grant the Inngest integration access to the worker project ONLY. The integration creates its own Inngest organization: open its dashboard from Vercel (Integrations, Inngest, Open in Inngest); a separate inngest.com sign-in shows a different, empty account. The integration copies `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` to the worker as sensitive values, which cannot be read back, so paste the event key into the web project by hand from the Inngest dashboard (Production, Event Keys); the web project never gets `INNGEST_SIGNING_KEY`. After granting, check that the worker project holds nothing beyond the worker column's variables (plus the integration's two keys) and that the web project has no `INNGEST_SIGNING_KEY`.
+- Keep Vercel Standard Deployment Protection on the worker project; its production domain stays reachable for Inngest. The integration's sync-on-deploy stays disabled for CLI deploys (its toggle does not save), so every worker deploy is followed by an explicit `PUT /api/inngest` that must answer "Successfully registered".
+- Deploy from a `git archive` export, never from a git checkout. A checkout (even a detached one) makes Vercel set `VERCEL_GIT_COMMIT_REF`, and the Inngest SDK then registers the app and sends events in a branch environment named after it instead of Production.
 - Keep the Vercel Supabase (and any database) integration disconnected from both projects: it re-adds privileged `POSTGRES_*` and `SUPABASE_*` variables.
 - Vercel accepts multi-line values, so paste the CA PEM and the ES256 signing key with their line breaks.
 
@@ -85,28 +86,37 @@ Never run `db:reset` or destructive SQL against this target without a separate e
 
 ## 4. Release
 
-1. Confirm green main-push CI for the SHA (`static-unit-build`, `database-integration`, `chromium`).
-2. Set `AI_EXECUTION_BINDING` to the SHA as a Production variable on both Vercel projects (section 2).
-3. Migrate (section 3).
-4. Deploy the worker from a clean detached worktree at the SHA. `vercel.json` turns off Git deployments, so the CLI is the only path:
+Releases run in GitHub Actions (`.github/workflows/release.yml`). Every successful push CI on `main` queues a release that waits for the operator's approval in the protected `release` environment (required reviewer: the operator; deployment branches: `main` only). Approving it runs, in order:
 
-   ```powershell
-   git worktree add --detach ..\scoperoom-release <sha>
-   cd ..\scoperoom-release
-   vercel link --yes --project <worker project>
-   vercel deploy --prod --yes
-   ```
+1. Resolve the commit: it must be on `main` and have a successful push CI run.
+2. Set `AI_EXECUTION_BINDING` to the commit on both Vercel projects (`release.mjs binding`).
+3. Migrate (`release.mjs db node scripts/db/migrate.mjs`; the CA is written to a file and the database URLs reach only this command).
+4. Deploy the worker from a `git archive` export, and refuse a deployment that is not READY or carries a git ref (`release.mjs deploy worker`).
+5. Register the worker with Inngest (`release.mjs sync`: `PUT /api/inngest`, retried, must answer "Successfully registered").
+6. Deploy the web project the same way (`release.mjs deploy web`).
+7. `schedule.mjs verify`: both pg_cron jobs, and a 202 from each maintenance endpoint (one repair sweep and one cleanup).
+8. Edge checks (`release.mjs checks`): web health, and 404 for every path the other project owns.
+9. The hosted smoke without AI.
 
-5. The Inngest integration syncs the function on each worker deploy. Confirm the Inngest dashboard shows `run-ai` on the current deployment and in the Production environment, not a branch environment (the SDK may derive a branch name from the git ref on CLI deploys; verify at cutover). If the sync did not happen, use the fallback:
+To release a chosen commit, or to add the paid AI smoke (about 2 model calls), run the workflow by hand (Actions, scoperoom-release, Run workflow) with the full SHA and the `ai_smoke` box. Releases queue and never cancel each other; while one runs, a newer waiting release replaces an older waiting one.
 
-   ```powershell
-   curl -X PUT https://<worker origin>/api/inngest
-   ```
+The `release` environment holds these secrets: `VERCEL_TOKEN` (a team-scoped Vercel token), `SCOPEROOM_BOOTSTRAP_DATABASE_URL`, `MIGRATION_DATABASE_URL`, `SCOPEROOM_SUPABASE_PROJECT_REF`, `SCOPEROOM_ENVIRONMENT_ID`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SCOPEROOM_DATABASE_CA_PEM` and `SMOKE_{OWNER,EDITOR,VIEWER}_{EMAIL,PASSWORD}`; and these variables: `VERCEL_ORG_ID`, `VERCEL_WEB_PROJECT`, `VERCEL_WORKER_PROJECT`, `WEB_URL` and `WORKER_URL`. Set or rotate one with `gh secret set <NAME> --env release` (or `gh variable set`), which reads the value from stdin. The database URLs are the same as in `.env.hosted.local`; the workflow replaces their `sslrootcert` path with its own CA file.
 
-6. Deploy the web project: relink the same worktree (`vercel link --yes --project <web project>`), then `vercel deploy --prod --yes`. Do not repeat `git worktree add`.
-7. Create the maintenance schedule once the worker is deployed (after step 5) with `node --env-file=.env.hosted.local scripts/db/schedule.mjs apply`; it stores the secret in Supabase Vault and creates the repair (every minute) and cleanup (hourly) pg_cron jobs. Then run `node --env-file=.env.hosted.local scripts/db/schedule.mjs verify` and expect `schedule=verify-ok`: it checks both jobs and runs each job's command once, which needs a 202 from each endpoint (so verify also performs one repair sweep and one cleanup). To rotate the secret, update the worker variable, redeploy the worker, then rerun `apply`.
-8. `GET <origin>/api/health` on the web origin returns `{"status":"ok","service":"scoperoom-ai","apiVersion":"v1"}`. The worker serves only `/api/inngest`, the two maintenance endpoints, `/_next/static` and `/_next/image`: its origin returns 404 for `/`, `/api/health`, `/api/projects`, image-suffixed paths and an unauthenticated POST to a maintenance endpoint, and the web origin returns 404 for `/api/inngest` and `/api/internal/worker/*`. The web logger writes only failed requests, so `releaseId` cannot be read from healthy traffic; identify a release by its deployment ID.
-9. `corepack pnpm test:smoke:hosted`, then record the deployment IDs and results in the tracker.
+Manual fallback (the same steps by hand, for example when GitHub Actions is down):
+
+```powershell
+git archive <sha> -o ..\scoperoom-release.tar
+mkdir ..\scoperoom-release; tar -xf ..\scoperoom-release.tar -C ..\scoperoom-release
+node --env-file=.env.hosted.local scripts/db/migrate.mjs
+cd ..\scoperoom-release
+vercel link --yes --project <worker project>; vercel deploy --prod --yes
+curl -X PUT https://<worker origin>/api/inngest
+vercel link --yes --project <web project>; vercel deploy --prod --yes
+```
+
+Set `AI_EXECUTION_BINDING` on both projects first, then run `schedule.mjs verify`, the edge checks (`WEB_URL=... WORKER_URL=... node scripts/release/release.mjs checks`) and `corepack pnpm test:smoke:hosted`. When appending a line to `.env.hosted.local`, start with a newline: the file may not end with one.
+
+`node --env-file=.env.hosted.local scripts/db/schedule.mjs apply` creates the repair (every minute) and cleanup (hourly) pg_cron jobs and stores the worker secret in Supabase Vault. Run it by hand once after the first worker deploy, and again only when the worker origin or `SCOPEROOM_WORKER_SECRET` changes (update the worker variable, redeploy the worker, then rerun `apply`). The web logger writes only failed requests, so `releaseId` cannot be read from healthy traffic; identify a release by its deployment ID.
 
 Changed environment values mean a new deployment and a new smoke.
 
