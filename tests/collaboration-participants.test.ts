@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { PresenceState } from "../src/features/collaboration/contracts/messages.ts";
 import {
-  claimOf, createDirectory, paletteIndex, resolveParticipants, selectorsByItem, PALETTE_SIZE, UNKNOWN_PARTICIPANT, type DirectoryMember,
+  claimOf, createDirectory, paletteIndex, peopleOnFlow, resolveParticipants, selectorsByItem, PALETTE_SIZE, UNKNOWN_PARTICIPANT, type DirectoryMember,
 } from "../src/features/collaboration/ui/participants.ts";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -85,4 +85,11 @@ test("a superseded, replaced or failed read changes nothing, and a failure is re
   invalidate();
   reads[2]!(directory); await settle();
   assert.deepEqual(shown, [], "a response after a project switch is dropped");
+});
+
+test("people on this flow are told apart from people elsewhere, so a counted person without a cursor is explained", () => {
+  // Ann has one tab here and one elsewhere (here wins); Bob is on another flow; Gone is on the List or Details view (no flow).
+  const roster = [entry(ann, id(11), { flowId: other }), entry(ann, id(12)), entry(bob, id(13), { flowId: other }), entry(gone, id(14), { flowId: null }), entry(me, id(15))];
+  assert.deepEqual([...peopleOnFlow(roster, flow)].sort(), [ann, me].sort());
+  assert.deepEqual([...peopleOnFlow(roster, other)].sort(), [ann, bob].sort());
 });

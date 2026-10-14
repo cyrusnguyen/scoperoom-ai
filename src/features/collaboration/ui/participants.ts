@@ -32,6 +32,11 @@ export function resolveParticipants(roster: PresenceState[], directory: Director
   }).sort((a, b) => (a.role === null ? 1 : 0) - (b.role === null ? 1 : 0) || a.name.localeCompare(b.name) || a.profileId.localeCompare(b.profileId));
 }
 
+/** Profiles with at least one tab on this flow. Anyone else is counted as here but can show no cursor or selection in it. */
+export function peopleOnFlow(roster: PresenceState[], flowId: string): Set<string> {
+  return new Set(roster.filter((entry) => entry.flowId === flowId).map((entry) => entry.profileId));
+}
+
 /** Who else has each step, connection or flow selected in this flow (a person once per item, however many tabs). */
 export function selectorsByItem(roster: PresenceState[], people: Person[], flowId: string, viewerId: string): Map<string, Person[]> {
   const byProfile = new Map(people.map((person) => [person.profileId, person]));

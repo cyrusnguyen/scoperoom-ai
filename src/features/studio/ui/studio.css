@@ -132,6 +132,7 @@ button.item-row { width: 100%; border: 0; border-bottom: var(--panel-border); ba
 .presence-marks .presence-dot { margin-right: 0; box-shadow: 0 0 0 1px var(--background); }
 .step-node > .presence-marks { position: absolute; top: -6px; right: -6px; z-index: 2; }
 .step-row .presence-marks { margin-right: var(--space-2); }
+.participants > button .presence-marks { margin-right: var(--space-2); }
 .presence-dot[data-presence="1"] { background: var(--presence-1); }
 .presence-dot[data-presence="2"] { background: var(--presence-2); }
 .presence-dot[data-presence="3"] { background: var(--presence-3); }
