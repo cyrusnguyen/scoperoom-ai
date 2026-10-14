@@ -5,15 +5,14 @@ import { Client } from "pg";
 import { getMe } from "../../src/features/access/server/me.ts";
 import { parseStartRunInput } from "../../src/features/proposals/contracts/tasks.ts";
 import { createProject } from "../../src/features/projects/server/projects.ts";
-import { admissionSubject, admitRun } from "../../src/features/proposals/server/admit-run.ts";
+import { admitRun } from "../../src/features/proposals/server/admit-run.ts";
 import { readAllowance } from "../../src/features/proposals/server/read-runs.ts";
-import { canRun, withFixture, type Fixture, type Identity } from "./support/fixture.ts";
+import { canRun } from "./support/fixture.ts";
+import { withStaff } from "./support/staff.ts";
 
 // Staff roles (2026-10-14): the SECURITY DEFINER authority functions on the web runtime role, and unlimited AI for staff-owned projects.
 // Refusal SQLSTATEs: SR001 no staff role (the app answers NOT_FOUND), SR002 Admin required, SR003 version conflict, SR004 last Admin, SR005 unknown target.
 const CONFIG = { model: "test-model", executionBinding: "binding-1" };
-type Person = { identity: Identity; profile: string };
-type Env = Fixture & { web: Client; person: (label?: string) => Promise<Person>; staff: (who: Person, role: "ADMIN" | "MODERATOR") => Promise<void> };
 type Outcome = { ok: true; value: { profileId: string; version: number; role?: string | null; override?: { blocked: boolean } | null } } | { ok: false; code: string; message: string };
 
 /** Runs a staff function and returns its jsonb result, or the SQLSTATE and message of the refusal. */
@@ -27,32 +26,6 @@ const setRole = (web: Client, actor: string, target: string, role: string | null
 const setLimits = (web: Client, actor: string, target: string, version: number, over: { max?: number; total?: number | null; daily?: number | null; blocked?: boolean; reset?: boolean } = {}) =>
   call(web, SET_ENTITLEMENT, [actor, target, over.max ?? 4, over.total === undefined ? 7 : over.total, over.daily === undefined ? 9 : over.daily, null, over.blocked ?? false, over.reset ?? false, "support request", version, randomUUID()]);
 const code = (outcome: Outcome) => (outcome.ok ? "OK" : outcome.code);
-
-async function withStaff(run: (env: Env) => Promise<void>) {
-  await withFixture(async (fixture) => {
-    const web = new Client({ connectionString: process.env.DATABASE_URL! });
-    await web.connect();
-    const profiles: string[] = [];
-    const person = async (label?: string): Promise<Person> => {
-      const identity = await fixture.user(label);
-      const profile = await fixture.profileId(identity);
-      profiles.push(profile);
-      return { identity, profile };
-    };
-    // The first Admin is granted by an operator script (a later task): seed the first staff rows on the bootstrap connection.
-    const staff = async (who: Person, role: "ADMIN" | "MODERATOR") => {
-      await fixture.database.query("insert into app.platform_role (profile_id, role, granted_by) values ($1, $2, $1)", [who.profile, role]);
-    };
-    try {
-      const { rows: [existing] } = await fixture.database.query<{ n: number }>("select count(*)::int as n from app.platform_role where revoked_at is null");
-      assert.equal(existing!.n, 0, "staff tests need a disposable database with no active staff");
-      await run({ ...fixture, web, person, staff });
-    } finally {
-      await fixture.database.query("delete from app.rate_limit_bucket where subject_hash = any($1::text[])", [profiles.map((profile) => admissionSubject(profile))]);
-      await web.end();
-    }
-  });
-}
 
 const audits = async (db: Client, target: string) => (await db.query<{ action: string }>("select action from app.account_audit_event where target_profile_id = $1 order by created_at", [target])).rows.map((row) => row.action);
 const roleOf = async (web: Client, profile: string) => (await web.query("select app.staff_role($1) as role", [profile])).rows[0].role;
