@@ -25,7 +25,6 @@ export function jobDispatcher(env: Env = process.env): JobDispatcher | undefined
 export function modelGateway(env: Env = process.env): ModelGateway {
   const google = present(env.GOOGLE_GENERATIVE_AI_API_KEY) ? env.GOOGLE_GENERATIVE_AI_API_KEY : undefined;
   const anthropic = present(env.ANTHROPIC_API_KEY) ? env.ANTHROPIC_API_KEY : undefined;
-  if (!google && !anthropic) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY or ANTHROPIC_API_KEY is required to call a model.");
   const key = JSON.stringify([google, anthropic]);
   if (gateway?.key !== key) gateway = { key, value: createModelGateway({ apiKey: google, anthropicApiKey: anthropic }) };
   return gateway.value;

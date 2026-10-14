@@ -225,8 +225,9 @@ test("cancel is unknown: SQL cancel intent and fences decide, the event is never
 test("the composition module treats blank keys as absent and the test environment never reaches a real provider", () => {
   assert.equal(jobDispatcher({}), undefined);
   assert.equal(jobDispatcher({ INNGEST_EVENT_KEY: "  " }), undefined);
-  assert.throws(() => modelGateway({}), /GOOGLE_GENERATIVE_AI_API_KEY/);
-  assert.throws(() => modelGateway({ GOOGLE_GENERATIVE_AI_API_KEY: "", ANTHROPIC_API_KEY: " " }));
+  // A worker with no provider key still gets a gateway, so a run fails promptly as MODEL_UNAVAILABLE before its claim.
+  assert.equal(modelGateway({}).supports("gemini-3.8-flash"), false);
+  assert.equal(modelGateway({ GOOGLE_GENERATIVE_AI_API_KEY: "", ANTHROPIC_API_KEY: " " }).supports("anthropic/claude-sonnet-5-5"), false);
   const blanked = withoutProviderSecrets({ GOOGLE_GENERATIVE_AI_API_KEY: "x", ANTHROPIC_API_KEY: "w", INNGEST_EVENT_KEY: "y", INNGEST_SIGNING_KEY: "z", KEEP: "1" });
   assert.deepEqual(PROVIDER_SECRET_NAMES.map((name) => blanked[name]), ["", "", "", ""]);
   assert.equal(blanked.KEEP, "1");
@@ -274,6 +275,10 @@ test("an Anthropic model gets one bounded structured-output call and the same no
   assert.equal(body.max_tokens, AI_LIMITS.maxOutputTokens);
   assert.equal(body.output_format?.type ?? body.output_config?.format?.type, "json_schema", "provider-side structured output is requested");
   assert.equal(body.output_config?.effort, "low", "thinking shares max_tokens with the reply, so effort stays low");
+  // Older Claude models reject the effort parameter after the claim, so only the Claude 5 generation gets it.
+  const older = anthropicGateway(() => respond(claude('{"schemaVersion":1,"kind":"clarification","message":"hi"}')));
+  assert.equal((await older.gateway.generate(claudeRequest({ model: "anthropic/claude-sonnet-4-5-20250929" }), signal())).kind, "completed");
+  assert.equal(JSON.parse(older.calls[0]!.body).output_config?.effort, undefined);
 });
 
 test("Anthropic refusal, truncation, malformed output and a reply without usage are normalized, never thrown", async () => {
@@ -303,7 +308,6 @@ test("a gateway supports a model only when it can route it and holds that provid
 });
 
 test("the composition module builds a gateway from either key and blanks both in tests", () => {
-  assert.throws(() => modelGateway({}), /GOOGLE_GENERATIVE_AI_API_KEY or ANTHROPIC_API_KEY/);
   assert.equal(modelGateway({ ANTHROPIC_API_KEY: "fake-for-construction-only" }).supports("anthropic/claude-sonnet-5-5"), true);
   assert.equal(modelGateway({ ANTHROPIC_API_KEY: "fake-for-construction-only" }).supports("gemini-3.8-flash"), false);
   assert.ok(PROVIDER_SECRET_NAMES.includes("ANTHROPIC_API_KEY"));

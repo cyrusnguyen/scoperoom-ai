@@ -59,6 +59,9 @@ function normalize(error: unknown): ModelReply {
 /** `apiKey` is Google's (the original single provider); `anthropicApiKey` adds Anthropic. A provider without a key is not supported. */
 export type ModelAdapterOptions = { apiKey?: string; anthropicApiKey?: string; fetch?: typeof fetch };
 
+/** Claude models that accept `effort`: the Claude 5 generation (Opus, Sonnet, Haiku and Fable 5.x). */
+const CLAUDE_EFFORT = /^claude-(?:opus|sonnet|haiku|fable)-5(?:-|$)/;
+
 /** Provider-reported token counts only: the SDK turns an absent count into 0, so a field the provider did not send stays null. */
 function reportedUsage(provider: "google" | "anthropic", metadata: Record<string, Record<string, unknown>> | undefined, usage: { inputTokens?: number; outputTokens?: number }) {
   const raw = (provider === "google" ? metadata?.google?.usageMetadata : metadata?.anthropic?.usage) as Record<string, unknown> | undefined ?? {};
@@ -74,7 +77,7 @@ export function createModelGateway({ apiKey, anthropicApiKey, fetch: transport =
   };
   const resolve = (model: string) => {
     const route = modelRoute(model), provider = route && providers[route.provider];
-    return route && provider ? { name: route.provider, model: provider(route.id) } : null;
+    return route && provider ? { name: route.provider, id: route.id, model: provider(route.id) } : null;
   };
   return {
     supports: (model) => resolve(model) !== null,
@@ -92,9 +95,10 @@ export function createModelGateway({ apiKey, anthropicApiKey, fetch: transport =
           output: rawJson(request.outputSchema),
           maxOutputTokens: request.maxOutputTokens,
           maxRetries: 0, // hidden SDK inference retries are never allowed: the SQL claim is the only authority for a call
-          // ponytail: one fixed effort for every Claude model. Sonnet 5.5 always thinks and its thinking counts toward the same
-          // maxOutputTokens as the JSON reply, so low effort leaves the budget to the answer; revisit with measured smoke usage.
-          ...(target.name === "anthropic" ? { providerOptions: { anthropic: { effort: "low" } } } : {}),
+          // ponytail: one fixed effort for the Claude 5 generation. Sonnet 5.5 always thinks and its thinking counts toward the same
+          // maxOutputTokens as the JSON reply, so low effort leaves the budget to the answer; older Claude models reject the parameter
+          // (after the claim), so they get none. Revisit with measured smoke usage.
+          ...(target.name === "anthropic" && CLAUDE_EFFORT.test(target.id) ? { providerOptions: { anthropic: { effort: "low" } } } : {}),
           abortSignal: AbortSignal.any([signal, AbortSignal.timeout(request.timeoutMs)]),
         });
         const requestId = result.response.id;
