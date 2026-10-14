@@ -14,7 +14,8 @@ export function releaseSha(value) {
 export function releaseOrigin(name, value) {
   let url;
   try { url = new URL(value ?? ""); } catch { url = null; }
-  if (!url || url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash) throw new Error(`${name} must be the production site's bare https origin.`);
+  const local = url && /^(?:localhost|.*\.localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1?\])$/.test(url.hostname);
+  if (!url || local || url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash) throw new Error(`${name} must be the production site's bare https origin.`);
   return url.origin;
 }
 
