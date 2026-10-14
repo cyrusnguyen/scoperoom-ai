@@ -3,7 +3,7 @@ import type { Prisma } from "../../../../prisma/generated/client.ts";
 import { asJson } from "../../drafts/server/execute-command.ts";
 import { keyPattern, uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import {
-  checkReceipt, findReceipt, lockActor, lockOwnerCapacity, lockProject, ownerPlan, profileFor, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
+  checkReceipt, findReceipt, lockActor, lockOwnerCapacity, lockProject, ownerPlan, projectRole, profileFor, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
   withDatabase, type ProjectRow, type Transaction,
 } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
@@ -138,8 +138,9 @@ export async function admitRun(identity: ProjectIdentity, projectId: string, inp
       await lockActor(tx, profile.id, identity.authUserId, true);
       // The owner's limits are read under the lock staff limit changes take, so a change cannot interleave with this admission.
       // ownerId is immutable, so an unlocked read may choose the guard before the project lock (lock order 2 then 3, as restore does).
-      const owner = await tx.project.findUnique({ where: { id: projectId }, select: { ownerId: true } });
-      if (owner) await lockOwnerCapacity(tx, owner.ownerId);
+      // Only a current member takes that owner-wide lock; requireMember below stays the authoritative check under the project lock.
+      const owner = await tx.project.findUnique({ where: { id: projectId }, select: { id: true, ownerId: true } });
+      if (owner && await projectRole(tx, owner, profile.id)) await lockOwnerCapacity(tx, owner.ownerId);
       let project = await lockProject(tx, profile.id, projectId);
       const role = requireMember(project);
       const receipt = await findReceipt(tx, profile.id, "PROJECT", project.id, input.key);
