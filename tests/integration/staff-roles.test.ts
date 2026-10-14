@@ -267,3 +267,30 @@ test("an actor who loses their staff role while the call waits for the account l
     assert.deepEqual(await audits(database, target.profile), []);
   });
 });
+
+test("a limit lowered while an admission waits is the limit that admission enforces", { skip: !canRun }, async () => {
+  await withStaff(async ({ person, database }) => {
+    const owner = await person();
+    const project = (await createProject(owner.identity, { name: "Racing limits", key: randomUUID() })).id;
+    const input = await startInput(database, project);
+    // A staff limit change holds the owner's entitlement lock while it lowers the total to zero.
+    const change = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
+    await change.connect();
+    try {
+      await change.query("BEGIN");
+      await change.query("SELECT app.lock_pilot_entitlement($1)", [owner.profile]);
+      await change.query(`INSERT INTO app.pilot_entitlement (profile_id, granted_by_operator, ai_total_run_limit, ai_daily_run_limit) VALUES ($1, $1, 0, 30)
+        ON CONFLICT (profile_id) DO UPDATE SET ai_total_run_limit = 0`, [owner.profile]);
+      let settled = false;
+      const admission = admitRun(owner.identity, project, input, CONFIG).finally(() => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assert.equal(settled, false, "the admission waits for the limit change instead of reading the old limit");
+      await change.query("COMMIT");
+      await assert.rejects(admission, refused("AI_ALLOWANCE_EXCEEDED"));
+    } finally {
+      await change.query("ROLLBACK").catch(() => undefined);
+      await change.end();
+    }
+    assert.equal((await database.query("select count(*)::int n from app.ai_run where project_id = $1", [project])).rows[0].n, 0);
+  });
+});
