@@ -16,7 +16,8 @@ export function releaseOrigin(name, value) {
   let url;
   try { url = new URL(value ?? ""); } catch { url = null; }
   // A production origin is a domain name: any IP literal (every loopback spelling included) and localhost names are refused.
-  const local = url && (isIP(url.hostname.replace(/^\[|\]$/g, "")) !== 0 || /^(?:.*\.)?localhost$/.test(url.hostname));
+  const host = url?.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, ""); // brackets of an IPv6 literal, and a fully qualified trailing dot
+  const local = url && (isIP(host) !== 0 || /^(?:.*\.)?localhost$/.test(host));
   if (!url || local || url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash) throw new Error(`${name} must be the production site's bare https origin.`);
   return url.origin;
 }
