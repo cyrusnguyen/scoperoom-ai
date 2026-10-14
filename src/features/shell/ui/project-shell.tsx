@@ -386,7 +386,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
         </div>
         {dock.left === "docked" && resizer("left")}
         {projectId && bootstrap
-          ? <SyncProvider key={projectId} projectId={projectId} initial={bootstrap.status} live={() => liveOf(projectId)} bootstrap={(fence) => loadProject(projectId, undefined, fence)}>
+          ? <SyncProvider key={projectId} projectId={projectId} initial={bootstrap.status} live={() => liveOf(projectId)} bootstrap={(fence) => loadProject(projectId, undefined, fence).finally(() => void loadLists())}>
             <StudioProvider key={projectId} projectId={projectId} draft={bootstrap.draft} role={bootstrap.project.role} archived={bootstrap.project.status === "ARCHIVED"}
               narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={projectChanged} onInspect={() => openRightTab("details")} saveRef={saveChangesRef}>
               {main}{rightResizer}{panel}
