@@ -21,13 +21,13 @@ permissions:
   contents: read
   actions: read
 
-concurrency:
-  group: production-release
-  cancel-in-progress: false
-
 jobs:
   release:
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    # Job level, so a skipped run (failed CI, a pull request CI) never takes the group or replaces a waiting release.
+    concurrency:
+      group: production-release
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: release
