@@ -26,7 +26,7 @@ const completed = (output: unknown = GOOD, usage: { inputTokens: number | null; 
 
 function fakeGateway(handler: (request: ModelRequest, call: number) => Promise<ModelReply> | ModelReply) {
   const requests: ModelRequest[] = [];
-  const gateway: ModelGateway = { generate: async (request) => { requests.push(request); return handler(request, requests.length); } };
+  const gateway: ModelGateway = { supports: () => true, generate: async (request) => { requests.push(request); return handler(request, requests.length); } };
   return { gateway, requests };
 }
 function fakeDispatcher(handler: (request: JobRequest, call: number) => Promise<{ kind: "accepted"; taskId: string } | { kind: "unavailable" }> = async (_, call) => ({ kind: "accepted", taskId: `task-${call}` })) {
@@ -459,6 +459,40 @@ test("a capture from another prompt version fails before any claim and refunds i
     assert.equal(requests.length, 0);
     assert.deepEqual([(await row(runId)).state, (await row(runId)).failure_code, (await attempts(runId)).length], ["FAILED", "PROMPT_VERSION_UNSUPPORTED", 0]);
     assert.deepEqual(await budget(owner), { reserved_runs: 0, consumed_runs: 0 });
+  });
+});
+
+test("a run whose model this worker cannot serve fails before any claim and refunds its reservation", { skip: !canRun }, async () => {
+  await withWorld(async ({ admin, seed, row, attempts, budget }) => {
+    const { runId, owner } = await seed({ createdAt: ago(5) });
+    // A worker without the key for the run's provider (say AI_MODEL names Anthropic and only Google is configured) never claims a call.
+    const asked: string[] = [];
+    const requests: ModelRequest[] = [];
+    const gateway: ModelGateway = { supports: (model) => { asked.push(model); return false; }, generate: async (request) => { requests.push(request); return completed(); } };
+    await runAi(runId, gateway);
+    assert.equal(requests.length, 0);
+    assert.deepEqual(asked, [(await admin.query("select model from app.ai_run where id = $1", [runId])).rows[0].model]);
+    assert.deepEqual([(await row(runId)).state, (await row(runId)).failure_code, (await attempts(runId)).length], ["FAILED", "MODEL_UNAVAILABLE", 0]);
+    assert.deepEqual(await budget(owner), { reserved_runs: 0, consumed_runs: 0 });
+  });
+});
+
+test("a pre-claim failure for an actor who lost access records ACCESS_REVOKED, whichever check stopped the run", { skip: !canRun }, async () => {
+  await withWorld(async ({ admin, seed, row, attempts, budget }) => {
+    for (const cause of ["model", "prompt"] as const) {
+      const { runId, owner } = await seed({ createdAt: ago(5) });
+      await admin.query("update app.pilot_entitlement set active = false, revoked_at = clock_timestamp() where profile_id = $1", [owner]);
+      if (cause === "prompt") {
+        await admin.query("alter table app.ai_run disable trigger enforce_ai_run");
+        try { await admin.query(`update app.ai_run set capture = jsonb_set(capture, '{versions,prompt}', '"2026-10-03.1"') where id = $1`, [runId]); } finally { await admin.query("alter table app.ai_run enable trigger enforce_ai_run"); }
+      }
+      const requests: ModelRequest[] = [];
+      const gateway: ModelGateway = { supports: () => cause !== "model", generate: async (request) => { requests.push(request); return completed(); } };
+      await runAi(runId, gateway);
+      assert.equal(requests.length, 0, cause);
+      assert.deepEqual([(await row(runId)).state, (await row(runId)).failure_code, (await attempts(runId)).length], ["FAILED", "ACCESS_REVOKED", 0], cause);
+      assert.deepEqual(await budget(owner), { reserved_runs: 0, consumed_runs: 0 }, cause);
+    }
   });
 });
 

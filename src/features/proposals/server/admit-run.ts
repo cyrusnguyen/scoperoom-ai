@@ -11,6 +11,7 @@ import { accountPlan } from "../../projects/server/plan.ts";
 import { assertSourceCapacity, insertPromptEvidence } from "../../sources/server/source-versions.ts";
 import { AI_LIMITS, parseStartRunInput, startBody, startBodyBytes, type StartRunInput, type TaskKind } from "../contracts/tasks.ts";
 import { evidenceStats } from "../domain/capture.ts";
+import { modelRoute } from "../domain/model-route.ts";
 import { captureSaved } from "./capture.ts";
 import { applicableCapacityFull } from "./applicability.ts";
 import { settleOverdueRuns } from "./settle-runs.ts";
@@ -28,8 +29,8 @@ export function aiConfiguration(env: Partial<NodeJS.ProcessEnv> = process.env): 
   const { AI_MODEL: model, AI_EXECUTION_BINDING: executionBinding } = env;
   const valid = (value: string | undefined, max: number): value is string => Boolean(value) && value!.length <= max && /^[\x21-\x7e]+$/.test(value!);
   // The binding is the release SHA bound at admission; 128 characters is the admission limit.
-  // A quoted model id (copied with its quotes into a provider setting) would reach the provider after a run is reserved.
-  if (!valid(model, 200) || /["'`]/.test(model) || !valid(executionBinding, 128)) throw new ProjectError("UNAVAILABLE");
+  // A quoted or unroutable model id (an unknown provider prefix) would otherwise reach a provider after a run is reserved.
+  if (!valid(model, 200) || /["'`]/.test(model) || !modelRoute(model) || !valid(executionBinding, 128)) throw new ProjectError("UNAVAILABLE");
   return { model, executionBinding };
 }
 

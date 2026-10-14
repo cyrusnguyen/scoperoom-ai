@@ -86,7 +86,7 @@ test("an interrupted second validation exhausts the two-call ceiling and a deliv
     await waitUntil(attempt.deadline_at);
     assert.equal((await claim()).out_status, "CEILING");
     let calls = 0;
-    await runAi(runId, { generate: async () => { calls += 1; return { kind: "unknown" }; } });
+    await runAi(runId, { supports: () => true, generate: async () => { calls += 1; return { kind: "unknown" }; } });
     assert.equal(calls, 0);
     assert.equal((await row()).state, "FAILED");
     assert.equal((await row()).failure_code, "ATTEMPTS_EXHAUSTED");
@@ -132,7 +132,7 @@ test("an interrupted validation cannot recover after the original run deadline",
     await waitUntil((await row()).deadline_at);
     assert.equal((await claim()).out_status, "DEADLINE");
     let calls = 0;
-    await runAi(runId, { generate: async () => { calls += 1; return { kind: "unknown" }; } });
+    await runAi(runId, { supports: () => true, generate: async () => { calls += 1; return { kind: "unknown" }; } });
     assert.equal(calls, 0);
     assert.equal((await row()).state, "TIMED_OUT");
     assert.equal((await attempts()).length, 1);

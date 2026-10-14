@@ -62,6 +62,8 @@ export async function runAi(runId: string, gateway: ModelGateway, db?: Sql): Pro
     if (!run || run.terminal || !run.capture) return;
     // Only this build's prompt is available: another captured version would be sent with rules its record does not name, and a retry could mix prompts. Fail before any claim, so the reservation is released.
     if (run.capture.versions.prompt !== PROMPT_VERSION) { await finishRun(sql, runId, "FAILED", "PROMPT_VERSION_UNSUPPORTED"); return; }
+    // No key on this worker for the run's provider (or an unroutable model): fail before any claim, so the reservation is released.
+    if (!gateway.supports(run.model)) { await finishRun(sql, runId, "FAILED", "MODEL_UNAVAILABLE"); return; }
     const request = buildModelRequest({ id: runId, model: run.model, capture: run.capture }, ATTEMPT_MS);
     // Too large for the configured ceiling: fail before any claim, so the reservation is released, not consumed.
     if (estimateInputTokens(request) > request.maxInputTokens) { await finishRun(sql, runId, "FAILED", "INPUT_TOO_LARGE"); return; }
