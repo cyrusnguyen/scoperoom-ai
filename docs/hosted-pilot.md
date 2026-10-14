@@ -27,7 +27,7 @@ Hosted Supabase signs database certificates with its own root CA. Download it fr
 | `WORKER_DATABASE_URL` | | | yes | transaction pooler (port 6543), user `app_worker_runtime.<ref>` |
 | `SCOPEROOM_DATABASE_CA_PEM` | | yes | yes | the CA file's PEM text; runtime connections then verify the server whatever TLS parameters the URL carries |
 | `SCOPEROOM_REALTIME_SIGNING_ALG`, `_KEY`, `_KID` | | yes | | `ES256`, the imported key's PKCS8 PEM and its key id ([Realtime setup](realtime-setup.md)) |
-| `AI_MODEL` | | yes | | the bare model id (no spaces, line breaks or quotes); removing it pauses AI admission |
+| `AI_MODEL` | | yes | | the provider and model: `anthropic/claude-sonnet-5-5`, `google/<id>`, or a bare Google id (no spaces, line breaks or quotes); removing it pauses AI admission |
 | `AI_TOTAL_RUN_LIMIT`, `AI_DAILY_RUN_LIMIT` | | optional | | default-plan AI limits for every account; blank keeps 5 total and 30 per day |
 | `AI_EXECUTION_BINDING` | | yes | yes | the release SHA, the same on both projects, set before deploying (section 4) |
 | `INNGEST_EVENT_KEY` | | yes | yes | the Inngest Production event key; added to the web project by hand, synced to the worker by the integration |
@@ -35,15 +35,16 @@ Hosted Supabase signs database certificates with its own root CA. Download it fr
 | `SCOPEROOM_SERVICE` | | | yes | `worker` |
 | `SCOPEROOM_WORKER_SECRET` | `.env.hosted.local` | | yes | at least 32 random characters; the bearer token the pg_cron jobs send to the worker's maintenance endpoints. Never on the web project |
 | `SCOPEROOM_WORKER_URL` | `.env.hosted.local` | | | the worker's bare https origin, read by `scripts/db/schedule.mjs` |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | | | yes | the Gemini key; never on the web project |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | | | yes | the Gemini key, when `AI_MODEL` is a Google model; never on the web project |
+| `ANTHROPIC_API_KEY` | | | yes | the Anthropic key, when `AI_MODEL` names `anthropic/`; never on the web project |
 | `SMOKE_URL`, `SMOKE_{OWNER,EDITOR,VIEWER}_{EMAIL,PASSWORD}`, `SMOKE_AI` | `.env.smoke.local` | | | production origin, three synthetic accounts, `1` only when an AI budget is authorized |
 
-Never set bootstrap or migrator credentials on a Vercel project. The web project never holds `WORKER_DATABASE_URL`, `GOOGLE_GENERATIVE_AI_API_KEY`, `INNGEST_SIGNING_KEY` or `SCOPEROOM_WORKER_SECRET`. The worker project holds only the variables marked above (plus Vercel system variables). `INNGEST_DEV` is never set on either project.
+Never set bootstrap or migrator credentials on a Vercel project. The web project never holds `WORKER_DATABASE_URL`, `GOOGLE_GENERATIVE_AI_API_KEY`, `ANTHROPIC_API_KEY`, `INNGEST_SIGNING_KEY` or `SCOPEROOM_WORKER_SECRET`. The worker project holds only the variables marked above (plus Vercel system variables). `INNGEST_DEV` is never set on either project.
 
 Vercel settings that cost a release during the first cutover:
 
 - Each project's Function Region must be the region closest to the Supabase database. From a distant region the AI admission transaction (about 25 sequential queries) exceeded Prisma's 5 second interactive-transaction timeout and surfaced as 503 `UNAVAILABLE`.
-- `AI_MODEL` must be the bare model id. Admission rejects anything else (spaces, line breaks, quotes) with 503.
+- `AI_MODEL` is `anthropic/<id>`, `google/<id>` or a bare Google id. Admission rejects anything else (spaces, line breaks, quotes, an unknown provider) with 503. To switch providers, add the new provider's key to the worker, then change `AI_MODEL` on the web project and release; a run admitted for a provider whose key the worker lacks fails before any claim with its reservation released.
 - `AI_EXECUTION_BINDING` must be a Production environment variable on both projects. `vercel deploy -e` did not reach the runtime with CLI 48.
 - Sign up for Inngest through the Vercel Marketplace (free plan: up to 50K executions a month, used by AI runs only; each run is a few executions) and grant the Inngest integration access to the worker project ONLY. The integration creates its own Inngest organization: open its dashboard from Vercel (Integrations, Inngest, Open in Inngest); a separate inngest.com sign-in shows a different, empty account. The integration copies `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` to the worker as sensitive values, which cannot be read back, so paste the event key into the web project by hand from the Inngest dashboard (Production, Event Keys); the web project never gets `INNGEST_SIGNING_KEY`. After granting, check that the worker project holds nothing beyond the worker column's variables (plus the integration's two keys) and that the web project has no `INNGEST_SIGNING_KEY`.
 - Keep Vercel Standard Deployment Protection on the worker project; its production domain stays reachable for Inngest. The integration's sync-on-deploy stays disabled for CLI deploys (its toggle does not save), so every worker deploy is followed by an explicit `PUT /api/inngest` that must answer "Successfully registered".
