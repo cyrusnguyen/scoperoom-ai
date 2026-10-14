@@ -15,7 +15,7 @@ test("entitlement input: a reset or a full limit set, strictly", () => {
   const bad: unknown[] = [
     { ...limits, expectedVersion: -1 }, { ...limits, expectedVersion: 1.5 }, { ...limits, reason: "   " }, { ...limits, reason: "x".repeat(501) },
     { ...limits, maxOwnedProjects: null }, { ...limits, maxOwnedProjects: -1 }, { ...limits, aiDailyRuns: -1 }, { ...limits, aiTotalRuns: "5" },
-    { ...limits, maxOwnedProjects: 2 ** 31 }, { ...limits, blocked: "no" }, { ...limits, expiresAt: "tomorrow" }, { ...limits, expiresAt: "2030-13-45T00:00:00Z" },
+    { ...limits, maxOwnedProjects: 2 ** 31 }, { ...limits, blocked: "no" }, { ...limits, expiresAt: "tomorrow" }, { ...limits, expiresAt: "2030-13-45T00:00:00Z" }, { ...limits, expiresAt: "2026-02-29T23:59:59Z" }, { ...limits, expiresAt: "2026-02-30T23:59:59Z" }, { ...limits, expiresAt: "0000-01-01T00:00:00Z" },
     { ...limits, extra: 1 }, { ...limits, reset: true }, { key, expectedVersion: 0, reason: "r", reset: true, maxOwnedProjects: 1 },
     { key: "short", expectedVersion: 0, reason: "r", reset: true }, { ...limits, key: undefined }, [], null,
   ];

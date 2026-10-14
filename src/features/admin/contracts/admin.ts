@@ -52,6 +52,10 @@ export function validateEntitlementInput(input: unknown): EntitlementInput {
     if (typeof value.expiresAt !== "string" || !/^\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:\d{2})$/.test(value.expiresAt)) invalid();
     const parsed = new Date(value.expiresAt);
     if (Number.isNaN(parsed.getTime())) invalid();
+    // Date silently rolls a nonexistent day (2026-02-30) into the next month: the written calendar date must exist as written.
+    const [year, month, day] = value.expiresAt.slice(0, 10).split("-").map(Number) as [number, number, number];
+    const calendar = new Date(Date.UTC(year, month - 1, day));
+    if (year < 1000 || calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) invalid();
     expiresAt = parsed.toISOString();
   }
   return {
