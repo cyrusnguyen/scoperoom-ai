@@ -1,11 +1,10 @@
 import { Prisma } from "../../../../prisma/generated/client.ts";
 import { uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
-import { readAsMember, type Transaction } from "../../projects/server/access.ts";
+import { ownerPlan, readAsMember, type Transaction } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { AI_LIMITS, type AiAllowance, type RunApplication, type RunPage, type RunState, type RunDisposition, type RunSummary, type RunUsage, type RunView, type TaskKind } from "../contracts/tasks.ts";
 import { inspectRun, sourcesChanged, type ApplicabilityRow } from "./applicability.ts";
 import { settleOverdueRuns } from "./settle-runs.ts";
-import { accountPlan } from "../../projects/server/plan.ts";
 import { aiAllowance } from "../domain/allowance.ts";
 
 const BODY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -101,7 +100,7 @@ export async function readRun(identity: ProjectIdentity, projectId: string, runI
  * Read inside the member snapshot, so it matches the page it is shown with; admission rechecks under its own locks.
  */
 async function ownerAllowance(tx: Transaction, ownerId: string, viewerId: string) {
-  const plan = accountPlan(await tx.pilotEntitlement.findUnique({ where: { profileId: ownerId } }));
+  const plan = await ownerPlan(tx, ownerId);
   const [used] = await tx.$queryRaw<Array<{ total: number; today: number }>>`
     SELECT coalesce(sum(reserved_runs + consumed_runs), 0)::integer AS total,
       coalesce(sum(reserved_runs + consumed_runs) FILTER (WHERE day = (transaction_timestamp() AT TIME ZONE 'UTC')::date), 0)::integer AS today

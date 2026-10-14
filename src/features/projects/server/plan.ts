@@ -3,6 +3,7 @@
  * override: while active and unexpired it replaces the defaults; an inactive or revoked row blocks project ownership and AI; an
  * expired row falls back to the defaults. A null AI limit is unlimited. AI usage is charged to the project owner's plan.
  * AI_TOTAL_RUN_LIMIT and AI_DAILY_RUN_LIMIT replace the default AI limits for every account on the default plan.
+ * A staff owner (Admin or Moderator, 2026-10-14) has unlimited AI in the projects they own; project limits and a block are unchanged.
  */
 export const DEFAULT_PLAN = { maxOwnedProjects: 10, aiTotalRuns: 5, aiDailyRuns: 30 } as const;
 type PlanEnv = Partial<NodeJS.ProcessEnv>;
@@ -22,9 +23,11 @@ export type EntitlementOverride = {
 };
 export type AccountPlan = { allowed: boolean; maxOwnedProjects: number; aiTotalRuns: number | null; aiDailyRuns: number | null };
 
-export function accountPlan(override: EntitlementOverride | null, now = new Date(), env: PlanEnv = process.env): AccountPlan {
+export function accountPlan(override: EntitlementOverride | null, now = new Date(), env: PlanEnv = process.env, staff = false): AccountPlan {
   if (override && (!override.active || override.revokedAt)) return { allowed: false, maxOwnedProjects: 0, aiTotalRuns: 0, aiDailyRuns: 0 };
-  if (!override || (override.expiresAt && override.expiresAt <= now)) return { allowed: true, maxOwnedProjects: DEFAULT_PLAN.maxOwnedProjects,
-    aiTotalRuns: envLimit(env, "AI_TOTAL_RUN_LIMIT", DEFAULT_PLAN.aiTotalRuns), aiDailyRuns: envLimit(env, "AI_DAILY_RUN_LIMIT", DEFAULT_PLAN.aiDailyRuns) };
-  return { allowed: true, maxOwnedProjects: override.maxOwnedProjects, aiTotalRuns: override.aiTotalRunLimit, aiDailyRuns: override.aiDailyRunLimit };
+  const plan = !override || (override.expiresAt && override.expiresAt <= now)
+    ? { allowed: true, maxOwnedProjects: DEFAULT_PLAN.maxOwnedProjects,
+      aiTotalRuns: envLimit(env, "AI_TOTAL_RUN_LIMIT", DEFAULT_PLAN.aiTotalRuns), aiDailyRuns: envLimit(env, "AI_DAILY_RUN_LIMIT", DEFAULT_PLAN.aiDailyRuns) }
+    : { allowed: true, maxOwnedProjects: override.maxOwnedProjects, aiTotalRuns: override.aiTotalRunLimit, aiDailyRuns: override.aiDailyRunLimit };
+  return staff ? { ...plan, aiTotalRuns: null, aiDailyRuns: null } : plan;
 }

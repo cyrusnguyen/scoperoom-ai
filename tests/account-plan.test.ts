@@ -40,3 +40,14 @@ test("an inactive or revoked override blocks ownership and AI, even after it exp
   assert.deepEqual(accountPlan(override({ revokedAt: now }), now), blocked);
   assert.deepEqual(accountPlan(override({ active: false, expiresAt: new Date("2026-10-01T00:00:00Z") }), now), blocked);
 });
+
+test("a staff owner has unlimited AI, keeps the project limit, and a block still blocks", () => {
+  const unlimited = { aiTotalRuns: null, aiDailyRuns: null };
+  assert.deepEqual(accountPlan(null, now, {}, true), { allowed: true, maxOwnedProjects: 10, ...unlimited });
+  assert.deepEqual(accountPlan(override({ maxOwnedProjects: 3, aiTotalRunLimit: 5, aiDailyRunLimit: 2 }), now, {}, true), { allowed: true, maxOwnedProjects: 3, ...unlimited });
+  assert.deepEqual(accountPlan(override({ expiresAt: now }), now, {}, true), { allowed: true, maxOwnedProjects: 10, ...unlimited });
+  const blocked = { allowed: false, maxOwnedProjects: 0, aiTotalRuns: 0, aiDailyRuns: 0 };
+  assert.deepEqual(accountPlan(override({ active: false }), now, {}, true), blocked);
+  assert.deepEqual(accountPlan(override({ revokedAt: now }), now, {}, true), blocked);
+  assert.deepEqual(accountPlan(null, now, {}, false), { allowed: true, ...DEFAULT_PLAN });
+});

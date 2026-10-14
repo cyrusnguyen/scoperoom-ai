@@ -152,6 +152,7 @@ model UserProfile {
   createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt             DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   entitlement           PilotEntitlement?
+  platformRole          PlatformRole?
   ownedProjects         Project[]           @relation("project_owner")
   projectMemberships    ProjectMembership[]
   receipts              MutationReceipt[]
@@ -188,9 +189,39 @@ model PilotEntitlement {
   revokedAt         DateTime?   @map("revoked_at") @db.Timestamptz(6)
   aiTotalRunLimit   Int?        @map("ai_total_run_limit")
   aiDailyRunLimit   Int?        @default(30) @map("ai_daily_run_limit")
+  version           Int         @default(1)
   profile           UserProfile @relation(fields: [profileId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@map("pilot_entitlement")
+  @@schema("app")
+}
+
+model PlatformRole {
+  profileId  String      @id @map("profile_id") @db.Uuid
+  role       String
+  grantedBy  String      @map("granted_by") @db.Uuid
+  grantedAt  DateTime    @default(dbgenerated("clock_timestamp()")) @map("granted_at") @db.Timestamptz(6)
+  revokedAt  DateTime?   @map("revoked_at") @db.Timestamptz(6)
+  version    Int         @default(1)
+  profile    UserProfile @relation(fields: [profileId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("platform_role")
+  @@schema("app")
+}
+
+model AccountAuditEvent {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorId         String   @map("actor_id") @db.Uuid
+  targetProfileId String   @map("target_profile_id") @db.Uuid
+  action          String
+  before          Json?
+  after           Json?
+  reason          String
+  requestId       String   @map("request_id") @db.Uuid
+  createdAt       DateTime @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(6)
+
+  @@index([targetProfileId, createdAt(sort: Desc)], map: "account_audit_event_target_created")
+  @@map("account_audit_event")
   @@schema("app")
 }
 

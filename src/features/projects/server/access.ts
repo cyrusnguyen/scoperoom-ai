@@ -147,9 +147,15 @@ export async function lockOwnerCapacity(tx: Transaction, ownerId: string) {
   await tx.$queryRaw`SELECT app.lock_pilot_entitlement(${ownerId}::uuid)::text AS locked`;
 }
 
+/** The account's plan, with unlimited AI for an active Admin or Moderator, read in the caller's transaction. Pass the project owner for AI and capacity. */
+export async function ownerPlan(tx: Transaction, profileId: string) {
+  const [staff] = await tx.$queryRaw<Array<{ role: string | null }>>`SELECT app.staff_role(${profileId}::uuid) AS role`;
+  return accountPlan(await tx.pilotEntitlement.findUnique({ where: { profileId } }), new Date(), process.env, staff?.role != null);
+}
+
 /** Call after lockOwnerCapacity in the same READ COMMITTED transaction so the count includes every committed project. */
 export async function assertOwnerCapacity(tx: Transaction, ownerId: string) {
-  const plan = accountPlan(await tx.pilotEntitlement.findUnique({ where: { profileId: ownerId } }));
+  const plan = await ownerPlan(tx, ownerId);
   if (!plan.allowed) throw new ProjectError("ENTITLEMENT_REQUIRED");
   const activeOwned = await tx.project.count({ where: { ownerId, status: "ACTIVE" } });
   if (activeOwned >= plan.maxOwnedProjects) throw new ProjectError("OWNED_PROJECT_LIMIT", { activeOwned, maxOwned: plan.maxOwnedProjects });

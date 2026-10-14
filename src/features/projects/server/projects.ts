@@ -6,12 +6,11 @@ import {
   type ProjectIdentity, type ProjectListItem, type ProjectLists, type ProjectStatusView, uuid, validateProjectCreateInput,
 } from "../contracts/project.ts";
 import {
-  assertOwnerCapacity, checkReceipt, findReceipt, lockActor, lockOwnerCapacity, profileFor, readProject,
+  assertOwnerCapacity, checkReceipt, findReceipt, lockActor, lockOwnerCapacity, ownerPlan, profileFor, readProject,
   receiptString, requestHash, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow,
 } from "./access.ts";
 import { settleOverdueRuns } from "../../proposals/server/settle-runs.ts";
 import { ProjectError } from "./errors.ts";
-import { accountPlan } from "./plan.ts";
 
 const CREATE_OPERATION = "CREATE_PROJECT_V2";
 
@@ -71,7 +70,7 @@ export async function listProjects(identity: ProjectIdentity): Promise<ProjectLi
       const owned = await group(Prisma.sql`project.owner_id = ${profile.id}::uuid AND project.status = 'ACTIVE'::app.project_status`);
       const shared = await group(Prisma.sql`project.owner_id <> ${profile.id}::uuid AND project.status = 'ACTIVE'::app.project_status`);
       const archived = await group(Prisma.sql`project.status = 'ARCHIVED'::app.project_status`);
-      const plan = accountPlan(await tx.pilotEntitlement.findUnique({ where: { profileId: profile.id } }));
+      const plan = await ownerPlan(tx, profile.id);
       const activeOwned = await tx.project.count({ where: { ownerId: profile.id, status: "ACTIVE" } });
       return { owned, shared, archived, capacity: { entitled: plan.allowed, activeOwned, maxOwned: plan.maxOwnedProjects, canCreate: plan.allowed && activeOwned < plan.maxOwnedProjects } };
     });
