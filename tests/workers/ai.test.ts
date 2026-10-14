@@ -477,6 +477,25 @@ test("a run whose model this worker cannot serve fails before any claim and refu
   });
 });
 
+test("a pre-claim failure for an actor who lost access records ACCESS_REVOKED, whichever check stopped the run", { skip: !canRun }, async () => {
+  await withWorld(async ({ admin, seed, row, attempts, budget }) => {
+    for (const cause of ["model", "prompt"] as const) {
+      const { runId, owner } = await seed({ createdAt: ago(5) });
+      await admin.query("update app.pilot_entitlement set active = false, revoked_at = clock_timestamp() where profile_id = $1", [owner]);
+      if (cause === "prompt") {
+        await admin.query("alter table app.ai_run disable trigger enforce_ai_run");
+        try { await admin.query(`update app.ai_run set capture = jsonb_set(capture, '{versions,prompt}', '"2026-10-03.1"') where id = $1`, [runId]); } finally { await admin.query("alter table app.ai_run enable trigger enforce_ai_run"); }
+      }
+      const requests: ModelRequest[] = [];
+      const gateway: ModelGateway = { supports: () => cause !== "model", generate: async (request) => { requests.push(request); return completed(); } };
+      await runAi(runId, gateway);
+      assert.equal(requests.length, 0, cause);
+      assert.deepEqual([(await row(runId)).state, (await row(runId)).failure_code, (await attempts(runId)).length], ["FAILED", "ACCESS_REVOKED", 0], cause);
+      assert.deepEqual(await budget(owner), { reserved_runs: 0, consumed_runs: 0 }, cause);
+    }
+  });
+});
+
 for (const fence of ["cancel", "deadline", "authority", "cancel-and-deadline"] as const) {
   test(`an oversized capture honors the committed ${fence} fence before input failure`, { skip: !canRun }, async () => {
     await withWorld(async ({ admin, seed, row, attempts, budget }) => {
