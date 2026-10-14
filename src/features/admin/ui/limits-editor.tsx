@@ -53,7 +53,9 @@ export default function LimitsEditor({ account, defaults, reloading, onSaved, on
   return <section className="admin-section" aria-labelledby="limits-heading">
     <h2 id="limits-heading">Limits</h2>
     <form onSubmit={submit} noValidate>
-      {account.staffRole && <p className="admin-note">AI is unlimited while this account has a staff role. These limits apply if the role is removed.</p>}
+      {account.staffRole && <p className="admin-note">{account.plan === "BLOCKED"
+        ? "This staff account is blocked: a block overrides the staff role's unlimited AI."
+        : "AI is unlimited while this account has a staff role. These limits apply if the role is removed."}</p>}
       {limitField("limit-projects", "Max owned projects", projects, setProjects)}
       {limitField("limit-ai-total", "AI total runs", total, setTotal, { on: totalUnlimited, set: setTotalUnlimited })}
       {limitField("limit-ai-daily", "AI daily runs", daily, setDaily, { on: dailyUnlimited, set: setDailyUnlimited })}
