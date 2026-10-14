@@ -29,6 +29,12 @@ export function accountView(row: SummaryRow, now = new Date(), env: Partial<Node
   };
 }
 
+/** The default plan without the staff exemption: what the limits editor starts from when an account has no stored override. */
+export function defaultLimits(now = new Date(), env: Partial<NodeJS.ProcessEnv> = process.env): AccountView["limits"] {
+  const { maxOwnedProjects, aiTotalRuns, aiDailyRuns } = accountPlan(null, now, env);
+  return { maxOwnedProjects, aiTotalRuns, aiDailyRuns };
+}
+
 export function auditView(entry: Omit<AuditView, "createdAt"> & { createdAt: string }): AuditView {
   return { ...entry, createdAt: new Date(entry.createdAt).toISOString() };
 }

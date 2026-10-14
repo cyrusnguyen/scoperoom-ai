@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AccountView } from "../src/features/admin/contracts/admin.ts";
-import { actionLabel, expiryFor, parseLimit, planLabel, relativeTime, snapshotLabel, usageLabel } from "../src/features/admin/ui/format.ts";
+import { actionLabel, expiryFor, limitsStart, parseLimit, planLabel, relativeTime, snapshotLabel, usageLabel } from "../src/features/admin/ui/format.ts";
 
 const now = Date.parse("2026-10-14T12:00:00Z");
 const account = (plan: AccountView["plan"], expiresAt: string | null = null): Pick<AccountView, "plan" | "override"> =>
@@ -41,6 +41,15 @@ test("limit text and expiry round trip", () => {
   assert.equal(expiryFor("2026-12-31", null), "2026-12-31T23:59:59.000Z");
   assert.equal(expiryFor("2026-12-01", "2026-12-01T08:30:00.000Z"), "2026-12-01T08:30:00.000Z");
   assert.equal(expiryFor("2026-12-02", "2026-12-01T08:30:00.000Z"), "2026-12-02T23:59:59.000Z");
+});
+
+test("the limits form starts from the stored override or the default plan, never the staff exemption", () => {
+  const defaults = { maxOwnedProjects: 10, aiTotalRuns: 5, aiDailyRuns: 30 };
+  // A staff account on the default plan is enforced as unlimited AI; the form must still start from the default numbers.
+  const staff = { override: null, limits: { maxOwnedProjects: 10, aiTotalRuns: null, aiDailyRuns: null } };
+  assert.deepEqual(limitsStart(staff, defaults), defaults);
+  const stored = { maxOwnedProjects: 3, aiTotalRuns: null, aiDailyRuns: 9, expiresAt: null };
+  assert.equal(limitsStart({ override: stored }, defaults), stored);
 });
 
 test("audit entries read in words", () => {

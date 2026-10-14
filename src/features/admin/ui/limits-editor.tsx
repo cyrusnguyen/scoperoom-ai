@@ -3,14 +3,14 @@
 import { useState, type SubmitEvent } from "react";
 import type { AccountView } from "@/features/admin/contracts/admin";
 import Dialog, { CancelFocus } from "@/features/shell/ui/dialog";
-import { expiryFor, MAX_LIMIT, parseLimit } from "./format";
+import { expiryFor, limitsStart, MAX_LIMIT, parseLimit } from "./format";
 import { CONFLICT_MESSAGE, REASON_MAX, reasonLength, useChange } from "./use-change";
 
-type Props = { account: AccountView; reloading: boolean; onSaved: () => Promise<void>; onReload: () => void };
+type Props = { account: AccountView; defaults: AccountView["limits"]; reloading: boolean; onSaved: () => Promise<void>; onReload: () => void };
 
-/** Limits, expiry and block for Admins and Moderators. The form starts from the stored override, or from what is enforced today. */
-export default function LimitsEditor({ account, reloading, onSaved, onReload }: Props) {
-  const start = account.override ?? account.limits;
+/** Limits, expiry and block for Admins and Moderators. The form edits the stored override, or starts from the default plan. */
+export default function LimitsEditor({ account, defaults, reloading, onSaved, onReload }: Props) {
+  const start = limitsStart(account, defaults);
   const [projects, setProjects] = useState(String(start.maxOwnedProjects));
   const [total, setTotal] = useState(start.aiTotalRuns === null ? "" : String(start.aiTotalRuns));
   const [totalUnlimited, setTotalUnlimited] = useState(start.aiTotalRuns === null);
@@ -53,6 +53,7 @@ export default function LimitsEditor({ account, reloading, onSaved, onReload }: 
   return <section className="admin-section" aria-labelledby="limits-heading">
     <h2 id="limits-heading">Limits</h2>
     <form onSubmit={submit} noValidate>
+      {account.staffRole && <p className="admin-note">AI is unlimited while this account has a staff role. These limits apply if the role is removed.</p>}
       {limitField("limit-projects", "Max owned projects", projects, setProjects)}
       {limitField("limit-ai-total", "AI total runs", total, setTotal, { on: totalUnlimited, set: setTotalUnlimited })}
       {limitField("limit-ai-daily", "AI daily runs", daily, setDaily, { on: dailyUnlimited, set: setDailyUnlimited })}

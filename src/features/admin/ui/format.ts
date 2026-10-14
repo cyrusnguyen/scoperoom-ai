@@ -58,6 +58,12 @@ export function snapshotLabel(action: string, value: unknown): string {
   return parts.join(", ");
 }
 
+/**
+ * Where the limits form starts: the stored override, or the default plan when there is none. Never the enforced limits, which for
+ * staff carry the unlimited-AI exemption; saving those would store an unlimited override that outlives the role.
+ */
+export const limitsStart = (account: Pick<AccountView, "override">, defaults: AccountView["limits"]) => account.override ?? defaults;
+
 export const MAX_LIMIT = 2_147_483_647;
 /** A whole number from 0 to the server's maximum, or null when the text is anything else. */
 export function parseLimit(text: string): number | null {

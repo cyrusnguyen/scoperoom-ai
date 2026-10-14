@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import type { Client } from "pg";
 import { encodeAccountCursor } from "../../src/features/admin/contracts/admin.ts";
+import { defaultLimits } from "../../src/features/admin/server/account-view.ts";
 import { listAccounts, readAccount } from "../../src/features/admin/server/accounts.ts";
 import { setEntitlement, setRole } from "../../src/features/admin/server/changes.ts";
 import { parseStartRunInput } from "../../src/features/proposals/contracts/tasks.ts";
@@ -48,6 +49,7 @@ test("Admins and Moderators list and read accounts; a normal account gets NOT_FO
       assert.equal(page.nextCursor, null);
       const detail = await readAccount(viewer.identity, target.profile);
       assert.deepEqual([detail.account.profileId, detail.account.displayName, detail.account.plan, detail.audit], [target.profile, `${label} Target`, "DEFAULT", []]);
+      assert.deepEqual(detail.defaultLimits, defaultLimits());
     }
 
     const denied = refusal("NOT_FOUND");

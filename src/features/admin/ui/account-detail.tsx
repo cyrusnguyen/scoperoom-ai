@@ -8,7 +8,7 @@ import { absoluteTime, actionLabel, planLabel, projectsLabel, relativeTime, role
 import LimitsEditor from "./limits-editor";
 import RoleEditor from "./role-editor";
 
-type Detail = { account: AccountView; audit: AuditView[] };
+type Detail = { account: AccountView; audit: AuditView[]; defaultLimits: AccountView["limits"] };
 
 /** One account: summary, limits editor, role editor (Admins), history. `role` is the viewer's staff role, decided on the server. */
 export default function AccountDetail({ profileId, role }: { profileId: string; role: StaffRole }) {
@@ -55,7 +55,7 @@ export default function AccountDetail({ profileId, role }: { profileId: string; 
     {error && <div className="error-message" role="alert"><p>{error}</p><button type="button" className="button small" disabled={reloading} onClick={reload}>Retry</button></div>}
     {!account ? (!error && <p className="admin-note">Loading account…</p>) : <>
       <Summary account={account} now={now} />
-      <LimitsEditor key={`limits-${account.entitlementVersion}`} account={account} reloading={reloading} onSaved={saveDone} onReload={reload} />
+      <LimitsEditor key={`limits-${account.entitlementVersion}`} account={account} defaults={detail.defaultLimits} reloading={reloading} onSaved={saveDone} onReload={reload} />
       {role === "ADMIN" && <RoleEditor key={`role-${account.roleVersion}`} account={account} reloading={reloading} onSaved={saveDone} onReload={reload} />}
       <History audit={detail.audit} />
     </>}

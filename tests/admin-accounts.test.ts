@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { decodeAccountCursor, encodeAccountCursor, validateAccountQuery, validateEntitlementInput, validateRoleInput } from "../src/features/admin/contracts/admin.ts";
 import { ProjectError } from "../src/features/projects/server/errors.ts";
-import { accountView, type SummaryRow } from "../src/features/admin/server/account-view.ts";
+import { accountView, defaultLimits, type SummaryRow } from "../src/features/admin/server/account-view.ts";
 import { staffError } from "../src/features/admin/server/staff-error.ts";
 
 const key = "k".repeat(24);
@@ -72,6 +72,9 @@ test("account view shows the limits that are enforced", () => {
   assert.equal(blocked.override?.maxOwnedProjects, 4);
   const staff = accountView({ ...row, staff_role: "MODERATOR" }, new Date(), env);
   assert.deepEqual([staff.staffRole, staff.limits.aiTotalRuns, staff.limits.aiDailyRuns, staff.limits.maxOwnedProjects], ["MODERATOR", null, null, 10]);
+  // The editor's start without an override: the default plan with its AI settings, never the staff exemption.
+  assert.deepEqual(defaultLimits(new Date(), env), { maxOwnedProjects: 10, aiTotalRuns: 5, aiDailyRuns: 30 });
+  assert.deepEqual(defaultLimits(new Date(), { AI_TOTAL_RUN_LIMIT: "7", AI_DAILY_RUN_LIMIT: "3" }), { maxOwnedProjects: 10, aiTotalRuns: 7, aiDailyRuns: 3 });
 });
 
 test("staff refusals map to the shared error codes", () => {

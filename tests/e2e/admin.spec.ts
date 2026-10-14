@@ -103,6 +103,12 @@ test.describe("staff screens", () => {
     await expect(page.getByRole("status")).toHaveText("Saved.");
     await expect(page.locator(".admin-summary")).toContainText("Moderator");
     await expect(page.getByRole("region", { name: "History" })).toContainText("Set role");
+
+    // Staff AI is unlimited, but the limits form starts from the default plan, so saving it never stores an unlimited override.
+    await page.reload();
+    await expect(limits(page)).toContainText("AI is unlimited while this account has a staff role.");
+    await expect(limits(page).getByRole("checkbox", { name: "Unlimited AI total runs" })).not.toBeChecked();
+    await expect(limits(page).getByLabel("AI total runs", { exact: true })).toHaveValue("5");
   });
 
   test("a Moderator edits limits and gets no role editor", async ({ page }) => {
