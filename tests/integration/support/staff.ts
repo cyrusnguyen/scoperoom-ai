@@ -4,7 +4,8 @@ import { admissionSubject } from "../../../src/features/proposals/server/admit-r
 import { withFixture, type Fixture, type Identity } from "./fixture.ts";
 
 // The last-Admin guard counts every active Admin in the database, so staff tests must not overlap. Integration files run in parallel
-// processes against one database; this advisory lock (held on the bootstrap connection for the whole run) makes them take turns.
+// processes against one database; this advisory lock makes them take turns. It is held on its own connection around the whole fixture,
+// so it is released only after the fixture's cleanup has deleted this test's staff rows.
 const STAFF_TESTS_LOCK = 20261014;
 
 export type Person = { identity: Identity; profile: string };
@@ -12,8 +13,18 @@ export type StaffEnv = Fixture & { web: Client; person: (label?: string) => Prom
 
 /** A fixture plus a connection as the web runtime role, people with profiles, and a way to seed the first staff rows. */
 export async function withStaff(run: (env: StaffEnv) => Promise<void>) {
+  const lock = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
+  await lock.connect();
+  try {
+    await lock.query("select pg_advisory_lock($1)", [STAFF_TESTS_LOCK]);
+    await withStaffFixture(run);
+  } finally {
+    await lock.end();
+  }
+}
+
+async function withStaffFixture(run: (env: StaffEnv) => Promise<void>) {
   await withFixture(async (fixture) => {
-    await fixture.database.query("select pg_advisory_lock($1)", [STAFF_TESTS_LOCK]);
     const web = new Client({ connectionString: process.env.DATABASE_URL! });
     await web.connect();
     const profiles: string[] = [];
@@ -34,7 +45,6 @@ export async function withStaff(run: (env: StaffEnv) => Promise<void>) {
     } finally {
       await fixture.database.query("delete from app.rate_limit_bucket where subject_hash = any($1::text[])", [profiles.map((profile) => admissionSubject(profile))]);
       await web.end();
-      await fixture.database.query("select pg_advisory_unlock($1)", [STAFF_TESTS_LOCK]);
     }
   });
 }
