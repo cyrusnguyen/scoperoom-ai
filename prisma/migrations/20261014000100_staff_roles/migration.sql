@@ -218,12 +218,16 @@ BEGIN
   IF p_limit IS NULL OR p_limit < 1 OR length(v_query) > 100 OR (p_after_name IS NULL) <> (p_after_id IS NULL) THEN
     RAISE EXCEPTION 'a limit of at least 1, a query of at most 100 characters and a complete cursor are required' USING ERRCODE = '22023';
   END IF;
+  -- The page of profiles is chosen first, so the summary (counts and sums) runs only for the rows returned.
   RETURN QUERY
-  SELECT summary.* FROM app.user_profile profile CROSS JOIN LATERAL app.account_summary(profile.id) summary
-  WHERE (v_query IS NULL OR v_query = '' OR position(lower(v_query) IN lower(profile.display_name)) > 0)
-    AND (p_after_name IS NULL OR (profile.display_name, profile.id) > (p_after_name, p_after_id))
-  ORDER BY profile.display_name, profile.id
-  LIMIT least(p_limit, 50);
+  SELECT summary.* FROM (
+    SELECT profile.id, profile.display_name FROM app.user_profile profile
+    WHERE (v_query IS NULL OR v_query = '' OR position(lower(v_query) IN lower(profile.display_name)) > 0)
+      AND (p_after_name IS NULL OR (profile.display_name, profile.id) > (p_after_name, p_after_id))
+    ORDER BY profile.display_name, profile.id
+    LIMIT least(p_limit, 50)
+  ) page CROSS JOIN LATERAL app.account_summary(page.id) summary
+  ORDER BY page.display_name, page.id;
 END;
 $$;
 
