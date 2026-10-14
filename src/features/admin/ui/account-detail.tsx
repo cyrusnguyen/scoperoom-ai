@@ -26,7 +26,7 @@ export default function AccountDetail({ profileId, role }: { profileId: string; 
     controller.current?.abort();
     const { signal } = (controller.current = new AbortController());
     setReloading(true);
-    const result = await apiRead<Detail>(`/api/admin/accounts/${profileId}`, signal);
+    const result = await apiRead<Detail>(`/api/admin/accounts/${encodeURIComponent(profileId)}`, signal);
     if (mine !== ticket.current || signal.aborted || sessionEnded(result)) return false;
     setReloading(false);
     if (!result.ok) { setError(result.message); return false; }
