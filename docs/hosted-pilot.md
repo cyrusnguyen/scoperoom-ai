@@ -102,19 +102,31 @@ To release a chosen commit (an older one included, which a manual run of a commi
 
 The `release` environment holds these secrets: `VERCEL_TOKEN` (a team-scoped Vercel token), `SCOPEROOM_BOOTSTRAP_DATABASE_URL`, `MIGRATION_DATABASE_URL`, `SCOPEROOM_SUPABASE_PROJECT_REF`, `SCOPEROOM_ENVIRONMENT_ID`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SCOPEROOM_DATABASE_CA_PEM` and `SMOKE_{OWNER,EDITOR,VIEWER}_{EMAIL,PASSWORD}`; and these variables: `VERCEL_ORG_ID`, `VERCEL_WEB_PROJECT`, `VERCEL_WORKER_PROJECT`, `WEB_URL` and `WORKER_URL`. Set or rotate one with `gh secret set <NAME> --env release` (or `gh variable set`), which reads the value from stdin. The database URLs are the same as in `.env.hosted.local`; the workflow replaces their `sslrootcert` path with its own CA file.
 
-Manual fallback (the same steps by hand, for example when GitHub Actions is down):
+Manual fallback (the same steps by hand, for example when GitHub Actions is down). Run every tool from the export of the chosen SHA, so its migrations and scripts match what is deployed, and in this order:
 
-```powershell
-git archive <sha> -o ..\scoperoom-release.tar
-mkdir ..\scoperoom-release; tar -xf ..\scoperoom-release.tar -C ..\scoperoom-release
-node --env-file=.env.hosted.local scripts/db/migrate.mjs
-cd ..\scoperoom-release
-vercel link --yes --project <worker project>; vercel deploy --prod --yes
-curl -X PUT https://<worker origin>/api/inngest
-vercel link --yes --project <web project>; vercel deploy --prod --yes
-```
+1. Export the SHA and install its tooling:
 
-Set `AI_EXECUTION_BINDING` on both projects first, then run `schedule.mjs verify`, the edge checks (`WEB_URL=... WORKER_URL=... node scripts/release/release.mjs checks`) and `corepack pnpm test:smoke:hosted`. When appending a line to `.env.hosted.local`, start with a newline: the file may not end with one.
+   ```powershell
+   git archive <sha> -o ..\scoperoom-release.tar
+   mkdir ..\scoperoom-release; tar -xf ..\scoperoom-release.tar -C ..\scoperoom-release
+   cd ..\scoperoom-release
+   corepack pnpm install --frozen-lockfile; corepack pnpm db:generate
+   ```
+
+2. Migrate from the export: `node --env-file=..\scoperoom-ai\.env.hosted.local scripts/db/migrate.mjs`.
+3. Set `AI_EXECUTION_BINDING` to the full SHA as a Production variable on both projects (Vercel, project Settings, Environment Variables). A variable change reaches only later deployments, so this comes before both deploys.
+4. Deploy the worker, register it, then deploy the web project, all from the export:
+
+   ```powershell
+   vercel link --yes --project <worker project>; vercel deploy --prod --yes
+   curl -X PUT https://<worker origin>/api/inngest
+   vercel link --yes --project <web project>; vercel deploy --prod --yes
+   ```
+
+   The `PUT` must answer "Successfully registered".
+5. From the export: `node --env-file=..\scoperoom-ai\.env.hosted.local scripts/db/schedule.mjs verify`, the edge checks (`WEB_URL=... WORKER_URL=... node scripts/release/release.mjs checks`) and `corepack pnpm test:smoke:hosted` (copy `.env.smoke.local` into the export first, and delete the export afterwards).
+
+When appending a line to `.env.hosted.local`, start with a newline: the file may not end with one.
 
 `node --env-file=.env.hosted.local scripts/db/schedule.mjs apply` creates the repair (every minute) and cleanup (hourly) pg_cron jobs and stores the worker secret in Supabase Vault. Run it by hand once after the first worker deploy, and again only when the worker origin or `SCOPEROOM_WORKER_SECRET` changes (update the worker variable, redeploy the worker, then rerun `apply`). The web logger writes only failed requests, so `releaseId` cannot be read from healthy traffic; identify a release by its deployment ID.
 
