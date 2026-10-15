@@ -321,3 +321,16 @@ test("the composition module builds a gateway from either key and blanks both in
   assert.ok(PROVIDER_SECRET_NAMES.includes("ANTHROPIC_API_KEY"));
   assert.equal(withoutProviderSecrets({ ANTHROPIC_API_KEY: "x" }).ANTHROPIC_API_KEY, "");
 });
+
+test("a follow-up sends earlier turns as context without run ids; other requests have no conversation key", () => {
+  const capture = resultFixture().generate();
+  const plain = buildModelRequest({ id: "run-1", model: "model-x", capture }, 5_000);
+  assert.equal("conversation" in (plain.context as Record<string, unknown>), false);
+  const runId = "11111111-1111-4111-8111-111111111111";
+  const followUp = buildModelRequest({ id: "run-2", model: "model-x", capture: { ...capture, conversation: { continuesRunId: runId, turns: [
+    { runId, role: "user", text: "Make a checkout flow" }, { runId, role: "assistant", text: "Which payment methods?" }] } } }, 5_000);
+  assert.deepEqual((followUp.context as Record<string, unknown>).conversation, [
+    { role: "user", text: "Make a checkout flow" }, { role: "assistant", text: "Which payment methods?" }]);
+  assert.match(followUp.systemInstruction, /context\.conversation/);
+  assert.ok(!JSON.stringify(followUp.context).includes(runId));
+});
