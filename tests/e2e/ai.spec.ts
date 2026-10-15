@@ -1626,3 +1626,46 @@ test("uncertain committed old-parent Start replays exact URL bytes and key after
     expect(await (await page.request.get(path)).json()).toEqual(before);
   } finally { await page.unroute(startUrl); }
 });
+
+test("Reply to a clarification continues the conversation with its earlier turns", async ({ page, workerAccount }) => {
+  test.setTimeout(120_000);
+  const database = workerAccount.database;
+  const projectId = await createProjectViaApi(page, "AI follow-up project");
+  await page.goto(`/app/projects/${projectId}`);
+  const question: ValidatedProposal = { schemaVersion: 1, kind: "clarification", message: "Which payment methods should checkout support?" };
+  const asked = await storedSyntheticCompletion(page, database, projectId, false, question);
+  await page.goto(`/app/projects/${projectId}?run=${asked.runId}`);
+  await openAi(page);
+  await expect(panel(page).locator(".run-state")).toHaveText("Needs clarification");
+  const thread = panel(page).getByRole("region", { name: "Conversation" });
+  await expect(thread.getByText(asked.prompt, { exact: true })).toBeVisible();
+  await expect(thread.getByText(question.message, { exact: true })).toBeVisible();
+  await panel(page).getByRole("button", { name: "Reply to this question" }).click();
+  await expect(panel(page).getByLabel("Instruction", { exact: true })).toBeFocused();
+  await panel(page).getByLabel("Instruction", { exact: true }).fill("Cards and PayPal");
+  const startUrl = `${appUrl}/api/projects/${projectId}/ai-runs`;
+  const startedPromise = page.waitForResponse((response) => response.url() === startUrl && response.request().method() === "POST");
+  await panel(page).getByRole("button", { name: "Generate", exact: true }).click();
+  const started = await startedPromise;
+  expect(started.status()).toBe(202);
+  expect((started.request().postDataJSON() as { context: Record<string, unknown> }).context).toEqual({ selection: null, sources: [], continuesRunId: asked.runId });
+  const runId = (await started.json() as { runId: string }).runId;
+  const { rows: [stored] } = await database.query("select capture from app.ai_run where id = $1", [runId]);
+  expect(stored.capture.conversation.turns.map((turn: { text: string }) => turn.text)).toEqual([asked.prompt, question.message]);
+});
+
+test("Start a new conversation sends no earlier turns", async ({ page, workerAccount }) => {
+  test.setTimeout(120_000);
+  const projectId = await createProjectViaApi(page, "AI fresh conversation project");
+  await page.goto(`/app/projects/${projectId}`);
+  const asked = await storedSyntheticCompletion(page, workerAccount.database, projectId, false, { schemaVersion: 1, kind: "clarification", message: "Which payment methods?" });
+  await page.goto(`/app/projects/${projectId}?run=${asked.runId}`);
+  await openAi(page);
+  await panel(page).getByRole("button", { name: "Start a new conversation" }).click();
+  await expect(panel(page).getByRole("region", { name: "Conversation" })).toBeHidden();
+  await panel(page).getByLabel("Instruction", { exact: true }).fill("A brand new flow");
+  const startUrl = `${appUrl}/api/projects/${projectId}/ai-runs`;
+  const startedPromise = page.waitForResponse((response) => response.url() === startUrl && response.request().method() === "POST");
+  await panel(page).getByRole("button", { name: "Generate", exact: true }).click();
+  expect(((await startedPromise).request().postDataJSON() as { context: Record<string, unknown> }).context).toEqual({ selection: null, sources: [] });
+});

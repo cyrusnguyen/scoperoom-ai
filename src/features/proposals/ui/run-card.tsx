@@ -18,10 +18,10 @@ export function runLabel(run: RunSummary & Partial<Pick<RunView, "applicability"
 const active = (state: RunView["state"]) => ["QUEUED", "RUNNING", "VALIDATING"].includes(state);
 const tokens = (value: number | null) => value === null ? "Unknown" : value.toLocaleString();
 
-export function RunCard({ run, summary, busy, canWrite, blockedByPending, pendingApply, pendingControl, onCancel, onDiscard, onApply, onRegenerate, onRetryControl, inspection = false, authorityConfirmed = true }: {
+export function RunCard({ run, summary, busy, canWrite, blockedByPending, pendingApply, pendingControl, onCancel, onDiscard, onApply, onRegenerate, onReply, onRetryControl, inspection = false, authorityConfirmed = true }: {
   authorityConfirmed?: boolean; inspection?: boolean; run: RunView; summary?: RunSummary; busy: boolean; canWrite: boolean; blockedByPending: boolean; pendingApply: { key: string; body: Record<string, unknown>; runId?: string } | null;
   pendingControl: { kind: string } | null; onCancel: () => void; onDiscard: () => void; onApply: (request: { key: string; body: Record<string, unknown>; runId: string }) => void;
-  onRegenerate: () => void; onRetryControl: () => void;
+  onRegenerate: () => void; onReply?: () => void; onRetryControl: () => void;
 }) {
   const capture = run.capture;
   const selected = capture?.selection;
@@ -42,6 +42,7 @@ export function RunCard({ run, summary, busy, canWrite, blockedByPending, pendin
     {pendingControl && <button type="button" className="button quiet small" onClick={onRetryControl} disabled={busy}>Retry {pendingControl.kind}</button>}
     {canWrite && authorityConfirmed && active(run.state) && !run.cancelRequestedAt && !pendingControl?.kind.includes("cancel") && <button type="button" className="button quiet small" disabled={busy || blockedByPending} onClick={onCancel}>Cancel run…</button>}
     {canWrite && authorityConfirmed && run.state === "SUCCEEDED" && run.disposition === "AVAILABLE" && run.resultHash && !pendingControl?.kind.includes("discard") && <button type="button" className="button quiet small" disabled={busy || blockedByPending} onClick={onDiscard}>Discard proposal</button>}
+    {canWrite && authorityConfirmed && onReply && run.state === "SUCCEEDED" && run.result?.kind === "clarification" && <button type="button" className="button primary small" disabled={busy || blockedByPending} onClick={onReply}>Reply to this question</button>}
     {canWrite && authorityConfirmed && run.capture && <button type="button" className="button quiet small" disabled={busy || blockedByPending || Boolean(pendingApply || pendingControl)} onClick={onRegenerate}>{run.applicability === "STALE" ? "Improve again with a fresh capture" : "Regenerate with a fresh capture"}</button>}
     </div>}
     {inspection && <p className="muted" role="status">Read-only history. New Apply and run controls are available to project editors in an active project.</p>}
