@@ -5,6 +5,7 @@ import { SOURCE_LIMITS } from "../../sources/contracts/source-version.ts";
 import type { ProjectRow, Transaction } from "../../projects/server/access.ts";
 import { AI_LIMITS, CAPTURE_SCHEMA_VERSION, type CapturedInput, type ProposalDiff, type RunApplicability, type RunApplicabilityReason, type RunDisposition, type RunState, type TaskKind, type ValidatedProposal } from "../contracts/tasks.ts";
 import { canonicalJson, captureInput, jsonbTextBytes, sha256 } from "../domain/capture.ts";
+import { parseConversation } from "../domain/conversation.ts";
 import { proposalDiff } from "../domain/proposal-diff.ts";
 import { validateResult } from "../domain/validate-result.ts";
 
@@ -49,11 +50,15 @@ export function validatedCapture(row: CaptureRow): CapturedInput | null {
         nodes: Object.fromEntries(capture.graph.nodes.map(({ readOnly, ...node }) => { void readOnly; return [node.id, { ...node, origin: "HUMAN", sourceRefs: [] }]; })),
         edges: Object.fromEntries(capture.graph.edges.map(edge => [edge.id, { ...edge, origin: "HUMAN", sourceRefs: [] }])),
       });
+      // A follow-up's stored turns are checked strictly, then fed back so the rebuild reproduces them exactly.
+      const conversation = capture.conversation === undefined ? undefined : parseConversation(capture.conversation);
       const projectId = "00000000-0000-4000-8000-000000000000";
       const rebuilt = captureInput({ projectId, draftId: capture.draftId, documentRevision: capture.documentRevision, parentSnapshotId: capture.parentSnapshotId,
-        document, sources: capture.sources.map(source => ({ ...source, projectId, currentVersionId: source.expectedCurrentVersionId })), model: capture.versions.model },
+        document, sources: capture.sources.map(source => ({ ...source, projectId, currentVersionId: source.expectedCurrentVersionId })), model: capture.versions.model,
+        ...(conversation ? { conversation } : {}) },
       { key: "stored-capture", taskType: capture.taskType, prompt: capture.prompt, draftId: capture.draftId, expectedDocumentRevision: capture.documentRevision,
-        expectedParentSnapshotId: capture.parentSnapshotId, context: { selection: capture.selection, sources: capture.sources.map(source => ({ sourceVersionId: source.sourceVersionId, expectedCurrentVersionId: source.expectedCurrentVersionId })) } });
+        expectedParentSnapshotId: capture.parentSnapshotId, context: { selection: capture.selection, sources: capture.sources.map(source => ({ sourceVersionId: source.sourceVersionId, expectedCurrentVersionId: source.expectedCurrentVersionId })),
+          ...(conversation ? { continuesRunId: conversation.continuesRunId } : {}) } });
       rebuilt.capture.versions.prompt = capture.versions.prompt; // Historical prompt versions are attribution, not a request to recapture.
       if (canonicalJson(rebuilt.capture) !== canonicalJson(capture)) throw new Error();
     } catch { capture = null; }
