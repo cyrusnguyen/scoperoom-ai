@@ -527,7 +527,7 @@ test("a follow-up whose continued instruction alone exceeds the conversation bou
   await withAdmission(async ({ person, projectFor, database }) => {
     const owner = await person(); const projectId = await projectFor(owner);
     const huge = await seedAiRun(database, { projectId, owner: owner.profile, shape: "SUCCEEDED", uncounted: true, prompt: "😀".repeat(AI_LIMITS.promptCodePoints) });
-    await assert.rejects(admitRun(owner.identity, projectId, await start(database, projectId, { continuesRunId: huge }), CONFIG), refused("LIMIT_EXCEEDED"));
+    await assert.rejects(admitRun(owner.identity, projectId, await start(database, projectId, { continuesRunId: huge }), CONFIG), refused("AI_CONVERSATION_TOO_LONG"));
   });
 });
 

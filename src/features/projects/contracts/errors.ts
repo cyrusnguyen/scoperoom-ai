@@ -34,6 +34,7 @@ export const projectErrors = {
   AI_RESULT_UNAVAILABLE: { status: 409, message: "This proposal is no longer available. Start a new proposal." },
   AI_RESULT_MISMATCH: { status: 409, message: "This proposal does not match the reviewed result." },
   AI_CONVERSATION_UNAVAILABLE: { status: 409, message: "The earlier AI answer is no longer available to continue. Start a new conversation." },
+  AI_CONVERSATION_TOO_LONG: { status: 422, message: "The earlier conversation is too long to include. Start a new conversation." },
   AI_BUDGET_EXCEEDED: { status: 429, message: "This project owner has used the daily AI request limit. It resets at 00:00 UTC." },
   AI_ALLOWANCE_EXCEEDED: { status: 429, message: "This project owner has used all the AI requests included in their plan." },
   RATE_LIMITED: { status: 429, message: "Too many AI requests. Wait a minute and try again." },

@@ -33,6 +33,10 @@ test("a long proposal summary lists 20 changes, counts the rest and stays within
   const summary = summarizeResult(many, "AVAILABLE");
   assert.ok(Array.from(summary).length <= AI_LIMITS.turnSummaryCodePoints);
   assert.ok(summary.endsWith("…"));
+  const shortLabels: ValidatedProposal = { ...many, operations: many.operations.map((operation) => ({
+    ...operation, edit: { command: "ADD_NODE" as const, payload: { ref: operation.id, flowId: "flow", kind: "ACTION" as const, label: "Pay", description: "", actorLabel: "" } },
+  })) };
+  assert.ok(summarizeResult(shortLabels, "AVAILABLE").includes("\n- and 10 more"));
 });
 
 test("runTurns appends the run's own instruction and answer after its earlier turns", () => {
@@ -78,4 +82,6 @@ test("parseConversation accepts what buildConversation stores and rejects anythi
   bad({ ...built, turns: [...built.turns].reverse() }); // must end with the answer
   bad({ ...built, turns: built.turns.map((turn) => ({ ...turn, role: "system" })) });
   bad({ ...built, turns: built.turns.map((turn) => ({ ...turn, text: "" })) });
+  bad({ ...built, turns: Array.from({ length: AI_LIMITS.conversationTurns + 2 }, (_, index) => ({ runId: built.continuesRunId, role: index % 2 ? "assistant" : "user", text: "Hi" })) }); // too many turns
+  bad({ ...built, turns: ["user", "assistant"].map((role) => ({ runId: built.continuesRunId, role, text: "😀".repeat(4_000) })) }); // 32,000 bytes: each turn is within the prompt bound, together they are over the byte bound
 });

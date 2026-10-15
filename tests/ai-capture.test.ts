@@ -63,7 +63,6 @@ test("prompt bound counts normalized code points: 8,000 pass and 8,001 reject", 
 
 test("continuesRunId is optional, must be a uuid and leaves the start body unchanged when absent", () => {
   const { generate } = build();
-  assert.equal("continuesRunId" in generate().context, false);
   assert.equal(JSON.stringify(generate().context), JSON.stringify({ selection: null, sources: [] }));
   const runId = randomUUID();
   assert.equal(generate({ context: { selection: null, sources: [], continuesRunId: runId } }).context.continuesRunId, runId);

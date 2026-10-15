@@ -18,7 +18,7 @@ export function acknowledgedInstruction(current: string, submitted: string): str
 /**
  * Which run a new instruction continues, and the turns it will carry. A run that answered is continued itself; a follow-up that
  * failed or is still running keeps continuing the answer it continued, so one failure never silently drops the thread.
- * The server trims the oldest turns to its bounds; this shows the same newest turns.
+ * The server trims the oldest turns to its turn and byte bounds; the UI mirrors only the turn-count bound, not the byte bound.
  */
 export function followUpThread(run: Pick<RunView, "id" | "state" | "result" | "capture" | "disposition"> | null, startFresh: boolean): { runId: string; turns: ConversationTurn[] } | null {
   if (!run || startFresh) return null;

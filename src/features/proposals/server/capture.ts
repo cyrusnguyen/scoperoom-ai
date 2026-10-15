@@ -31,7 +31,8 @@ async function savedSources(tx: Transaction, projectId: string, input: StartRunI
 
 /**
  * The run a follow-up continues: this project only, SUCCEEDED, bodies retained and still valid. Anything else is one refusal, so
- * an id from another project or a guess reveals nothing. Read without a lock: a terminal run's capture and result never change.
+ * an id from another project or a guess reveals nothing. Read without a lock: the capture and result of a terminal run never change,
+ * and the disposition in the answer summary is a snapshot taken at admission.
  */
 async function savedConversation(tx: Transaction, project: ProjectRow, input: StartRunInput): Promise<CapturedConversation | undefined> {
   const runId = input.context.continuesRunId;
@@ -48,7 +49,7 @@ async function savedConversation(tx: Transaction, project: ProjectRow, input: St
   try {
     return buildConversation({ id: row.id, capture: bodies.capture, result: bodies.result, disposition: row.disposition });
   } catch (error) {
-    if (error instanceof Error && error.message === "LIMIT_EXCEEDED") throw new ProjectError("LIMIT_EXCEEDED", { limit: "CONVERSATION_BYTES" });
+    if (error instanceof Error && error.message === "LIMIT_EXCEEDED") throw new ProjectError("AI_CONVERSATION_TOO_LONG");
     throw error;
   }
 }

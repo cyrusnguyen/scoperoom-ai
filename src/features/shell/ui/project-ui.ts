@@ -10,7 +10,7 @@ export type AiRequest =
   | (AiRequestBase & { kind: "start"; submittedText: string })
   | (AiRequestBase & { kind: "apply"; runId: string })
   | (AiRequestBase & { kind: "discard" | "cancel"; runId: string });
-export type AiUi = { instruction: string; action: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; selectedRunId: string | null; pendingRequest: AiRequest | null; startFresh?: boolean; applyPhase?: { key: string; projectId: string; runId: string; state: "uncertain" | "acknowledged" | "adopted"; draftId: string; documentRevision?: number; layoutRevision?: number } };
+export type AiUi = { instruction: string; action: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; selectedRunId: string | null; pendingRequest: AiRequest | null; startFresh: boolean; applyPhase?: { key: string; projectId: string; runId: string; state: "uncertain" | "acknowledged" | "adopted"; draftId: string; documentRevision?: number; layoutRevision?: number } };
 export type RightTab = "details" | "ai" | "specs" | "review";
 export type SpecsSelection =
   | { kind: "source"; sourceId: string; versionId: string | null; back: SpecsSelection; range?: { startLine: number; endLine: number } }
@@ -22,7 +22,7 @@ export type SpecsUi = { section: "sources" | "scope"; selected: SpecsSelection; 
 export type ProjectUi = { rightOpen: boolean; rightMounted: boolean; rightTab: RightTab; drafts: Record<string, string>; ai: AiUi; specs: SpecsUi; review: ReviewUi } & StudioUi;
 export type UiStore = Record<string, ProjectUi>;
 
-export const defaultAiUi: AiUi = { instruction: "", action: "PROPOSE_FLOW", selectedRunId: null, pendingRequest: null };
+export const defaultAiUi: AiUi = { instruction: "", action: "PROPOSE_FLOW", selectedRunId: null, pendingRequest: null, startFresh: false };
 export const defaultSpecsUi: SpecsUi = { section: "sources", selected: null, sourceScope: "user", pending: null, message: "" };
 
 /** Records the frozen body only for the reservation that owns it. */

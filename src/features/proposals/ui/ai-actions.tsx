@@ -64,7 +64,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
   const resources = useMemo(() => createRunResources({ projectId: studio.projectId, apiRead, adoptPage, adoptRun: setRun, adoptHistoryRun: setHistoryRun, adoptReadState: (destination, state) => setReads(current => ({ ...current, [destination]: state })) }), [studio.projectId, adoptPage]);
   const selectedSummary = page.runs.find((item) => item.id === ui.selectedRunId);
   const canWrite = status.status === "ACTIVE" && (status.role === "OWNER" || status.role === "EDITOR");
-  const thread = followUpThread(run, Boolean(ui.startFresh));
+  const thread = followUpThread(run, ui.startFresh);
   const activeJobVisible = Boolean((runTab === "current" && run && !isTerminal(run.state)) || (runTab === "history" && historyRun && !isTerminal(historyRun.state)));
 
   useEffect(() => { resources.setMissingCurrentHandler(ticket => update(current => recoverUnavailableCurrentRun(current,ticket))); return () => resources.setMissingCurrentHandler(undefined); }, [resources, update]);
@@ -111,7 +111,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
     const invocationFence = fence();
     const stillCurrent = () => mounted.current && invocationFence();
     const intent = uiRef.current;
-    const continuesRunId = followUpThread(run, Boolean(intent.startFresh))?.runId;
+    const continuesRunId = followUpThread(run, intent.startFresh)?.runId;
     const selectionIntent = studioRef.current.ui.selection;
     actionFlight.current = true;
     setBusy(true);
@@ -216,7 +216,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
       setMessage("We couldn’t confirm this request. Retry uses the same saved input and key.");
     } else {
       update((current) => ({ ...current, pendingRequest: null }));
-      setMessage(result.code === "LIMIT_EXCEEDED" && result.details?.limit === "CONVERSATION_BYTES" ? "The earlier conversation is too long to include. Start a new conversation." : result.message || "The AI request was refused. Your instruction is still here.");
+      setMessage(result.message || "The AI request was refused. Your instruction is still here.");
       if (result.status === 401 || result.status === 403 || result.status === 404) await revalidate("focus");
     }
   };
@@ -257,8 +257,14 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
   const regenerate = (selected: RunView) => {
     if (!selected.capture) { setMessage("The captured input has expired. Enter a new instruction for another run."); return; }
     if (ui.pendingRequest) { setMessage("Resolve the pending AI request before regenerating."); return; }
-    update((current) => ({ ...current, action: selected.taskType, instruction: selected.capture!.prompt }));
+    update((current) => ({ ...current, action: selected.taskType, instruction: selected.capture!.prompt, startFresh: true }));
     setMessage("Review the instruction and current selection, then submit to capture a fresh saved context.");
+    requestAnimationFrame(() => document.getElementById("ai-instruction")?.focus());
+  };
+
+  const startFresh = () => {
+    update((current) => ({ ...current, startFresh: true }));
+    setMessage("Your next instruction starts a new conversation.");
     requestAnimationFrame(() => document.getElementById("ai-instruction")?.focus());
   };
 
@@ -281,7 +287,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
       <section className="ai-current-content">
       <div className="ai-context"><span><Icon name="flow" size={13} />Saved draft · r{studio.savedDraft.documentRevision}</span>{ui.action === "REFINE_FLOW_SELECTION" && <span>{studio.ui.selection?.kind === "NODES" ? studio.ui.selection.ids.length : 0} steps selected</span>}</div>
       {ui.action === "REFINE_FLOW_SELECTION" && <p className="ai-selection">Selection: {studio.ui.selection?.kind === "NODES" ? studio.ui.selection.ids.map((id) => studio.draft.document.nodes[id]?.label ?? id).join(", ") : "none"}. Only these steps and their incident connections are in scope.</p>}
-      {thread && <ConversationThread turns={thread.turns} disabled={busy || Boolean(ui.pendingRequest)} onStartFresh={() => update((current) => ({ ...current, startFresh: true }))} />}
+      {thread && <ConversationThread turns={thread.turns} disabled={busy || Boolean(ui.pendingRequest)} onStartFresh={startFresh} />}
       <div className="ai-composer">
         <label htmlFor="ai-instruction">Instruction</label>
         <textarea id="ai-instruction" rows={4} maxLength={16000} value={ui.instruction} onChange={(event) => update((current) => ({ ...current, instruction: event.target.value }))} placeholder={ui.action === "PROPOSE_FLOW" ? "Describe the flow to create…" : "Describe how these steps should improve…"} />
@@ -302,7 +308,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
       pendingControl={ui.pendingRequest && (ui.pendingRequest.kind === "cancel" || ui.pendingRequest.kind === "discard") && ui.pendingRequest.runId === run.id ? ui.pendingRequest : null}
       onCancel={() => void runControl("cancel", run)} onDiscard={() => void runControl("discard", run)} onApply={(request) => void retryApply(request)} onRegenerate={() => regenerate(run)} onReply={reply}
       onRetryControl={() => void runControl(ui.pendingRequest?.kind === "cancel" ? "cancel" : "discard", run, true)} /> : reads.page === "loaded" && !page.runs.length && !ui.selectedRunId && <section className="detail-section ai-empty"><h2>Ready for your next idea</h2><p>Describe a flow, or select steps to improve. Review every suggestion before applying it.</p></section>}</>}
-    {runTab === "history" && <>{needsCurrentAttention && <p className="ai-history-return" role="status">A current AI request needs attention. <button type="button" className="button quiet small" onClick={returnToCurrent}>Return to Current</button></p>}{historyId ? <><button type="button" className="button quiet small" onClick={() => setHistoryId(null)}>Back to history</button>{reads.history === "error" ? <p role="alert">Could not load History run.</p> : !historyRun ? <p role="status">Loading History run…</p> : <RunCard inspection run={historyRun} summary={page.runs.find(item => item.id === historyRun.id)} busy={false} canWrite={false} blockedByPending={false} pendingApply={null} pendingControl={null} onCancel={() => {}} onDiscard={() => {}} onApply={() => {}} onRegenerate={() => {}} onRetryControl={() => {}} />}</> : <>{reads.page === "loaded" ? <><p className="muted">Choose a run to inspect its saved history.</p><RunHistory runs={page.runs} selectedId={null} nextCursor={page.nextCursor} loading={loadingMore} onSelect={chooseRun} onMore={() => void loadMore()} /></> : <p role={reads.page === "error" ? "alert" : "status"}>{reads.page === "error" ? "Could not load AI history." : "Loading AI history…"}</p>}</>}</>}
+    {runTab === "history" && <>{needsCurrentAttention && <p className="ai-history-return" role="status">A current AI request needs attention. <button type="button" className="button quiet small" onClick={returnToCurrent}>Return to Current</button></p>}{historyId ? <><button type="button" className="button quiet small" onClick={() => setHistoryId(null)}>Back to history</button>{reads.history === "error" ? <p role="alert">Could not load History run.</p> : !historyRun ? <p role="status">Loading History run…</p> : <RunCard inspection run={historyRun} summary={page.runs.find(item => item.id === historyRun.id)} busy={false} canWrite={false} blockedByPending={false} pendingApply={null} pendingControl={null} onCancel={() => {}} onDiscard={() => {}} onApply={() => {}} onRegenerate={() => {}} onReply={() => {}} onRetryControl={() => {}} />}</> : <>{reads.page === "loaded" ? <><p className="muted">Choose a run to inspect its saved history.</p><RunHistory runs={page.runs} selectedId={null} nextCursor={page.nextCursor} loading={loadingMore} onSelect={chooseRun} onMore={() => void loadMore()} /></> : <p role={reads.page === "error" ? "alert" : "status"}>{reads.page === "error" ? "Could not load AI history." : "Loading AI history…"}</p>}</>}</>}
     </div>
     {Object.values(reads).includes("error") && <button type="button" className="button quiet small" onClick={retryReads}>Retry AI reads</button>}
   </div>;

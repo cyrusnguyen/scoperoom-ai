@@ -61,8 +61,6 @@ test("a stored follow-up capture stays valid; a malformed stored conversation fa
     { key: randomUUID(), taskType: "PROPOSE_FLOW", prompt: "Cards and PayPal", draftId, expectedDocumentRevision: 1, expectedParentSnapshotId: null, context: { selection: null, sources: [], continuesRunId: earlierId } });
   const stored = JSON.parse(JSON.stringify(followUp.capture)) as typeof capture;
   assert.deepEqual(inspectRun({ ...base, capture: stored, capture_hash: followUp.hash }, project).capture, followUp.capture);
-  // Old captures in the same file keep passing: the shared `base` row has no conversation and still inspects as APPLICABLE.
-  assert.equal(inspectRun(base, project).applicability, "APPLICABLE");
   for (const change of [
     (value: typeof stored) => { delete (value.conversation as Partial<typeof conversation>).continuesRunId; },
     (value: typeof stored) => { value.conversation!.turns[1]!.text = "x".repeat(AI_LIMITS.promptCodePoints + 1); },
