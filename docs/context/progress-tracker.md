@@ -16,7 +16,7 @@ Staff roles, PR #42 review rounds: the staff screens reuse the app's controls (l
 
 ## Sign-up confirmation email restyle (PR #43, 2026-10-14)
 
-PR #43 updates `supabase/templates/confirmation.html` to match the recovery email's dark card layout, with the six-digit code, ten-minute expiry, verification-page button and ignore note. `docs/auth-setup.md` explains the template and hosted setup. Local verification rendered both templates with a sample code and compared their layout, colours and spacing side by side; no app code changed. This qualifies the checked-in template only.
+PR #43 updates `supabase/templates/confirmation.html` to match the recovery email's dark card layout, with the six-digit code, ten-minute expiry and ignore note. It has no button: a bare `/signup/verify` link would drop an invitation's `continue` destination (Codex review), so the email sends people back to the verification page they signed up from. `docs/auth-setup.md` explains the template and hosted setup. Local verification rendered both templates with a sample code and compared their layout, colours and spacing side by side; no app code changed. This qualifies the checked-in template only.
 
 Hosted Supabase Auth does not read the checked-in template. Its previously verified code-only confirmation email (2026-09-24) is not evidence that this restyle is live. Next, after PR #43 merges, the operator pastes `supabase/templates/confirmation.html` into Supabase Authentication, Email Templates, Confirm signup, sets the subject to `Confirm your ScopeRoom email`, and sends one fresh test sign-up to inspect the delivered email and verify the code. The hosted restyle remains unverified until that check passes.
 
