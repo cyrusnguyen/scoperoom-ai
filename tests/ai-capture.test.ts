@@ -60,6 +60,16 @@ test("prompt bound counts normalized code points: 8,000 pass and 8,001 reject", 
   rejects(() => generate({ prompt: "bad \ud800" }), "INVALID_INPUT");
 });
 
+test("continuesRunId is optional, must be a uuid and leaves the start body unchanged when absent", () => {
+  const { generate } = build();
+  assert.equal("continuesRunId" in generate().context, false);
+  assert.equal(JSON.stringify(generate().context), JSON.stringify({ selection: null, sources: [] }));
+  const runId = randomUUID();
+  assert.equal(generate({ context: { selection: null, sources: [], continuesRunId: runId } }).context.continuesRunId, runId);
+  rejects(() => generate({ context: { selection: null, sources: [], continuesRunId: "not-a-run" } }), "INVALID_INPUT");
+  rejects(() => generate({ context: { selection: null, sources: [], continuesRunId: null } }), "INVALID_INPUT");
+});
+
 test("the strict body rejects unknown tasks, extra keys and malformed context", () => {
   const { generate, improve, ids, draftId } = build();
   rejects(() => generate({ taskType: "ASK" }), "INVALID_INPUT");
