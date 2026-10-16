@@ -19,7 +19,7 @@ Observed state and the next action. Dated entries up to 2026-10-16, with their e
 ## In progress
 
 - `perf/ci-shard-browser-tests`: browser tests run as four CI shards and Realtime gets its own job, to bring the CI run from about 21 minutes down to about 9. Also removes the finished Admin Dashboard plan, stops tracking `skills-lock.json` (it describes the ignored `.agents` folder) and shortens this tracker. Local run on a clean worktree with a loopback-pinned Docker stack: lint, typecheck, unit 743/743, workers, Realtime, and the four browser shards 160 + 117 + 101 + 125 = all 503 tests once, none failed, flaky or skipped. Integration 408/409: the AI admission rate-limit test failed once (it needs five attempts inside one database minute and took 9 s locally); main CI passed it.
-- README screenshots: 10 of the 12 still show the toolbar from before PR #46; retake them from the live demo.
+- The same PR retakes the 10 README screenshots that show the Studio, from the live demo after PR #46. Priya Shah (smoke viewer account) was added to the demo project as an Editor for the four-person presence shot.
 
 ## Accepted limitations
 
@@ -31,6 +31,7 @@ Observed state and the next action. Dated entries up to 2026-10-16, with their e
 - Staff: operator SQL does not advance the entitlement version; staff screens show display names and short ids, not email addresses.
 - Sources: an editor can fill the shared source budget, which blocks new source versions and AI admission; removing that editor does not free it.
 - AI: Anthropic 402 and 413 count as `unknown` (one extra unbilled claim); a long follow-up thread plus a large graph can exceed the 16,000 input-token budget.
+- AI: Claude gets the result schema only as text, so it sometimes returns valid JSON that breaks the strict format: 2 of 13 completed Claude runs by 2026-10-16 (`RESULT_SHAPE`, `RESULT_INVALID`). `SHAPE` does not record the field or rule, and a refused result closes the run without the second call the worker allows for transient failures.
 - Studio: the draft read has no client timeout, so a hung request leaves the flow dialog open. Below 640 px, keyboard focus reaches the flow switcher row before Save, Inspect and AI.
 - Dependencies: `pnpm audit` lists 5 findings (4 high, 1 moderate), all in build or dev tooling.
 - Local stack on Windows: Docker Desktop publishes Supabase ports on all interfaces, so `scripts/db/guard.mjs` refuses it until the published containers are recreated with ports on 127.0.0.1.
@@ -48,4 +49,4 @@ Observed state and the next action. Dated entries up to 2026-10-16, with their e
 ## Next
 
 1. Merge the CI speed-up PR once its CI and review pass.
-2. Retake the README screenshots from the live demo in a `docs:` PR.
+2. Decide the `RESULT_SHAPE` follow-up: record the failing field and rule, and retry a refused result once within the existing two-call limit.
