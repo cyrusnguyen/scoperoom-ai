@@ -209,12 +209,13 @@ function validate(capture: CapturedInput, output: unknown): ValidatedProposal {
     return { schemaVersion: 1, kind: "clarification", message: text(root.message, AI_LIMITS.assumptionCodePoints, true) };
   }
   if (root.kind !== "proposal") return bad("KIND");
-  keys(root, ["schemaVersion", "kind", "operations", "assumptions", "citations"]);
+  keys(root, ["schemaVersion", "kind", "operations", "assumptions"], ["citations"]);
   const operations = parseOperations(capture, root.operations);
   if (operations.length) checkScope(capture, operations);
   if (!Array.isArray(root.assumptions) || root.assumptions.length > AI_LIMITS.assumptions) bad("ASSUMPTIONS");
   const assumptions = (root.assumptions as unknown[]).map((note) => text(note, AI_LIMITS.assumptionCodePoints, true));
-  const citations = parseCitations(capture, root.citations);
+  // Claude reads the schema as text and often leaves out an empty citations list when there are no sources: a missing list means none.
+  const citations = parseCitations(capture, Object.hasOwn(root, "citations") ? root.citations : []);
   if (new Set(citations.map(citation => JSON.stringify(citation))).size !== citations.length) bad("DUPLICATE_CITATION");
   if (operations.some(op => op.edit.command === "ADD_NODE") && assumptions.some(note => [...note].length > LIMITS.note)) bad("SAVED_NOTES");
   // Only after the whole closed envelope validated: Improve with nothing to change is a no-change clarification.
