@@ -9,6 +9,7 @@ import { canonicalJson, captureInput, sha256 } from "../../src/features/proposal
 import { createProject } from "../../src/features/projects/server/projects.ts";
 import { admissionSubject, admitRun, aiConfiguration } from "../../src/features/proposals/server/admit-run.ts";
 import { canRun, withFixture, type Fixture, type Identity } from "./support/fixture.ts";
+import { seedRun as seedAiRun } from "./support/ai-runs.ts";
 import { serializeSweeps } from "./support/sweep-lock.ts";
 
 serializeSweeps(); // the expiry test sweeps globally: see sweep-lock.ts
@@ -45,12 +46,12 @@ async function draftOf(db: Client, projectId: string) {
   return row!;
 }
 
-type StartOptions = { key?: string; prompt?: string; revision?: number; task?: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; sources?: { sourceVersionId: string; expectedCurrentVersionId: string }[] };
+type StartOptions = { key?: string; prompt?: string; revision?: number; task?: "PROPOSE_FLOW" | "REFINE_FLOW_SELECTION"; sources?: { sourceVersionId: string; expectedCurrentVersionId: string }[]; continuesRunId?: string };
 async function start(db: Client, projectId: string, options: StartOptions = {}): Promise<StartRunInput> {
   const draft = await draftOf(db, projectId);
   return parseStartRunInput({
     taskType: options.task ?? "PROPOSE_FLOW", prompt: options.prompt ?? "Outline the checkout flow", draftId: draft.id, expectedDocumentRevision: options.revision ?? draft.revision,
-    expectedParentSnapshotId: null, context: { selection: null, sources: options.sources ?? [] },
+    expectedParentSnapshotId: null, context: { selection: null, sources: options.sources ?? [], ...(options.continuesRunId ? { continuesRunId: options.continuesRunId } : {}) },
   }, options.key ?? randomUUID());
 }
 
@@ -484,5 +485,61 @@ test("a start receipt replays during an AI configuration pause without a new bud
       if (saved.model === undefined) delete process.env.AI_MODEL; else process.env.AI_MODEL = saved.model;
       if (saved.binding === undefined) delete process.env.AI_EXECUTION_BINDING; else process.env.AI_EXECUTION_BINDING = saved.binding;
     }
+  });
+});
+
+test("a follow-up captures the continued run's instruction and answer, and a further follow-up carries both", { skip: !canRun }, async () => {
+  await withAdmission(async ({ person, projectFor, database }) => {
+    const owner = await person(); const projectId = await projectFor(owner);
+    const asked = await seedAiRun(database, { projectId, owner: owner.profile, shape: "SUCCEEDED", prompt: "Make a checkout flow",
+      result: { schemaVersion: 1, kind: "clarification", message: "Which payment methods?" } });
+    const reply = await admitRun(owner.identity, projectId, await start(database, projectId, { prompt: "Cards and PayPal", continuesRunId: asked }), CONFIG);
+    const { rows: [stored] } = await database.query("select capture from app.ai_run where id = $1", [reply.runId]);
+    assert.deepEqual(stored.capture.conversation, { continuesRunId: asked, turns: [
+      { runId: asked, role: "user", text: "Make a checkout flow" }, { runId: asked, role: "assistant", text: "Which payment methods?" }] });
+    // Finish the reply as a clarification too, then continue it: the newest capture carries all four turns.
+    await database.query("update app.ai_run set state = 'RUNNING', budget_state = 'CONSUMED' where id = $1", [reply.runId]);
+    const answer = { schemaVersion: 1, kind: "clarification", message: "Guest checkout too?" };
+    await database.query("update app.ai_run set state = 'SUCCEEDED', disposition = 'AVAILABLE', result = $2::jsonb, result_hash = $3, terminal_at = now() where id = $1",
+      [reply.runId, JSON.stringify(answer), sha256(canonicalJson(answer))]);
+    const third = await admitRun(owner.identity, projectId, await start(database, projectId, { prompt: "Yes", continuesRunId: reply.runId }), CONFIG);
+    const { rows: [latest] } = await database.query("select capture from app.ai_run where id = $1", [third.runId]);
+    assert.deepEqual(latest.capture.conversation.turns.map((turn: { role: string; text: string }) => turn.text),
+      ["Make a checkout flow", "Which payment methods?", "Cards and PayPal", "Guest checkout too?"]);
+  });
+});
+
+test("a follow-up to an unusable run is refused with no writes: other project, unknown, not succeeded or expired", { skip: !canRun }, async () => {
+  await withAdmission(async ({ person, projectFor, database }) => {
+    const owner = await person(); const projectId = await projectFor(owner); const otherProject = await projectFor(owner);
+    const elsewhere = await seedAiRun(database, { projectId: otherProject, owner: owner.profile, shape: "SUCCEEDED", uncounted: true });
+    const failed = await seedAiRun(database, { projectId, owner: owner.profile, shape: "FAILED", uncounted: true });
+    const expired = await seedAiRun(database, { projectId, owner: owner.profile, shape: "SUCCEEDED", uncounted: true, createdAt: new Date(Date.now() - 8 * 86_400_000) });
+    const baseline = await footprint(database, projectId, owner.profile);
+    for (const continuesRunId of [elsewhere, failed, expired, randomUUID()]) {
+      await assert.rejects(admitRun(owner.identity, projectId, await start(database, projectId, { continuesRunId }), CONFIG), refused("AI_CONVERSATION_UNAVAILABLE"));
+    }
+    assert.deepEqual(await footprint(database, projectId, owner.profile), baseline);
+  });
+});
+
+test("a follow-up whose continued instruction alone exceeds the conversation bound is refused", { skip: !canRun }, async () => {
+  await withAdmission(async ({ person, projectFor, database }) => {
+    const owner = await person(); const projectId = await projectFor(owner);
+    const huge = await seedAiRun(database, { projectId, owner: owner.profile, shape: "SUCCEEDED", uncounted: true, prompt: "😀".repeat(AI_LIMITS.promptCodePoints) });
+    await assert.rejects(admitRun(owner.identity, projectId, await start(database, projectId, { continuesRunId: huge }), CONFIG), refused("AI_CONVERSATION_TOO_LONG"));
+  });
+});
+
+test("a follow-up start replays by key with its conversation and refuses the same key for a different continued run", { skip: !canRun }, async () => {
+  await withAdmission(async ({ person, projectFor, database }) => {
+    const owner = await person(); const projectId = await projectFor(owner);
+    const asked = await seedAiRun(database, { projectId, owner: owner.profile, shape: "SUCCEEDED", uncounted: true });
+    const other = await seedAiRun(database, { projectId, owner: owner.profile, shape: "SUCCEEDED", uncounted: true });
+    const input = await start(database, projectId, { continuesRunId: asked });
+    const first = await admitRun(owner.identity, projectId, input, CONFIG);
+    const again = await admitRun(owner.identity, projectId, input, CONFIG);
+    assert.deepEqual([again.runId, again.replayed], [first.runId, true]);
+    await assert.rejects(admitRun(owner.identity, projectId, { ...input, context: { ...input.context, continuesRunId: other } }, CONFIG), refused("KEY_REUSED"));
   });
 });

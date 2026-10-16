@@ -106,3 +106,11 @@
   .ai-history-item { grid-template-columns: minmax(0, 1fr); }
   .ai-history-state { padding-left: 22px; }
 }
+.ai-thread { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border-strong); border-radius: var(--radius-overlay); background: var(--background); }
+.ai-thread-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.ai-thread-header h3 { margin: 0; font-size: 13px; }
+.ai-thread-turns { display: grid; gap: var(--space-2); max-height: 320px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.ai-turn { display: grid; gap: 2px; padding: var(--space-2); border-radius: var(--radius-overlay); }
+.ai-turn[data-role="assistant"] { border-left: 2px solid var(--focus-ring); }
+.ai-turn-role { color: var(--foreground-muted); font-size: 12px; }
+.ai-turn p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }

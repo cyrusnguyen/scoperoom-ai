@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { emptyDraft, type ScopeDocument } from "../src/features/drafts/contracts/scope-document.ts";
 import { canonicalJson, captureInput, evidenceStats, jsonbTextBytes, normalizeEvidence, type SavedContext, type SavedSource } from "../src/features/proposals/domain/capture.ts";
+import { buildConversation } from "../src/features/proposals/domain/conversation.ts";
 import { lineStarts } from "../src/features/sources/contracts/source-version.ts";
 import { AI_LIMITS, TASK_EDITS, parseStartRunInput, type StartRunInput } from "../src/features/proposals/contracts/tasks.ts";
 
@@ -58,6 +59,15 @@ test("prompt bound counts normalized code points: 8,000 pass and 8,001 reject", 
   rejects(() => capture("😀".repeat(8_001)), "INVALID_INPUT");
   rejects(() => generate({ prompt: "   \n " }), "INVALID_INPUT");
   rejects(() => generate({ prompt: "bad \ud800" }), "INVALID_INPUT");
+});
+
+test("continuesRunId is optional, must be a uuid and leaves the start body unchanged when absent", () => {
+  const { generate } = build();
+  assert.equal(JSON.stringify(generate().context), JSON.stringify({ selection: null, sources: [] }));
+  const runId = randomUUID();
+  assert.equal(generate({ context: { selection: null, sources: [], continuesRunId: runId } }).context.continuesRunId, runId);
+  rejects(() => generate({ context: { selection: null, sources: [], continuesRunId: "not-a-run" } }), "INVALID_INPUT");
+  rejects(() => generate({ context: { selection: null, sources: [], continuesRunId: null } }), "INVALID_INPUT");
 });
 
 test("the strict body rejects unknown tasks, extra keys and malformed context", () => {
@@ -208,4 +218,26 @@ test("the 64 KiB start body bound rejects too many sources before any lookup and
 test("lineStarts maps each normalized line to its code point offset", () => {
   assert.deepEqual(lineStarts(""), [0]);
   assert.deepEqual(lineStarts("a\n\nb \u{1F600}\n"), [0, 2, 3, 7]);
+});
+
+test("a follow-up capture stores the server-built conversation; a capture without one keeps its exact form", () => {
+  const { saved, generate } = build();
+  const plain = captureInput(saved, generate());
+  assert.equal("conversation" in plain.capture, false, "no key at all, so older hashes are unchanged");
+  const earlierId = randomUUID();
+  const conversation = buildConversation({ id: earlierId, disposition: "AVAILABLE", capture: plain.capture,
+    result: { schemaVersion: 1, kind: "clarification", message: "Which payment methods?" } });
+  const followUp = captureInput({ ...saved, conversation }, generate({ prompt: "Cards and PayPal", context: { selection: null, sources: [], continuesRunId: earlierId } }));
+  assert.deepEqual(followUp.capture.conversation, conversation);
+  assert.notEqual(followUp.hash, plain.hash);
+});
+
+test("the request and the server-read conversation must name the same run", () => {
+  const { saved, generate } = build();
+  const earlierId = randomUUID();
+  const conversation = { continuesRunId: earlierId, turns: [
+    { runId: earlierId, role: "user" as const, text: "a" }, { runId: earlierId, role: "assistant" as const, text: "b" }] };
+  rejects(() => captureInput({ ...saved, conversation }, generate()), "INVALID_INPUT");
+  rejects(() => captureInput(saved, generate({ context: { selection: null, sources: [], continuesRunId: conversation.continuesRunId } })), "INVALID_INPUT");
+  rejects(() => captureInput({ ...saved, conversation }, generate({ context: { selection: null, sources: [], continuesRunId: randomUUID() } })), "INVALID_INPUT");
 });

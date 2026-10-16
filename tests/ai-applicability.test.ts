@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { emptyDraft } from "../src/features/drafts/contracts/scope-document.ts";
 import { captureInput, canonicalJson, sha256 } from "../src/features/proposals/domain/capture.ts";
+import { AI_LIMITS } from "../src/features/proposals/contracts/tasks.ts";
 import { resultFixture } from "./support/ai-results.ts";
 import { inspectRun, type ApplicabilityRow } from "../src/features/proposals/server/applicability.ts";
 
@@ -48,5 +49,28 @@ test("stored source identities and text stay strict even when their capture hash
     const view = inspectRun({ ...row, capture: malformed, capture_hash: sha256(canonicalJson(malformed)) }, context);
     assert.equal(view.capture, null, JSON.stringify(change)); assert.equal(view.result, null); assert.equal(view.diff, null);
     assert.equal(view.applicability, "UNAVAILABLE"); assert.deepEqual(view.applicabilityReasons, ["INVALID_CAPTURE"]);
+  }
+});
+
+test("a stored follow-up capture stays valid; a malformed stored conversation fails closed even when rehashed", () => {
+  const earlierId = randomUUID();
+  const conversation = { continuesRunId: earlierId, turns: [
+    { runId: earlierId, role: "user" as const, text: "Make a checkout flow" },
+    { runId: earlierId, role: "assistant" as const, text: "Which payment methods?" }] };
+  const followUp = captureInput({ projectId: randomUUID(), draftId, documentRevision: 1, parentSnapshotId: null, document: emptyDraft().document, sources: [], model: "test-model", conversation },
+    { key: randomUUID(), taskType: "PROPOSE_FLOW", prompt: "Cards and PayPal", draftId, expectedDocumentRevision: 1, expectedParentSnapshotId: null, context: { selection: null, sources: [], continuesRunId: earlierId } });
+  const stored = JSON.parse(JSON.stringify(followUp.capture)) as typeof capture;
+  assert.deepEqual(inspectRun({ ...base, capture: stored, capture_hash: followUp.hash }, project).capture, followUp.capture);
+  for (const change of [
+    (value: typeof stored) => { delete (value.conversation as Partial<typeof conversation>).continuesRunId; },
+    (value: typeof stored) => { value.conversation!.turns[1]!.text = "x".repeat(AI_LIMITS.promptCodePoints + 1); },
+    (value: typeof stored) => { value.conversation!.turns.pop(); },
+    (value: typeof stored) => { value.conversation!.continuesRunId = randomUUID(); },
+  ]) {
+    const malformed = structuredClone(stored);
+    change(malformed);
+    const view = inspectRun({ ...base, capture: malformed, capture_hash: sha256(canonicalJson(malformed)) }, project);
+    assert.equal(view.capture, null);
+    assert.deepEqual(view.applicabilityReasons, ["INVALID_CAPTURE"]);
   }
 });

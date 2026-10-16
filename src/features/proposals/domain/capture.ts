@@ -4,7 +4,7 @@ import { byId } from "../../drafts/domain/graph.ts";
 import { normalizeEvidence, SOURCE_LIMITS } from "../../sources/contracts/source-version.ts";
 import {
   AI_LIMITS, CAPTURE_SCHEMA_VERSION, PROMPT_VERSION, RESULT_SCHEMA_VERSION,
-  type CapturedEdge, type CapturedFlow, type CapturedInput, type CapturedNode, type CapturedSource, type StartRunInput,
+  type CapturedConversation, type CapturedEdge, type CapturedFlow, type CapturedInput, type CapturedNode, type CapturedSource, type StartRunInput,
 } from "../contracts/tasks.ts";
 
 export { normalizeEvidence };
@@ -39,6 +39,8 @@ export type SavedSource = { projectId: string; sourceId: string; sourceVersionId
 export type SavedContext = {
   projectId: string; draftId: string; documentRevision: number; parentSnapshotId: string | null;
   document: ScopeDocument; sources: SavedSource[]; model: string;
+  /** Built by the server from the run a follow-up continues (server/capture.ts), never from browser text. */
+  conversation?: CapturedConversation;
 };
 
 const fail = (code: "INVALID_INPUT" | "INVALID_SOURCE_REFERENCE" | "DRAFT_REPLACED" | "STALE_DOCUMENT_REVISION" | "BASELINE_CHANGED" | "CONFLICT" | "LIMIT_EXCEEDED"): never => { throw new Error(code); };
@@ -109,12 +111,14 @@ export function captureInput(saved: SavedContext, input: StartRunInput): { captu
   if (input.expectedParentSnapshotId !== saved.parentSnapshotId) fail("BASELINE_CHANGED");
   const prompt = normalizeEvidence(input.prompt);
   if (!prompt.trim() || Array.from(prompt).length > AI_LIMITS.promptCodePoints) fail("INVALID_INPUT");
+  if (input.context.continuesRunId !== saved.conversation?.continuesRunId) fail("INVALID_INPUT");
   const sources = captureSources(saved, input);
   const { selection, graph } = captureGraph(saved, input);
   const capture: CapturedInput = {
     schemaVersion: CAPTURE_SCHEMA_VERSION, taskType: input.taskType, prompt, promptHash: sha256(prompt),
     draftId: saved.draftId, documentRevision: saved.documentRevision, parentSnapshotId: saved.parentSnapshotId,
     selection, graph, graphHash: sha256(canonicalJson(graph)), sources,
+    ...(saved.conversation ? { conversation: saved.conversation } : {}),
     versions: { prompt: PROMPT_VERSION, resultSchema: RESULT_SCHEMA_VERSION, model: saved.model },
     limits: {
       maxInputTokens: AI_LIMITS.maxInputTokens, maxOutputTokens: AI_LIMITS.maxOutputTokens, maxGraphNodes: AI_LIMITS.maxGraphNodes,

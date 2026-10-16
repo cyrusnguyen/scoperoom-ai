@@ -142,7 +142,7 @@ test("requirement acknowledgement matches the normalization applied before sendi
   assert.equal(finishRequirementWrite(newer, request, { createdIds: ["r1"] }).drafts["specs:req:new:title"], "Later title");
 });
 
-const closed = { review: defaultReviewUi, nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { section: "sources" as const, selected: null, sourceScope: "user" as const, pending: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
+const closed = { review: defaultReviewUi, nativeImport: null, acknowledgedRevisions: {}, save: { state: "idle", message: "" }, refreshFailed: false, rightOpen: false, rightMounted: false, rightTab: "details" as const, specs: { section: "sources" as const, selected: null, sourceScope: "user" as const, pending: null, message: "" }, ai: { instruction: "", action: "PROPOSE_FLOW" as const, selectedRunId: null, pendingRequest: null, threadMode: "continue" as const }, drafts: {}, buffers: {}, endpointBuffers: {}, positionBuffers: {}, outbox: emptyOutbox, request: null, flowId: null, selection: null, view: null };
 const node: Saved = { kind: "NODE", id: "n1", version: 1, fields: { label: "Pay", description: "" } };
 
 test("discard preserves an uncertain import's original per-project request; dropping access clears it", () => {
@@ -171,7 +171,7 @@ test("opening mounts the panel; closing hides it but keeps it mounted", () => {
 
 test("AI prompt and uncertain request stay in per-project memory across panel close and project switches", () => {
   const pendingRequest = { kind: "start" as const, projectId: "a", draftId: "draft-a", key: "same-key", submittedText: "Original", body: { prompt: "Original" } };
-  let store = updateUi({}, "a", () => ({ ai: { instruction: "Newer", action: "PROPOSE_FLOW", selectedRunId: null, pendingRequest } }));
+  let store = updateUi({}, "a", () => ({ ai: { instruction: "Newer", action: "PROPOSE_FLOW", selectedRunId: null, pendingRequest, threadMode: "continue" } }));
   store = setRightTab(store, "a", "ai");
   store = setRightOpen(store, "a", false);
   store = setRightTab(store, "b", "ai");
@@ -184,7 +184,7 @@ for (const kind of ["start", "apply", "cancel", "discard"] as const) {
   test(`pending AI ${kind} alone protects unload across retained projects without becoming a draft edit`, () => {
     const body = Object.freeze({ draftId: "draft-a", expectedDocumentRevision: 3, selectedOperationIds: ["step"] });
     const pendingRequest: AiRequest = Object.freeze({ kind, projectId: "a", draftId: "draft-a", key: "original-key", body, submittedText: "Original", runId: "run-a" });
-    let store = updateUi({}, "a", () => ({ ai: { instruction: "Newer instruction", action: "PROPOSE_FLOW", selectedRunId: "run-a", pendingRequest } }));
+    let store = updateUi({}, "a", () => ({ ai: { instruction: "Newer instruction", action: "PROPOSE_FLOW", selectedRunId: "run-a", pendingRequest, threadMode: "continue" } }));
     assert.equal(dirtyCount(store, "a"), 0, "a receipt is not an unsaved draft edit");
     assert.equal(anyDirty(store), true, "an uncertain AI receipt must protect unload even with a clean Studio");
     store = setRightOpen(setRightTab(store, "a", "ai"), "a", false);

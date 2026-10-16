@@ -3,8 +3,9 @@ import { LIMITS, type EdgeRecord, type FlowRecord, type NodeRecord, type SourceR
 import { id, idList, invalid, keys, object, oneOf, text, version } from "../../drafts/contracts/strict.ts";
 import { keyPattern } from "../../projects/contracts/project.ts";
 
-// Stage 06 AI task contracts (Data 04/05, API "AI actions"). Exactly two tasks; nothing here accepts chat history,
-// a conversation, previous AI output or a model-chosen authority. Provider SDK types never appear in this file.
+// Stage 06 AI task contracts (Data 04/05, API "AI actions"). Exactly two tasks. A request may name one earlier run it continues
+// (`continuesRunId`); the server builds the earlier turns from that run, so nothing here accepts history text from the browser
+// or a model-chosen authority. Provider SDK types never appear in this file.
 export const TASK_KINDS = ["PROPOSE_FLOW", "REFINE_FLOW_SELECTION"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 
@@ -17,17 +18,23 @@ export const AI_LIMITS = {
   ownerConcurrentRuns: 2, applicableResults: 10,
   // Operational default, not a product promise: start attempts per actor per minute, counted by the keyed AI_ADMISSION bucket.
   admissionAttemptsPerMinute: 30,
+  // Follow-ups (2026-10-15): earlier turns stored in a capture, measured as compact JSON; a proposal answer is summarized within the code point bound.
+  conversationTurns: 12, conversationBytes: 24 * 1024, turnSummaryCodePoints: 2_000,
   operations: 100, dependsOn: 100, assumptions: 20, assumptionCodePoints: 2_000, citations: 100, excerptCodePoints: 2_000,
 } as const;
 
 export const CAPTURE_SCHEMA_VERSION = 1;
 export const RESULT_SCHEMA_VERSION = 1;
-export const PROMPT_VERSION = "2026-10-14.1";
+export const PROMPT_VERSION = "2026-10-15.1";
 
 export type { SourceRef } from "../../drafts/contracts/scope-document.ts";
+/** One earlier turn of a follow-up: a person's captured instruction or ScopeRoom's summary of the model's answer. */
+export type ConversationTurn = { runId: string; role: "user" | "assistant"; text: string };
+/** Earlier turns, oldest first, ending with the answer of the run this one continues. Built by the server at admission. */
+export type CapturedConversation = { continuesRunId: string; turns: ConversationTurn[] };
 export type StartRunInput = {
   key: string; taskType: TaskKind; prompt: string; draftId: string; expectedDocumentRevision: number; expectedParentSnapshotId: string | null;
-  context: { selection: { flowId: string; nodeIds: string[] } | null; sources: { sourceVersionId: string; expectedCurrentVersionId: string }[] };
+  context: { selection: { flowId: string; nodeIds: string[] } | null; sources: { sourceVersionId: string; expectedCurrentVersionId: string }[]; continuesRunId?: string };
 };
 
 /** The request body without its receipt key, in the fixed order every hash and size is computed over. */
@@ -46,7 +53,7 @@ export function parseStartRunInput(raw: unknown, key: string): StartRunInput {
   keys(body, ["taskType", "prompt", "draftId", "expectedDocumentRevision", "expectedParentSnapshotId", "context"]);
   const taskType = oneOf(body.taskType, TASK_KINDS);
   const context = object(body.context);
-  keys(context, ["selection", "sources"]);
+  keys(context, ["selection", "sources"], ["continuesRunId"]);
   if (!Array.isArray(context.sources)) invalid();
   const sources = context.sources.map((entry) => {
     const source = object(entry);
@@ -62,9 +69,11 @@ export function parseStartRunInput(raw: unknown, key: string): StartRunInput {
     if (!selection.nodeIds.length) invalid();
   } else if (context.selection !== null) invalid();
   const prompt = text(body.prompt, AI_LIMITS.promptCodePoints * 2, true); // loose raw bound; captureInput applies the exact normalized bound
+  // Absent stays absent, so a request without a follow-up hashes exactly as before this field existed.
+  const continuesRunId = context.continuesRunId === undefined ? {} : { continuesRunId: id(context.continuesRunId) };
   const input: StartRunInput = {
     key, taskType, prompt, draftId: id(body.draftId), expectedDocumentRevision: version(body.expectedDocumentRevision),
-    expectedParentSnapshotId: body.expectedParentSnapshotId === null ? null : id(body.expectedParentSnapshotId), context: { selection, sources },
+    expectedParentSnapshotId: body.expectedParentSnapshotId === null ? null : id(body.expectedParentSnapshotId), context: { selection, sources, ...continuesRunId },
   };
   if (startBodyBytes(input) > AI_LIMITS.startBodyBytes) throw new Error("LIMIT_EXCEEDED", { cause: "START_BODY_BYTES" });
   return input;
@@ -84,6 +93,8 @@ export type CapturedInput = {
   selection: { flowId: string; nodeIds: string[] } | null;
   graph: { flows: CapturedFlow[]; nodes: CapturedNode[]; edges: CapturedEdge[]; boundaryNodeIds: string[] };
   graphHash: string; sources: CapturedSource[];
+  /** Present only on a follow-up; absent (not empty) otherwise, so older captures keep their exact canonical form and hash. */
+  conversation?: CapturedConversation;
   versions: { prompt: string; resultSchema: number; model: string };
   limits: Pick<typeof AI_LIMITS, "maxInputTokens" | "maxOutputTokens" | "maxGraphNodes" | "maxGraphEdges" | "operations" | "resultBytes">;
 };
