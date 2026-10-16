@@ -225,11 +225,12 @@ test.describe("Inline label editing (real draft)", () => {
     const pay = nodeAt(page, ids.payId);
     await pay.locator(".step-label").dblclick();
     await stepEditor(page, ids.payId).fill("Mine");
+    // Queued before their rename, so the save still meets it even if a status read finds it first.
+    await stepEditor(page, ids.payId).press("Enter");
     const saved = await draftOf(page, projectId);
     const remote = await page.request.post(`/api/projects/${projectId}/drafts/${ids.draftId}/commands`, { headers: headers(),
       data: { commandSchemaVersion: 1, command: "UPDATE_NODE", expectedEntityVersion: saved.document.nodes[ids.payId]!.version, payload: { nodeId: ids.payId, label: "Theirs" } } });
     expect(remote.status()).toBe(200);
-    await stepEditor(page, ids.payId).press("Enter");
     await headerSave(page).click();
     await expect(saveNote(page)).toContainText("Someone else changed this draft first, so your changes weren’t saved.");
     await expect(pay.locator(".step-label")).toHaveText("Mine");

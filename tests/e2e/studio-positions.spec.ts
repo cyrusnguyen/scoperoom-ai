@@ -185,6 +185,7 @@ test.describe("saved positions and arrangement", () => {
     await page.reload();
     const middle = seeded.nodeIds[1]!;
     await expect(nodeAt(page, middle)).toBeVisible();
+    await page.clock.pauseAt(new Date(Date.now() + 2_000)); // from here only fastForward moves the page's time, so the 10 s count is exact
     await drag(page, middle, 150, 0);
     await expect(status(page)).toContainText("Unsaved changes");
     await page.clock.fastForward(8_000);
@@ -544,8 +545,8 @@ test.describe("saved positions and arrangement", () => {
     expect((await draftOf(page, projectId)).layout.positions[middle!]!.version).toBe(2);
     await dialog.getByRole("button", { name: "Cancel" }).click();
 
-    await moveViaApi(page, projectId, seeded, { [start!]: { x: 600, y: 600 } });
     await drag(page, start!, 150, 0);
+    await moveViaApi(page, projectId, seeded, { [start!]: { x: 600, y: 600 } });
     await toolbar.getByRole("button", { name: "Arrange" }).click();
     await expect(note(page).filter({ hasText: STALE })).toBeVisible();
     const blocked = note(page).filter({ hasText: "Arrange didn’t open because your changes aren’t saved yet." });

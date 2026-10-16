@@ -1,5 +1,5 @@
 // Preloaded into a throwaway next start for recovery browser tests. It faults only selected Auth operations for that process.
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 
 const realFetch = globalThis.fetch;
 const unavailable = () => new Response(JSON.stringify({ code: "unexpected_failure", msg: "temporarily unavailable" }), { status: 503, headers: { "content-type": "application/json" } });
@@ -25,7 +25,9 @@ function record(name, status) {
   if (!Array.isArray(events)) events = [];
   if (events.length >= 100) return;
   events.push({ operation: name, status });
-  writeFileSync(path, JSON.stringify(events));
+  // The test process polls this file: replace it whole so it never reads a truncated, half-written list.
+  writeFileSync(`${path}.tmp`, JSON.stringify(events));
+  renameSync(`${path}.tmp`, path);
 }
 
 globalThis.fetch = async (input, init) => {

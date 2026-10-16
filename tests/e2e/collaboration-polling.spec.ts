@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, type Route } from "@playwright/test";
+import { poll } from "./collaboration-fixtures";
 import { test } from "./studio-fixtures";
 import { appUrl, createProjectViaApi, e2eReady, headerSave, seedStudioChanges } from "./support";
 
@@ -84,8 +85,8 @@ test("a transient bootstrap failure in the background keeps the Studio mounted a
   await expect(page.getByRole("button", { name: "Restore…" })).toHaveCount(0); // still the active view
   const beforeRecovery = recoveredReads;
   await page.unroute(`**/api/projects/${projectId}/bootstrap`, unavailable);
-  // Advance the next full polling window, then observe its actual successful response.
-  await page.clock.runFor(11_000);
+  // Run the clock until a status read starts after the unroute: one still in flight from the last window holds back the next timer.
+  await poll(page);
   await expect.poll(() => recoveredReads, { timeout: 5_000, intervals: [25] }).toBeGreaterThan(beforeRecovery);
   await expect(page.getByRole("button", { name: "Restore…" })).toBeVisible();
   await expect(toolbar).toBeVisible();

@@ -11,8 +11,9 @@ const status = (page: Page) => page.locator(".studio-status");
 const bar = (page: Page) => page.getByRole("group", { name: "Canvas controls" });
 const nodeAt = (page: Page, nodeId: string) => page.locator(`.react-flow__node[data-id="${nodeId}"]`);
 const hasScale = (page: Page) => page.locator(".react-flow__viewport").evaluate((element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).a);
-/** The viewport's scale once React Flow's 200 ms zoom animation has settled. */
-async function scale(page: Page) {
+/** The viewport's scale once React Flow's 200 ms zoom animation has settled. After a zoom, pass the scale before it: its first frame may not be drawn yet. */
+async function scale(page: Page, before?: number) {
+  if (before !== undefined) await expect.poll(() => hasScale(page)).not.toBe(before);
   let last = await hasScale(page);
   for (let index = 0; index < 20; index += 1) {
     await page.waitForTimeout(100);
@@ -72,21 +73,22 @@ test.describe("Canvas control bar and shortcuts (real draft)", () => {
     await expect(bar(page).getByRole("button")).toHaveCount(5);
     const initial = await scale(page);
     await bar(page).getByRole("button", { name: "Zoom In", exact: true }).click();
-    const zoomedIn = await scale(page);
+    const zoomedIn = await scale(page, initial);
     expect(zoomedIn).toBeGreaterThan(initial);
     await bar(page).getByRole("button", { name: "Zoom Out", exact: true }).click();
     await bar(page).getByRole("button", { name: "Zoom Out", exact: true }).click();
-    const zoomedOut = await scale(page);
+    const zoomedOut = await scale(page, zoomedIn);
     expect(zoomedOut).toBeLessThan(initial);
     await bar(page).getByRole("button", { name: "Fit View", exact: true }).click();
-    expect(await scale(page)).toBeCloseTo(initial, 1);
+    const fit = await scale(page, zoomedOut);
+    expect(fit).toBeCloseTo(initial, 1);
 
     await page.keyboard.press("+");
-    const plus = await scale(page);
+    const plus = await scale(page, fit);
     expect(plus).toBeGreaterThan(initial);
     await page.keyboard.press("-");
     await page.keyboard.press("-");
-    expect(await scale(page)).toBeLessThan(plus);
+    expect(await scale(page, plus)).toBeLessThan(plus);
     expect(await acted(page, { key: "=" })).toBe(true);
     expect(await acted(page, { key: "=", ctrlKey: true })).toBe(false); // the browser's own page zoom
 
@@ -239,7 +241,7 @@ test.describe("Canvas control bar (reader, mocked project)", () => {
     await expect(bar(page).getByRole("button", { name: "Redo" })).toHaveCount(0);
     const initial = await scale(page);
     await bar(page).getByRole("button", { name: "Zoom In", exact: true }).click();
-    expect(await scale(page)).toBeGreaterThan(initial);
+    expect(await scale(page, initial)).toBeGreaterThan(initial);
     expect(await acted(page, { key: "-" })).toBe(true);
     expect(await acted(page, { key: "z", ctrlKey: true })).toBe(false);
     expect(await acted(page, { key: "y", ctrlKey: true })).toBe(false);

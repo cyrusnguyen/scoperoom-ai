@@ -26,6 +26,7 @@ test("a peer's drag shows as a labelled ghost at any pan and zoom, the canonical
     { command: "ADD_NODE", payload: { flowId, kind: "START", label: "Start", description: "", actorLabel: "" }, proposedIds: [startId] },
     { command: "ADD_NODE", payload: { flowId, kind: "ACTION", label: "Next", description: "", actorLabel: "" }, proposedIds: [nextId] },
   ]);
+  await ownerPage.clock.install();
   await Promise.all([ownerPage, editorPage].map((page) => page.goto(`/app/projects/${projectId}`)));
   await expect(nodeAt(ownerPage, startId)).toBeVisible({ timeout: 20_000 });
   await expect(nodeAt(editorPage, startId)).toBeVisible({ timeout: 20_000 });
@@ -44,6 +45,8 @@ test("a peer's drag shows as a labelled ghost at any pan and zoom, the canonical
 
   const ghost = ghostAt(ownerPage, startId);
   await expect(ghost).toBeVisible({ timeout: 10_000 });
+  // A preview expires 2 s after its last packet on the owner's clock: stopped here, only DRAG_END can remove the ghost.
+  await ownerPage.clock.pauseAt(new Date(Date.now() + 100));
   await expect(ghost).toContainText("Collab editor");
   await expect(ownerPage.locator(".live-overlay")).toHaveAttribute("aria-hidden", "true");
   await expect(ownerPage.locator("[aria-live] .live-overlay, .live-overlay [aria-live]")).toHaveCount(0);
@@ -56,13 +59,10 @@ test("a peer's drag shows as a labelled ghost at any pan and zoom, the canonical
   expect(Math.abs(ghostBox.width - nodeBox.width)).toBeLessThan(4);
   expect(nodeBox.width).toBeLessThan(box.width); // the owner really is zoomed out relative to the editor
 
-  // A fresh update right before the drop, so only DRAG_END (not the 2 s expiry) can remove the ghost within the next second.
-  await editorPage.mouse.move(x + 162, y + 81);
-  await editorPage.waitForTimeout(200); // longer than the 125 ms movement interval: the nudge is on the wire before the drop
-  await expect(ghost).toBeVisible();
   await editorPage.mouse.up();
-  await expect(ghost).toHaveCount(0, { timeout: 1_000 });
+  await expect(ghost).toHaveCount(0);
   expect(await transformOf(ownerPage, startId)).toBe(savedTransform); // unsaved: nothing changed for the owner
+  await ownerPage.clock.resume();
 
   await saveStudio(editorPage);
   await ownerPage.reload();
@@ -152,11 +152,11 @@ async function savePosition(page: Page, projectId: string, ids: Chain, nodeId: s
   });
   expect(response.status()).toBe(200);
 }
-/** Both pages on the project with their nodes drawn, and the editor's channels joined (the owner counts them in the roster). */
+/** Both pages on the project with their nodes drawn, and both pages' channels joined (each counts the other in its roster, so each draws the other's previews). */
 async function openBoth({ ownerPage, editorPage, projectId }: { ownerPage: Page; editorPage: Page; projectId: string }, ids: Chain) {
   await Promise.all([ownerPage, editorPage].map((page) => page.goto(`/app/projects/${projectId}`)));
   for (const page of [ownerPage, editorPage]) await expect(nodeAt(page, ids.shipId)).toBeVisible({ timeout: 20_000 });
-  await expect(ownerPage.getByRole("button", { name: /other person here/ })).toBeVisible({ timeout: 20_000 });
+  for (const page of [ownerPage, editorPage]) await expect(page.getByRole("button", { name: /other person here/ })).toBeVisible({ timeout: 20_000 });
 }
 
 // RT-016, Review Focus 5: the provider delivers every hint to a healthy socket, the page never sees one, and 04.2's status timer alone converges.

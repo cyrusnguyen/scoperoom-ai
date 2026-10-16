@@ -94,13 +94,17 @@ test.describe("two real users converge through status polling", () => {
     ids = await seed(ownerPage, projectId);
   });
 
-  async function openBoth({ ownerPage, editorPage, projectId }: { ownerPage: Page; editorPage: Page; projectId: string }) {
+  /** `joins: false` for a test that keeps the editor's Realtime join from completing. */
+  async function openBoth({ ownerPage, editorPage, projectId }: { ownerPage: Page; editorPage: Page; projectId: string }, joins = true) {
     await editorPage.addInitScript(() => { Math.random = () => 0; }); // jitter 0: the poll is due exactly 9 s after the last read
     await editorPage.clock.install();
+    // The editor's Realtime join reads status once: let it land first, so only the test's own steps read after this.
+    const joined = joins && editorPage.waitForResponse((response) => /\/status$/.test(new URL(response.url()).pathname));
     for (const page of [ownerPage, editorPage]) {
       await page.goto(`/app/projects/${projectId}`);
       await expect(nodeAt(page, ids.payId)).toBeVisible();
     }
+    await joined;
     await editorPage.clock.pauseAt(new Date(Date.now() + 2_000)); // from here only `poll` and `runFor` move the editor's time
   }
 
@@ -192,7 +196,7 @@ test.describe("two real users converge through status polling", () => {
     const wire = await interceptRealtime(editorPage);
     await wire.cut();
     await editorPage.bringToFront();
-    await openBoth(collaboration);
+    await openBoth(collaboration, false);
     const reads = await holdDraftReads(editorPage, projectId);
     await rename(ownerPage, projectId, ids.shipId, "Ship (theirs)");
     // A status read may already have started and be waiting on R1, so no next poll is scheduled until R1 lands.
@@ -308,7 +312,7 @@ test.describe("two real users converge through status polling", () => {
     const statusReads: Route[] = [];
     await editorPage.route(/\/realtime-token$/, (route) => { joinRoutes.push(route); });
     try {
-      await openBoth(collaboration);
+      await openBoth(collaboration, false);
       const writes = watchWrites(editorPage);
       await renameLocally(editorPage, ids.startId, "Mine");
       const setVisibility = (state: "hidden" | "visible") => editorPage.evaluate((value) => {

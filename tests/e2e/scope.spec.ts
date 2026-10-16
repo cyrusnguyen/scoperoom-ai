@@ -55,6 +55,7 @@ test("long source readers render bounded pages with exact absolute line numbers"
   await expect(page.locator(".source-lines")).toHaveAttribute("start", "1");
   await expect(page.locator(".source-lines li").first()).toHaveText("a");
   await expect(page.getByText("Lines 1-100 of 50,000", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Many lines" })).toBeFocused(); // opened by the person, so focus follows once it loads
   await page.getByRole("button", { name: "Next lines" }).focus();
   await page.keyboard.press("Enter");
   await expect(page.locator(".source-lines")).toHaveAttribute("start", "101");

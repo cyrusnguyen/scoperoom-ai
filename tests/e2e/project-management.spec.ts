@@ -202,6 +202,7 @@ test.describe("project details", () => {
     await nav.getByRole("button", { name: project.name, exact: true }).click();
     await page.getByRole("button", { name: "Inspect" }).click();
     await panel.getByRole("button", { name: "Back to project", exact: true }).click();
+    await expect(panel.getByRole("tab", { name: "Details", exact: true })).toBeFocused(); // Back moves focus here a frame later; keys sent sooner go elsewhere
     expect(await warnsBeforeUnload(page)).toBe(false);
     await nameField.fill("Renamed once");
     expect(await warnsBeforeUnload(page)).toBe(true);
@@ -266,6 +267,7 @@ test.describe("project details", () => {
     await page.goto(`/app/projects/${project.id}`);
     await page.getByRole("button", { name: "Inspect" }).click();
     await panel.getByRole("button", { name: "Back to project", exact: true }).click();
+    await expect(panel.getByRole("tab", { name: "Details", exact: true })).toBeFocused();
     await nameField.fill("First attempt");
     await panel.getByRole("button", { name: "Save", exact: true }).click();
     await expect(panel.getByRole("alert")).toHaveText("We could not confirm that change. Retry uses the same request.");
@@ -316,6 +318,7 @@ test.describe("project details", () => {
     await page.goto(`/app/projects/${project.id}`);
     await page.getByRole("button", { name: "Inspect" }).click();
     await panel.getByRole("button", { name: "Back to project", exact: true }).click();
+    await expect(panel.getByRole("tab", { name: "Details", exact: true })).toBeFocused();
     await panel.getByLabel("Project name").fill("Renamed while typing");
     await panel.getByRole("button", { name: "Save", exact: true }).click();
     await email.click();
@@ -343,6 +346,7 @@ test.describe("project details", () => {
     await page.goto(`/app/projects/${project.id}`);
     await page.getByRole("button", { name: "Inspect" }).click();
     await panel.getByRole("button", { name: "Back to project", exact: true }).click();
+    await expect(panel.getByRole("tab", { name: "Details", exact: true })).toBeFocused();
     await panel.getByLabel("Project name").fill("Renamed before archive");
     expect(await warnsBeforeUnload(page)).toBe(true);
 

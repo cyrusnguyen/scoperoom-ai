@@ -247,6 +247,7 @@ test("narrow keyboard preview freezes exact saved scope, reads captured evidence
   await expect(capturedName).toHaveText("Candidate reader");
   await page.getByRole("tab", { name: "Details", exact: true }).click();
   await page.getByRole("button", { name: "Back to project", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Details", exact: true })).toBeFocused(); // Back moves focus here a frame later; keys sent sooner go elsewhere
   await page.getByLabel("Project name", { exact: true }).fill("Renamed candidate project");
   await page.locator("#right-panel").getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Project name updated.", { exact: true })).toBeVisible();
@@ -290,6 +291,7 @@ test("dirty Details fields block preview and survive candidate error navigation"
   await openReview(page,projectId);
   await page.getByRole("tab",{name:"Details",exact:true}).click();
   await page.getByRole("button",{name:"Back to project",exact:true}).click();
+  await expect(page.getByRole("tab",{name:"Details",exact:true})).toBeFocused();
   await page.getByLabel("Project name",{exact:true}).fill("Unsent project name");
   await page.getByRole("tab",{name:"Review",exact:true}).click();
   await page.getByRole("button",{name:"Preview saved scope",exact:true}).click();
@@ -1022,7 +1024,7 @@ test("saved pending comparison never labels a below-status saved view clean and 
   await page.evaluate(() => { window.dispatchEvent(new Event("blur")); window.dispatchEvent(new Event("focus")); });
   await expect(pending).toContainText("Saved comparison is unavailable or still refreshing.");
   await expect(pending.getByText("Saved included scope matches the current approved baseline.", { exact: true })).toHaveCount(0);
-  stale = false; await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  stale = false; await page.evaluate(() => { window.dispatchEvent(new Event("blur")); window.dispatchEvent(new Event("focus")); });
   await expect(pending).toContainText("Saved included scope has changes pending approval.");
   await page.unroute(`**${path}`);
 });

@@ -17,7 +17,10 @@ test("closing the switcher when its last flow disappears does not reopen it afte
   test.setTimeout(90_000);
   const projectId = await createProjectViaApi(page, "Flow switcher project");
     // Withhold Realtime hints (the page would otherwise read the other change first, which the collaboration specs cover) so only the save finds out.
-    (await interceptRealtime(page)).dropEvents = true;
+    const wire = await interceptRealtime(page);
+    wire.dropEvents = true;
+    // Subscribing also revalidates independently of hints. Finish that startup read before the remote change.
+    const initialStatus = page.waitForResponse((response) => response.url() === `${appUrl}/api/projects/${projectId}/status` && wire.joined >= 2);
     await page.goto(`/app/projects/${projectId}`);
     await expect(page.getByRole("heading", { level: 1, name: "Flow switcher project" })).toBeVisible();
 
@@ -28,6 +31,7 @@ test("closing the switcher when its last flow disappears does not reopen it afte
     await expect(page.locator(".flow-switch")).toContainText("Original");
     await page.locator(".flow-switch").click();
     const flows = dialog(page, "Flows");
+    expect((await initialStatus).status()).toBe(200);
 
     const draft = await draftOf(page, projectId);
     const flow = Object.values(draft.document.flows)[0]!;

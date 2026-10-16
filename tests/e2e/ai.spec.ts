@@ -1059,9 +1059,10 @@ test("review regression: expired proposal still recovers an uncertain Apply with
   const lost = new Promise<void>((resolve) => { lostAcknowledgement = resolve; });
   await page.route(applyUrl, async (route) => {
     sent.push({ key: route.request().headers()["idempotency-key"], body: route.request().postDataJSON(), bytes: route.request().postData() });
+    if (sent.length === 1) holdDetail = true; // before the commit: its AI event can start a run read before this handler resumes
     const response = await route.fetch();
     expect(response.status()).toBe(200);
-    if (sent.length === 1) { holdDetail = true; await route.abort("failed"); lostAcknowledgement(); }
+    if (sent.length === 1) { await route.abort("failed"); lostAcknowledgement(); }
     else {
       replayed = (await response.json() as { replayed: boolean }).replayed;
       await route.fulfill({ response });
@@ -1072,7 +1073,7 @@ test("review regression: expired proposal still recovers an uncertain Apply with
     await lost;
     await expect(review.getByRole("button", { name: "Retry Apply with the same selection" })).toBeVisible();
     await expect(page.locator(".studio-status")).not.toContainText("Unsaved changes");
-    expect(await warnsBeforeUnload(page)).toBe(true);
+    await expect.poll(() => warnsBeforeUnload(page)).toBe(true); // the unload listener attaches in an effect after the failure renders
     const applied = await (await page.request.get(`/api/projects/${projectId}/bootstrap`)).json() as { draft: { documentRevision: number; layoutRevision: number; document: { flows: Record<string, { title: string }> } } };
     expect(Object.values(applied.draft.document.flows).filter((flow) => flow.title === "Reviewed checkout")).toHaveLength(1);
     const databaseTarget = new URL(process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL!);
@@ -1156,6 +1157,7 @@ test("corrective regression: two node updates identify their target and fields b
   expect(await panel(page).evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.setViewportSize({ width: 320, height: 900 });
   await expect(panel(page)).toHaveAttribute("data-dock", "overlay");
+  await expect(panel(page).getByRole("tab", { name: "AI", exact: true })).toBeFocused(); // the overlay focuses its tab in an effect after it renders
   await payment.focus();
   await expect(payment).toBeFocused();
   await payment.press("Space");
@@ -1224,7 +1226,7 @@ for (const kind of ["cancel", "discard"] as const) for (const accessChange of ["
       const retry = panel(editorPage).getByRole("button", { name: `Retry ${kind}`, exact: true });
       await expect(retry).toBeVisible();
       await expect(editorPage.locator(".studio-status")).not.toContainText("Unsaved changes");
-      expect(await warnsBeforeUnload(editorPage)).toBe(true);
+      await expect.poll(() => warnsBeforeUnload(editorPage)).toBe(true); // the unload listener attaches in an effect after the failure renders
       expect(responses[0]).toMatchObject(kind === "cancel" ? { runId, cancelRequested: true, replayed: false } : { runId, disposition: "DISCARDED", replayed: false });
       const committed = await snapshot();
       expect(committed).toMatchObject({ receipts: 1, audits: 1 });
@@ -1683,5 +1685,7 @@ test("Start a new conversation sends no earlier turns", async ({ page, workerAcc
   const startUrl = `${appUrl}/api/projects/${projectId}/ai-runs`;
   const startedPromise = page.waitForResponse((response) => response.url() === startUrl && response.request().method() === "POST");
   await panel(page).getByRole("button", { name: "Generate", exact: true }).click();
-  expect(((await startedPromise).request().postDataJSON() as { context: Record<string, unknown> }).context).toEqual({ selection: null, sources: [] });
+  const started = await startedPromise;
+  expect(started.status()).toBe(202);
+  expect((started.request().postDataJSON() as { context: Record<string, unknown> }).context).toEqual({ selection: null, sources: [] });
 });
