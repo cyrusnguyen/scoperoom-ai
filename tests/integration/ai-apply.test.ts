@@ -319,7 +319,8 @@ test("cleanup-first holds the parent/run guards and Apply refuses the expired bo
 test("cleanup skips Apply's locked project; Apply checks body expiry after its source lock wait", { skip: !canRun }, async () => {
   await withAi(async ({ person, projectFor, database }) => {
     const owner = await person(); const p = await projectFor(owner); const draft = await draftOf(database, p); const source = await sourceOf(database, p, owner.profile);
-    const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: proposal, sources: [source], createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000 + 2_000) });
+    const { rows: [clock] } = await database.query("select clock_timestamp() - interval '7 days' + interval '5 seconds' as at"); // the body has five seconds left on the database clock
+    const run = await seedRun(database, { projectId: p, owner: owner.profile, shape: "SUCCEEDED", result: proposal, sources: [source], createdAt: clock.at });
     const before = await stateOf(database, p, run);
     const blocker = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! }); await blocker.connect();
     let pending: Promise<unknown> | undefined;

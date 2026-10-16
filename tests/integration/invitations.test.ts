@@ -141,19 +141,23 @@ test("sequence rule under lock contention: an invite issued before removal never
       const memberProfile = await profileId(member);
       const current = await memberVersion(owner, projectId, member);
       const changedEmail = `changed-${randomUUID()}@example.test`;
-      await database.query("begin");
-      await database.query("select id from app.project where id = $1 for update", [projectId]);
-      const wait = () => new Promise((resolve) => setTimeout(resolve, 250));
-      const first = removalFirst
+      let holder = await holdProjectLocks([projectId]);
+      const calls: Promise<unknown>[] = [removalFirst
         ? removeProjectMember(owner, projectId, memberProfile, { expectedMemberVersion: current.version, key: randomUUID() })
-        : invite(owner, projectId, changedEmail);
-      await wait();
-      const second = removalFirst
-        ? invite(owner, projectId, changedEmail)
-        : removeProjectMember(owner, projectId, memberProfile, { expectedMemberVersion: current.version, key: randomUUID() });
-      await wait();
-      await database.query("commit");
-      await Promise.all([first, second]);
+        : invite(owner, projectId, changedEmail)];
+      try {
+        await waitForLockWaiters(database, holder.pid, (queries) => countLockQueries(queries, "FROM app.project project") >= 1, "the first call behind the held project lock");
+        calls.push(removalFirst
+          ? invite(owner, projectId, changedEmail)
+          : removeProjectMember(owner, projectId, memberProfile, { expectedMemberVersion: current.version, key: randomUUID() }));
+        // The owner makes both calls, so the second queues behind the first one's actor lock rather than the project lock.
+        await waitForLockWaiters(database, holder.pid, (queries) => queries.length >= 2, "both calls queued behind the held project lock");
+        await releaseHeldProjectLocks(holder); holder = null!;
+        await Promise.all(calls);
+      } finally {
+        if (holder) { await holder.client.query("rollback"); await holder.client.end(); }
+        await Promise.allSettled(calls);
+      }
       const pending = (await listProjectInvitations(owner, projectId)).invitations.find((entry) => entry.verifiedEmail === changedEmail)!;
       const attempt = acceptInvitation({ ...member, verifiedEmail: changedEmail }, { invitationId: pending.id, key: randomUUID() });
       if (removalFirst) assert.equal((await attempt).role, "EDITOR");

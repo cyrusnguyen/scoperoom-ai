@@ -189,7 +189,7 @@ test("concurrent requirement creates serialize labels without burning one on sta
         command: "CREATE_REQUIREMENT", expectedDocumentRevision: 1, payload: fields,
       })));
       let waiting = false;
-      for (let attempt = 0; attempt < 100; attempt += 1) {
+      for (let attempt = 0; attempt < 500; attempt += 1) {
         const { rows: [row] } = await database.query<{ count: number }>(
           `with recursive holder_chain(pid) as (
             select $1::int

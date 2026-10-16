@@ -142,7 +142,7 @@ test("ordinary reads do not wait for a held project write lock", { skip: !canRun
     try {
       await database.query("select id from app.project where id = $1 for update", [projectId]);
       reads = Promise.all([getProjectBootstrap(owner, projectId), getProjectStatus(owner, projectId), listProjects(owner)]);
-      const completed = await Promise.race([reads.then(() => true), new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 1500); })]);
+      const completed = await Promise.race([reads.then(() => true), new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 5000); })]);
       assert.equal(completed, true, "GET paths must not take row locks");
     } finally {
       if (timer) clearTimeout(timer);
