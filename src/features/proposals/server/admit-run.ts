@@ -164,7 +164,7 @@ export async function admitRun(identity: ProjectIdentity, projectId: string, inp
         await tx.$executeRaw`ROLLBACK TO SAVEPOINT ai_admission`;
         return { refusal: error };
       }
-    });
+    }, { timeout: 15_000 });
     if ("refusal" in outcome) throw outcome.refusal;
     return outcome.result;
   });
