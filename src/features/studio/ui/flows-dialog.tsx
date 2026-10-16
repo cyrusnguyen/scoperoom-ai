@@ -24,7 +24,7 @@ export function FlowSwitcher() {
   const [open, setOpen] = useState(false);
   const flow = currentFlow(draft.document, ui.flowId);
   const title = flow?.title ?? "Flows";
-  return <div className="flow-current">
+  return <div className="editor-flow">
     <button type="button" id={flow ? "studio-flow-title" : undefined} className="button quiet small flow-switch" onClick={() => setOpen(true)} aria-haspopup="dialog" title={title}>
       <Icon name="flow" size={13} /><span>{title}</span><Icon name="chevron" size={12} />
     </button>

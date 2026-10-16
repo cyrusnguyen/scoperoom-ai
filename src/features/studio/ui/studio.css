@@ -11,7 +11,7 @@
 .segmented button + button { border-left: 1px solid var(--border-strong); }
 .segmented button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-hover); }
 
-.flow-current { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.editor-flow { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .flow-switch { min-width: 0; max-width: 240px; }
 .flow-switch > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge[data-inclusion="INCLUDED"] { border-color: var(--scope-included-border); background: var(--scope-included-background); color: var(--scope-included); }
@@ -108,7 +108,7 @@ button.item-row { width: 100%; border: 0; border-bottom: var(--panel-border); ba
   .studio-toolbar, .studio-status { padding-inline: var(--space-3); }
   /* The header's actions crowd out the open flow's name, so the flow and its scope take their own row. */
   .editor-header { flex-wrap: wrap; padding-block: var(--space-2); }
-  .flow-current { order: 1; flex-basis: 100%; }
+  .editor-flow { order: 1; flex-basis: 100%; }
   .studio button, .studio .button.small, .editor-header .flow-switch, .segmented button, .step-open { min-height: 44px; }
   .step-check { display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
   .studio .canvas-control { min-width: 44px; min-height: 44px; }
