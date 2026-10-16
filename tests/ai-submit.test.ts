@@ -55,3 +55,18 @@ test("regenerating a follow-up continues the same earlier answer; regenerating a
   assert.deepEqual(followUpThread(view({}), "parent"), { runId: earlierId, turns: earlier.turns });
   assert.equal(followUpThread(view({ capture: { prompt: "Make a checkout flow" } as CapturedInput }), "parent"), null);
 });
+
+test("the shown thread drops whole older runs by bytes exactly as admission does", () => {
+  // Two-byte characters: three 10,000-byte instructions exceed the 24 KiB bound within 6 turns, so the oldest run must go.
+  const big = (id: string, text: string) => [{ runId: id, role: "user" as const, text }, { runId: id, role: "assistant" as const, text: "ok" }];
+  const older = "33333333-3333-4333-8333-333333333333";
+  const conversation = { continuesRunId: earlierId, turns: [...big(older, "é".repeat(5_000)), ...big(earlierId, "è".repeat(5_000))] };
+  const thread = followUpThread(view({ capture: { prompt: "ê".repeat(5_000), conversation } as CapturedInput }), "continue");
+  assert.deepEqual([...new Set(thread?.turns.map((turn) => turn.runId))], [earlierId, runId]);
+});
+
+test("a continued run too long to send still shows its thread, so the server's refusal can be recovered with Start a new conversation", () => {
+  const thread = followUpThread(view({ capture: { prompt: "😀".repeat(8_000) } as CapturedInput }), "continue");
+  assert.equal(thread?.runId, runId);
+  assert.equal(thread?.turns.length, 2);
+});

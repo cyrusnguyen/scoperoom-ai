@@ -1,5 +1,5 @@
-import { AI_LIMITS, type ConversationTurn, type RunView } from "../contracts/tasks.ts";
-import { runTurns } from "../domain/conversation.ts";
+import type { ConversationTurn, RunView } from "../contracts/tasks.ts";
+import { buildConversation, runTurns } from "../domain/conversation.ts";
 
 export type PendingStartRequest = {
   kind: "start"; projectId: string; draftId: string; key: string; body: Record<string, unknown>; submittedText: string;
@@ -21,12 +21,14 @@ export type ThreadMode = "continue" | "fresh" | "parent";
 /**
  * Which run a new instruction continues, and the turns it will carry. A run that answered is continued itself; a follow-up that
  * failed or is still running keeps continuing the answer it continued, so one failure never silently drops the thread.
- * The server trims the oldest turns to its turn and byte bounds; the UI mirrors only the turn-count bound, not the byte bound.
+ * The shown turns are trimmed by the same buildConversation admission uses, so the panel shows exactly what is sent.
  */
 export function followUpThread(run: Pick<RunView, "id" | "state" | "result" | "capture" | "disposition"> | null, mode: ThreadMode): { runId: string; turns: ConversationTurn[] } | null {
   if (!run || mode === "fresh") return null;
   if (mode === "continue" && run.state === "SUCCEEDED" && run.result && run.capture) {
-    return { runId: run.id, turns: runTurns({ id: run.id, capture: run.capture, result: run.result, disposition: run.disposition }).slice(-AI_LIMITS.conversationTurns) };
+    const continued = { id: run.id, capture: run.capture, result: run.result, disposition: run.disposition };
+    // Too long to send even alone: show it anyway, so the server refusal can be recovered with "Start a new conversation".
+    try { return { runId: run.id, turns: buildConversation(continued).turns }; } catch { return { runId: run.id, turns: runTurns(continued) }; }
   }
   const earlier = run.capture?.conversation;
   return earlier ? { runId: earlier.continuesRunId, turns: earlier.turns } : null;
