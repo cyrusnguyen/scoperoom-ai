@@ -789,10 +789,10 @@ test("failed runs keep manual editing available and expired results retain read-
   expect(started.status()).toBe(202);
   const failedId = (await started.json() as { runId: string }).runId;
   await workerAccount.database.query("update app.ai_run set state = 'RUNNING', budget_state = 'CONSUMED' where id = $1", [failedId]);
-  const failure = await workerAccount.database.query("select app.finish_ai_run($1::uuid, 'FAILED'::app.ai_run_state, 'SYNTHETIC_FAILURE') as result", [failedId]);
+  const failure = await workerAccount.database.query("select app.finish_ai_run($1::uuid, 'FAILED'::app.ai_run_state, 'RESULT_GRAPH_LIMIT') as result", [failedId]);
   expect(failure.rows[0]?.result).toBe("SETTLED");
   await expect(panel(page).getByText("Failed", { exact: true })).toBeVisible();
-  await expect(panel(page).getByText(/provider could not complete this run.*synthetic failure/i)).toBeVisible();
+  await expect(panel(page).getByText("The AI proposed more than 20 new steps or 40 new connections, which is over the limit. Ask for fewer steps and try again.", { exact: false })).toBeVisible();
   await page.locator(".editor-body").getByRole("button", { name: "New flow" }).click();
   await expect(page.getByRole("dialog", { name: "New flow" })).toBeVisible();
   await page.getByRole("dialog", { name: "New flow" }).getByRole("button", { name: "Cancel" }).click();

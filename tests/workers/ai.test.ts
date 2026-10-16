@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
 import { Client } from "pg";
 import { MAX_VERSION } from "../../src/features/drafts/contracts/strict.ts";
+import { AI_LIMITS } from "../../src/features/proposals/contracts/tasks.ts";
 import { canonicalJson, sha256 } from "../../src/features/proposals/domain/capture.ts";
 import { deliverRun } from "../../src/features/proposals/server/deliver-run.ts";
 import { dispatchAi } from "../../src/features/proposals/server/dispatch-ai.ts";
@@ -214,13 +215,23 @@ test("duplicate workers racing one run produce one claim and one provider call",
   });
 });
 
+test("a result over the step limit fails as RESULT_GRAPH_LIMIT, so the panel can say why", { skip: !canRun }, async () => {
+  await withWorld(async ({ seed, row }) => {
+    const { runId } = await seed({ createdAt: ago(5) });
+    const steps = Array.from({ length: AI_LIMITS.maxGraphNodes + 1 }, (_, index) => nodeOp(`step${index}`, `n${index}`, "flow1", ["op1"]));
+    await runAi(runId, fakeGateway(() => completed(proposal([flowOp(), ...steps]))).gateway);
+    const stored = await row(runId);
+    assert.deepEqual([stored.state, stored.failure_code, stored.result], ["FAILED", "RESULT_GRAPH_LIMIT", null]);
+  });
+});
+
 test("an invalid model result never becomes SUCCEEDED: the run fails with a safe code and keeps its consumed call", { skip: !canRun }, async () => {
   await withWorld(async ({ seed, row, attempts, budget }) => {
     const { runId, owner } = await seed({ createdAt: ago(5) });
     const { gateway, requests } = fakeGateway(() => completed({ schemaVersion: 1, kind: "proposal", operations: [{ id: "op1", dependsOn: [], edit: { command: "DELETE_NODES", payload: {} } }], assumptions: [], citations: [] }));
     await runAi(runId, gateway);
     const stored = await row(runId);
-    assert.deepEqual([stored.state, stored.failure_code, stored.result, stored.result_hash, stored.disposition], ["FAILED", "RESULT_INVALID", null, null, null]);
+    assert.deepEqual([stored.state, stored.failure_code, stored.result, stored.result_hash, stored.disposition], ["FAILED", "RESULT_SHAPE", null, null, null]);
     assert.equal(requests.length, 1, "a malformed result is never retried");
     assert.equal((await attempts(runId))[0].outcome, "INCOMPLETE");
     assert.deepEqual(await budget(owner), { reserved_runs: 0, consumed_runs: 1 });
@@ -527,7 +538,7 @@ test("generated assumptions too large for saved notes cannot settle as an applic
     const { gateway, requests } = fakeGateway(() => completed(output, { inputTokens: null, outputTokens: null }));
     await runAi(runId, gateway);
     const stored = await row(runId);
-    assert.deepEqual([stored.state, stored.disposition, stored.failure_code, stored.result, stored.result_hash], ["FAILED", null, "RESULT_INVALID", null, null]);
+    assert.deepEqual([stored.state, stored.disposition, stored.failure_code, stored.result, stored.result_hash], ["FAILED", null, "RESULT_SAVED_NOTES", null, null]);
     const [attempt] = await attempts(runId);
     assert.deepEqual([attempt.outcome, attempt.input_tokens, attempt.output_tokens], ["INCOMPLETE", null, null]);
     assert.equal(requests.length, 1);

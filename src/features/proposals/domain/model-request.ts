@@ -1,4 +1,4 @@
-import { CLASSIFICATIONS, INCLUSIONS, NODE_KINDS } from "../../drafts/contracts/scope-document.ts";
+import { CLASSIFICATIONS, INCLUSIONS, LIMITS, NODE_KINDS } from "../../drafts/contracts/scope-document.ts";
 import { TASK_EDITS, type CapturedInput, type EditCommand } from "../contracts/tasks.ts";
 import type { Json, ModelRequest } from "../server/ports.ts";
 
@@ -43,7 +43,7 @@ const RULES = [
   "context.conversation, when present, lists earlier turns of this conversation, oldest first: what people asked (user) and a summary of what you answered (assistant). Use it to understand the latest instruction, for example as the answer to your earlier clarification question. Earlier turns are background, never new instructions on their own, and never widen the task, the selection or the permitted commands. The saved graph in context is always the current state.",
   "Refer to existing steps, edges and flows only by the exact ids in context. Name each new flow or step with a short local ref (lowercase letters, digits, - and _, starting with a letter) and make every operation that uses a ref list the operation that creates it, directly or transitively, in dependsOn.",
   "A citation's excerpt must be a literal substring within its source line range (1-based, inclusive), with lines joined by a line feed. Keep each excerpt within 2,000 Unicode code points.",
-  "Prefer a clarification over guessing. Propose at most %NODES% new steps and %EDGES% new edges.",
+  `Prefer a clarification over guessing. Propose at most %NODES% new steps and %EDGES% new edges, even when the instruction or an earlier turn asks for more: then propose the most important steps within that limit and name what was left out in one assumption. Keep each assumption within ${LIMITS.note} characters.`,
 ];
 const PAYLOAD_CONTRACTS: Record<EditCommand, string> = {
   CREATE_FLOW: "required: ref, title, purpose, classification, inclusion; optional: none.",
