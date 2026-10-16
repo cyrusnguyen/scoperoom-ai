@@ -21,21 +21,16 @@ const UNSAVED = "Your changes aren’t saved yet, so this flow stays open. Resol
  */
 export function FlowSwitcher() {
   const { draft, ui } = useStudio();
-  const flow = currentFlow(draft.document, ui.flowId);
-  return <div className="flow-current">
-    <FlowSwitcherControl title={flow?.title ?? "Flows"} id={flow ? "studio-flow-title" : undefined} />
-    {flow && <span className="badge" data-inclusion={flow.inclusion}>{INCLUSION_LABELS[flow.inclusion]}</span>}
-  </div>;
-}
-
-function FlowSwitcherControl({ title, id }: { title: string; id?: string }) {
   const [open, setOpen] = useState(false);
-  return <>
-    <button type="button" id={id} className="button quiet small flow-switch" onClick={() => setOpen(true)} aria-haspopup="dialog" title={title}>
+  const flow = currentFlow(draft.document, ui.flowId);
+  const title = flow?.title ?? "Flows";
+  return <div className="flow-current">
+    <button type="button" id={flow ? "studio-flow-title" : undefined} className="button quiet small flow-switch" onClick={() => setOpen(true)} aria-haspopup="dialog" title={title}>
       <Icon name="flow" size={13} /><span>{title}</span><Icon name="chevron" size={12} />
     </button>
+    {flow && <span className="badge" data-inclusion={flow.inclusion}>{INCLUSION_LABELS[flow.inclusion]}</span>}
     {open && <FlowsDialog onClose={() => setOpen(false)} />}
-  </>;
+  </div>;
 }
 
 type Mode = "list" | "create" | "delete" | "import" | "export";

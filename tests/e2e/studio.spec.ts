@@ -1263,6 +1263,8 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await mock(page, "OWNER");
     await page.goto(`/app/projects/${projectId}`);
     await expect(page.locator("#studio-flow-title")).toHaveText("Intake");
+    // The header's actions must not squeeze the open flow's name: it has its own header row here.
+    expect(await page.locator("#studio-flow-title > span").evaluate((name) => name.clientWidth > 0 && name.scrollWidth <= name.clientWidth)).toBe(true);
     await expect(toolbar(page).getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("list", { name: "Steps" })).toBeVisible();
     await expect(page.getByRole("list", { name: "Steps" })).toContainText(longLabel);
