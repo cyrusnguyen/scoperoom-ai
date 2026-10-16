@@ -334,3 +334,9 @@ test("a follow-up sends earlier turns as context without run ids; other requests
   assert.match(followUp.systemInstruction, /context\.conversation/);
   assert.ok(!JSON.stringify(followUp.context).includes(runId));
 });
+
+test("the step limit holds even when the instruction or an earlier turn asks for more", () => {
+  const { systemInstruction } = buildModelRequest({ id: "run-1", model: "model-x", capture: resultFixture().generate() }, 5_000);
+  assert.match(systemInstruction, /Propose at most 20 new steps and 40 new edges, even when the instruction or an earlier turn asks for more/);
+  assert.match(systemInstruction, /name what was left out in one assumption of at most 500 characters/);
+});

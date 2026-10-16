@@ -6,6 +6,7 @@ import { incidentTraceLinks } from "@/features/drafts/domain/graph";
 import { removedRecordIds } from "@/features/scope/domain/scope";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import type { ProposalOperation, RunView } from "../contracts/tasks";
+import { failureText } from "../domain/failure-text";
 import { projectProposalPreview, newApplyBlocker } from "./preview-projection";
 import { WorkflowPreview } from "./workflow-preview";
 
@@ -88,7 +89,7 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
   return <section className="detail-section proposal-review" aria-labelledby="proposal-heading">
     <h2 id="proposal-heading">Proposal review</h2>
     {run.disposition === "EXPIRED" && <p className="inline-note" role="status">This result has expired. Its history remains, but the proposal body is no longer available.</p>}
-    {run.state === "FAILED" && <p className="inline-note" role="status">The provider could not complete this run{run.failureCode ? ` (${run.failureCode.toLowerCase().replaceAll("_", " ")})` : ""}. Manual editing remains available.</p>}
+    {run.state === "FAILED" && <p className="inline-note" role="status">{failureText(run.failureCode)} Manual editing remains available.</p>}
     {!run.result && run.disposition !== "EXPIRED" && <p className="muted">No proposal is available for this run.</p>}
     {run.result?.kind === "clarification" && <p>{run.result.message}</p>}
     {run.result?.kind === "proposal" && <>
