@@ -1652,6 +1652,22 @@ test("Reply to a clarification continues the conversation with its earlier turns
   const runId = (await started.json() as { runId: string }).runId;
   const { rows: [stored] } = await database.query("select capture from app.ai_run where id = $1", [runId]);
   expect(stored.capture.conversation.turns.map((turn: { text: string }) => turn.text)).toEqual([asked.prompt, question.message]);
+
+  // Regenerating the reply resends it within the same conversation: it continues the first answer again, not the reply itself.
+  const followUp: ValidatedProposal = { schemaVersion: 1, kind: "clarification", message: "Should guests be able to check out?" };
+  await database.query("update app.ai_run set state = 'RUNNING', budget_state = 'CONSUMED' where id = $1", [runId]);
+  await database.query("update app.ai_run set state = 'SUCCEEDED', disposition = 'AVAILABLE', terminal_at = now(), result = $2::jsonb, result_hash = $3 where id = $1",
+    [runId, JSON.stringify(followUp), sha256(canonicalJson(followUp))]);
+  await database.query("select app.record_ai_event((select project_id from app.ai_run where id = $1), $1, 'AI_RUN_SUCCEEDED', jsonb_build_object('testOnly', true))", [runId]);
+  await page.reload();
+  await expect(panel(page).locator(".run-state")).toHaveText("Needs clarification");
+  await panel(page).getByRole("button", { name: "Regenerate with a fresh capture" }).click();
+  await expect(panel(page).getByLabel("Instruction", { exact: true })).toHaveValue("Cards and PayPal");
+  const regeneratedPromise = page.waitForResponse((response) => response.url() === startUrl && response.request().method() === "POST");
+  await panel(page).getByRole("button", { name: "Generate", exact: true }).click();
+  const regenerated = await regeneratedPromise;
+  expect(regenerated.status()).toBe(202);
+  expect((regenerated.request().postDataJSON() as { context: Record<string, unknown> }).context).toEqual({ selection: null, sources: [], continuesRunId: asked.runId });
 });
 
 test("Start a new conversation sends no earlier turns", async ({ page, workerAccount }) => {
