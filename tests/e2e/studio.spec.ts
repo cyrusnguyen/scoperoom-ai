@@ -523,6 +523,7 @@ test.describe("Studio on a real draft", () => {
     await page.keyboard.press("Enter");
     await expect(page.locator("#studio-flow-title")).toHaveText("Returns");
     await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
+    await expect(page.locator("#studio-flow-title")).toBeFocused(); // focus lands a frame after the dialog closes; keys sent sooner go elsewhere
     for (const label of ["Request return", "Refund issued"]) {
       await press(toolbar(page).getByRole("button", { name: "Add step" }));
       await page.keyboard.press("Tab"); // Shape → Name
