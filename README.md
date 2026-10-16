@@ -82,7 +82,7 @@ The manual path works end to end without AI.
 
 | Live collaboration | Invite and members |
 | --- | --- |
-| ![Another editor's cursor, selection and presence list on the canvas](docs/screenshots/collaboration-presence.png) | ![Project details with members and the invitation form](docs/screenshots/invite-members.png) |
+| ![Three other editors' cursors and the presence list on the canvas](docs/screenshots/collaboration-presence.png) | ![Project details with members and the invitation form](docs/screenshots/invite-members.png) |
 | **AI proposal review** | **Evidence and scope** |
 | ![An AI proposal shown as a preview before Apply](docs/screenshots/ai-proposal.png) | ![Specs panel with the scope board](docs/screenshots/specs-scope.png) |
 | **Approved baseline** | **Flows menu** |
@@ -94,7 +94,7 @@ The manual path works end to end without AI.
 | **Phone layout** | |
 | ![The Studio at phone width](docs/screenshots/mobile-studio.png) | |
 
-The screenshots come from the live app with a demo project and two demo accounts; the AI proposal is a real Claude result. The staff screen shows sample accounts, so no real users appear.
+The screenshots come from the live app with a demo project and four of its members working at once; the AI proposal is a real Claude result. The staff screen shows sample accounts, so no real users appear.
 
 ## Tech stack
 

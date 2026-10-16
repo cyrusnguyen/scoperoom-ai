@@ -5,8 +5,7 @@
 3. [Corrected specification](../.codex/docs/implementation/v1.6/PROJECT-SPEC.md) and [decisions/acceptance coverage](../.codex/docs/implementation/v1.6/01-requirements-and-decisions.md): product authority and explicit implementation choices.
 4. Relevant data/API/UI/delivery contracts linked from that plan: exact behavior and verification gates.
 5. [Supabase email signup setup](auth-setup.md): local code delivery and hosted Auth requirements.
-6. [Admin Dashboard plan](admin-dashboard-plan.md): planned account limits and usage screen, to build after the hosted pilot stage.
-7. [Hosted pilot runbook](hosted-pilot.md): hosted target configuration, bootstrap, release, abort and limitations.
+6. [Hosted pilot runbook](hosted-pilot.md): hosted target configuration, bootstrap, release, abort and limitations.
 
 The handbook adopts PostgreSQL saved content/positions, Supabase Realtime collaboration and immutable approval that preserves newer draft edits. It builds on the existing ScopeRoom interface through staged functional integration.
 
