@@ -32,7 +32,7 @@ test("keyboard only: the participants control is reached by Tab, shows a focus r
   const toggle = toggleOf(page);
   const list = page.locator(".participants-list");
 
-  await page.locator("#studio-flow-title").focus();
+  await page.locator(".studio-toolbar").getByRole("button", { name: "Arrange" }).focus();
   await page.keyboard.press("Tab"); // the next control in the toolbar
   await expect(toggle).toBeFocused();
   await expect(toggle).toHaveCSS("outline-style", "solid"); // :focus-visible ring (globals.css), present because the focus came from the keyboard

@@ -136,7 +136,8 @@ test.describe("Studio on a real draft", () => {
     await expect(page.getByRole("heading", { name: "No flows yet" })).toBeVisible();
     await createFlowInUi(page, "Checkout");
     await expect(page.locator(".flow-switch")).toContainText("Checkout");
-    await expect(toolbar(page).locator(".badge")).toHaveText("Exploratory");
+    await expect(page.locator(".editor-header .badge[data-inclusion]")).toHaveText("Exploratory"); // beside the flow switcher
+    await expect(toolbar(page).locator(".badge, h2")).toHaveCount(0); // the toolbar does not repeat the flow's name or scope
     await page.locator(".flow-switch").click();
     const flows = modal(page, "Flows");
     await flows.getByRole("button", { name: "New flow" }).click();

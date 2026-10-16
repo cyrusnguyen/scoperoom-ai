@@ -153,7 +153,7 @@ test.describe("Inline label editing (real draft)", () => {
     await expect(stepEditor(page, ids.payId)).toHaveValue("");
     const long = "x".repeat(161);
     await stepEditor(page, ids.payId).fill(long);
-    await page.locator(".studio-flow-title").click(); // blur closes too
+    await page.locator(".editor-title").click(); // blur closes too
     await expect(note(page)).toHaveText("Name can be up to 160 characters (now 161). Your text is kept; fix it here or in the inspector.");
     await pay.locator(".step-kind").dblclick();
     await expect(panel(page).getByLabel("Name")).toHaveValue(long);
@@ -181,7 +181,7 @@ test.describe("Inline label editing (real draft)", () => {
 
     await pay.locator(".step-label").dblclick();
     await expect(stepEditor(page, ids.payId)).toHaveValue("Pay by card");
-    await page.locator(".studio-flow-title").click();
+    await page.locator(".editor-title").click();
     await expect(stepEditor(page, ids.payId)).toBeHidden();
 
     // A real inline change with other unsaved fields opens the inspector instead of applying them.
