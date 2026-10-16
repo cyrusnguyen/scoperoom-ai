@@ -34,19 +34,24 @@ const view = (over: Partial<RunView>) => ({ id: runId, state: "SUCCEEDED", dispo
   result: { schemaVersion: 1, kind: "clarification", message: "Guest checkout too?" }, ...over }) as Pick<RunView, "id" | "state" | "result" | "capture" | "disposition">;
 
 test("a succeeded run is continued with its earlier turns plus its own instruction and answer", () => {
-  const thread = followUpThread(view({}), false);
+  const thread = followUpThread(view({}), "continue");
   assert.equal(thread?.runId, runId);
   assert.deepEqual(thread?.turns.map((turn) => turn.text), ["Make a checkout flow", "Which payment methods?", "Cards", "Guest checkout too?"]);
 });
 
 test("a failed follow-up keeps continuing the answer it continued", () => {
-  const thread = followUpThread(view({ state: "FAILED", result: null }), false);
+  const thread = followUpThread(view({ state: "FAILED", result: null }), "continue");
   assert.deepEqual(thread, { runId: earlierId, turns: earlier.turns });
 });
 
 test("no thread when starting fresh, with no run, or once the capture expired", () => {
-  assert.equal(followUpThread(view({}), true), null);
-  assert.equal(followUpThread(null, false), null);
-  assert.equal(followUpThread(view({ capture: null, result: null, disposition: "EXPIRED" }), false), null);
-  assert.equal(followUpThread(view({ state: "FAILED", result: null, capture: { prompt: "x" } as CapturedInput }), false), null);
+  assert.equal(followUpThread(view({}), "fresh"), null);
+  assert.equal(followUpThread(null, "continue"), null);
+  assert.equal(followUpThread(view({ capture: null, result: null, disposition: "EXPIRED" }), "continue"), null);
+  assert.equal(followUpThread(view({ state: "FAILED", result: null, capture: { prompt: "x" } as CapturedInput }), "continue"), null);
+});
+
+test("regenerating a follow-up continues the same earlier answer; regenerating a first run starts fresh", () => {
+  assert.deepEqual(followUpThread(view({}), "parent"), { runId: earlierId, turns: earlier.turns });
+  assert.equal(followUpThread(view({ capture: { prompt: "Make a checkout flow" } as CapturedInput }), "parent"), null);
 });

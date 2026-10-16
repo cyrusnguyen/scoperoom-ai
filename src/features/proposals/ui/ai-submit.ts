@@ -15,14 +15,17 @@ export function acknowledgedInstruction(current: string, submitted: string): str
   return current === submitted ? "" : current;
 }
 
+/** "continue" the current run, start "fresh", or reuse the current run's own "parent" answer (Regenerate sends the same request again). */
+export type ThreadMode = "continue" | "fresh" | "parent";
+
 /**
  * Which run a new instruction continues, and the turns it will carry. A run that answered is continued itself; a follow-up that
  * failed or is still running keeps continuing the answer it continued, so one failure never silently drops the thread.
  * The server trims the oldest turns to its turn and byte bounds; the UI mirrors only the turn-count bound, not the byte bound.
  */
-export function followUpThread(run: Pick<RunView, "id" | "state" | "result" | "capture" | "disposition"> | null, startFresh: boolean): { runId: string; turns: ConversationTurn[] } | null {
-  if (!run || startFresh) return null;
-  if (run.state === "SUCCEEDED" && run.result && run.capture) {
+export function followUpThread(run: Pick<RunView, "id" | "state" | "result" | "capture" | "disposition"> | null, mode: ThreadMode): { runId: string; turns: ConversationTurn[] } | null {
+  if (!run || mode === "fresh") return null;
+  if (mode === "continue" && run.state === "SUCCEEDED" && run.result && run.capture) {
     return { runId: run.id, turns: runTurns({ id: run.id, capture: run.capture, result: run.result, disposition: run.disposition }).slice(-AI_LIMITS.conversationTurns) };
   }
   const earlier = run.capture?.conversation;

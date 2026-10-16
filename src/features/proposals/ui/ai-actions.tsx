@@ -64,7 +64,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
   const resources = useMemo(() => createRunResources({ projectId: studio.projectId, apiRead, adoptPage, adoptRun: setRun, adoptHistoryRun: setHistoryRun, adoptReadState: (destination, state) => setReads(current => ({ ...current, [destination]: state })) }), [studio.projectId, adoptPage]);
   const selectedSummary = page.runs.find((item) => item.id === ui.selectedRunId);
   const canWrite = status.status === "ACTIVE" && (status.role === "OWNER" || status.role === "EDITOR");
-  const thread = followUpThread(run, ui.startFresh);
+  const thread = followUpThread(run, ui.threadMode);
   const activeJobVisible = Boolean((runTab === "current" && run && !isTerminal(run.state)) || (runTab === "history" && historyRun && !isTerminal(historyRun.state)));
 
   useEffect(() => { resources.setMissingCurrentHandler(ticket => update(current => recoverUnavailableCurrentRun(current,ticket))); return () => resources.setMissingCurrentHandler(undefined); }, [resources, update]);
@@ -111,7 +111,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
     const invocationFence = fence();
     const stillCurrent = () => mounted.current && invocationFence();
     const intent = uiRef.current;
-    const continuesRunId = followUpThread(run, intent.startFresh)?.runId;
+    const continuesRunId = followUpThread(run, intent.threadMode)?.runId;
     const selectionIntent = studioRef.current.ui.selection;
     actionFlight.current = true;
     setBusy(true);
@@ -207,7 +207,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
     if (sessionEnded(result)) return;
     if (result.ok) {
       update((current) => ({ ...current, pendingRequest: null, applyPhase: undefined, selectedRunId: result.data.runId,
-        ...(request.kind === "start" ? { instruction: acknowledgedInstruction(current.instruction, request.submittedText), startFresh: false } : {}) }));
+        ...(request.kind === "start" ? { instruction: acknowledgedInstruction(current.instruction, request.submittedText), threadMode: "continue" } : {}) }));
       setRunTab("current");
       setMessage("Run queued.");
       await revalidate("focus");
@@ -254,24 +254,26 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
     } finally { actionFlight.current = false; setBusy(false); }
   };
 
+  const focusInstruction = () => requestAnimationFrame(() => document.getElementById("ai-instruction")?.focus());
+
   const regenerate = (selected: RunView) => {
     if (!selected.capture) { setMessage("The captured input has expired. Enter a new instruction for another run."); return; }
     if (ui.pendingRequest) { setMessage("Resolve the pending AI request before regenerating."); return; }
-    update((current) => ({ ...current, action: selected.taskType, instruction: selected.capture!.prompt, startFresh: true }));
+    update((current) => ({ ...current, action: selected.taskType, instruction: selected.capture!.prompt, threadMode: "parent" }));
     setMessage("Review the instruction and current selection, then submit to capture a fresh saved context.");
-    requestAnimationFrame(() => document.getElementById("ai-instruction")?.focus());
+    focusInstruction();
   };
 
   const startFresh = () => {
-    update((current) => ({ ...current, startFresh: true }));
+    update((current) => ({ ...current, threadMode: "fresh" }));
     setMessage("Your next instruction starts a new conversation.");
-    requestAnimationFrame(() => document.getElementById("ai-instruction")?.focus());
+    focusInstruction();
   };
 
   const reply = () => {
-    update((current) => ({ ...current, startFresh: false }));
+    update((current) => ({ ...current, threadMode: "continue" }));
     setMessage("");
-    requestAnimationFrame(() => document.getElementById("ai-instruction")?.focus());
+    focusInstruction();
   };
 
   return <div className="ai-panel">
