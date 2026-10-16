@@ -9,28 +9,9 @@ import {
 import { createProject, getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { ProjectError } from "../../src/features/projects/server/errors.ts";
 import { canRun, withFixture, type Identity } from "./support/fixture.ts";
+import { countLockQueries, waitForLockWaiters } from "./support/lock-waiters.ts";
 
 const code = (expected: string) => (error: unknown) => error instanceof ProjectError && error.code === expected;
-async function waitForLockWaiters(database: Client, holderPid: number, expected: number) {
-  const deadline = Date.now() + 5_000;
-  let queries: string[] = [];
-  while (Date.now() < deadline) {
-    const result = await database.query<{ query: string }>(`
-      with recursive holder_chain(pid) as (
-        select $1::int
-        union
-        select waiting.pid from pg_stat_activity waiting
-        join holder_chain blocker on blocker.pid = any(pg_blocking_pids(waiting.pid))
-      )
-      select activity.query from pg_stat_activity activity
-      join holder_chain on holder_chain.pid = activity.pid
-      where activity.wait_event_type = 'Lock'`, [holderPid]);
-    queries = result.rows.map((row) => row.query);
-    if (queries.filter((query) => query.includes("FROM app.project project")).length >= expected) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`Timed out waiting for ${expected} leaves behind the held project lock: ${queries.join(" | ")}`);
-}
 type HeldProjectLock = { client: Client; pid: number };
 async function holdProjectLock(projectId: string) {
   const holder = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
@@ -98,7 +79,7 @@ test("same-key leaves queued behind a project lock replay after membership ends"
     const leaves = [leaveProject(member, projectId, { key }), leaveProject(member, projectId, { key })];
     const settled = Promise.allSettled(leaves);
     try {
-      await waitForLockWaiters(database, holder.pid, 2);
+      await waitForLockWaiters(database, holder.pid, (queries) => countLockQueries(queries, "FROM app.project project") >= 2, "2 leaves behind the held project lock");
       await releaseHeldProjectLock(holder); holder = null!;
       const results = (await settled).map((result) => {
         if (result.status !== "fulfilled") throw result.reason;
