@@ -220,7 +220,9 @@ function validate(capture: CapturedInput, output: unknown): ValidatedProposal {
   if (operations.some(op => op.edit.command === "ADD_NODE") && assumptions.some(note => [...note].length > LIMITS.note)) bad("SAVED_NOTES");
   // Only after the whole closed envelope validated: Improve with nothing to change is a no-change clarification.
   if (!operations.length) return capture.taskType === "REFINE_FLOW_SELECTION" ? NO_CHANGE : bad("EMPTY_PROPOSAL");
-  return { schemaVersion: 1, kind: "proposal", operations, assumptions, citations };
+  const result: ValidatedProposal = { schemaVersion: 1, kind: "proposal", operations, assumptions, citations };
+  // Normalizing can add bytes (a missing citations list is stored as []); the stored result must still fit its size CHECK.
+  return jsonbTextBytes(result) > capture.limits.resultBytes ? bad("RESULT_BYTES") : result;
 }
 
 /**

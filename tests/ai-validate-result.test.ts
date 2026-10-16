@@ -53,6 +53,10 @@ test("a proposal that leaves out its citations list cites nothing and is returne
   assert.deepEqual(validateResult(generate, uncited), { ...uncited, citations: [] });
   assert.deepEqual(validateResult(improve, { schemaVersion: 1, kind: "proposal", operations: [], assumptions: [] }), NO_CHANGE);
   refuses(generate, { ...uncited, citations: null }, "CITATIONS"); // only a missing list means none
+  // The added empty list counts toward the stored size: a reply that fits only without it is refused, not stored over the limit.
+  const exactly = (bytes: number) => ({ ...generate, limits: { ...generate.limits, resultBytes: bytes } });
+  refuses(exactly(jsonbTextBytes(uncited)), uncited, "RESULT_BYTES");
+  assert.equal(validateResult(exactly(jsonbTextBytes({ ...uncited, citations: [] })), uncited).kind, "proposal");
 });
 
 test("operations are a closed union restricted to the task's edits", () => {
