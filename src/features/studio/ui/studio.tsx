@@ -5,7 +5,6 @@ import { graphWarnings } from "@/features/drafts/domain/warnings";
 import { Participants } from "@/features/collaboration/ui/use-participants";
 import { Icon } from "@/features/shell/ui/icon";
 import { ArrangeDialog } from "./arrange-dialog";
-import { INCLUSION_LABELS } from "./fields";
 import FlowCanvas from "./flow-canvas";
 import { FlowsDialog } from "./flows-dialog";
 import GraphList from "./graph-list";
@@ -63,19 +62,17 @@ export default function Studio() {
 
   return <><section className="studio" aria-labelledby="studio-flow-title" onKeyDown={onKeyDown}>
     <div className="studio-toolbar">
-      <h2 id="studio-flow-title" className="studio-flow-title" tabIndex={-1} title={flow.title}>{flow.title}</h2>
-      <span className="badge" data-inclusion={flow.inclusion}>{INCLUSION_LABELS[flow.inclusion]}</span>
+      {editable && <>
+        <button type="button" className="button small" onClick={() => setDialog("add")}><Icon name="plus" size={14} />Add step</button>
+        <button type="button" className="button small" onClick={() => setDialog("connect")} disabled={!stepCount}><Icon name="link" size={14} />Connect</button>
+        <button type="button" className="button quiet small" onClick={() => void arrange()} disabled={busy || !stepCount}><Icon name="grid" size={14} />Arrange</button>
+      </>}
       <span className="editor-spacer" />
       <Participants flowId={flow.id} />
       <div className="segmented" role="group" aria-label="Studio view">
         <button type="button" aria-pressed={view === "canvas"} onClick={() => update(() => ({ view: "canvas" }))}><Icon name="flow" size={14} />Canvas</button>
         <button type="button" aria-pressed={view === "list"} onClick={() => update(() => ({ view: "list" }))}><Icon name="list" size={14} />List</button>
       </div>
-      {editable && <>
-        <button type="button" className="button small" onClick={() => setDialog("add")}><Icon name="plus" size={14} />Add step</button>
-        <button type="button" className="button small" onClick={() => setDialog("connect")} disabled={!stepCount}><Icon name="link" size={14} />Connect</button>
-        <button type="button" className="button quiet small" onClick={() => void arrange()} disabled={busy || !stepCount}><Icon name="grid" size={14} />Arrange</button>
-      </>}
     </div>
     <div className="studio-stage">
       {view === "canvas" ? <FlowCanvas flowId={flow.id} /> : <GraphList flowId={flow.id} onDeleteSelected={() => setDialog("delete")} />}

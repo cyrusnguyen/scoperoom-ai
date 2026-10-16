@@ -15,21 +15,22 @@ import { explain, formKeys, useCommandSubmit, useStudio } from "./studio-context
 
 const UNSAVED = "Your changes aren’t saved yet, so this flow stays open. Resolve them in the Studio, then switch.";
 
-/** Header control naming the open flow; the Flows dialog remains available in an empty draft. */
+/**
+ * Header control naming the open flow, with its scope badge; the Flows dialog remains available in an empty draft.
+ * With a flow open, the control labels the Studio and is where focus returns after flow and step dialogs.
+ */
 export function FlowSwitcher() {
   const { draft, ui } = useStudio();
-  const flow = currentFlow(draft.document, ui.flowId);
-  return <FlowSwitcherControl title={flow?.title ?? "Flows"} />;
-}
-
-function FlowSwitcherControl({ title }: { title: string }) {
   const [open, setOpen] = useState(false);
-  return <>
-    <button type="button" className="button quiet small flow-switch" onClick={() => setOpen(true)} aria-haspopup="dialog" title={title}>
+  const flow = currentFlow(draft.document, ui.flowId);
+  const title = flow?.title ?? "Flows";
+  return <div className="editor-flow">
+    <button type="button" id={flow ? "studio-flow-title" : undefined} className="button quiet small flow-switch" onClick={() => setOpen(true)} aria-haspopup="dialog" title={title}>
       <Icon name="flow" size={13} /><span>{title}</span><Icon name="chevron" size={12} />
     </button>
+    {flow && <span className="badge" data-inclusion={flow.inclusion}>{INCLUSION_LABELS[flow.inclusion]}</span>}
     {open && <FlowsDialog onClose={() => setOpen(false)} />}
-  </>;
+  </div>;
 }
 
 type Mode = "list" | "create" | "delete" | "import" | "export";

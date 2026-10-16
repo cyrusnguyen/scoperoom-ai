@@ -136,7 +136,8 @@ test.describe("Studio on a real draft", () => {
     await expect(page.getByRole("heading", { name: "No flows yet" })).toBeVisible();
     await createFlowInUi(page, "Checkout");
     await expect(page.locator(".flow-switch")).toContainText("Checkout");
-    await expect(toolbar(page).locator(".badge")).toHaveText("Exploratory");
+    await expect(page.locator(".editor-header .badge[data-inclusion]")).toHaveText("Exploratory"); // beside the flow switcher
+    await expect(toolbar(page).locator(".badge, h2")).toHaveCount(0); // the toolbar does not repeat the flow's name or scope
     await page.locator(".flow-switch").click();
     const flows = modal(page, "Flows");
     await flows.getByRole("button", { name: "New flow" }).click();
@@ -1262,6 +1263,13 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
     await mock(page, "OWNER");
     await page.goto(`/app/projects/${projectId}`);
     await expect(page.locator("#studio-flow-title")).toHaveText("Intake");
+    // The header's actions must not squeeze the open flow's name: it has its own header row here.
+    expect(await page.locator("#studio-flow-title > span").evaluate((name) => name.clientWidth > 0 && name.scrollWidth <= name.clientWidth)).toBe(true);
+    // The Flows dialog renders inside the header's flow wrapper and must not inherit a narrow-screen rule meant for something else.
+    await page.locator(".flow-switch").click();
+    expect(await modal(page, "Flows").evaluate((dialog) => parseFloat(getComputedStyle(dialog).fontSize))).toBeGreaterThan(0);
+    await page.keyboard.press("Escape");
+    await expect(modal(page, "Flows")).toBeHidden();
     await expect(toolbar(page).getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("list", { name: "Steps" })).toBeVisible();
     await expect(page.getByRole("list", { name: "Steps" })).toContainText(longLabel);
