@@ -161,6 +161,7 @@ test.describe("Save covers every change (real draft)", () => {
     await page.clock.install();
     await page.reload();
     await expect(nodeAt(page, ids.payId)).toBeVisible();
+    await page.clock.pauseAt(new Date(Date.now() + 2_000)); // from here only fastForward moves the page's time, so the 10 s count is exact
     await connect(page, ids.payId, ids.shipId);
     await nodeAt(page, ids.payId).locator(".step-label").dblclick();
     await nodeAt(page, ids.payId).getByRole("textbox", { name: "Step name" }).fill("Pay now");

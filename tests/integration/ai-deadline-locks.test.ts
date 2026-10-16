@@ -26,8 +26,8 @@ async function world(admin: Client, blocker: Client, worker: Client, profiles: s
   const owner = await insertProfile(admin); profiles.push(owner);
   await admin.query("insert into app.pilot_entitlement (profile_id, granted_by_operator) values ($1, gen_random_uuid())", [owner]);
   const projectId = await insertProject(admin, owner);
-  // A real counted reservation and an immutable admission deadline with three seconds left.
-  const { rows: [clock] } = await admin.query("select clock_timestamp() - interval '297 seconds' as admitted");
+  // A real counted reservation and an immutable admission deadline with eight seconds left: room for setup, while a call blocked until then stays under the worker's 10 s statement timeout.
+  const { rows: [clock] } = await admin.query("select clock_timestamp() - interval '292 seconds' as admitted");
   const runId = await seedRun(admin, { projectId, owner, createdAt: clock.admitted });
   const { rows: [deadline] } = await admin.query("select deadline_at from app.ai_run where id = $1", [runId]);
   const { rows: [workerPid] } = await worker.query("select pg_backend_pid() as pid");
@@ -45,10 +45,10 @@ async function world(admin: Client, blocker: Client, worker: Client, profiles: s
     // Attach rejection handling immediately; always release the blocker before awaiting the call.
     const settled = pending.then((value) => ({ value }), (error: unknown) => ({ error }));
     try {
-      const timeout = Date.now() + 2_000;
       let blocked = false;
-      while (Date.now() < timeout) {
-        blocked = (await admin.query("select $2::integer = any(pg_blocking_pids($1::integer)) as blocked", [workerPid.pid, blockerPid.pid])).rows[0].blocked;
+      let live = true;
+      while (live) {
+        ({ blocked, live } = (await admin.query("select $2::integer = any(pg_blocking_pids($1::integer)) as blocked, clock_timestamp() < $3::timestamptz as live", [workerPid.pid, blockerPid.pid, deadline.deadline_at])).rows[0]);
         if (blocked) break;
         await sleep(10);
       }

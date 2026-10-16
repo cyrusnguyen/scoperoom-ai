@@ -426,7 +426,7 @@ test("the AI_ADMISSION bucket limits new attempts across connections, counts ref
   await withAdmission(async ({ person, projectFor, database }) => {
     const owner = await person(); const projectId = await projectFor(owner);
     const { rows: [second] } = await database.query<{ sec: number }>("select extract(second from now())::int as sec");
-    if (second!.sec >= 55) await new Promise((resolve) => setTimeout(resolve, (61 - second!.sec) * 1000)); // never straddle the database's minute boundary
+    if (second!.sec >= 45) await new Promise((resolve) => setTimeout(resolve, (61 - second!.sec) * 1000)); // attempt 1 and the serialized burst share one database minute
     const first = await start(database, projectId);
     const admitted = await admitRun(owner.identity, projectId, first, CONFIG); // attempt 1 of the database's current window
     const subject = admissionSubject(owner.profile);
@@ -435,8 +435,8 @@ test("the AI_ADMISSION bucket limits new attempts across connections, counts ref
     const before = await footprint(database, projectId, owner.profile);
     const results = await Promise.allSettled(Array.from({ length: 5 }, () => admitRun(owner.identity, projectId, { ...stale, key: randomUUID() }, CONFIG)));
     const codes = results.map((result) => (result.status === "rejected" ? result.reason.code : "ADMITTED"));
-    assert.equal(codes.filter((code) => code === "STALE_DOCUMENT_REVISION").length, 2); // the last two attempts count even though they are refused
-    assert.equal(codes.filter((code) => code === "RATE_LIMITED").length, 3);
+    // The last two attempts count even though they are refused; the sorted list shows every code on failure.
+    assert.deepEqual(codes.sort(), ["RATE_LIMITED", "RATE_LIMITED", "RATE_LIMITED", "STALE_DOCUMENT_REVISION", "STALE_DOCUMENT_REVISION"]);
     assert.deepEqual(await footprint(database, projectId, owner.profile), before);
     const { rows: [bucket] } = await database.query("select count, action, window_start, expires_at, subject_hash from app.rate_limit_bucket where subject_hash = $1", [subject]);
     assert.equal(bucket.count, AI_LIMITS.admissionAttemptsPerMinute); // a full bucket refuses without incrementing

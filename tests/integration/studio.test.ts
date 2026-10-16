@@ -12,6 +12,7 @@ import { recordEvent, requestHash } from "../../src/features/projects/server/acc
 import { archiveProject, changeProjectMember, getProjectMembers, removeProjectMember } from "../../src/features/projects/server/management.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { canRun, withFixture, type Identity } from "./support/fixture.ts";
+import { countLockQueries, waitForLockWaiters } from "./support/lock-waiters.ts";
 
 const code = (expected: string) => (error: unknown) => error instanceof ProjectError && error.code === expected;
 type Body = Record<string, unknown>;
@@ -27,15 +28,9 @@ async function holdProjectLock(projectId: string) {
   return holder;
 }
 
-async function waitForProjectLockWaiters(database: Client, expected: number) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const { rows: [row] } = await database.query<{ count: number }>(`
-      select count(*)::int as count from pg_stat_activity
-      where wait_event_type = 'Lock' and query like '%FROM app.project project%'`);
-    if (row!.count >= expected) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.fail(`Expected ${expected} command(s) waiting on the held project lock.`);
+async function waitForProjectLockWaiters(database: Client, holder: Client, expected: number) {
+  const { rows: [held] } = await holder.query<{ pid: number }>("select pg_backend_pid() pid");
+  await waitForLockWaiters(database, held!.pid, (queries) => countLockQueries(queries, "FROM app.project project") >= expected, `${expected} command(s) waiting on the held project lock`);
 }
 async function releaseHeldProjectLock(holder: Client) {
   try { await holder.query("commit"); } finally { await holder.end(); }
@@ -164,7 +159,7 @@ test("concurrent saves to different nodes both persist; a stale same-node save i
     let independentHolder = await holdProjectLock(projectId);
     try {
       const saves = Promise.all([label(owner, nodeIds[0]!, "Owner's A"), label(editor, nodeIds[1]!, "Editor's B")]);
-      await waitForProjectLockWaiters(database, 2);
+      await waitForProjectLockWaiters(database, independentHolder, 2);
       await releaseHeldProjectLock(independentHolder); independentHolder = null!;
       await saves;
     } finally {
@@ -185,7 +180,7 @@ test("concurrent saves to different nodes both persist; a stale same-node save i
         send(owner, projectId, draftId, { command: "UPDATE_NODE", expectedEntityVersion: 2, payload: { nodeId: nodeIds[0], label: "First" } }),
         send(editor, projectId, draftId, { command: "UPDATE_NODE", expectedEntityVersion: 2, payload: { nodeId: nodeIds[0], label: "Second" } }),
       ]);
-      await waitForProjectLockWaiters(database, 2);
+      await waitForProjectLockWaiters(database, staleHolder, 2);
       await releaseHeldProjectLock(staleHolder); staleHolder = null!;
       race = await pending;
     } finally {
@@ -383,7 +378,7 @@ test("two topology commands at one revision: exactly one saves, the other is sta
     let race: PromiseSettledResult<Awaited<ReturnType<typeof add>>>[];
     try {
       const pending = Promise.allSettled([add(owner, "Owner step"), add(editor, "Editor step")]);
-      await waitForProjectLockWaiters(database, 2);
+      await waitForProjectLockWaiters(database, topologyHolder, 2);
       await releaseHeldProjectLock(topologyHolder); topologyHolder = null!;
       race = await pending;
     } finally {
@@ -464,7 +459,7 @@ test("a command waiting on the project lock sees a committed downgrade before au
     let holder = await holdProjectLock(projectId);
     try {
       const pending = assert.rejects(send(editor, projectId, draftId, { command: "UPDATE_NODE", expectedEntityVersion: 1, payload: { nodeId: nodeIds[0], label: "Late editor" } }), code("FORBIDDEN"));
-      await waitForProjectLockWaiters(database, 1);
+      await waitForProjectLockWaiters(database, holder, 1);
       await holder.query("update app.project_membership set role = 'VIEWER' where project_id = $1 and profile_id = $2", [projectId, editorId]);
       await releaseHeldProjectLock(holder); holder = null!;
       await pending;
@@ -491,7 +486,7 @@ test("a receipt retry waiting on the project lock sees a committed removal befor
     let holder = await holdProjectLock(projectId);
     try {
       const pending = assert.rejects(send(editor, projectId, draftId, body, key), code("NOT_FOUND"));
-      await waitForProjectLockWaiters(database, 1);
+      await waitForProjectLockWaiters(database, holder, 1);
       await holder.query("update app.project_membership set active = false, version = version + 1, deactivated_sequence = 1 where project_id = $1 and profile_id = $2", [projectId, editorId]);
       await releaseHeldProjectLock(holder); holder = null!;
       await pending;

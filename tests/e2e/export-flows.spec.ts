@@ -101,6 +101,7 @@ test("stale saved pair refreshes disclosure and requires an explicit second requ
 
 test("a pending local move is excluded until Save and inspect acknowledges it", async ({ page }) => {
   const { id, nodeId } = await setup(page), before = await draftOf(page, id);
+  await page.locator(`.react-flow__node[data-id="${nodeId}"]`).hover(); // waits until the node is measured and the canvas has fitted its view
   const box = (await page.locator(`.react-flow__node[data-id="${nodeId}"]`).boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 + 90, box.y + box.height / 2 + 65, { steps: 8 }); await page.mouse.up();

@@ -18,8 +18,8 @@ Observed state and the next action. Dated entries up to 2026-10-16, with their e
 
 ## In progress
 
-- `perf/ci-shard-browser-tests`: browser tests run as four CI shards and Realtime gets its own job, to bring the CI run from about 21 minutes down to about 9. Also removes the finished Admin Dashboard plan, stops tracking `skills-lock.json` (it describes the ignored `.agents` folder) and shortens this tracker. Local run on a clean worktree with a loopback-pinned Docker stack: lint, typecheck, unit 743/743, workers, Realtime, and the four browser shards 160 + 117 + 101 + 125 = all 503 tests once, none failed, flaky or skipped. Integration 408/409: the AI admission rate-limit test failed once (it needs five attempts inside one database minute and took 9 s locally); main CI passed it.
-- The same PR retakes the 10 README screenshots that show the Studio, from the live demo after PR #46. Priya Shah (smoke viewer account) was added to the demo project as an Editor for the four-person presence shot.
+- `fix/flaky-tests-and-ai-citations`, flaky tests: a code review of every suite (not repeat runs) found tests that typed before a frame-delayed focus move, acted before the page's Realtime join had read status, asserted cursors or autosave on a running clock, or seeded database deadlines only 0.5 to 3 s away. Each now waits for the state it depends on or has real slack on the database clock. It also found the worker account's daily AI budget filling up within one AI spec pass (now reset in cleanup) and AI admission running on Prisma's 5 s transaction default (now 15 s, like the other writes). Evidence: local run with every change, unit 744/744, integration 408/409 (the miss was the invitation contention test, whose rewrite then passed 3 of 3 on its own), workers 33/33, browser 503/503 once each with 0 flaky. The keyboard Studio flake from main CI run 38870458087 was reproduced locally by delaying the focus frame, and passes with the fix.
+- Same branch, `RESULT_SHAPE`: Claude refused results as `RESULT_SHAPE` because it often leaves out the empty `citations` list when a run has no sources, and the validator required the key. Replaying the failed production capture 10 times gave 5 such refusals and nothing else wrong. A missing list now means no citations; a `null` or malformed one is still refused. Evidence: the new unit test fails on the old validator and passes now; the 5 refused real replies validate and diff as 14-operation proposals.
 
 ## Accepted limitations
 
@@ -31,7 +31,7 @@ Observed state and the next action. Dated entries up to 2026-10-16, with their e
 - Staff: operator SQL does not advance the entitlement version; staff screens show display names and short ids, not email addresses.
 - Sources: an editor can fill the shared source budget, which blocks new source versions and AI admission; removing that editor does not free it.
 - AI: Anthropic 402 and 413 count as `unknown` (one extra unbilled claim); a long follow-up thread plus a large graph can exceed the 16,000 input-token budget.
-- AI: Claude gets the result schema only as text, so it sometimes returns valid JSON that breaks the strict format: 2 of 13 completed Claude runs by 2026-10-16 (`RESULT_SHAPE`, `RESULT_INVALID`). `SHAPE` does not record the field or rule, and a refused result closes the run without the second call the worker allows for transient failures.
+- AI: Claude gets the result schema only as text, so other format slips are still possible; `SHAPE` does not name the field or rule, and a refused result closes the run without a second call.
 - Studio: the draft read has no client timeout, so a hung request leaves the flow dialog open. Below 640 px, keyboard focus reaches the flow switcher row before Save, Inspect and AI.
 - Dependencies: `pnpm audit` lists 5 findings (4 high, 1 moderate), all in build or dev tooling.
 - Local stack on Windows: Docker Desktop publishes Supabase ports on all interfaces, so `scripts/db/guard.mjs` refuses it until the published containers are recreated with ports on 127.0.0.1.
@@ -48,5 +48,4 @@ Observed state and the next action. Dated entries up to 2026-10-16, with their e
 
 ## Next
 
-1. Merge the CI speed-up PR once its CI and review pass.
-2. Decide the `RESULT_SHAPE` follow-up: record the failing field and rule, and retry a refused result once within the existing two-call limit.
+1. Merge the missing-citations fix once its CI and review pass, release it, and check that new Claude runs without sources succeed.

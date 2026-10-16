@@ -318,14 +318,16 @@ test("the task waits through a crashed attempt and recovers its acknowledged del
     process.env.GOOGLE_GENERATIVE_AI_API_KEY = "synthetic-recovery-test-no-real-key";
     let calls = 0, waits = 0;
     // Emulate only the durable sleep; the delivery function, provider adapter, SQL claim, validation and settlement remain real.
-    const redeliver = (delivery: JobRequest) => deliverRun(delivery, { run: (_id, fn) => fn(), sleepUntil: async (_id, at) => { waits += 1; await sleep(Math.max(0, Date.parse(at) - Date.now())); } }, { binding: delivery.executionBinding });
+    const redeliver = (delivery: JobRequest) => deliverRun(delivery, { run: (_id, fn) => fn(), sleepUntil: async (_id, at) => { waits += 1; await admin.query("select pg_sleep(greatest(0, extract(epoch from ($1::timestamptz - clock_timestamp()))))", [at]); } }, { binding: delivery.executionBinding });
     context.mock.method(globalThis, "fetch", async () => {
       calls += 1;
       return new Response(JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text: JSON.stringify(GOOD) }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 7 }, responseId: "recovered-request" }), { headers: { "content-type": "application/json" } });
     });
     try {
       for (const state of ["RUNNING", "VALIDATING"]) {
-        const { runId, owner } = await seed({ createdAt: ago(122), shape: "RUNNING" });
+        // Attempt 1's window closes 125 s after creation: eight seconds left on the database clock.
+        const { rows: [clock] } = await admin.query("select clock_timestamp() - interval '117 seconds' as at");
+        const { runId, owner } = await seed({ createdAt: clock.at, shape: "RUNNING" });
         await admin.query("update app.ai_run set state = $2::text::app.ai_run_state, dispatch_state = 'DISPATCHED', task_id = 'crashed-task' where id = $1", [runId, state]);
         const delivery = { runId, dispatchId: "unused-diagnostic-id", executionBinding: "seed-binding", deadlineAt: new Date(Date.now() + 175_000).toISOString() };
         const beforeCalls = calls, beforeWaits = waits;

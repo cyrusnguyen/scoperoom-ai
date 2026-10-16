@@ -7,30 +7,10 @@ import { removeProjectMember, getProjectMembers } from "../../src/features/proje
 import { getProjectBootstrap } from "../../src/features/projects/server/projects.ts";
 import { ProjectError } from "../../src/features/projects/server/errors.ts";
 import { canRun, withFixture, type Identity } from "./support/fixture.ts";
+import { countLockQueries, waitForLockWaiters } from "./support/lock-waiters.ts";
 
 const code = (expected: string) => (error: unknown) => error instanceof ProjectError && error.code === expected;
 const tokenOf = (issued: { url?: string }) => issued.url!.split("/").at(-1)!;
-async function waitForLockWaiters(database: Client, holderPid: number, ready: (queries: string[]) => boolean, description: string) {
-  const deadline = Date.now() + 5_000;
-  let queries: string[] = [];
-  while (Date.now() < deadline) {
-    const result = await database.query<{ query: string }>(`
-      with recursive holder_chain(pid) as (
-        select $1::int
-        union
-        select waiting.pid from pg_stat_activity waiting
-        join holder_chain blocker on blocker.pid = any(pg_blocking_pids(waiting.pid))
-      )
-      select activity.query from pg_stat_activity activity
-      join holder_chain on holder_chain.pid = activity.pid
-      where activity.wait_event_type = 'Lock'`, [holderPid]);
-    queries = result.rows.map((row) => row.query);
-    if (ready(queries)) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`Timed out waiting for ${description}: ${queries.join(" | ")}`);
-}
-const countLockQueries = (queries: string[], fragment: string) => queries.filter((query) => query.includes(fragment)).length;
 const acceptanceWaiters = (queries: string[]) => countLockQueries(queries, "FROM app.project project") >= 2 ||
   (countLockQueries(queries, "FROM app.project project") >= 1 && countLockQueries(queries, "FROM app.user_profile") >= 1);
 type HeldProjectLocks = { client: Client; pid: number };
@@ -141,19 +121,23 @@ test("sequence rule under lock contention: an invite issued before removal never
       const memberProfile = await profileId(member);
       const current = await memberVersion(owner, projectId, member);
       const changedEmail = `changed-${randomUUID()}@example.test`;
-      await database.query("begin");
-      await database.query("select id from app.project where id = $1 for update", [projectId]);
-      const wait = () => new Promise((resolve) => setTimeout(resolve, 250));
-      const first = removalFirst
+      let holder = await holdProjectLocks([projectId]);
+      const calls: Promise<unknown>[] = [removalFirst
         ? removeProjectMember(owner, projectId, memberProfile, { expectedMemberVersion: current.version, key: randomUUID() })
-        : invite(owner, projectId, changedEmail);
-      await wait();
-      const second = removalFirst
-        ? invite(owner, projectId, changedEmail)
-        : removeProjectMember(owner, projectId, memberProfile, { expectedMemberVersion: current.version, key: randomUUID() });
-      await wait();
-      await database.query("commit");
-      await Promise.all([first, second]);
+        : invite(owner, projectId, changedEmail)];
+      try {
+        await waitForLockWaiters(database, holder.pid, (queries) => countLockQueries(queries, "FROM app.project project") >= 1, "the first call behind the held project lock");
+        calls.push(removalFirst
+          ? invite(owner, projectId, changedEmail)
+          : removeProjectMember(owner, projectId, memberProfile, { expectedMemberVersion: current.version, key: randomUUID() }));
+        // The owner makes both calls, so the second queues behind the first one's actor lock rather than the project lock.
+        await waitForLockWaiters(database, holder.pid, (queries) => queries.length >= 2, "both calls queued behind the held project lock");
+        await releaseHeldProjectLocks(holder); holder = null!;
+        await Promise.all(calls);
+      } finally {
+        if (holder) { await holder.client.query("rollback"); await holder.client.end(); }
+        await Promise.allSettled(calls);
+      }
       const pending = (await listProjectInvitations(owner, projectId)).invitations.find((entry) => entry.verifiedEmail === changedEmail)!;
       const attempt = acceptInvitation({ ...member, verifiedEmail: changedEmail }, { invitationId: pending.id, key: randomUUID() });
       if (removalFirst) assert.equal((await attempt).role, "EDITOR");

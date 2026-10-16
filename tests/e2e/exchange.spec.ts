@@ -92,6 +92,7 @@ async function setup(page: Page, populated = false) {
   return { id, flowId, first, second, edge };
 }
 async function drag(page: Page, id: string, dx: number, dy: number) {
+  await nodeAt(page, id).hover(); // waits until the node is measured and the canvas has fitted its view
   const box = (await nodeAt(page, id).boundingBox())!;
   const x = box.x + box.width / 2, y = box.y + box.height / 2;
   await page.mouse.move(x, y); await page.mouse.down();
@@ -106,6 +107,7 @@ async function typeWhileModal(page: Page, selector: string, text: string) {
 }
 
 test("reinspection retires each previous preview and continues beyond the ten body quota", async ({ page, workerAccount }) => {
+  test.setTimeout(90_000);
   const { id } = await setup(page); const before = await draftOf(page, id); const uploads = writes(page, "/preview");
   await openImport(page); await inspect(page); const priorIds: string[] = [];
   try {
@@ -370,7 +372,7 @@ test("unknown upload recovery stays busy through delayed manual status validatio
   await dialog(page).getByRole("button", { name: "Inspect file", exact: true }).click();
   await expect(dialog(page).getByRole("alert")).toContainText("Upload not confirmed");
   const original = (await records(page))[0]; let held: Route | undefined;
-  await page.route(`**/api/projects/${id}/status`, (route) => { held = route; });
+  await page.route(`**/api/projects/${id}/status`, (route) => { if (held) return route.continue(); held = route; }); // hold only the recovery read; a background poll passes
   await dialog(page).getByRole("button", { name: "Recover import status" }).click();
   await expect.poll(() => Boolean(held)).toBe(true);
   try {

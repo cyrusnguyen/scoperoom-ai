@@ -99,6 +99,7 @@ test("at 390 px the Studio header with the participants control fits, is touch-s
 
 test("a peer's cursor and drag ghost are static under reduced motion, and they never touch a live region or become reachable", async ({ collaboration }) => {
   const { ownerPage, editorPage } = collaboration;
+  await ownerPage.clock.install();
   const { startId } = await seedAndOpen(collaboration);
   const box = (await nodeAt(editorPage, startId).boundingBox())!;
   const [x, y] = [box.x + box.width / 2, box.y + box.height / 2];
@@ -119,6 +120,8 @@ test("a peer's cursor and drag ghost are static under reduced motion, and they n
   await editorPage.mouse.move(px + 20, py + 10, { steps: 4 });
   const cursor = ownerPage.locator(".live-cursor");
   await expect(cursor).toBeVisible({ timeout: 10_000 });
+  // Previews expire 2 s after their last packet on the owner's clock (drag packets replace cursor ones): stopped here, the cursor and ghost stay for the checks below.
+  await ownerPage.clock.pauseAt(new Date(Date.now() + 100));
   await editorPage.mouse.move(x, y);
   await editorPage.mouse.down();
   await editorPage.mouse.move(x + 60, y + 30, { steps: 4 });

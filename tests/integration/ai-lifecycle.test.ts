@@ -26,12 +26,12 @@ async function world(admin: Client, worker: Client, profiles: string[], options:
   const owner = await insertProfile(admin); profiles.push(owner);
   await admin.query("insert into app.pilot_entitlement (profile_id, granted_by_operator) values ($1, gen_random_uuid())", [owner]);
   const projectId = await insertProject(admin, owner);
-  const { rows: [clock] } = await admin.query("select clock_timestamp() - make_interval(secs => $1::integer) as admitted", [options.nearRunDeadline ? 296 : 0]);
+  const { rows: [clock] } = await admin.query("select clock_timestamp() - make_interval(secs => $1::integer) as admitted", [options.nearRunDeadline ? 290 : 0]);
   const runId = await seedRun(admin, { projectId, owner, createdAt: clock.admitted });
-  // Counted crash fixtures: attempt windows are immutable and valid, with one second left. No post-insert clock rewrites.
+  // Counted crash fixtures: attempt windows are immutable and valid, with five seconds left. No post-insert clock rewrites.
   const insertAttempt = async (number: number, expired = false) => (await admin.query<Attempt>(
     `insert into app.ai_run_attempt (run_id, attempt_number, started_at, deadline_at, call_may_have_started, outcome, settled_at)
-     values ($1, $2, CURRENT_TIMESTAMP - interval '119 seconds', CURRENT_TIMESTAMP + interval '1 second', true,
+     values ($1, $2, CURRENT_TIMESTAMP - interval '115 seconds', CURRENT_TIMESTAMP + interval '5 seconds', true,
        case when $3 then 'UNKNOWN'::app.ai_attempt_outcome else null end, case when $3 then clock_timestamp() else null end)
      returning id, token, deadline_at`, [runId, number, expired])).rows[0]!;
   let attempt = await insertAttempt(1, options.second);

@@ -132,9 +132,10 @@ test("an Auth outage keeps entries and inspector text, shows Not saved, never le
 
   // Auth goes down: focus revalidates against the real route, which answers 503 (not 401).
   fault("down");
-  const outage = page.waitForResponse((response) => response.url() === statusUrl(projectId));
+  // A read already in flight (the join's or a poll) can still answer 200 first.
+  const outage = page.waitForResponse((response) => response.url() === statusUrl(projectId) && response.status() === 503);
   await focusWindow(page);
-  expect((await outage).status()).toBe(503);
+  await outage;
   await headerSave(page).click();
   await expect(status(page)).toContainText("Not saved");
   await quiet(page);

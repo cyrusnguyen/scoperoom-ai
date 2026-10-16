@@ -308,7 +308,7 @@ test("SQL transition guard rejects wall-clock expiry after transaction start", {
     const owner = await user(); const projectId = await project(owner); const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
     const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), await bytes());
     const now = (await database.query("select clock_timestamp() now")).rows[0].now.getTime();
-    await replacePreview(database, preview.id, { created_at: new Date(now - 86_400_000), expires_at: new Date(now + 500) });
+    await replacePreview(database, preview.id, { created_at: new Date(now - 86_400_000), expires_at: new Date(now + 2000) });
     const before = await snapshot(database, projectId); await database.query("begin");
     try {
       const deadline = Date.now() + 4000;
@@ -353,11 +353,11 @@ test("Apply refuses expiry reached while waiting on the draft; cleanup skips its
       apply = applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash }); void apply.catch(() => undefined);
       const waiting = await waiter(database, pid);
       const now = (await database.query("select clock_timestamp() now")).rows[0].now.getTime();
-      await replacePreview(database, preview.id, { created_at: new Date(now - 86_400_000), expires_at: new Date(now + 500) });
+      await replacePreview(database, preview.id, { created_at: new Date(now - 86_400_000), expires_at: new Date(now + 2000) });
       await gate.query("commit"); await waiter(database, draftPid);
       const deadline = Date.now() + 4000;
       while (!(await database.query("select clock_timestamp()>=expires_at expired from app.flow_import_preview where id=$1", [preview.id])).rows[0].expired) { assert.ok(Date.now() < deadline); await setImmediate(); }
-      assert.ok(waiting.xact_start.getTime() < now + 500);
+      assert.ok(waiting.xact_start.getTime() < now + 2000);
       const held = await snapshot(database, projectId);
       await cleanupTransient({ dryRun: false, batchSize: 100 }); assert.deepEqual(await snapshot(database, projectId), held, "expired preview owned by Apply is skipped");
       await draftGate.query("commit");

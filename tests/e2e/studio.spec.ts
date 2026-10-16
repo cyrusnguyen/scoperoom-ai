@@ -523,6 +523,7 @@ test.describe("Studio on a real draft", () => {
     await page.keyboard.press("Enter");
     await expect(page.locator("#studio-flow-title")).toHaveText("Returns");
     await expect(page.locator("dialog[open]")).toHaveCount(0); // its save-first has finished
+    await expect(page.locator("#studio-flow-title")).toBeFocused(); // focus lands a frame after the dialog closes; keys sent sooner go elsewhere
     for (const label of ["Request return", "Refund issued"]) {
       await press(toolbar(page).getByRole("button", { name: "Add step" }));
       await page.keyboard.press("Tab"); // Shape → Name
@@ -576,13 +577,13 @@ test.describe("Studio on a real draft", () => {
     await page.getByRole("button", { name: "Inspect" }).click();
     const name = panel(page).getByLabel("Name");
     await name.fill("Invoice (mine)");
+    // Adding a step is local; queued before the other tab's change, the save still meets that change even if a status read finds it first.
+    await addStepInUi(page, "Paid");
 
     const draft = await draftOf(page, projectId);
     const invoice = Object.values(draft.document.nodes)[0]!;
     await command(page, projectId, draft.id, { command: "UPDATE_NODE", expectedEntityVersion: invoice.version, payload: { nodeId: invoice.id, label: "Invoice (theirs)" } });
 
-    // Adding a step is local: nothing refuses it until the save meets the other tab's change.
-    await addStepInUi(page, "Paid");
     await toolbar(page).getByRole("button", { name: "List" }).click();
     await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Invoice/ }).click();
     await expect(name).toHaveValue("Invoice (mine)");
@@ -697,12 +698,13 @@ test.describe("Studio on a real draft", () => {
     await saveStudio(page);
     await page.getByRole("button", { name: "Inspect" }).click();
     await panel(page).getByLabel("Description").fill("Check the policy number first");
+    // Queued before the other tab's deletion, so the save still meets it even if a status read finds it first.
+    await addStepInUi(page, "Probe");
     const draft = await draftOf(page, projectId);
     const flowId = Object.keys(draft.document.flows)[0]!;
     const nodeId = Object.keys(draft.document.nodes)[0]!;
     await command(page, projectId, draft.id, { command: "DELETE_NODES", expectedDocumentRevision: draft.documentRevision, payload: { flowId, nodeIds: [nodeId], removeEdgeIds: [] } });
     // The next save meets the deletion; applying again on the newer draft keeps only what still applies.
-    await addStepInUi(page, "Probe");
     await headerSave(page).click();
     await note(page).getByRole("button", { name: "Apply my changes again" }).click();
     await expect(note(page)).toHaveCount(0);
@@ -839,12 +841,16 @@ test.describe("Studio on a real draft", () => {
     await command(page, projectId, draft.id, { command: "ADD_EDGE", expectedDocumentRevision: draft.documentRevision,
       payload: { flowId, fromId: nodes.Start, toId: nodes.Original, condition: "" } });
     // Withhold Realtime hints (the page would otherwise read the other change first, which the collaboration specs cover) so only the save finds out.
-    (await interceptRealtime(page)).dropEvents = true;
+    const wire = await interceptRealtime(page);
+    wire.dropEvents = true;
+    // Subscribing also revalidates independently of hints. Finish that startup read before the remote change.
+    const initialStatus = page.waitForResponse((response) => response.url() === `${appUrl}/api/projects/${projectId}/status` && wire.joined >= 2);
     await page.reload();
     await toolbar(page).getByRole("button", { name: "List" }).click();
     await page.getByRole("list", { name: "Connections" }).getByRole("button", { name: /^Start/ }).click();
     await page.getByRole("button", { name: "Inspect", exact: true }).click();
     await panel(page).getByLabel("To", { exact: true }).selectOption(nodes.Mine!);
+    expect((await initialStatus).status()).toBe(200);
     const before = await draftOf(page, projectId);
     const edge = Object.values(before.document.edges)[0]!;
     await command(page, projectId, before.id, { command: "RECONNECT_EDGE", expectedDocumentRevision: before.documentRevision,
@@ -1029,10 +1035,11 @@ test.describe("Studio on a real draft", () => {
       await page.getByRole("list", { name: "Steps" }).getByRole("button", { name: /Before/ }).click();
       await panel(page).getByLabel("Name", { exact: true }).fill("After");
       await saveButton(page).click();
-      await expect(page.locator(".studio-status")).toContainText("Changes saved. Refreshing saved changes…");
+      // Only the shared prefix: the save's own Realtime hint can read (and fail) again within ~100 ms, replacing "Refreshing saved changes…".
+      await expect(page.locator(".studio-status")).toContainText("Changes saved.");
       release();
       await expect(page.getByRole("heading", { level: 1, name: "Metadata reread" })).toBeVisible();
-      // The first failure says "Refreshing saved changes…"; the poll's next failed read turns it into the recovery line.
+      // A second failed read (that hint's, or else the poll's) turns the first failure's line into the recovery line.
       await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible({ timeout: 25_000 });
       await expect(page.locator(".studio-status")).toContainText("Couldn't refresh saved changes");
       await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
@@ -1443,14 +1450,14 @@ test.describe("Studio read-only and narrow states (mocked project)", () => {
       writes++;
       await route.fulfill({ json: { draftId: initial.id, documentRevision: 2, layoutRevision: 1, eventSequence: 1, replayed: false } });
     });
-    // The status poll fails too: two failed attempts (the poll's backoff at its cap) turn "Refreshing" into the recovery line.
-    await page.route(`**/api/projects/${projectId}/status`, (route) => route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Status unavailable" } } }));
     await page.clock.install();
     await page.goto(`/app/projects/${projectId}`);
     await toolbar(page).getByRole("button", { name: "List", exact: true }).click();
     await page.getByRole("button", { name: /^Delete connection Receive form/ }).click();
     await headerSave(page).click();
     await expect(page.locator(".studio-status")).toContainText("Changes saved. Refreshing saved changes…");
+    // From here (a failed status read before the save would block it) the poll fails too: two failed attempts (its backoff at the cap) turn "Refreshing" into the recovery line.
+    await page.route(`**/api/projects/${projectId}/status`, (route) => route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Status unavailable" } } }));
     await expect(page.locator(".studio-status")).not.toContainText("All changes saved");
     await expect(page.locator(".studio-status")).toContainText("0 connections"); // what was saved stays shown
     await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);

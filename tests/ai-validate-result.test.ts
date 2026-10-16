@@ -44,8 +44,19 @@ test("an empty Improve result still has its whole envelope validated: assumption
   refuses(improve, empty({ citations: [{ sourceVersionId: f.sourceVersionId, startLine: 1, endLine: 1, excerpt: "wrong" }] }), "CITATION_EXCERPT");
   refuses(improve, empty({ assumptions: "garbage" }), "ASSUMPTIONS");
   refuses(improve, empty({ assumptions: [" "] }), "SHAPE");
-  refuses(improve, { schemaVersion: 1, kind: "proposal", operations: [], assumptions: [] }, "SHAPE"); // missing citations
   refuses(improve, { ...empty({}), extra: 1 }, "SHAPE");
+});
+
+test("a proposal that leaves out its citations list cites nothing and is returned with an empty list", () => {
+  const { citations, ...uncited } = goodGenerate(f.sourceVersionId);
+  assert.ok(citations.length); // the omission below drops a real list
+  assert.deepEqual(validateResult(generate, uncited), { ...uncited, citations: [] });
+  assert.deepEqual(validateResult(improve, { schemaVersion: 1, kind: "proposal", operations: [], assumptions: [] }), NO_CHANGE);
+  refuses(generate, { ...uncited, citations: null }, "CITATIONS"); // only a missing list means none
+  // The added empty list counts toward the stored size: a reply that fits only without it is refused, not stored over the limit.
+  const exactly = (bytes: number) => ({ ...generate, limits: { ...generate.limits, resultBytes: bytes } });
+  refuses(exactly(jsonbTextBytes(uncited)), uncited, "RESULT_BYTES");
+  assert.equal(validateResult(exactly(jsonbTextBytes({ ...uncited, citations: [] })), uncited).kind, "proposal");
 });
 
 test("operations are a closed union restricted to the task's edits", () => {

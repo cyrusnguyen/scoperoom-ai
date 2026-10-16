@@ -9,6 +9,7 @@ import { changeProjectMember, leaveProject, removeProjectMember } from "../../sr
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { correctSource, createSource, updateSource } from "../../src/features/sources/server/sources.ts";
 import { canRun, withFixture, type Identity } from "./support/fixture.ts";
+import { countLockQueries, waitForLockWaiters } from "./support/lock-waiters.ts";
 
 const refused = (code: string) => (error: unknown) => error instanceof ProjectError && error.code === code;
 const key = () => `scope-${randomUUID()}`;
@@ -188,24 +189,7 @@ test("concurrent requirement creates serialize labels without burning one on sta
       pending = Promise.allSettled([owner, editor].map((who) => send(who, projectId, draftId, {
         command: "CREATE_REQUIREMENT", expectedDocumentRevision: 1, payload: fields,
       })));
-      let waiting = false;
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        const { rows: [row] } = await database.query<{ count: number }>(
-          `with recursive holder_chain(pid) as (
-            select $1::int
-            union
-            select waiting.pid from pg_stat_activity waiting
-            join holder_chain blocker on blocker.pid = any(pg_blocking_pids(waiting.pid))
-          )
-          select count(*)::int as count from pg_stat_activity activity
-          join holder_chain on holder_chain.pid = activity.pid
-          where activity.wait_event_type = 'Lock' and activity.query like '%FROM app.project project%'`,
-          [held!.pid],
-        );
-        if (row!.count >= 2) { waiting = true; break; }
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-      assert.ok(waiting, "both creates must reach the held project lock");
+      await waitForLockWaiters(database, held!.pid, (queries) => countLockQueries(queries, "FROM app.project project") >= 2, "both creates behind the held project lock");
       await holder.query("commit");
       const race = await pending;
       assert.equal(race.filter((entry) => entry.status === "fulfilled").length, 1);

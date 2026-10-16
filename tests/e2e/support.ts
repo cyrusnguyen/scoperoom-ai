@@ -153,6 +153,8 @@ export async function cleanupWorkerProjects(database: Client, authUserId: string
   const profiles = "(select id from app.user_profile where auth_user_id = $1::uuid)";
   await database.query(`delete from app.mutation_receipt where actor_id in ${profiles}`, [authUserId]);
   await database.query(`delete from app.project where owner_id in ${profiles}`, [authUserId]);
+  // Runs that tests mark CONSUMED are never refunded, so without this the account reaches its daily AI limit within one worker.
+  await database.query(`delete from app.ai_budget_day where owner_id in ${profiles}`, [authUserId]);
 }
 
 /** The project header's Save (Task 14b): every Studio change waits for it, the 10-second autosave or a save-first action. */
