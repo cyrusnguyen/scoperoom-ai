@@ -6,7 +6,6 @@ import { adminClient, appUrl, cleanupUsers, e2eReady, openDatabase, signIn } fro
 
 test.skip(!e2eReady, "Requires isolated local Supabase Auth and database URLs");
 
-const shot = (page: Page, name: string) => page.screenshot({ path: `test-results/screenshots/${name}.png`, fullPage: true });
 const limits = (page: Page) => page.getByRole("region", { name: "Limits" });
 const roleSection = (page: Page) => page.getByRole("region", { name: "Role", exact: true });
 
@@ -63,7 +62,6 @@ test.describe("staff screens", () => {
 
     await page.goto("/app");
     await expect(page.getByRole("link", { name: "Admin" })).toBeVisible();
-    await shot(page, "workspace-admin-link");
     await page.getByRole("link", { name: "Admin" }).click();
     await expect(page).toHaveURL(/\/app\/admin$/);
     await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
@@ -75,7 +73,6 @@ test.describe("staff screens", () => {
     await expect(row).toContainText("Default");
     await expect(row).toContainText("2 of");
     await expect(row).toContainText(`${targetId.slice(0, 8)} \u00b7 joined`);
-    await shot(page, "admin-accounts");
 
     await row.getByRole("link", { name: targetName }).click();
     await expect(page).toHaveURL(new RegExp(`/app/admin/accounts/${targetId}$`));
@@ -83,7 +80,6 @@ test.describe("staff screens", () => {
     await expect(page.getByText(`${targetId.slice(0, 8)} \u00b7 joined`)).toBeVisible();
     await expect(page.getByRole("heading", { name: "History" })).toBeVisible();
     await expect(page.getByText("No changes yet.")).toBeVisible();
-    await shot(page, "admin-account-detail");
 
     const form = limits(page);
     await form.getByLabel("AI total runs", { exact: true }).fill("50");
@@ -97,7 +93,6 @@ test.describe("staff screens", () => {
     await expect(history).toContainText("Pilot extension");
     await expect(history).toContainText("AI total 50");
     await expect(page.locator(".admin-summary")).toContainText("2 of 50");
-    await shot(page, "admin-account-saved");
 
     await page.goto(`/app/admin/accounts/${candidateId}`);
     await expect(page.getByRole("heading", { level: 1, name: candidateName })).toBeVisible();
@@ -136,7 +131,6 @@ test.describe("staff screens", () => {
     await expect(page.getByRole("status")).toHaveText("Saved.");
     await expect(page.locator(".admin-summary")).toContainText("0 of 7");
     await expect(page.getByRole("button", { name: "Reset to default plan" })).toBeVisible();
-    await shot(page, "admin-moderator-detail");
 
     // The screen hides the editor; the server refuses the change as well.
     const refused = await page.request.put(`/api/admin/accounts/${targetId}/role`, {
@@ -207,7 +201,6 @@ test.describe("staff screens", () => {
     await search(page, `Zed Narrow ${word}`);
     await expect(page.getByRole("link", { name: targetName })).toBeVisible();
     expect(await fits(), "accounts list").toBe(true);
-    await shot(page, "admin-accounts-320");
 
     await page.goto(`/app/admin/accounts/${targetId}`);
     await expect(limits(page)).toBeVisible();
