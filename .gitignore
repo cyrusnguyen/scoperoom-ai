@@ -43,3 +43,6 @@ next-env.d.ts
 
 /test-results/
 /.tmp/
+
+# Agent skill lock for the ignored .agents folder
+skills-lock.json
