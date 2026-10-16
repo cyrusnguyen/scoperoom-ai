@@ -40,6 +40,28 @@ jobs:
       - run: corepack pnpm db:bootstrap
       - run: corepack pnpm test:integration
       - run: corepack pnpm test:workers
+      - name: Supabase diagnostics
+        if: failure()
+        run: bash scripts/ci/print-local-supabase-logs.sh
+      - name: Stop isolated Supabase
+        if: always()
+        run: bash scripts/ci/stop-local-supabase.sh
+
+  # Realtime runs alone on its stack, so it gets its own job instead of following the integration files.
+  database-realtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.21.0
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm db:generate
+      - run: bash scripts/ci/start-local-supabase.sh
+      - run: bash scripts/ci/export-local-db-env.sh
+      - run: bash scripts/ci/export-local-auth-env.sh
+      - run: corepack pnpm db:bootstrap
       - run: corepack pnpm test:realtime
       - name: Supabase diagnostics
         if: failure()
@@ -48,9 +70,15 @@ jobs:
         if: always()
         run: bash scripts/ci/stop-local-supabase.sh
 
+  # Each shard builds fresh and runs its share of the spec files on its own Supabase stack with two workers.
+  # Four shards balance best: Playwright keeps a file in one shard, so more shards leave the large files uneven.
   chromium:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -63,7 +91,7 @@ jobs:
       - run: bash scripts/ci/export-local-db-env.sh
       - run: bash scripts/ci/export-local-auth-env.sh
       - run: corepack pnpm db:bootstrap
-      - run: corepack pnpm test:e2e:production
+      - run: corepack pnpm test:e2e:production --shard=${{ matrix.shard }}/4
       - name: Supabase diagnostics
         if: failure()
         run: bash scripts/ci/print-local-supabase-logs.sh
@@ -71,7 +99,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: playwright-traces
+          name: playwright-traces-${{ matrix.shard }}
           path: test-results
           retention-days: 7
           if-no-files-found: ignore
@@ -79,7 +107,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: playwright-timings
+          name: playwright-timings-${{ matrix.shard }}
           path: |
             test-results/e2e-timing.json
             test-results/playwright-results.json

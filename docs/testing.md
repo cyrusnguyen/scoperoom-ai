@@ -140,6 +140,8 @@ corepack pnpm test:e2e:production tests/e2e/studio-canvas.spec.ts tests/e2e/stud
 - `test-results/e2e-timing.json`: production build duration, test phase duration, total duration and exit codes.
 - Failure traces remain under `test-results/`. CI retains timing reports even when a run succeeds.
 
+CI splits the browser run into four shards (`--shard=N/4`, the `chromium (N)` jobs). Each shard has its own Supabase stack, fresh build and two workers, and keeps its own `playwright-timings-N` and, on failure, `playwright-traces-N` artifacts; together the shards run every spec once. Playwright keeps a spec file in one shard and splits by test count, so four shards balance best for the current files (a fifth or sixth leaves the large files uneven). `test:realtime` runs in its own `database-realtime` job, alone on its stack.
+
 Treat these reports as test artifacts: keep them out of Git. Authentication state must stay in memory or ignored local files, never in published reports.
 
 Before starting another browser run, copy any reports, failure artifacts and source identity needed for diagnosis into an ignored directory outside `test-results/`. Playwright clears its output directory at the next run; archives inside it are lost. Verify the copied files before continuing.
