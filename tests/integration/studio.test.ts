@@ -12,6 +12,7 @@ import { recordEvent, requestHash } from "../../src/features/projects/server/acc
 import { archiveProject, changeProjectMember, getProjectMembers, removeProjectMember } from "../../src/features/projects/server/management.ts";
 import { getProjectBootstrap, getProjectStatus } from "../../src/features/projects/server/projects.ts";
 import { canRun, withFixture, type Identity } from "./support/fixture.ts";
+import { countLockQueries, waitForLockWaiters } from "./support/lock-waiters.ts";
 
 const code = (expected: string) => (error: unknown) => error instanceof ProjectError && error.code === expected;
 type Body = Record<string, unknown>;
@@ -27,21 +28,9 @@ async function holdProjectLock(projectId: string) {
   return holder;
 }
 
-/** Counts only commands queued behind this holder, directly or through another waiter, so parallel files cannot satisfy it. */
 async function waitForProjectLockWaiters(database: Client, holder: Client, expected: number) {
   const { rows: [held] } = await holder.query<{ pid: number }>("select pg_backend_pid() pid");
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const { rows: [row] } = await database.query<{ count: number }>(`
-      with recursive chain(pid) as (
-        select pid from pg_stat_activity where $1 = any(pg_blocking_pids(pid))
-        union select a.pid from pg_stat_activity a join chain c on c.pid = any(pg_blocking_pids(a.pid)))
-      select count(*)::int as count from pg_stat_activity join chain using (pid)
-      where wait_event_type = 'Lock' and query like '%FROM app.project project%'`, [held!.pid]);
-    if (row!.count >= expected) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.fail(`Expected ${expected} command(s) waiting on the held project lock.`);
+  await waitForLockWaiters(database, held!.pid, (queries) => countLockQueries(queries, "FROM app.project project") >= expected, `${expected} command(s) waiting on the held project lock`);
 }
 async function releaseHeldProjectLock(holder: Client) {
   try { await holder.query("commit"); } finally { await holder.end(); }

@@ -231,11 +231,13 @@ test.describe("shell actions", () => {
     await page.route(`**/api/projects/${ids.alpha}/bootstrap`, (route) => route.fulfill({ json: withStatus({ project: { id: ids.alpha, name: "Alpha plan", status: "ACTIVE", role: "OWNER", ownerId: ids.alpha }, draft: emptyDraftView() }) }));
     await page.route(`**/api/projects/${ids.alpha}/status`, (route) => route.fulfill({ json: { ...status(1), ...(switched ? { viewerId: OTHER_VIEWER } : {}) } }));
     await page.route(`**/api/projects/${ids.alpha}/archive`, (route) => { sent.push("archive"); return route.fulfill({ json: { ...status(2, "ARCHIVED"), replayed: false } }); });
+    // Never answered: a failed token would mark Realtime unavailable and bring the background status poll forward to every ~5 s.
+    await page.route(`**/api/projects/${ids.alpha}/realtime-token`, () => {});
     await page.goto(`/app/projects/${ids.alpha}`);
     await expect(page.getByRole("heading", { level: 1, name: "Alpha plan" })).toBeVisible();
     const seen = await watchTeardown(page);
     await sidebar(page).getByRole("button", { name: "Actions for Alpha plan" }).click();
-    switched = true; // not sooner: with Realtime unavailable the background status poll runs every ~5 s and would tear down first
+    switched = true; // not sooner: the first background status poll (9 to 11 s after load) would see the other account and tear down
     await page.getByRole("menuitem", { name: "Archive…" }).click();
     const dialog = page.getByRole("dialog", { name: "Archive Alpha plan?" });
     await dialog.getByLabel("Reason").fill("Pilot finished");
