@@ -67,7 +67,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -80,7 +80,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "f223b2123534d5e99f278c4d9e6edc92bfdde5cef30203616cf96be474432cf1",
+      "captureHash": "55c0896c6f0beaa364779856af4554f4b76fa1a9b7f0c7b18ab79ad2655b512f",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -197,7 +197,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -210,7 +210,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "956f62593da653db9dfca0e015277a946b47a5fa0717200c8df77b41c0dd6846",
+      "captureHash": "b428e5996621837c503d0002855a90a1cfde7c84c8ecf76794347b0328714be0",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -327,7 +327,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -340,7 +340,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "d4f668ac9830599f425bec0e78433191c9447c63e622ebc39a465fced29397ab",
+      "captureHash": "922df3f72b985187af84b0f5af9c7da2ef7d5ac32c20dfc170e9b3468c3f1292",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -457,7 +457,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -470,7 +470,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "539a71609fcf30346e68714f0fd14a8ac65c0b751815a16aae03b1af59f9ac54",
+      "captureHash": "efa08a5b76f1981f4c4bfff3d0057d6844d39f522d356db07403ca7db0e8af95",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -587,7 +587,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -600,7 +600,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "ee3fa3896305a42ae0e443c65612ce09c48824b385bb8af900ae7c33ba4e2a38",
+      "captureHash": "a11d00cc879189ffcc2c3f10990f8dab4ce73eb61a381c4acfcd841346dc6b0a",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -717,7 +717,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -730,7 +730,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "1e5e173677de2a93c26aff8319953b9578765a6b241f2112845a47fe2f332f0b",
+      "captureHash": "3013ded3f7d9c433050c5ca5447a58318dd5d7dca3226d9123490a74d227d23c",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -896,7 +896,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -909,7 +909,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "2f6ebf89d0e78092455b993ea1811d75adfa8d93b9b1ebc0a1a1d85f42be3b9d",
+      "captureHash": "65352a6d5b5356a6ad37320ad3c6605a268e546c81c438309ac4c4ec9b36b003",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -1052,7 +1052,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -1065,7 +1065,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "715237c5ebd0d89f1729bffb658631c52a0ad92f63fc905831c9f5e3aee53ab9",
+      "captureHash": "2a527b74868be31a1e361ef5289113c09dfe1e8df03eb70a92faf75971cb3c64",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -1208,7 +1208,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -1221,7 +1221,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "bcd4f89933670803d5149af825b0ece0fea195457a26b160622cc2a968dcf280",
+      "captureHash": "f829d0e497a8777f7145fb65877cecbc8f7210ae25dc703f30a62ab676e5f115",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -1617,7 +1617,7 @@
         "graphHash": "0ca10f7255c1ea03ade2ea8fe41e2b542482782906269223aca0f3fdd25a1397",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -1630,7 +1630,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "6d775535ece99625cd6164f69b07ff3ed1a36ae230620282ce347715d62a7231",
+      "captureHash": "dc373d0cdf4525ce0c182415c16b8eec33d9a723cb49f4d6d7ca4ff1085ae61e",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -1747,7 +1747,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -1760,7 +1760,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "b5c28350bf113d9e2a6fa30ab5410939364a39b1945b3faa82ac8b3d5fe474bc",
+      "captureHash": "9b502410e74f6e277944ce60e40f88cf4ab2fc2d6d199000b860cb437cfb4239",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -1877,7 +1877,7 @@
         "graphHash": "c1eb6c99705d8483b08706112f5b9dea32a550badf35026adf2ed651dc7d3f2d",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -1890,7 +1890,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "3fc4843d16016e946579bdc0bca6f9311d66b71e9363428caa590d1f57e33289",
+      "captureHash": "c1c681aa297600160c805695812f43a8d9c055ed5b6fbc088b9b01783afbd028",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -2238,7 +2238,7 @@
         "graphHash": "9d62ad109cc49e96279629e64f19e0035b9559f2fd01f36b1dc7e5359e8c5aca",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -2251,7 +2251,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "55003603219351cd5d573d6e3a44343511daccff911e44892051e35dc3093b5a",
+      "captureHash": "347ee9f0d9970efa0983a6461f909c734b067c827590f39cac5cdb1a9fba981c",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -2579,7 +2579,7 @@
         "graphHash": "3616926e64459786e6fe7e03ee4116535c5f8b74a2a46d46c9ab34e15886d686",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -2592,7 +2592,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "a6db7415a92d258d42704bd81929a61e0ab3db0702df2360acb038805dab2345",
+      "captureHash": "8b0553a50e4896ec62beced11c167a3f3362b22a742111af571cbc5b617173d3",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -2938,7 +2938,7 @@
         "graphHash": "2242c7be9b1589f3bd4269d799d4e889261c3d09db69d5d04c1b10fba7089e85",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -2951,7 +2951,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "c5c40c1cd3fa9f2c2cc3b6c1bcc97933720960b5f0c34ee0d0102c09d01518c9",
+      "captureHash": "dced268960f1b6ae5e1b308411249bd6ef6ad5cb4f3f8407da91595c6f198b0f",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -3279,7 +3279,7 @@
         "graphHash": "d044a12f4132decd73f2c84b2230292d89fd896cb4341ed16bd596297683fbfb",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -3292,7 +3292,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "eed2f214328f0d78a07a85051f619f17b6867b63013b1bcdfb0e8b32f6c8bae0",
+      "captureHash": "2a7e7ecbaf33856d45587bd14a2dcf2c558c6b532002aad64468f5dbf49785cd",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -3653,7 +3653,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -3666,7 +3666,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "fde094fab555226f823b4fcd777dc8c989c2f98f3c19f04e9e0f8abf66594d7c",
+      "captureHash": "befb2107e05e5738a7a645021f9bc8e48a0ad065db6006b585ddda91ea546baf",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -4043,7 +4043,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -4056,7 +4056,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "43f1b9556ecebfefb19f74c5fce5d8a3376fba09a9e9661f0613180a5016815a",
+      "captureHash": "333831951ff831c76484eed67714ac841220d8e66bea3cb4ffdf515757040f40",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -4410,7 +4410,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -4423,7 +4423,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "e38cc3fb83573996a42ad6ed0a6f9c311321bd1d87d06b180bf6ba571eeac965",
+      "captureHash": "4f8c45d44eee0540105fe9204f63f4e8b101f9a32c02f51720cf8642fd6a05a4",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -4751,7 +4751,7 @@
         "graphHash": "6913aaa1140494f6905304d84c3d8253102925bcaabc4b39c67519f3c8051e49",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -4764,7 +4764,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "1c331f027c1d50e45127dbb67ce7d72ae03158a40fa94f7105ccb0d0781e9f16",
+      "captureHash": "f39ac0dfdca51f7f2f2e627e35aee8fdce687d599121b2fb263d0e76e09b4c10",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -5118,7 +5118,7 @@
           }
         ],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -5131,7 +5131,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "7fe5f520ad40b9306532abae971203a6f00c77d386e0dec953b42cceb27efc62",
+      "captureHash": "2bc454f99b7e42f1b23e5673530c34c9bb8efa58eb54eaf557d67a7c88d169bd",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -8951,7 +8951,7 @@
         "graphHash": "c224f5ed4ded350705f2f1c574348a9642746fb6193ac5bcc64b5360adfdee7b",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -8964,7 +8964,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "4aad7fff415d3807c118afe5e0db154e219cfd1c1800910cbf81b689fbb8ac73",
+      "captureHash": "92d6d2ef7c68f2c241d1b9abebfd6fefe2edee052ff695d99aab2d114c32773b",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -9292,7 +9292,7 @@
         "graphHash": "0e5581636613f8e3168ef2b8d50995f7406d589276783356d63ad66a70f9e2ea",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -9305,7 +9305,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "00b755fc73d906b54468fa879b279bd55a7b9b5bfc454226855f30276203251c",
+      "captureHash": "b329e30cdb5243550d01acd3800d852940075cca8886881b95247cbd312c1f8a",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",
@@ -9633,7 +9633,7 @@
         "graphHash": "69b84c496237744c3c27ffb6edbb04c31002eb0f1a0e471542eef119115ca11e",
         "sources": [],
         "versions": {
-          "prompt": "2026-10-16.1",
+          "prompt": "2026-10-17.1",
           "resultSchema": 1,
           "model": "gemini-3.8-flash"
         },
@@ -9646,7 +9646,7 @@
           "resultBytes": 131072
         }
       },
-      "captureHash": "3426fb9ac56a27aa87c9d56bd59263fb0d02ca4c91c47533ab62d0cd4eff3d7c",
+      "captureHash": "69d5dd8705596705b3a7ee7cdd1382955ddc283fb2d01d451047a2aa22acd3ce",
       "validationProbe": {
         "schemaVersion": 1,
         "kind": "proposal",

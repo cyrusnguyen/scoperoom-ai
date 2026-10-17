@@ -25,7 +25,7 @@ export const AI_LIMITS = {
 
 export const CAPTURE_SCHEMA_VERSION = 1;
 export const RESULT_SCHEMA_VERSION = 1;
-export const PROMPT_VERSION = "2026-10-16.1";
+export const PROMPT_VERSION = "2026-10-17.1";
 
 export type { SourceRef } from "../../drafts/contracts/scope-document.ts";
 /** One earlier turn of a follow-up: a person's captured instruction or ScopeRoom's summary of the model's answer. */

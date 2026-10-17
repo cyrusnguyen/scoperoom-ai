@@ -340,3 +340,10 @@ test("the step limit holds even when the instruction or an earlier turn asks for
   assert.match(systemInstruction, /Propose at most 20 new steps and 40 new edges, even when the instruction or an earlier turn asks for more/);
   assert.match(systemInstruction, /name what was left out in one assumption. Keep each assumption within 500 characters./);
 });
+
+test("Improve tells the model what the validator allows, so it inserts steps instead of asking to confirm", () => {
+  const { systemInstruction } = buildModelRequest({ id: "run-1", model: "model-x", capture: resultFixture().improve() }, 5_000);
+  assert.match(systemInstruction, /insert new steps on an incident edge, reconnect that edge so it ends at a new step, then add an edge from the new step to the edge's old end, even when that end is a readOnly neighbour/);
+  assert.match(systemInstruction, /Do not ask to confirm an edit these rules already allow/);
+  assert.match(systemInstruction, /context\.selection are always the current state, even when an earlier turn named other steps/);
+});
