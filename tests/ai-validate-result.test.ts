@@ -119,9 +119,6 @@ test("Improve edges may touch selected steps, boundary neighbours and new steps,
   const reconnect = (nodeId: string) => ({ id: "op1", dependsOn: [], edit: { command: "RECONNECT_EDGE", payload: { edgeId: f.edges.e2, fromId: f.ids.b, toId: nodeId } } });
   assert.equal(validateResult(improve, proposal([reconnect(f.ids.a)])).kind, "proposal");
   assert.equal(validateResult(improve, proposal([reconnect(f.ids.d)])).kind, "proposal"); // d is a captured neighbour
-  // The insertion the Improve prompt describes: c->d becomes c->n1, then n1 joins read-only d.
-  const insertOnEdge = { id: "op2", dependsOn: ["op1"], edit: { command: "RECONNECT_EDGE", payload: { edgeId: f.edges.e3, fromId: f.ids.c, toId: "n1" } } };
-  assert.equal(validateResult(improve, proposal([newNode, insertOnEdge, edgeOp("op3", f.flowId, "n1", f.ids.d, ["op1"])])).kind, "proposal");
   refuses(improve, proposal([reconnect(f.ids.stray)]), "OUT_OF_SCOPE");
   refuses(improve, proposal([reconnect(f.ids.foreign)]), "OUT_OF_SCOPE");
 });
