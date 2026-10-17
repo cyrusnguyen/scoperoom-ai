@@ -10,7 +10,7 @@ import { MAX_VERSION } from "../src/features/drafts/contracts/strict.ts";
 import { applyGraphCommand, applyGraphGroup, type Draft } from "../src/features/drafts/domain/graph.ts";
 import { applyProposal, proposalDiff } from "../src/features/proposals/domain/proposal-diff.ts";
 import { validateResult } from "../src/features/proposals/domain/validate-result.ts";
-import { goodGenerate, proposal, resultFixture } from "./support/ai-results.ts";
+import { edgeOp, goodGenerate, nodeOp, proposal, resultFixture } from "./support/ai-results.ts";
 
 const f = resultFixture();
 function saved(): Draft {
@@ -87,6 +87,20 @@ test("Improve preserves latest peer moves and sides when reconnecting and untouc
   assert.equal(applied.layout.edgeSides[f.edges.e2]!.from, "bottom");
   assert.deepEqual(applied.changedIds.sort(), [f.flowId, f.edges.e2].sort());
   assert.deepEqual(applied.document.edges[f.edges.e1], draft.document.edges[f.edges.e1]);
+});
+
+test("Improve applies new steps inserted on connections into and out of the selection", () => {
+  const capture = f.improve(); // b and c selected; a and d are read-only neighbours
+  const reconnect = (id: string, dependsOn: string, edgeId: string, fromId: string, toId: string) => ({ id, dependsOn: [dependsOn], edit: { command: "RECONNECT_EDGE", payload: { edgeId, fromId, toId } } });
+  const result = validateResult(capture, proposal([
+    nodeOp("op1", "n1", f.flowId, []), reconnect("op2", "op1", f.edges.e1, f.ids.a, "n1"), edgeOp("op3", f.flowId, "n1", f.ids.b, ["op1"]),
+    nodeOp("op4", "n2", f.flowId, []), reconnect("op5", "op4", f.edges.e3, f.ids.c, "n2"), edgeOp("op6", f.flowId, "n2", f.ids.d, ["op4"]),
+  ]));
+  const applied = applyProposal(saved(), capture, result, ["op1", "op2", "op3", "op4", "op5", "op6"], randomUUID);
+  const { n1, n2 } = applied.idMap;
+  const links = Object.values(applied.document.edges).map((edge) => `${edge.fromId}>${edge.toId}`).sort();
+  assert.deepEqual(links, [`${f.ids.a}>${n1}`, `${n1}>${f.ids.b}`, `${f.ids.b}>${f.ids.c}`, `${f.ids.c}>${n2}`, `${n2}>${f.ids.d}`].sort());
+  parseDraftPair(applied.document, applied.layout);
 });
 
 test("clarification has no Apply and malformed historical data fails closed", () => {
