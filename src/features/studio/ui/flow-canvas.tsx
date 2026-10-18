@@ -402,6 +402,13 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     event.preventDefault();
     setEditing({ kind: "NODE", id: target.dataset.id });
   };
+  // React Flow moves selected steps on arrow keys only in its own copy (keyboard moves are never saved) and announces a move that
+  // did not happen; an unchanged step keeps that shifted copy, so a later drag would start from it. Stop the keys before it sees them.
+  const stopArrowMoves = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!event.key.startsWith("Arrow") || !(event.target as Element).matches(".react-flow__node.selected, .react-flow__nodesselection-rect")) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
   // Which handle a drag began on, so a saved connection runs from the gesture's start to its drop whatever the handle
   // types are (React Flow labels a finished connection's ends by handle type, not by gesture).
   const dragStart = useRef<{ nodeId: string | null; handleId: string | null } | null>(null);
@@ -471,7 +478,7 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     connect: (connection: Connection) => void connect(connection), reconnect,
   });
 
-  return <InlineEditingContext.Provider value={inline}><div className="canvas" ref={wrapperRef} onDragOver={onShapeDragOver} onDrop={onShapeDrop} onKeyDown={canvasKeyDown} onPointerMove={onPointerMove} onPointerLeave={() => sendCursor(null)}>
+  return <InlineEditingContext.Provider value={inline}><div className="canvas" ref={wrapperRef} onDragOver={onShapeDragOver} onDrop={onShapeDrop} onKeyDownCapture={stopArrowMoves} onKeyDown={canvasKeyDown} onPointerMove={onPointerMove} onPointerLeave={() => sendCursor(null)}>
     <ReactFlow<StepNode, FlowEdge> key={preview ? `preview-${preview.direction}` : flowId} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions} connectionMode={ConnectionMode.Loose}
       onNodesChange={interactive ? on.nodesChange : on.measure} onEdgesChange={interactive ? on.edgesChange : undefined}

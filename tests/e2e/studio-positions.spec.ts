@@ -225,6 +225,23 @@ test.describe("saved positions and arrangement", () => {
     expect(saves).toHaveLength(1);
   });
 
+  test("arrow keys on a selected step change nothing, so a later drag moves it like any other step", async ({ page }) => {
+    const [first, middle] = [seeded.nodeIds[0]!, seeded.nodeIds[1]!];
+    const before = (await draftOf(page, projectId)).layout.positions;
+    await drag(page, first, 150, 0); // the same gesture with no arrow keys, for comparison
+    await nodeAt(page, middle).click();
+    await expect(nodeAt(page, middle)).toHaveClass(/selected/);
+    for (const key of ["ArrowRight", "ArrowRight", "ArrowRight", "ArrowDown"]) await page.keyboard.press(key);
+    await page.waitForTimeout(300);
+    // React Flow used to shift its own copy of the step, so this drag began 15 px right and 5 px down of the saved position.
+    await drag(page, middle, 150, 0);
+    await saveButton(page).click();
+    await expect(status(page)).toContainText("All changes saved");
+    const after = (await draftOf(page, projectId)).layout.positions;
+    expect(after[middle]!.x - before[middle]!.x).toBeCloseTo(after[first]!.x - before[first]!.x, 0);
+    expect(after[middle]!.y).toBeCloseTo(before[middle]!.y, 0);
+  });
+
   test("typed coordinates survive a remote move and project switch until explicitly reviewed or discarded", async ({ page }) => {
     const middle = seeded.nodeIds[1]!;
     await createProjectViaApi(page, "Other project");
