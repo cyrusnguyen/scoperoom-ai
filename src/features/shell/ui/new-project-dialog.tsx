@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type SubmitEvent } from "react";
-import { apiMutate } from "@/client/api";
+import { apiMutate, sessionEnded } from "@/client/api";
 import type { CreatedProject } from "@/features/projects/contracts/project";
 import Dialog from "./dialog";
 
@@ -24,6 +24,7 @@ export default function NewProjectDialog({ onClose, onCreated, onRefused }: { on
     setError("");
     const result = await apiMutate<CreatedProject>("/api/projects", requestKey, { name });
     setBusy(false);
+    if (sessionEnded(result)) return;
     if (result.ok) { onCreated(result.data); return; }
     if (result.uncertain) { setError("We could not confirm project creation. Retry uses the same request."); return; }
     setKey(null);

@@ -79,7 +79,7 @@ export async function applyRun(identity: ProjectIdentity, projectId: string, run
         ${JSON.stringify(selected)}::jsonb, ${JSON.stringify(applied!.actualCommands)}::jsonb, ${JSON.stringify(applied!.idMap)}::jsonb, ${JSON.stringify(applied!.createdIdMap)}::jsonb,
         ${JSON.stringify(evidence)}::jsonb,
         ${sourceIds}::uuid[], ${saved.documentRevision}, ${documentRevision}, ${saved.layoutRevision}, ${layoutRevision})`;
-    for (const sourceId of sourceIds) await tx.$executeRaw`INSERT INTO app.ai_application_source (project_id, application_id, source_version_id) VALUES (${project.id}::uuid, ${applicationId}::uuid, ${sourceId}::uuid)`;
+    await tx.$executeRaw`INSERT INTO app.ai_application_source (project_id, application_id, source_version_id) SELECT ${project.id}::uuid, ${applicationId}::uuid, unnest(${sourceIds}::uuid[])`;
     await tx.$executeRaw`UPDATE app.ai_run SET disposition = 'APPLIED' WHERE id = ${runId}::uuid`;
     const sequence = await recordEvent(tx, project, actorId, "AI_PROPOSAL_APPLIED", [{ kind: "DRAFT", id: saved.id }, { kind: "AI_RUN", id: runId }], { applicationId, documentRevision, layoutRevision, changedCount: applied!.changedIds.length });
     await tx.$executeRaw`UPDATE app.project SET ai_revision = ${sequence}::bigint WHERE id = ${project.id}::uuid`;

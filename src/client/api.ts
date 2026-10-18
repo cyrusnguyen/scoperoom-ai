@@ -51,11 +51,17 @@ export function apiPostEmpty<T>(url: string): Promise<ApiResult<T>> {
 }
 
 /**
+ * A write that gets no response gives up as an uncertain network failure, which callers retry with the same key, so a dead connection
+ * cannot hold a save forever. The server bounds its own work at 15 s; the rest is room for a 256 KiB body on a slow, distant link.
+ */
+const MUTATION_TIMEOUT_MS = 120_000;
+
+/**
  * Callers keep `key` and reuse it to retry an uncertain result; a certain failure should get a new key.
  * `null` is for a nonmutating preview POST, which takes no Idempotency-Key.
  */
-export function apiMutate<T>(url: string, key: string | null, body: Record<string, unknown> = {}, method: "POST" | "PUT" | "PATCH" | "DELETE" = "POST"): Promise<ApiResult<T>> {
-  return settle<T>(() => fetch(url, { method, headers: { "Content-Type": "application/json", ...(key ? { "Idempotency-Key": key } : {}) }, body: JSON.stringify(body) }));
+export function apiMutate<T>(url: string, key: string | null, body: Record<string, unknown> = {}, method: "POST" | "PUT" | "PATCH" | "DELETE" = "POST", timeoutMs = MUTATION_TIMEOUT_MS): Promise<ApiResult<T>> {
+  return settle<T>(() => fetch(url, { method, headers: { "Content-Type": "application/json", ...(key ? { "Idempotency-Key": key } : {}) }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) }));
 }
 
 /**
