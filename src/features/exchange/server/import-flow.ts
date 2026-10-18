@@ -148,15 +148,18 @@ async function clock(tx: Transaction) {
   return row.now;
 }
 
-/** The actor and project locks serialize these cumulative quotas across all projects and actors. */
+/**
+ * The actor and project locks serialize these cumulative quotas across all projects and actors. `bodies` counts open previews only:
+ * an applied preview keeps its body for seven days, which `admitPreviewBody` still counts in bytes, but it no longer blocks the next one.
+ */
 async function preflightPreviewAdmission(tx: Transaction, actorId: string, projectId: string) {
   const [admission] = await tx.$queryRaw<Array<{ allowed: boolean }>>`
     SELECT count(*) FILTER (WHERE actor_id = ${actorId}::uuid) < ${FLOW_IMPORT_PREVIEW_LIMITS.actor.rows}
       AND count(*) FILTER (WHERE project_id = ${projectId}::uuid) < ${FLOW_IMPORT_PREVIEW_LIMITS.project.rows}
       AND count(*) FILTER (WHERE actor_id = ${actorId}::uuid AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 hour') < ${FLOW_IMPORT_PREVIEW_LIMITS.actor.creationsPerHour}
       AND count(*) FILTER (WHERE project_id = ${projectId}::uuid AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 hour') < ${FLOW_IMPORT_PREVIEW_LIMITS.project.creationsPerHour}
-      AND count(*) FILTER (WHERE actor_id = ${actorId}::uuid AND payload IS NOT NULL) < ${FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies}
-      AND count(*) FILTER (WHERE project_id = ${projectId}::uuid AND payload IS NOT NULL) < ${FLOW_IMPORT_PREVIEW_LIMITS.project.bodies}
+      AND count(*) FILTER (WHERE actor_id = ${actorId}::uuid AND state = 'READY' AND expires_at > CURRENT_TIMESTAMP) < ${FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies}
+      AND count(*) FILTER (WHERE project_id = ${projectId}::uuid AND state = 'READY' AND expires_at > CURRENT_TIMESTAMP) < ${FLOW_IMPORT_PREVIEW_LIMITS.project.bodies}
       AS allowed
     FROM app.flow_import_preview
     WHERE actor_id = ${actorId}::uuid OR project_id = ${projectId}::uuid`;

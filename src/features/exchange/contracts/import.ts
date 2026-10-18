@@ -1,6 +1,6 @@
 import type { FlowFileV1 } from "./flow-file.ts";
 
-/** Durable import identities are retained indefinitely; these caps bound their database footprint. */
+/** Applied import identities are kept for ever and others are deleted 30 days after expiry; these caps bound their database footprint. */
 export const FLOW_IMPORT_PREVIEW_LIMITS = {
   actor: { rows: 1_000, bodies: 10, bodyBytes: 8 * 1024 * 1024, creationsPerHour: 20 },
   project: { rows: 2_000, bodies: 25, bodyBytes: 16 * 1024 * 1024, creationsPerHour: 60 },

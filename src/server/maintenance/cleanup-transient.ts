@@ -1,6 +1,6 @@
 import { Client } from "pg";
 
-export type CleanupTransientResult = { expiredPreviews: number; clearedAppliedBodies: number; deletedReceipts: number; expiredAiResults: number; clearedAiBodies: number };
+export type CleanupTransientResult = { expiredPreviews: number; clearedAppliedBodies: number; deletedReceipts: number; expiredAiResults: number; clearedAiBodies: number; deletedPreviews: number };
 
 /** Local operator sweep for transient import bodies, expired receipts and AI run bodies; the SQL function enforces the 100-row ceiling. */
 export async function cleanupTransient({ dryRun, batchSize }: { dryRun: boolean; batchSize: number }): Promise<CleanupTransientResult> {

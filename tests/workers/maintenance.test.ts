@@ -39,7 +39,7 @@ test("the worker role sweeps expired bodies through the environment-validated fu
   await withWorld(async ({ admin, seed }) => {
     const runId = await seed({ hours: 8 * 24, shape: "SUCCEEDED" });
     const result = await workerCleanup(100);
-    assert.deepEqual(Object.keys(result).sort(), ["clearedAiBodies", "clearedAppliedBodies", "deletedReceipts", "expiredAiResults", "expiredPreviews"]);
+    assert.deepEqual(Object.keys(result).sort(), ["clearedAiBodies", "clearedAppliedBodies", "deletedPreviews", "deletedReceipts", "expiredAiResults", "expiredPreviews"]);
     assert.ok(result.expiredAiResults >= 1);
     assert.equal(await purged(admin, runId), true);
   });
