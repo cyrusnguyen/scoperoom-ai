@@ -7,13 +7,6 @@ import { asJson, auditRefs, draftMutation, graphFailure, nextRevision, requireSt
 
 // POST D/changes: the whole unsaved batch in one transaction under the project lock, with one PROJECT receipt.
 const CHANGES_OPERATION = "DRAFT_CHANGES_V1";
-/**
- * The largest batch (100 commands, 200 moves) on a 1.93 MB draft measured 0.86–1.72 s end to end locally, about the
- * same as one single command on that draft (0.84–1.15 s): the cost is reading, size-checking and writing 2 MB of JSONB,
- * not the batch. Prisma's 5 s default leaves too little room for waiting on the project lock behind another save and for
- * a slower hosted database; 15 s does, while still bounding how long a stuck save can hold the lock.
- */
-const CHANGES_TIMEOUT_MS = 15_000;
 
 export async function saveChanges(identity: ProjectIdentity, projectId: string, draftId: string, input: Record<string, unknown>): Promise<ChangesResult> {
   const { key, ...raw } = input;
@@ -44,5 +37,5 @@ export async function saveChanges(identity: ProjectIdentity, projectId: string, 
       })),
     ]);
     return { draftId: draft.id, documentRevision, layoutRevision, eventSequence: Number(eventSequence) };
-  }, CHANGES_TIMEOUT_MS);
+  });
 }

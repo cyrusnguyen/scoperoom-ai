@@ -4,7 +4,7 @@ import { arrange } from "../../drafts/server/layout.ts";
 import { asJson, graphFailure, nextRevision, requireStoredSize, storedDraft } from "../../drafts/server/execute-command.ts";
 import { LIMITS, type ScopeDocument } from "../../drafts/contracts/scope-document.ts";
 import { keyPattern, uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
-import { checkReceipt, findReceipt, lockActor, lockProject, profileFor, readProject, receiptString, recordEvent, requestHash, requireActive, requireMember, saveReceipt, withDatabase, withReadSnapshot, type Transaction } from "../../projects/server/access.ts";
+import { WRITE_TIMEOUT_MS, checkReceipt, findReceipt, lockActor, lockProject, profileFor, readProject, receiptString, recordEvent, requestHash, requireActive, requireMember, saveReceipt, withDatabase, withReadSnapshot, type Transaction } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import type { FlowFileV1 } from "../contracts/flow-file.ts";
 import { FLOW_IMPORT_PREVIEW_LIMITS, type ImportApplyInput, type ImportApplyResult, type ImportFidelityReport, type ImportPreviewView } from "../contracts/import.ts";
@@ -238,7 +238,7 @@ export async function previewFlowImport(identity: ProjectIdentity, projectId: st
       const preview = await tx.flowImportPreview.create({ data: { id: previewId, projectId: project.id, draftId, actorId: profile.id, expectedDocumentRevision, payload: parsed.source as Prisma.InputJsonValue, positions: positions as Prisma.InputJsonValue, fidelityReport: fidelityReport as Prisma.InputJsonValue, payloadHash: parsed.payloadHash, previewHash: hash, expiresAt: new Date(now.getTime() + PREVIEW_RETENTION_MS) } }) as StoredPreview;
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, PREVIEW_OPERATION, hash, { previewId, previewHash: hash, draftId });
       return viewOf(preview, now);
-    });
+    }, { timeout: WRITE_TIMEOUT_MS });
   });
 }
 
@@ -327,7 +327,7 @@ export async function applyFlowImport(identity: ProjectIdentity, projectId: stri
       });
       await saveReceipt(tx, profile.id, "PROJECT", project.id, input.key, APPLY_OPERATION, hash, asJson(durable));
       return { ...durable, replayed: false };
-    });
+    }, { timeout: WRITE_TIMEOUT_MS });
   });
 }
 
@@ -364,6 +364,6 @@ export async function discardFlowImport(identity: ProjectIdentity, projectId: st
       const discarded = await tx.flowImportPreview.update({ where: { id: preview.id }, data: { state: "DISCARDED" } }) as StoredPreview;
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, DISCARD_OPERATION, hash, { previewId, previewHash: preview.previewHash });
       return viewOf(discarded, now);
-    });
+    }, { timeout: WRITE_TIMEOUT_MS });
   });
 }

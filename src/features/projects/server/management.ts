@@ -7,7 +7,7 @@ import {
 import { type ProjectAccessRole, type ProjectIdentity, uuid } from "../contracts/project.ts";
 import {
   assertOwnerCapacity, checkReceipt, findReceipt, lockActor, lockOwnerCapacity, lockProject, profileFor, readProject, recordEvent,
-  requestHash, requireActive, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow, type Transaction,
+  requestHash, requireActive, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow, type Transaction, WRITE_TIMEOUT_MS,
 } from "./access.ts";
 import { requestProjectRunCancel } from "../../proposals/server/settle-runs.ts";
 import { invalidateOpenReview } from "../../reviews/server/invalidate.ts";
@@ -48,7 +48,7 @@ async function ownerMutation(identity: ProjectIdentity, projectId: string, key: 
       const value = await work(tx, project, profile.id);
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, operation, hash, value);
       return { ...value, replayed: false };
-    });
+    }, { timeout: WRITE_TIMEOUT_MS });
   });
 }
 
@@ -200,7 +200,7 @@ export async function leaveProject(identity: InvitationIdentity, projectId: stri
       await deactivate(tx, project, profile.id, profile.id, "PROJECT_MEMBER_LEFT", [identity.verifiedEmail]);
       await saveReceipt(tx, profile.id, "PROJECT", project.id, validated.key, operation, hash, { projectId, left: true });
       return { projectId, left: true as const, replayed: false };
-    });
+    }, { timeout: WRITE_TIMEOUT_MS });
   });
 }
 
@@ -235,7 +235,7 @@ async function changeLifecycle(identity: ProjectIdentity, projectId: string, inp
       const value = result(next);
       await saveReceipt(tx, profile.id, "PROJECT", project.id, validated.key, operation, hash, value);
       return { ...value, replayed: false };
-    });
+    }, { timeout: WRITE_TIMEOUT_MS });
   });
 }
 

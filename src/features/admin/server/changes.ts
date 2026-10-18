@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Prisma } from "../../../../prisma/generated/client.ts";
 import { validateEntitlementInput, validateRoleInput, type EntitlementInput, type RoleInput } from "../contracts/admin.ts";
 import { uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
-import { checkReceipt, findReceipt, lockActor, profileFor, requestHash, saveReceipt, withDatabase, type Transaction } from "../../projects/server/access.ts";
+import { checkReceipt, findReceipt, lockActor, profileFor, requestHash, saveReceipt, withDatabase, WRITE_TIMEOUT_MS, type Transaction } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { staffError } from "./staff-error.ts";
 
@@ -38,7 +38,7 @@ async function staffWrite(identity: ProjectIdentity, target: string, key: string
         const value = stored(await call(tx, profile.id, randomUUID()));
         await saveReceipt(tx, profile.id, "USER", profile.id, key, operation, hash, value as Prisma.InputJsonValue);
         return { ...value, replayed: false };
-      });
+      }, { timeout: WRITE_TIMEOUT_MS }); // an entitlement change waits on the owner capacity lock
     } catch (error) {
       const mapped = staffError(error);
       if (mapped.code !== "CONFLICT" || mapped.details) throw mapped;

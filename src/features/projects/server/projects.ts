@@ -7,7 +7,7 @@ import {
 } from "../contracts/project.ts";
 import {
   assertOwnerCapacity, checkReceipt, findReceipt, lockActor, lockOwnerCapacity, ownerPlan, profileFor, readProject,
-  receiptString, requestHash, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow,
+  receiptString, requestHash, requireMember, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow, WRITE_TIMEOUT_MS,
 } from "./access.ts";
 import { settleOverdueRuns } from "../../proposals/server/settle-runs.ts";
 import { ProjectError } from "./errors.ts";
@@ -40,7 +40,7 @@ export async function createProject(identity: ProjectIdentity, input: unknown): 
       await tx.auditEvent.create({ data: { projectId: project.id, sequence: BigInt(1), actorId: profile.id, action: "PROJECT_CREATED", entityRefs: [{ kind: "PROJECT", id: project.id }], metadata: {} } });
       await saveReceipt(tx, profile.id, "USER", profile.id, validated.key, CREATE_OPERATION, hash, { id: project.id, name: project.name });
       return { ...project, replayed: false };
-    });
+    }, { timeout: WRITE_TIMEOUT_MS });
   });
 }
 

@@ -3,7 +3,7 @@ import type { Prisma } from "../../../../prisma/generated/client.ts";
 import { keyPattern, uuid, type ProjectAccessRole, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import {
   checkReceipt, findReceipt, lockActor, lockProject, profileFor, projectRole, readProject, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
-  withDatabase, withReadSnapshot, type ProjectRow, type Transaction,
+  withDatabase, withReadSnapshot, WRITE_TIMEOUT_MS, type ProjectRow, type Transaction,
 } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { parseCommandResult, type CommandResult } from "../contracts/commands.ts";
@@ -67,13 +67,12 @@ export async function lockDraft(tx: Transaction, project: ProjectRow, draftId: s
 /**
  * Draft mutation skeleton, in the Data03 order: actor → project lock → current read access → matching receipt replay →
  * (new work only) owner/editor capability → ACTIVE project → current draft lock → work. `work` returns the safe result
- * that is saved as the receipt and replayed for the same key. `timeout` overrides Prisma's 5 s interactive-transaction limit.
+ * that is saved as the receipt and replayed for the same key.
  */
 export async function draftMutation<T extends object>(
   identity: ProjectIdentity, projectId: string, draftId: string, key: string, operation: string, hash: string,
   parseStored: (value: unknown) => T,
   work: (tx: Transaction, project: ProjectRow, draft: LockedDraft, actorId: string) => Promise<T>,
-  timeout?: number,
 ): Promise<T & { replayed: boolean }> {
   if (!uuid.test(projectId) || !uuid.test(draftId)) throw new ProjectError("NOT_FOUND");
   return withDatabase(async (database) => {
@@ -95,7 +94,7 @@ export async function draftMutation<T extends object>(
       const value = parseStored(await work(tx, project, draft, profile.id));
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, operation, hash, asJson(value));
       return { ...value, replayed: false };
-    }, timeout ? { timeout } : undefined);
+    }, { timeout: WRITE_TIMEOUT_MS });
   });
 }
 
