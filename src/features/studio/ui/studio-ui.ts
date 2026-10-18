@@ -33,18 +33,13 @@ export const defaultStudioUi: StudioUi = {
 };
 export type SelectChange = { id: string; selected: boolean };
 
-/** Structural equality for plain JSON-like values (what a canvas node or edge is built from). */
-function sameValue(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (typeof a !== "object" || typeof b !== "object" || !a || !b || Array.isArray(a) !== Array.isArray(b)) return false;
-  const keys = Object.keys(a);
-  return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && sameValue((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]));
-}
-
-/** The previous element for every id whose content is unchanged, so React Flow re-renders only what changed (the previous array itself when nothing did). */
+/**
+ * The previous element for every id whose content is unchanged, so React Flow re-renders only what changed (the previous array itself
+ * when nothing did). Elements are plain JSON built by one object literal, so equal content serializes identically.
+ */
 export function reuseUnchanged<T extends { id: string }>(next: T[], previous: T[]): T[] {
   const before = new Map(previous.map((item) => [item.id, item]));
-  const reused = next.map((item) => { const old = before.get(item.id); return old && sameValue(old, item) ? old : item; });
+  const reused = next.map((item) => { const old = before.get(item.id); return old && JSON.stringify(old) === JSON.stringify(item) ? old : item; });
   return reused.length === previous.length && reused.every((item, index) => item === previous[index]) ? previous : reused;
 }
 
