@@ -5,9 +5,6 @@ export type SourceList = { key: string; ticket: number; page: SourcePage } | nul
 
 export const listKey = (projectId: string, scope: SourceScope) => `${projectId}:${scope}`;
 
-/** A new first-page load keeps the rows of the same list (a revision refresh) and drops a different project's or filter's. */
-export const startSourceList = (list: SourceList, key: string): SourceList => (list?.key === key ? list : null);
-
 export const acceptFirstPage = (key: string, ticket: number, page: SourcePage): SourceList => ({ key, ticket, page });
 
 /** More only continues the list the current load accepted: never a held, failed or other-filter first page. */

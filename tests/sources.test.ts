@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { emptyDraft } from "../src/features/drafts/contracts/scope-document.ts";
 import { citationMatches, lineStarts, normalizeEvidence, parseCorrectSource, parseCreateSource, parseUpdateSource } from "../src/features/sources/contracts/source-version.ts";
 import { graphExtract } from "../src/features/sources/domain/graph-extract.ts";
-import { acceptFirstPage, appendSourcePage, appendVersionPage, canLoadMore, listKey, startSourceList } from "../src/features/sources/ui/source-pages.ts";
+import { acceptFirstPage, appendSourcePage, appendVersionPage, canLoadMore, listKey } from "../src/features/sources/ui/source-pages.ts";
 import { editSourceCorrection, reconcileSourceCorrection, sourceCorrectionBody } from "../src/features/sources/ui/source-correction.ts";
 import { sourceLinePage, SOURCE_LINES_PER_PAGE } from "../src/features/sources/ui/source-line-pages.ts";
 
@@ -114,13 +114,10 @@ test("a later page joins only the list, load and cursor it was asked for", () =>
   assert.equal(appendSourcePage(first, user, 1, "z", next), first, "a page for another cursor is dropped");
   assert.equal(appendSourcePage(appendSourcePage(first, user, 1, "a", next), user, 1, "a", next)?.page.items.length, 2, "a page is never appended twice");
 
-  // Filter change: the old list is cleared, so its cursor can never be sent under the new filter.
-  assert.equal(startSourceList(first, archived), null);
-  assert.equal(canLoadMore(startSourceList(first, archived), archived, 2), false);
+  // Filter change: the old list's cursor can never be sent under the new filter.
+  assert.equal(canLoadMore(first, archived, 2), false);
   // Revision refresh on the same filter: rows stay visible, but More waits for the matching first page (held or failed).
-  const refreshing = startSourceList(first, user);
-  assert.equal(refreshing, first);
-  assert.equal(canLoadMore(refreshing, user, 2), false, "ticket 2's first page has not been accepted");
-  assert.equal(appendSourcePage(refreshing, user, 2, "a", next), refreshing, "an old cursor sent under the new load is dropped");
+  assert.equal(canLoadMore(first, user, 2), false, "ticket 2's first page has not been accepted");
+  assert.equal(appendSourcePage(first, user, 2, "a", next), first, "an old cursor sent under the new load is dropped");
   assert.equal(canLoadMore(acceptFirstPage(user, 2, { ...first!.page }), user, 2), true);
 });
