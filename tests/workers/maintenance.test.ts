@@ -33,7 +33,7 @@ async function withWorld(run: (world: { admin: Client; worker: Client; seed: (op
   }
 }
 const purged = async (admin: Client, runId: string) => (await admin.query("select capture is null as purged from app.ai_run where id = $1", [runId])).rows[0].purged;
-const noDispatch: JobDispatcher = { dispatch: async () => ({ kind: "unavailable" }), cancel: async () => "unknown" };
+const noDispatch: JobDispatcher = { dispatch: async () => ({ kind: "unavailable" }) };
 
 test("the worker role sweeps expired bodies through the environment-validated function", { skip: !canRun }, async () => {
   await withWorld(async ({ admin, seed }) => {
@@ -96,7 +96,7 @@ test("one maintenance tick repairs due dispatches and cleans bodies; each step s
     const due = await seed({ hours: 0, shape: "QUEUED" });
     const old = await seed({ hours: 8 * 24, shape: "FAILED" });
     const requests: JobRequest[] = [];
-    const dispatcher: JobDispatcher = { dispatch: async (request) => { requests.push(request); return { kind: "accepted", taskId: `task-${requests.length}` }; }, cancel: async () => "requested" };
+    const dispatcher: JobDispatcher = { dispatch: async (request) => { requests.push(request); return { kind: "accepted", taskId: `task-${requests.length}` }; } };
     const cleaned = await runMaintenance(dispatcher);
     assert.equal(requests.filter((request) => request.runId === due).length, 1);
     assert.equal((await admin.query("select dispatch_state::text s from app.ai_run where id = $1", [due])).rows[0].s, "DISPATCHED");

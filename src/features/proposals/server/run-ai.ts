@@ -120,7 +120,8 @@ export async function runAi(runId: string, gateway: ModelGateway, db?: Sql): Pro
 
     const status = await settle(sql, attempt, timedOut ? "TIMED_OUT" : OUTCOME[reply.kind], null, reply);
     if (status === "STALE") return;
-    if (reply.kind === "refused" || reply.kind === "incomplete" || call === 2) { await closeOut(sql, runId, GIVE_UP[reply.kind]); return; }
+    // A second call that ran out its own window is a timeout, not an unknown reply.
+    if (reply.kind === "refused" || reply.kind === "incomplete" || call === 2) { await closeOut(sql, runId, timedOut ? "MODEL_TIMEOUT" : GIVE_UP[reply.kind]); return; }
     await sleep(Math.min(reply.retryAfterMs ?? 0, 10_000)); // the next call, if any, needs its own SQL claim and still honours the deadline
   }
 }

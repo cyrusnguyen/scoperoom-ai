@@ -316,24 +316,24 @@ test("a run another transaction holds is skipped, never erased or waited for, an
   });
 });
 
-test("project deletion refunds only proved-undispatched reservations once and fences late delivery", { skip: !canRun }, async () => {
+test("project deletion refunds every unclaimed reservation once and fences late delivery", { skip: !canRun }, async () => {
   await withWorld(async ({ admin, worker, owner, seed, budget }) => {
     const person = await owner();
     const never = await seed(person, { hours: 52, shape: "QUEUED" });
-    const uncertain = await seed(person, { hours: 52, shape: "QUEUED" });
+    const leased = await seed(person, { hours: 52, shape: "QUEUED" });
     const started = await seed(person, { hours: 76, shape: "RUNNING" });
     const settled = await seed(person, { hours: 52, shape: "QUEUED" });
-    // A dispatch lease can precede a lost acknowledgement. It is not proof that no call started.
-    await admin.query("update app.ai_run set dispatch_lease_until = now() - interval '1 hour' where id = $1", [uncertain.runId]);
+    // A delivered dispatch never reached a provider without a claim, and a claim moves the budget to CONSUMED first.
+    await admin.query("update app.ai_run set dispatch_state = 'DISPATCHED', task_id = 'task-1' where id = $1", [leased.runId]);
     await worker.query("select app.finish_ai_run($1, 'TIMED_OUT', null)", [settled.runId]);
     const before = await budget(person);
     assert.equal(before.reduce((sum, day) => sum + day.reserved_runs, 0), 2);
     assert.equal(before.reduce((sum, day) => sum + day.consumed_runs, 0), 1);
-    const targets = [never, uncertain, started, settled];
+    const targets = [never, leased, started, settled];
     for (const target of targets) await admin.query("delete from app.project where id = $1", [target.projectId]);
     const after = await budget(person);
     assert.equal(after.reduce((sum, day) => sum + day.reserved_runs, 0), 0);
-    assert.equal(after.reduce((sum, day) => sum + day.consumed_runs, 0), 2, "unknown dispatch and claimed usage remain charged");
+    assert.equal(after.reduce((sum, day) => sum + day.consumed_runs, 0), 1, "only the claimed run stays charged");
     assert.deepEqual(after.map((day) => day.day), before.map((day) => day.day), "no charge moves to today's budget");
     for (const target of targets) {
       assert.equal((await admin.query("delete from app.project where id = $1", [target.projectId])).rowCount, 0);

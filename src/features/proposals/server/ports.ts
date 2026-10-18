@@ -23,5 +23,4 @@ export interface JobDispatcher {
   dispatch(request: JobRequest): Promise<
     { kind: "accepted"; taskId: string } | { kind: "unavailable" }
   >;
-  cancel(taskId: string): Promise<"requested" | "terminal" | "unknown">;
 }

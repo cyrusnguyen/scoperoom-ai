@@ -216,11 +216,6 @@ test("dispatch is unavailable for a failed send, no event id, an expired deadlin
   assert.equal(edge.sent.length, 1);
 });
 
-test("cancel is unknown: SQL cancel intent and fences decide, the event is never recalled", async () => {
-  const { dispatcher, sent } = fakeInngest();
-  assert.equal(await dispatcher.cancel("01EVENT"), "unknown");
-  assert.equal(sent.length, 0);
-});
 
 test("the composition module treats blank keys as absent and the test environment never reaches a real provider", () => {
   assert.equal(jobDispatcher({}), undefined);
