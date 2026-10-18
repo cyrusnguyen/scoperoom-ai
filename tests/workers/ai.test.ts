@@ -291,7 +291,7 @@ test("a crash after the call claim is never repeated while its window is open, a
   });
 });
 
-test("a crashed attempt whose actor then lost access fails as ACCESS_REVOKED at once, not at the deadline", { skip: !canRun }, async () => {
+test("a crashed attempt whose actor then lost access fails as ACCESS_REVOKED when its window closes, not at the deadline", { skip: !canRun }, async () => {
   await withWorld(async ({ admin, seed, row, attempts }) => {
     const crashed = await seed({ createdAt: ago(200), shape: "RUNNING" }); // attempt 1's window closed with no report
     await admin.query("update app.pilot_entitlement set active = false, revoked_at = clock_timestamp() where profile_id = $1", [crashed.owner]);
@@ -301,6 +301,34 @@ test("a crashed attempt whose actor then lost access fails as ACCESS_REVOKED at 
     // The finish used to be refused while the unreported attempt had no outcome, holding the project's AI slot until TIMED_OUT.
     assert.deepEqual([(await row(crashed.runId)).state, (await row(crashed.runId)).failure_code], ["FAILED", "ACCESS_REVOKED"]);
     assert.deepEqual((await attempts(crashed.runId)).map((attempt) => attempt.outcome), ["UNKNOWN"]);
+
+    // The usual retry comes back within seconds, while the window is still open: it waits for the window instead of returning.
+    const early = await seed({ createdAt: ago(10), shape: "RUNNING" });
+    await admin.query("update app.pilot_entitlement set active = false, revoked_at = clock_timestamp() where profile_id = $1", [early.owner]);
+    const wake = await runAi(early.runId, none.gateway);
+    assert.ok(wake instanceof Date && wake.getTime() > Date.now(), "the delivery sleeps until the open window closes");
+    assert.equal((await row(early.runId)).state, "RUNNING");
+    // Trusted fixture connection only: close the window by ageing this attempt past its immutable-identity trigger.
+    await admin.query("begin"); await admin.query("set local session_replication_role = replica");
+    await admin.query("update app.ai_run_attempt set started_at = now() - interval '200 seconds', deadline_at = now() - interval '80 seconds' where run_id = $1", [early.runId]);
+    await admin.query("commit");
+    assert.equal(await runAi(early.runId, none.gateway), undefined);
+    assert.deepEqual([(await row(early.runId)).state, (await row(early.runId)).failure_code], ["FAILED", "ACCESS_REVOKED"]);
+    assert.equal(none.requests.length, 0);
+  });
+});
+
+test("a second call that runs out its own window fails as MODEL_TIMEOUT, not MODEL_UNKNOWN", { skip: !canRun }, async (context) => {
+  await withWorld(async ({ seed, row, attempts }) => {
+    const { runId } = await seed({ createdAt: ago(5) });
+    // The worker's clock reads past both 120 s call windows, so each claim has no time left and neither call is made.
+    context.mock.timers.enable({ apis: ["Date"], now: Date.now() + 130_000 });
+    const none = fakeGateway(() => completed());
+    await runAi(runId, none.gateway);
+    context.mock.timers.reset();
+    assert.equal(none.requests.length, 0);
+    assert.deepEqual((await attempts(runId)).map((attempt) => attempt.outcome), ["TIMED_OUT", "TIMED_OUT"]);
+    assert.deepEqual([(await row(runId)).state, (await row(runId)).failure_code], ["FAILED", "MODEL_TIMEOUT"]);
   });
 });
 

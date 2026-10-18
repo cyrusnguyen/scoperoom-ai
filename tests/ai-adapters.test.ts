@@ -216,7 +216,6 @@ test("dispatch is unavailable for a failed send, no event id, an expired deadlin
   assert.equal(edge.sent.length, 1);
 });
 
-
 test("the composition module treats blank keys as absent and the test environment never reaches a real provider", () => {
   assert.equal(jobDispatcher({}), undefined);
   assert.equal(jobDispatcher({ INNGEST_EVENT_KEY: "  " }), undefined);
