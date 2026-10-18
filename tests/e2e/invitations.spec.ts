@@ -257,9 +257,9 @@ test.describe("project invitations", () => {
     });
     await reissue.click();
     await expect(panel.getByRole("alert")).toHaveText("We could not confirm that invitation was revoked. Retry uses the same request.");
-    await panel.getByRole("button", { name: "Retry revoke", exact: true }).click();
+    await panel.getByRole("button", { name: "Retry revoking this invitation", exact: true }).click();
     await expect(panel.getByText("Invitation revoked. You can create a replacement invitation.")).toBeVisible();
-    await expect(panel.getByRole("button", { name: /^(Revoke this invitation|Retry revoke)$/ })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: /^(Revoke this invitation|Retry revoking this invitation)$/ })).toHaveCount(0);
     expect(keys).toHaveLength(2);
     expect(keys[1]).toBe(keys[0]);
   });
