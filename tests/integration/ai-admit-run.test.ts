@@ -394,6 +394,18 @@ test("capacity refusals roll back every write: applicable results, retained vers
   });
 });
 
+test("a capture over the model's input budget is refused at admission without any write", { skip: !canRun }, async () => {
+  await withAdmission(async ({ person, projectFor, database }) => {
+    const owner = await person(); const projectId = await projectFor(owner);
+    const [version] = await seedVersions(database, projectId, owner.profile, [50_000]) as [string];
+    const before = await footprint(database, projectId, owner.profile);
+    // About 17,000 estimated tokens: the worker refused this as INPUT_TOO_LARGE only after admission had kept the prompt evidence.
+    await assert.rejects(admitRun(owner.identity, projectId, await start(database, projectId, { sources: [{ sourceVersionId: version, expectedCurrentVersionId: version }] }), CONFIG),
+      { code: "LIMIT_EXCEEDED", details: { limit: "INPUT_TOKENS" } });
+    assert.deepEqual(await footprint(database, projectId, owner.profile), before);
+  });
+});
+
 test("explicit source references: historical versions are captured as chosen, a moved head conflicts and another project's version is an invalid reference", { skip: !canRun }, async () => {
   await withAdmission(async ({ person, projectFor, database }) => {
     const owner = await person(); const projectId = await projectFor(owner); const foreign = await projectFor(owner);

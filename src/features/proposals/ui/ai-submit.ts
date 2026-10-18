@@ -1,4 +1,5 @@
-import type { ConversationTurn, RunView } from "../contracts/tasks.ts";
+import { AI_LIMITS, type ConversationTurn, type RunView } from "../contracts/tasks.ts";
+import { normalizeEvidence } from "../../sources/contracts/source-version.ts";
 import { buildConversation, runTurns } from "../domain/conversation.ts";
 
 export type PendingStartRequest = {
@@ -32,4 +33,15 @@ export function followUpThread(run: Pick<RunView, "id" | "state" | "result" | "c
   }
   const earlier = run.capture?.conversation;
   return earlier ? { runId: earlier.continuesRunId, turns: earlier.turns } : null;
+}
+
+/** The server counts the normalized instruction in code points; refusing here keeps the Studio save and the request from being sent. */
+export function instructionError(text: string): string | null {
+  return Array.from(normalizeEvidence(text)).length > AI_LIMITS.promptCodePoints ? `Instruction must be ${AI_LIMITS.promptCodePoints.toLocaleString("en-US")} characters or fewer.` : null;
+}
+
+/** A refused start: a request too large for the model says what to change; anything else keeps the server message. */
+export function startRefusalText(result: { code: string; message: string; details?: Record<string, unknown> }): string {
+  if (result.code === "LIMIT_EXCEEDED" && result.details?.limit === "INPUT_TOKENS") return "This request was refused because it is too large for the AI. Select fewer steps, shorten the instruction or start a new conversation.";
+  return result.message || "The AI request was refused. Your instruction is still here.";
 }

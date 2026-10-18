@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { acknowledgedInstruction, followUpThread, retryStartRequest } from "../src/features/proposals/ui/ai-submit.ts";
+import { acknowledgedInstruction, followUpThread, instructionError, retryStartRequest, startRefusalText } from "../src/features/proposals/ui/ai-submit.ts";
 import type { CapturedInput, RunView } from "../src/features/proposals/contracts/tasks.ts";
 
 const request = {
@@ -69,4 +69,16 @@ test("a continued run too long to send still shows its thread, so the server's r
   const thread = followUpThread(view({ capture: { prompt: "😀".repeat(8_000) } as CapturedInput }), "continue");
   assert.equal(thread?.runId, runId);
   assert.equal(thread?.turns.length, 2);
+});
+
+test("the instruction limit matches the server: normalized code points, not UTF-16 units", () => {
+  assert.equal(instructionError("😀".repeat(8_000)), null, "8,000 emoji are 16,000 UTF-16 units but 8,000 code points");
+  assert.equal(instructionError("a\r\n".repeat(4_000)), null, "CRLF counts as one line break, as the server normalizes it");
+  assert.match(instructionError("a".repeat(8_001)) ?? "", /8,000 characters or fewer/);
+});
+
+test("a request too large for the model says what to change, and other refusals keep the server message", () => {
+  assert.match(startRefusalText({ code: "LIMIT_EXCEEDED", message: "This draft has reached a size limit.", details: { limit: "INPUT_TOKENS" } }), /refused because it is too large for the AI/);
+  assert.equal(startRefusalText({ code: "LIMIT_EXCEEDED", message: "This draft has reached a size limit.", details: { limit: "APPLICABLE_PROPOSALS" } }), "This draft has reached a size limit.");
+  assert.equal(startRefusalText({ code: "FORBIDDEN", message: "" }), "The AI request was refused. Your instruction is still here.");
 });

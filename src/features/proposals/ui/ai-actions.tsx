@@ -9,7 +9,7 @@ import { Icon } from "@/features/shell/ui/icon";
 import { createRunResources, type ReadState } from "./run-resources";
 import { RunCard } from "./run-card";
 import { RunHistory } from "./run-history";
-import { acknowledgedInstruction, followUpThread, retryStartRequest } from "./ai-submit";
+import { acknowledgedInstruction, followUpThread, instructionError, retryStartRequest, startRefusalText } from "./ai-submit";
 import { ConversationThread } from "./conversation-thread";
 import { allowanceText } from "../domain/allowance";
 import type { AiAllowance, RunPage, RunView, StartRunInput, TaskKind } from "../contracts/tasks";
@@ -122,6 +122,8 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
     if (retry && !pending) { setMessage("The original request belongs to a different project or draft. Review it before starting again."); return; }
     if (pending?.kind !== "start" && !studio.editable) { setMessage("This project is read-only. You can inspect its AI history."); return; }
     if (pending?.kind !== "start" && !ui.instruction.trim()) { setMessage("Add an instruction before generating or improving."); return; }
+    const tooLong = pending?.kind !== "start" ? instructionError(ui.instruction) : null;
+    if (tooLong) { setMessage(tooLong); return; }
     if (intent.action === "REFINE_FLOW_SELECTION" && !pending && (!studioRef.current.ui.selection || studioRef.current.ui.selection.kind !== "NODES" || !studioRef.current.ui.selection.ids.length)) {
       setMessage("Select one or more steps in the flow before choosing Improve selection."); return;
     }
@@ -179,7 +181,10 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
     const authority = await beforeWrite();
     if (!stillCurrent()) return;
     if (authority.kind !== "current") { setMessage("Could not confirm current project access. Retry when ScopeRoom is available."); return; }
-    if (!retry && (authority.status.status !== "ACTIVE" || !["OWNER", "EDITOR"].includes(authority.status.role))) { setMessage("This project is read-only now. Your instruction is still here."); return; }
+    if (!retry && (authority.status.status !== "ACTIVE" || !["OWNER", "EDITOR"].includes(authority.status.role))) {
+      // Nothing was sent, so no request is pending: a kept one would block Generate and offer a Retry that skips this check.
+      update((current) => ({ ...current, pendingRequest: null })); setMessage("This project is read-only now. Your instruction is still here."); return;
+    }
     if (request.projectId !== studio.projectId || request.draftId !== request.body.draftId) return;
     if (!retry && (authority.status.currentDraftId !== request.draftId
       || authority.status.documentRevision !== request.body.expectedDocumentRevision
@@ -216,7 +221,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
       setMessage("We couldn’t confirm this request. Retry uses the same saved input and key.");
     } else {
       update((current) => ({ ...current, pendingRequest: null }));
-      setMessage(result.message || "The AI request was refused. Your instruction is still here.");
+      setMessage(startRefusalText(result));
       if (result.status === 401 || result.status === 403 || result.status === 404) await revalidate("focus");
     }
   };

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useSync } from "@/features/collaboration/ui/sync-context";
 import { incidentTraceLinks } from "@/features/drafts/domain/graph";
 import { removedRecordIds } from "@/features/scope/domain/scope";
@@ -31,8 +31,9 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
 }) {
   const studio = useStudio();
   const { status, failures } = useSync();
-  const operations = run.result?.kind === "proposal" ? run.result.operations : [];
-  const preview = projectProposalPreview(studio.savedDraft, status, run, inspection);
+  const operations = useMemo(() => run.result?.kind === "proposal" ? run.result.operations : [], [run.result]);
+  // Validating and applying the whole proposal is the costly part; typing elsewhere in the panel must not redo it.
+  const preview = useMemo(() => projectProposalPreview(studio.savedDraft, status, run, inspection), [studio.savedDraft, status, run, inspection]);
   const [localSelection, setSelected] = useState<string[]>([]);
   const byId = new Map(operations.map((operation) => [operation.id, operation]));
   const pendingSelection = pendingApply?.body.selectedOperationIds;
