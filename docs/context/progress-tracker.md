@@ -2,9 +2,9 @@
 
 Observed state and the next action. Dated entries up to 2026-10-16, with their evidence, are in [progress history](progress-history.md).
 
-## Current state (2026-10-16)
+## Current state (2026-10-19)
 
-- Production: release run 38855897297 deployed main `77002e3` (PR #46). Migration, worker and web deploys, schedule, edge checks and the hosted smoke passed. The manual releases of #44 and #45 also ran the Claude AI smoke and passed.
+- Production: release run 38995610226 deployed main `061ddec` (PR #49), after run 38917577133 deployed `6fba4fd` (PR #48); both succeeded.
 - Studio: canvas and List views, Add step, Connect, Arrange, inline label editing and a shape panel. The open flow's scope badge sits beside the flow switcher in the header (PR #46).
 - Panels: docked Projects sidebar (220 to 480 px) and right panel (320 to 720 px) resize by pointer or keyboard, keeping the editor at least 560 px wide (PR #31).
 - Collaboration: Owner, Editor, Reviewer and Viewer roles; presence, live cursors and drag previews over Realtime; removing access stops backend access and new joins at once.
@@ -18,9 +18,14 @@ Observed state and the next action. Dated entries up to 2026-10-16, with their e
 
 ## In progress
 
-- `fix/ai-improve-insert-steps`, Improve asked to confirm instead of proposing: asked to add a load balancer, shards and read replicas around two selected steps, the model said it could not rewire connections to the read-only steps next to the selection and asked for confirmation again, and each reply spent an AI request. The validator already allowed it (reconnect a connection so it ends at a new step, then connect the new step to the read-only step); only the Improve rules read stricter. The rules now spell that out, say not to ask to confirm an edit they allow, and say the current selection wins over earlier turns. `PROMPT_VERSION` is 2026-10-17.1; the evaluation corpus changed only its prompt versions and capture hashes. Evidence: unit 746/746 (new: the Improve rules, and validating and applying steps inserted on connections into and out of the selection; the apply test fails when reconnect stops resolving a new step), typecheck and lint pass. Not checked against the live model.
-- `fix/flaky-tests-and-ai-citations`, flaky tests: a code review of every suite (not repeat runs) found tests that typed before a frame-delayed focus move, acted before the page's Realtime join had read status, asserted cursors or autosave on a running clock, or seeded database deadlines only 0.5 to 3 s away. Each now waits for the state it depends on or has real slack on the database clock. It also found the worker account's daily AI budget filling up within one AI spec pass (now reset in cleanup) and AI admission running on Prisma's 5 s transaction default (now 15 s, like the other writes). Evidence: local run with every change, unit 744/744, integration 408/409 (the miss was the invitation contention test, whose rewrite then passed 3 of 3 on its own), workers 33/33, browser 503/503 once each with 0 flaky. The keyboard Studio flake from main CI run 38870458087 was reproduced locally by delaying the focus frame, and passes with the fix.
-- Same branch, `RESULT_SHAPE`: Claude refused results as `RESULT_SHAPE` because it often leaves out the empty `citations` list when a run has no sources, and the validator required the key. Replaying the failed production capture 10 times gave 5 such refusals and nothing else wrong. A missing list now means no citations; a `null` or malformed one is still refused. Evidence: the new unit test fails on the old validator and passes now; the 5 refused real replies validate and diff as 14-operation proposals.
+- `fix/audit-findings` from main `061ddec`, requested by the user: fixes from a whole-codebase audit for concurrency, performance, N+1 queries, missing awaits, logic errors and dirty code. A type-aware lint found no floating or misused promises. Each change had an independent review; the findings were fixed and re-reviewed. Changes:
+  - The citation excerpt re-rendered the whole shell for ever when the cited lines were blank; the shared `setDraft` now returns the same store for an unchanged value.
+  - Every write that takes the project or owner capacity lock now has the 15 s transaction budget saves already had (`WRITE_TIMEOUT_MS`); Prisma counted the lock wait against 5 s, so commands, positions, reviews, imports, member and invitation writes answered 503 under contention. The timer runs only between the function and the database, so a distant browser does not shorten it.
+  - Import quotas: applied previews keep their body 7 days but no longer count as open previews (10 per actor), so 10 imports a week no longer block every preview; the byte caps still count them. Cleanup deletes discarded and expired preview rows 30 days after expiry (`deletedPreviews`, migration `20261019000000`), so the row cap no longer fills for ever.
+  - AI: admission refuses a capture over the 16,000 input-token estimate before it keeps prompt evidence, a slot or budget; the panel limits the instruction to 8,000 normalized code points and says what to change. Deleting a run refunds every unclaimed reservation; a crashed attempt followed by revoked access ends ACCESS_REVOKED when its window closes instead of holding the slot until the deadline; a second call that times out is `MODEL_TIMEOUT` (migration `20261019000100`). The always-unknown dispatcher `cancel` is gone, and a read-only role no longer leaves a stuck pending request.
+  - Performance: canvas steps, edges and handlers keep their identity, so a drag frame or typing in another panel no longer re-renders every step; arrow keys on a selected step are stopped before React Flow shifts its own copy. Moves-only and sides-only saves no longer send and rewrite the whole document. `/api/me` reads the staff role once; applying a proposal inserts its sources in one statement.
+  - Writes give up after 120 s as uncertain (same-key retry), so a dead connection cannot hold a save. Two shell writes now end the session on 401, review history Load more no longer drops a refresh in flight, the lost-link invitation button says what it does, and an unused source-list helper is gone.
+  - Evidence (local, guarded stack `scoperoom-stage04-test`, recreated with its published ports pinned to 127.0.0.1 after `supabase start`): `lint` and `typecheck` pass; unit 751/751; integration 414/414; workers 35/35; Realtime 13/13; the full production browser suite 504/504 (0 flaky, 0 skipped, two workers) at `6b9c975`. Each new test fails without its fix. No change was checked against the hosted target or a live model.
 
 ## Accepted limitations
 
@@ -33,9 +38,10 @@ Observed state and the next action. Dated entries up to 2026-10-16, with their e
 - Sources: an editor can fill the shared source budget, which blocks new source versions and AI admission; removing that editor does not free it.
 - AI: Anthropic 402 and 413 count as `unknown` (one extra unbilled claim); a long follow-up thread plus a large graph can exceed the 16,000 input-token budget.
 - AI: Claude gets the result schema only as text, so other format slips are still possible; `SHAPE` does not name the field or rule, and a refused result closes the run without a second call.
-- Studio: the draft read has no client timeout, so a hung request leaves the flow dialog open. Below 640 px, keyboard focus reaches the flow switcher row before Save, Inspect and AI.
+- Studio: below 640 px, keyboard focus reaches the flow switcher row before Save, Inspect and AI.
 - Dependencies: `pnpm audit` lists 5 findings (4 high, 1 moderate), all in build or dev tooling.
 - Local stack on Windows: Docker Desktop publishes Supabase ports on all interfaces, so `scripts/db/guard.mjs` refuses it until the published containers are recreated with ports on 127.0.0.1.
+- Exchange: an applied import stays a permanent identity, so 1,000 applied imports per actor and 2,000 per project remain lifetime row caps.
 
 ## Open follow-ups
 
@@ -49,4 +55,4 @@ Observed state and the next action. Dated entries up to 2026-10-16, with their e
 
 ## Next
 
-1. Merge the missing-citations fix once its CI and review pass, release it, and check that new Claude runs without sources succeed.
+1. Open the `fix/audit-findings` PR once the user approves, then CI, review and release. Its two migrations run before the worker deploy; the old worker and web code work with both.
