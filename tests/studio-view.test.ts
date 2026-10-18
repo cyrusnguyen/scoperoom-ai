@@ -5,7 +5,7 @@ import type { DraftLayout } from "../src/features/drafts/contracts/draft-layout.
 import { graphWarnings } from "../src/features/drafts/domain/warnings.ts";
 import { fieldErrors, nodeFields, updateCommand } from "../src/features/studio/ui/fields.ts";
 import { connectionsInOrder, matchesStep, stepName, stepsInOrder } from "../src/features/studio/ui/graph-view.ts";
-import { isNewer, selectEdge, selectNodes, toggleNode } from "../src/features/studio/ui/studio-ui.ts";
+import { defaultStudioUi, isNewer, reuseUnchanged, reuser, selectEdge, selectNodes, studioSlice, toggleNode } from "../src/features/studio/ui/studio-ui.ts";
 
 const flowId = "f0000000-0000-4000-8000-000000000000";
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -112,4 +112,36 @@ test("inspector fields validate on Save by code points and build a guarded updat
   });
   assert.deepEqual(updateCommand("EDGE", id(9), 2, { condition: "Paid" }), { commandSchemaVersion: 1, command: "UPDATE_EDGE", expectedEntityVersion: 2, payload: { edgeId: id(9), condition: "Paid" } });
   assert.throws(() => updateCommand("EDGE", id(9), 2, {}), /Missing edge condition/);
+});
+
+test("canvas elements keep their identity until their own content changes", () => {
+  const step = (n: number, x: number, label = `Step ${n}`) => ({ id: id(n), type: "step", position: { x, y: 0 }, data: { label, kind: "ACTION", selectedBy: [{ name: "Ada" }] }, selected: false });
+  const before = [step(1, 0), step(2, 100), step(3, 200)];
+  const same = reuseUnchanged([step(1, 0), step(2, 100), step(3, 200)], before);
+  assert.equal(same, before);
+  const moved = reuseUnchanged([step(1, 0), step(2, 130), step(3, 200)], before);
+  assert.notEqual(moved, before);
+  assert.equal(moved[0], before[0]);
+  assert.notEqual(moved[1], before[1]);
+  assert.equal(moved[2], before[2]);
+  const renamed = reuseUnchanged([step(1, 0), step(2, 100, "Pay"), step(3, 200)], before);
+  assert.equal(renamed[0], before[0]);
+  assert.equal(renamed[1]!.data.label, "Pay");
+  const reordered = reuseUnchanged([step(3, 200), step(1, 0)], before);
+  assert.deepEqual(reordered.map((item) => item.id), [id(3), id(1)]);
+  assert.equal(reordered[0], before[2]);
+  assert.equal(reordered[1], before[0]);
+  const next = reuser<(typeof before)[number]>();
+  const first = next(before);
+  assert.equal(next([step(1, 0), step(2, 100), step(3, 200)]), first);
+  assert.equal(next([step(1, 5), step(2, 100), step(3, 200)])[1], first[1]);
+});
+
+test("the Studio keeps its UI object while only other panels' fields change", () => {
+  const first = studioSlice({ ...defaultStudioUi, ai: { instruction: "" } } as typeof defaultStudioUi, null);
+  assert.equal("ai" in first, false);
+  assert.equal(studioSlice({ ...defaultStudioUi, ai: { instruction: "typed" } } as typeof defaultStudioUi, first), first);
+  const selected = studioSlice({ ...defaultStudioUi, selection: { kind: "FLOW", id: flowId } }, first);
+  assert.notEqual(selected, first);
+  assert.deepEqual(selected.selection, { kind: "FLOW", id: flowId });
 });

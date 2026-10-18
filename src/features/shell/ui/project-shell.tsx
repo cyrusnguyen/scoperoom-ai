@@ -347,6 +347,11 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (projectId) void loadProject(projectId);
     void loadLists();
   }
+  // Stable for the Studio provider: its callbacks must not change whenever the shell re-renders.
+  const actions = useRef({ projectChanged, openRightTab });
+  useLayoutEffect(() => { actions.current = { projectChanged, openRightTab }; });
+  const onAccessChanged = useCallback(() => actions.current.projectChanged(), []);
+  const onInspect = useCallback(() => actions.current.openRightTab("details"), []);
 
   if (ended) return <div className="app-shell"><main id="editor-main" className="editor-slot"><div className="empty-state" role="alert"><p>{ended === "account" ? "Your account changed. Reloading…" : "Your session ended. Taking you to sign in…"}</p></div></main></div>;
 
@@ -403,7 +408,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
         {projectId && bootstrap
           ? <SyncProvider key={projectId} projectId={projectId} initial={bootstrap.status} live={() => liveOf(projectId)} bootstrap={(fence) => loadProject(projectId, undefined, fence).finally(() => void loadLists())}>
             <StudioProvider key={projectId} projectId={projectId} draft={bootstrap.draft} role={bootstrap.project.role} archived={bootstrap.project.status === "ARCHIVED"}
-              narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={projectChanged} onInspect={() => openRightTab("details")} saveRef={saveChangesRef}>
+              narrow={dock.editor < 640} ui={ui} update={updateStudio} adopt={adoptDraft} onAccessChanged={onAccessChanged} onInspect={onInspect} saveRef={saveChangesRef}>
               {main}{rightResizer}{panel}
             </StudioProvider>
           </SyncProvider>

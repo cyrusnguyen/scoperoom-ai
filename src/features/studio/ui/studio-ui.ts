@@ -33,6 +33,33 @@ export const defaultStudioUi: StudioUi = {
 };
 export type SelectChange = { id: string; selected: boolean };
 
+/** Structural equality for plain JSON-like values (what a canvas node or edge is built from). */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || !a || !b || Array.isArray(a) !== Array.isArray(b)) return false;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && sameValue((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]));
+}
+
+/** The previous element for every id whose content is unchanged, so React Flow re-renders only what changed (the previous array itself when nothing did). */
+export function reuseUnchanged<T extends { id: string }>(next: T[], previous: T[]): T[] {
+  const before = new Map(previous.map((item) => [item.id, item]));
+  const reused = next.map((item) => { const old = before.get(item.id); return old && sameValue(old, item) ? old : item; });
+  return reused.length === previous.length && reused.every((item, index) => item === previous[index]) ? previous : reused;
+}
+
+/** Remembers what it returned last, so each call hands back that call's unchanged elements (one instance per canvas). */
+export function reuser<T extends { id: string }>(): (next: T[]) => T[] {
+  let previous: T[] = [];
+  return (next) => (previous = reuseUnchanged(next, previous));
+}
+
+const STUDIO_KEYS = Object.keys(defaultStudioUi) as (keyof StudioUi)[];
+/** The Studio's own fields of the shell's wider per-project UI; the previous object while none of them changed, so other panels' edits never re-publish the Studio context. */
+export function studioSlice(ui: StudioUi, previous: StudioUi | null): StudioUi {
+  return previous && STUDIO_KEYS.every((key) => Object.is(ui[key], previous[key])) ? previous : Object.fromEntries(STUDIO_KEYS.map((key) => [key, ui[key]])) as StudioUi;
+}
+
 /** Folds React Flow node select/unselect changes into the selection. Edge or flow selections survive unselect-only batches. */
 export function selectNodes(selection: Selection, changes: SelectChange[]): Selection {
   if (selection?.kind !== "NODES" && !changes.some((change) => change.selected)) return selection;
