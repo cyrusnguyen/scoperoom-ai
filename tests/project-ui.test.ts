@@ -298,6 +298,14 @@ test("drafts belong to one project, and undefined clears a draft", () => {
   assert.equal(anyDirty(store), true);
 });
 
+test("an unchanged draft keeps the same store, so an effect that writes it cannot re-render forever", () => {
+  const store = setDraft({}, "a", "excerpt", "");
+  assert.equal(setDraft(store, "a", "excerpt", ""), store);
+  assert.equal(setDraft(store, "a", "missing", undefined), store);
+  assert.notEqual(setDraft(store, "a", "excerpt", undefined), store, "clearing a present draft is a change");
+  assert.notEqual(setDraft(store, "a", "excerpt", "text"), store);
+});
+
 test("Studio buffers count their dirty fields", () => {
   let store = updateUi({}, "a", (ui) => ({ buffers: edit(edit(ui.buffers, node, "label", "Pay now"), node, "description", "Card") }));
   assert.equal(dirtyCount(store, "a"), 2);

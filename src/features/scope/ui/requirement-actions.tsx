@@ -161,17 +161,16 @@ export default function RequirementActions({
   }, [citationAttempt, citationVersionKey, projectId]);
   useEffect(() => {
     if (!source || !validLines || excerpt) return;
-    setDraft(
-      `${cite}excerpt`,
-      Array.from(
-        source.text
-          .split("\n")
-          .slice(first - 1, last)
-          .join("\n"),
-      )
-        .slice(0, SOURCE_REF_LIMITS.excerpt)
-        .join(""),
-    );
+    const fill = Array.from(
+      source.text
+        .split("\n")
+        .slice(first - 1, last)
+        .join("\n"),
+    )
+      .slice(0, SOURCE_REF_LIMITS.excerpt)
+      .join("");
+    // Blank lines leave nothing to quote; an empty draft would only mark the form unsaved.
+    if (fill) setDraft(`${cite}excerpt`, fill);
   }, [cite, excerpt, first, last, setDraft, source, validLines]);
   const selectedSource = source?.id === sourceVersionId ? source : null;
   const sourceFor = (ref: SourceRef) =>

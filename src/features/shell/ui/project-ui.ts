@@ -64,9 +64,13 @@ export function setRightTab(store: UiStore, projectId: string, rightTab: RightTa
   return { ...store, [projectId]: { ...current, rightOpen: true, rightMounted: true, rightTab } };
 }
 
-/** Records an unsaved value; `undefined` means the field matches its saved value again. */
+/**
+ * Records an unsaved value; `undefined` means the field matches its saved value again. An unchanged value returns the same
+ * store, so React skips the render: effects that write a draft would otherwise re-run on the new props and loop.
+ */
 export function setDraft(store: UiStore, projectId: string, key: string, value: string | undefined): UiStore {
   const current = uiFor(store, projectId);
+  if (value === undefined ? !Object.hasOwn(current.drafts, key) : current.drafts[key] === value) return store;
   const drafts = { ...current.drafts };
   if (value === undefined) delete drafts[key];
   else drafts[key] = value;
