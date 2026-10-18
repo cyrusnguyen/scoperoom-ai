@@ -25,8 +25,11 @@ export async function saveChanges(identity: ProjectIdentity, projectId: string, 
       return { draftId: draft.id, documentRevision, layoutRevision: draft.layoutRevision, eventSequence: Number(project.eventSequence) };
     }
     const layoutRevision = applied.layoutChanged ? nextRevision(draft.layoutRevision) : draft.layoutRevision;
-    await requireStoredSize(tx, applied.document, applied.layout);
-    await tx.scopeDraft.update({ where: { id: draft.id }, data: { documentJson: asJson(applied.document), layoutJson: asJson(applied.layout), documentRevision, layoutRevision }, select: { id: true } });
+    // documentRevision advances once per effective semantic command, so an unchanged one means moves or sides only: the document
+    // is neither measured nor rewritten (up to 2 MB on every drag autosave).
+    const documentChanged = documentRevision !== draft.documentRevision;
+    await requireStoredSize(tx, documentChanged ? applied.document : null, applied.layout);
+    await tx.scopeDraft.update({ where: { id: draft.id }, data: { ...(documentChanged ? { documentJson: asJson(applied.document) } : {}), layoutJson: asJson(applied.layout), documentRevision, layoutRevision }, select: { id: true } });
     // The same audit as the single-command and position routes, written in one statement: one event per effective command
     // and one per moved flow. Every event carries the batch's single saved layoutRevision.
     const eventSequence = await recordEvents(tx, project, actorId, [

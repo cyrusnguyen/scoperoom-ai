@@ -39,12 +39,12 @@ export function nextRevision(value: number): number {
 
 export const asJson = (value: unknown) => value as Prisma.InputJsonValue;
 
-/** PostgreSQL checks JSONB's formatted text, which is larger than compact JSON.stringify output. */
+/** PostgreSQL checks JSONB's formatted text, which is larger than compact JSON.stringify output. `null` is an unchanged document, not sent. */
 export async function requireStoredSize(tx: Transaction, document: unknown, layout: unknown) {
-  const [size] = await tx.$queryRaw<Array<{ documentBytes: number; layoutBytes: number }>>`
-    SELECT octet_length(${JSON.stringify(document)}::jsonb::text)::integer AS "documentBytes",
+  const [size] = await tx.$queryRaw<Array<{ documentBytes: number | null; layoutBytes: number }>>`
+    SELECT octet_length(${document === null ? null : JSON.stringify(document)}::jsonb::text)::integer AS "documentBytes",
            octet_length(${JSON.stringify(layout)}::jsonb::text)::integer AS "layoutBytes"`;
-  if (!size || size.documentBytes > LIMITS.documentBytes || size.layoutBytes > LIMITS.layoutBytes) {
+  if (!size || (size.documentBytes ?? 0) > LIMITS.documentBytes || size.layoutBytes > LIMITS.layoutBytes) {
     throw new ProjectError("LIMIT_EXCEEDED");
   }
 }
@@ -147,8 +147,9 @@ export async function executeGraphCommand(identity: ProjectIdentity, projectId: 
     }
     const documentRevision = applied.documentChanged ? nextRevision(draft.documentRevision) : draft.documentRevision;
     const layoutRevision = applied.layoutChanged ? nextRevision(draft.layoutRevision) : draft.layoutRevision;
-    await requireStoredSize(tx, applied.document, applied.layout);
-    await tx.scopeDraft.update({ where: { id: draft.id }, data: { documentJson: asJson(applied.document), layoutJson: asJson(applied.layout), documentRevision, layoutRevision }, select: { id: true } });
+    // A layout-only effect leaves the document as it was: neither measure nor rewrite up to 2 MB of it.
+    await requireStoredSize(tx, applied.documentChanged ? applied.document : null, applied.layout);
+    await tx.scopeDraft.update({ where: { id: draft.id }, data: { ...(applied.documentChanged ? { documentJson: asJson(applied.document) } : {}), layoutJson: asJson(applied.layout), documentRevision, layoutRevision }, select: { id: true } });
     const extraRef = command.command === "RECONNECT_EDGE" ? [command.payload.edgeId] : [];
     const sequence = await recordEvent(tx, project, actorId, "DRAFT_COMMAND_SAVED", auditRefs(applied, extraRef), { command: command.command, documentRevision, layoutRevision });
     return { draftId: draft.id, documentRevision, layoutRevision, eventSequence: Number(sequence), createdIds: applied.createdIds, versions: applied.versions, retiredIds: applied.retiredIds };

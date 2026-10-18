@@ -247,3 +247,23 @@ test("a command that waits more than 5 s behind another write's project lock sti
     }
   });
 });
+
+test("a moves-only save leaves the stored document untouched, and a command save rewrites it", { skip: !canRun }, async () => {
+  await withFixture(async ({ database, user, project }) => {
+    const owner = await user();
+    const { projectId, draftId, base } = await started(project, owner);
+    const large = largeDraft();
+    await database.query("update app.scope_draft set document_json = $1::jsonb, layout_json = $2::jsonb where id = $3", [JSON.stringify(large.document), JSON.stringify(large.layout), draftId]);
+    // A rewritten 2 MB document is stored as a new out-of-line (TOAST) value; an untouched one keeps its chunk id.
+    const chunk = async () => (await database.query<{ id: string | null }>("select pg_column_toast_chunk_id(document_json)::text id from app.scope_draft where id = $1", [draftId])).rows[0]!.id;
+    const before = await chunk();
+    assert.ok(before);
+    const flowId = Object.keys(large.document.flows)[0]!;
+    const nodeId = Object.values(large.document.nodes).find((node) => node.flowId === flowId)!.id;
+    const moved = await saveChanges(owner, projectId, draftId, { commands: [], moves: [{ flowId, items: [{ nodeId, expectedPositionVersion: 1, x: 5, y: 5 }] }], key: randomUUID() });
+    assert.equal(moved.documentRevision, base.documentRevision);
+    assert.equal(await chunk(), before);
+    await saveChanges(owner, projectId, draftId, { commands: [updateNode(1, nodeId, "Renamed")], moves: [], key: randomUUID() });
+    assert.notEqual(await chunk(), before);
+  });
+});
