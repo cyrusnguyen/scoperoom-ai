@@ -32,8 +32,8 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
   const [snapshotError, setSnapshotError] = useState("");
   const [currentBaseline, setCurrentBaseline] = useState<PublishedSnapshot | null>(null), [baselineError, setBaselineError] = useState("");
   const baselineTicket = useRef(0), baselineSignature = useRef("");
-  // A cursor read has its own ticket: "More" must not discard a first-page refresh that is still in flight. A refresh that lands
-  // first makes the cursor read obsolete instead (its base page is gone), so neither its rows nor its failure reach the view.
+  // A cursor read has its own ticket: "More" must not discard a first-page refresh that is still in flight. A first-page read
+  // discards a cursor read, and so does a refresh that landed before it (its base page is gone): neither its rows nor its failure reach the view.
   const snapshotListTicket = useRef(0), snapshotMoreTicket = useRef(0), snapshotDetailTicket = useRef(0);
   const [preview, setPreview] = useState<ReviewPreview | null>(null), [previewBusy, setPreviewBusy] = useState(false);
   const [listError, setListError] = useState(""), [detailError, setDetailError] = useState("");
@@ -48,6 +48,7 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
   const refreshSnapshots = useCallback(async (cursor?: string, live = fence()) => {
     const tickets = cursor ? snapshotMoreTicket : snapshotListTicket;
     const ticket = ++tickets.current, base = current.current.snapshotPage;
+    if (!cursor) snapshotMoreTicket.current++;
     const result = await apiRead<SnapshotPage>(`/api/projects/${projectId}/snapshots${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`);
     if (!mounted.current || !live() || ticket !== tickets.current || sessionEnded(result)) return false;
     if (cursor && (!base || current.current.snapshotPage !== base)) return false;
@@ -85,6 +86,7 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
   const refresh = useCallback(async (cursor?: string, status?: ProjectStatusView, originFence?: () => boolean, receipt?: ReviewReceipt): Promise<boolean> => {
     const tickets = cursor ? moreTicket : listTicket;
     const ticket = ++tickets.current, live = originFence ?? fence();
+    if (!cursor) moreTicket.current++;
     const expected = Math.max(status?.reviewsRevision ?? current.current.status.reviewsRevision, (receipt ?? current.current.ui.pending?.receipt)?.eventSequence ?? 0);
     const base = current.current.page;
     const result = await apiRead<ReviewPage>(`/api/projects/${projectId}/reviews${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`);
