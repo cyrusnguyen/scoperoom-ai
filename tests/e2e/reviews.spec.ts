@@ -606,6 +606,30 @@ test("acknowledged decision refresh failure retries its receipt and late acknowl
   await expect(page.getByLabel("Reason", { exact: true })).toHaveValue("Newer local reason");
 });
 
+test("a More candidates failure that lands after a first-page refresh does not replace the refreshed history", async ({ page }) => {
+  const projectId = await createProjectViaApi(page, "Stale more");
+  const { draftId } = await readyCandidate(page, projectId); const frozen = await freezeViaApi(page, projectId, draftId);
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; }), held = new Promise<void>(resolve => { release = resolve; });
+  // Only this test has an older page: the first page offers a cursor, and that read is held until a decision refreshes the first page, then fails.
+  await page.route(url => url.pathname === `/api/projects/${projectId}/reviews`, async route => {
+    if (new URL(route.request().url()).searchParams.has("cursor")) { entered(); await held; await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "Older candidates unavailable" } } }); return; }
+    const response = await route.fetch(); await route.fulfill({ response, json: { ...await response.json(), nextCursor: "older" } });
+  });
+  await openReview(page, projectId); await page.getByRole("tab", { name: "History", exact: true }).click();
+  await page.getByRole("button", { name: "More candidates", exact: true }).click(); await started;
+  const responded = page.waitForResponse(response => response.url().includes("cursor=older"));
+  try {
+    await page.locator(`#review-row-${frozen.reviewId}`).click();
+    await page.getByLabel("Reason", { exact: true }).fill("Not this one");
+    await page.getByRole("button", { name: "Reject candidate", exact: true }).click();
+    await expect(page.getByText("Reject candidate: saved.", { exact: true })).toBeVisible();
+  } finally { release(); }
+  await responded; await page.waitForTimeout(500);
+  await expect(page.getByText("Older candidates unavailable")).toHaveCount(0);
+  await expect(page.getByText("Reject candidate: saved.", { exact: true })).toBeVisible();
+});
+
 collaborationTest("nonapprover controls are absent and a designated reviewer can decide an exact candidate", async ({ collaboration }) => {
   const { ownerPage, editorPage, projectId, setEditorRole } = collaboration;
   const { draftId } = await readyCandidate(ownerPage, projectId);
