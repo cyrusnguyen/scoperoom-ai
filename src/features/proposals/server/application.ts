@@ -48,7 +48,7 @@ export async function applicationMutation<T extends object>(identity: ProjectIde
       if (!size || size.bytes > 65_536) throw new ProjectError("LIMIT_EXCEEDED");
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, operation, hash, result as Prisma.InputJsonValue);
       return { ...result, replayed: false };
-    }, { timeout: 15_000 });
+    });
   });
 }
 export async function lockRun(tx: Transaction, projectId: string, runId: string): Promise<ApplicationRun> {

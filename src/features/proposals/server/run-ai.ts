@@ -72,9 +72,10 @@ export async function runAi(runId: string, gateway: ModelGateway, db?: Sql): Pro
       SELECT out_status, out_attempt_id, out_attempt_token, out_attempt_deadline_at FROM app.claim_ai_attempt(${runId}::uuid)`;
     if (claim?.out_status === "CANCELLED") { await finishRun(sql, runId, "CANCELLED", null); return; }
     if (claim?.out_status === "DEADLINE") { await finishRun(sql, runId, "TIMED_OUT", null); return; }
-    if (claim?.out_status === "DENIED") { await finishRun(sql, runId, "FAILED", "ACCESS_REVOKED"); return; }
+    // A revoked actor's run cannot fail while a crashed predecessor's call window is still open: wait for it like BUSY below.
+    if (claim?.out_status === "DENIED" && await finishRun(sql, runId, "FAILED", "ACCESS_REVOKED") !== "REFUSED") return;
     if (claim?.out_status === "CEILING") { await finishRun(sql, runId, "FAILED", "ATTEMPTS_EXHAUSTED"); return; }
-    if (claim?.out_status === "BUSY") {
+    if (claim?.out_status === "BUSY" || claim?.out_status === "DENIED") {
       // A retry can arrive before its crashed predecessor's call window closes. Keep the delivery alive: the Inngest run-ai function waits
       // durably until this SQL-owned window ends, then re-enters for a fresh claim. Returning success here would abandon the run.
       const [window] = await sql.$queryRaw<Array<{ retry_at: Date }>>`
@@ -120,7 +121,8 @@ export async function runAi(runId: string, gateway: ModelGateway, db?: Sql): Pro
 
     const status = await settle(sql, attempt, timedOut ? "TIMED_OUT" : OUTCOME[reply.kind], null, reply);
     if (status === "STALE") return;
-    if (reply.kind === "refused" || reply.kind === "incomplete" || call === 2) { await closeOut(sql, runId, GIVE_UP[reply.kind]); return; }
+    // A second call that ran out its own window is a timeout, not an unknown reply.
+    if (reply.kind === "refused" || reply.kind === "incomplete" || call === 2) { await closeOut(sql, runId, timedOut ? "MODEL_TIMEOUT" : GIVE_UP[reply.kind]); return; }
     await sleep(Math.min(reply.retryAfterMs ?? 0, 10_000)); // the next call, if any, needs its own SQL claim and still honours the deadline
   }
 }

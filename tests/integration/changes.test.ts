@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import type { Client } from "pg";
+import { Client } from "pg";
 import { executeGraphCommand, getDraft } from "../../src/features/drafts/server/execute-command.ts";
 import { saveChanges } from "../../src/features/drafts/server/changes.ts";
 import { ProjectError } from "../../src/features/projects/server/errors.ts";
@@ -221,5 +221,49 @@ test("a batch whose created ids alone would fill the 64 KiB receipt saves, and i
     assert.equal(saved.documentRevision, base.documentRevision + 30);
     assert.deepEqual(Object.keys((await getDraft(owner, projectId, draftId)).document.flows), [flowId]);
     assert.deepEqual(await saveChanges(owner, projectId, draftId, { ...body, key }), { ...saved, replayed: true });
+  });
+});
+
+test("a command that waits more than 5 s behind another write's project lock still saves", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project }) => {
+    const owner = await user();
+    const { projectId, draftId, base } = await started(project, owner);
+    const holder = new Client({ connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL! });
+    await holder.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT id FROM app.project WHERE id = $1 FOR UPDATE", [projectId]);
+      const saving = executeGraphCommand(owner, projectId, draftId, {
+        commandSchemaVersion: 1, command: "CREATE_FLOW", expectedDocumentRevision: base.documentRevision, payload: { title: "Waits", purpose: "", classification: "USER_JOURNEY", inclusion: "UNDECIDED" }, key: randomUUID(),
+      });
+      saving.catch(() => undefined); // awaited below; a rejection during the wait is not unhandled
+      // Prisma's 5 s default counted this lock wait and expired the transaction, so the command failed as UNAVAILABLE.
+      await new Promise((resolve) => setTimeout(resolve, 6_000));
+      await holder.query("COMMIT");
+      assert.equal((await saving).documentRevision, base.documentRevision + 1);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await holder.end();
+    }
+  });
+});
+
+test("a moves-only save leaves the stored document untouched, and a command save rewrites it", { skip: !canRun }, async () => {
+  await withFixture(async ({ database, user, project }) => {
+    const owner = await user();
+    const { projectId, draftId, base } = await started(project, owner);
+    const large = largeDraft();
+    await database.query("update app.scope_draft set document_json = $1::jsonb, layout_json = $2::jsonb where id = $3", [JSON.stringify(large.document), JSON.stringify(large.layout), draftId]);
+    // A rewritten 2 MB document is stored as a new out-of-line (TOAST) value; an untouched one keeps its chunk id.
+    const chunk = async () => (await database.query<{ id: string | null }>("select pg_column_toast_chunk_id(document_json)::text id from app.scope_draft where id = $1", [draftId])).rows[0]!.id;
+    const before = await chunk();
+    assert.ok(before);
+    const flowId = Object.keys(large.document.flows)[0]!;
+    const nodeId = Object.values(large.document.nodes).find((node) => node.flowId === flowId)!.id;
+    const moved = await saveChanges(owner, projectId, draftId, { commands: [], moves: [{ flowId, items: [{ nodeId, expectedPositionVersion: 1, x: 5, y: 5 }] }], key: randomUUID() });
+    assert.equal(moved.documentRevision, base.documentRevision);
+    assert.equal(await chunk(), before);
+    await saveChanges(owner, projectId, draftId, { commands: [updateNode(1, nodeId, "Renamed")], moves: [], key: randomUUID() });
+    assert.notEqual(await chunk(), before);
   });
 });

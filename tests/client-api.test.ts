@@ -123,3 +123,13 @@ test("reads work in browsers without AbortSignal.any (Safari before 17.4)", asyn
     if (any) Object.defineProperty(AbortSignal, "any", any);
   }
 });
+
+test("a write that never answers gives up as uncertain, so its same-key retry stays safe", async () => {
+  // A dead connection: the request resolves only when its signal aborts.
+  const restore = stubFetch((_url, init) => new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason))));
+  try {
+    const result = await apiMutate("/api/projects/p/drafts/d/changes", "key-0123456789abcdef", {}, "POST", 20);
+    assert.equal(result.ok, false);
+    if (!result.ok) { assert.equal(result.code, "NETWORK"); assert.equal(result.uncertain, true); }
+  } finally { restore(); }
+});

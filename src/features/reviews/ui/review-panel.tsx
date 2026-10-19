@@ -32,24 +32,29 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
   const [snapshotError, setSnapshotError] = useState("");
   const [currentBaseline, setCurrentBaseline] = useState<PublishedSnapshot | null>(null), [baselineError, setBaselineError] = useState("");
   const baselineTicket = useRef(0), baselineSignature = useRef("");
-  const snapshotListTicket = useRef(0), snapshotDetailTicket = useRef(0);
+  // A cursor read has its own ticket: "More" must not discard a first-page refresh that is still in flight. A first-page read
+  // discards a cursor read, and so does a refresh that landed before it (its base page is gone): neither its rows nor its failure reach the view.
+  const snapshotListTicket = useRef(0), snapshotMoreTicket = useRef(0), snapshotDetailTicket = useRef(0);
   const [preview, setPreview] = useState<ReviewPreview | null>(null), [previewBusy, setPreviewBusy] = useState(false);
   const [listError, setListError] = useState(""), [detailError, setDetailError] = useState("");
   const readError = listError || detailError || snapshotError;
   const [previewError, setPreviewError] = useState("");
-  const mounted = useRef(true), listTicket = useRef(0), detailTicket = useRef(0);
+  const mounted = useRef(true), listTicket = useRef(0), moreTicket = useRef(0), detailTicket = useRef(0);
   const detailSignature = useRef("");
   const snapshotSignature = useRef("");
   const current = useRef({ ui, dirty, status: sync.status, page, snapshotPage, onAccessLost, update });
   useLayoutEffect(() => { current.current = { ui, dirty, status: sync.status, page, snapshotPage, onAccessLost, update }; });
   useEffect(() => { mounted.current = true; return () => { mounted.current = false;  }; }, []);
   const refreshSnapshots = useCallback(async (cursor?: string, live = fence()) => {
-    const ticket = ++snapshotListTicket.current, base = current.current.snapshotPage;
+    const tickets = cursor ? snapshotMoreTicket : snapshotListTicket;
+    const ticket = ++tickets.current, base = current.current.snapshotPage;
+    if (!cursor) snapshotMoreTicket.current++;
     const result = await apiRead<SnapshotPage>(`/api/projects/${projectId}/snapshots${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`);
-    if (!mounted.current || !live() || ticket !== snapshotListTicket.current || sessionEnded(result)) return false;
+    if (!mounted.current || !live() || ticket !== tickets.current || sessionEnded(result)) return false;
+    if (cursor && (!base || current.current.snapshotPage !== base)) return false;
     if (!result.ok) { setSnapshotError(result.message); if (result.status === 403 || result.status === 404) { setSnapshotPage(null); setPublishedSnapshot(null); current.current.onAccessLost(); } return false; }
     if (result.data.baselineSequence < current.current.status.baselineSequence) { setSnapshotError("Saved baselines are still refreshing. Retry."); return false; }
-    if (cursor && (!base || current.current.snapshotPage !== base || result.data.baselineSequence !== base.baselineSequence)) return false;
+    if (cursor && result.data.baselineSequence !== base?.baselineSequence) return false;
     const next = cursor && base ? joinSnapshotPage(base, result.data, cursor) : result.data;
     current.current = { ...current.current, snapshotPage: next };
     setSnapshotPage(next); setSnapshotError(""); return true;
@@ -79,15 +84,18 @@ export default function ReviewPanel({ ui, update, dirty, onTarget, onSharing, on
     baselineSignature.current = signature; setCurrentBaseline(result.data); setBaselineError("");
   }, [projectId, fence]);
   const refresh = useCallback(async (cursor?: string, status?: ProjectStatusView, originFence?: () => boolean, receipt?: ReviewReceipt): Promise<boolean> => {
-    const ticket = ++listTicket.current, live = originFence ?? fence();
+    const tickets = cursor ? moreTicket : listTicket;
+    const ticket = ++tickets.current, live = originFence ?? fence();
+    if (!cursor) moreTicket.current++;
     const expected = Math.max(status?.reviewsRevision ?? current.current.status.reviewsRevision, (receipt ?? current.current.ui.pending?.receipt)?.eventSequence ?? 0);
     const base = current.current.page;
     const result = await apiRead<ReviewPage>(`/api/projects/${projectId}/reviews${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`);
-    if (!mounted.current || ticket !== listTicket.current || !live()) return false;
+    if (!mounted.current || ticket !== tickets.current || !live()) return false;
     if (sessionEnded(result)) return false;
+    if (cursor && (!base || current.current.page !== base)) return false;
     if (!result.ok) { setListError(result.message); if (result.status === 403 || result.status === 404) { setPage(null); setDetail(null); setPreview(null); current.current.onAccessLost(); } return false; }
     if (result.data.reviewsRevision < expected) { setListError("Saved reviews are still refreshing. Retry."); return false; }
-    if (cursor && (!base || current.current.page !== base || result.data.reviewsRevision !== base.reviewsRevision)) return false;
+    if (cursor && result.data.reviewsRevision !== base?.reviewsRevision) return false;
     const next = cursor && base ? joinReviewPage(base, result.data, cursor) : result.data;
     current.current = { ...current.current, page: next };
     setPage(next); setListError("");

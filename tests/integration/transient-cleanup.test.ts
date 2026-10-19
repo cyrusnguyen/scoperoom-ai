@@ -160,6 +160,29 @@ test("DB-clock retention boundaries preserve applied identity and serialize with
   });
 });
 
+test("cleanup deletes discarded and expired previews 30 days after expiry and keeps applied identities", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, profileId, database }) => {
+    const owner = await user(); const projectId = await project(owner); const actorId = await profileId(owner);
+    const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const ids = Object.fromEntries(["discardedOld", "expiredOld", "appliedOld", "discardedRecent"].map((name) => [name, randomUUID()]));
+    const flowId = randomUUID(); const mapping = { flowId, nodes: {}, edges: {} };
+    for (const [name, id] of Object.entries(ids)) {
+      const state = name.startsWith("applied") ? "APPLIED" : name.startsWith("discarded") ? "DISCARDED" : "EXPIRED";
+      const result = state === "APPLIED" ? { previewId: id, draftId, flowId, documentRevision: 2, layoutRevision: 3, eventSequence: 4 } : null;
+      await database.query(`insert into app.flow_import_preview (id,project_id,draft_id,actor_id,expected_document_revision,state,preview_hash,payload_hash,created_at,expires_at,applied_at,result_flow_id,applied_mapping,applied_result)
+        values ($1,$2,$3,$4,1,$5::text::app.flow_import_state,repeat('a',64),repeat('a',64),now()-make_interval(days => $6::int+1),now()-make_interval(days => $6::int),
+        case when $5='APPLIED' then now()-make_interval(days => $6::int+1) end,$7,$8,$9)`,
+        [id, projectId, draftId, actorId, state, name.endsWith("Old") ? 31 : 29, result ? flowId : null, result ? mapping : null, result]);
+    }
+    const present = async () => (await database.query<{ id: string }>("select id::text from app.flow_import_preview where id = any($1::uuid[])", [Object.values(ids)])).rows.map((row) => row.id).sort();
+    assert.ok((await cleanupTransient({ dryRun: true, batchSize: 100 })).deletedPreviews >= 2);
+    assert.equal((await present()).length, 4, "dry-run deletes nothing");
+    for (let sweep = 0; sweep < 20 && (await present()).some((id) => id === ids.discardedOld || id === ids.expiredOld); sweep += 1) await cleanupTransient({ dryRun: false, batchSize: 100 });
+    // Older rows no longer fill the creator's 1,000-row quota for ever; an applied import stays a permanent identity.
+    assert.deepEqual(await present(), [ids.appliedOld!, ids.discardedRecent!].sort());
+  });
+});
+
 test("cleanup refuses a mismatched environment before any mutation", { skip: !canRun }, async () => {
   const expected = process.env.SCOPEROOM_ENVIRONMENT_ID;
   try {

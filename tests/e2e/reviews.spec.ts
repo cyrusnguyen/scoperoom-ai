@@ -606,6 +606,41 @@ test("acknowledged decision refresh failure retries its receipt and late acknowl
   await expect(page.getByLabel("Reason", { exact: true })).toHaveValue("Newer local reason");
 });
 
+for (const firstPage of ["saved", "still refreshing"] as const) test(`a More candidates read in flight when the first page refreshes (${firstPage}) cannot change the refreshed history`, async ({ page }) => {
+  const projectId = await createProjectViaApi(page, `Stale more ${firstPage}`);
+  const { draftId } = await readyCandidate(page, projectId); const frozen = await freezeViaApi(page, projectId, draftId);
+  let entered!: () => void, release!: () => void, decided = false, before: Record<string, unknown> = {}, status: unknown;
+  const started = new Promise<void>(resolve => { entered = resolve; }), held = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/api/projects/${projectId}/reviews/*/decision`, async route => { const response = await route.fetch(); decided = true; await route.fulfill({ response }); });
+  // A status read keeps the pre-decision revision too, so no status-driven refresh sets the alert again after a late page clears it.
+  await page.route(`**/api/projects/${projectId}/status`, async route => {
+    if (decided && firstPage === "still refreshing") await route.fulfill({ json: status });
+    else { const response = await route.fetch(); status = await response.json(); await route.fulfill({ response }); }
+  });
+  // Only this test has an older page: the first page offers a cursor, and that read is held until a decision refreshes the first page.
+  // The late cursor answer is a failure, or a page of the revision the refresh could not confirm; neither may reach the view.
+  await page.route(url => url.pathname === `/api/projects/${projectId}/reviews`, async route => {
+    if (new URL(route.request().url()).searchParams.has("cursor")) {
+      entered(); await held;
+      await route.fulfill(firstPage === "saved" ? { status: 503, json: { error: { code: "UNAVAILABLE", message: "Older candidates unavailable" } } } : { json: { ...before, items: [], nextCursor: null } });
+    } else if (decided && firstPage === "still refreshing") await route.fulfill({ json: before });
+    else { const response = await route.fetch(); before = { ...await response.json(), nextCursor: "older" }; await route.fulfill({ json: before }); }
+  });
+  await openReview(page, projectId); await page.getByRole("tab", { name: "History", exact: true }).click();
+  await page.getByRole("button", { name: "More candidates", exact: true }).click(); await started;
+  const responded = page.waitForResponse(response => response.url().includes("cursor=older"));
+  const expected = firstPage === "saved" ? page.getByText("Reject candidate: saved.", { exact: true }) : page.getByText("Saved reviews are still refreshing.");
+  try {
+    await page.locator(`#review-row-${frozen.reviewId}`).click();
+    await page.getByLabel("Reason", { exact: true }).fill("Not this one");
+    await page.getByRole("button", { name: "Reject candidate", exact: true }).click();
+    await expect(expected).toBeVisible();
+  } finally { release(); }
+  await responded; await page.waitForTimeout(500);
+  await expect(page.getByText("Older candidates unavailable")).toHaveCount(0);
+  await expect(expected).toBeVisible();
+});
+
 collaborationTest("nonapprover controls are absent and a designated reviewer can decide an exact candidate", async ({ collaboration }) => {
   const { ownerPage, editorPage, projectId, setEditorRole } = collaboration;
   const { draftId } = await readyCandidate(ownerPage, projectId);

@@ -22,7 +22,7 @@ import {
   acknowledged, addDrop, discardOutbox, enqueue, keepTheirs as keepTheirsChange, optimistic, pendingCount, rebase, redo as redoChange, replay, startSave, undo as undoChange,
   wireBody, withEntries, type ConflictTarget, type Outbox, type Placement, type Sending,
 } from "./outbox";
-import { acknowledgeExternalWrite, advanceOnRead, afterDraftRead, AUTOSAVE_MS, clearedRedo, covers, draftWriteBlocker, frozenBehind, requireDraftRevision, stranded, studioDirtyCount, type SaveState, type StudioUi } from "./studio-ui";
+import { acknowledgeExternalWrite, advanceOnRead, afterDraftRead, AUTOSAVE_MS, clearedRedo, covers, draftWriteBlocker, frozenBehind, requireDraftRevision, stranded, studioDirtyCount, studioSlice, type SaveState, type StudioUi } from "./studio-ui";
 
 export type Outcome<T> =
   | { ok: true; result: T }
@@ -104,13 +104,16 @@ const readOnly = { ok: false as const, code: "FORBIDDEN", message: "This draft i
  * unconfirmed batch is retried only with its key and body; a refused one waits for the person. The saved draft lives in
  * the shell too (`adopt` keeps only newer reads).
  */
-export function StudioProvider({ projectId, draft: savedDraft, role, archived, narrow, ui, update, adopt, onAccessChanged, onInspect, saveRef, children }: {
+export function StudioProvider({ projectId, draft: savedDraft, role, archived, narrow, ui: shellUi, update, adopt, onAccessChanged, onInspect, saveRef, children }: {
   projectId: string; draft: DraftView; role: ProjectAccessRole; archived: boolean; narrow: boolean;
   ui: StudioUi; update: (change: (ui: StudioUi) => Partial<StudioUi>) => void;
   adopt: (view: DraftView) => boolean; onAccessChanged: () => void; onInspect: () => void;
   /** Lets the shell save unsaved changes before a project switch. */
   saveRef?: RefObject<(() => Promise<boolean>) | null>; children: ReactNode;
 }) {
+  // Only the Studio's own fields: an edit in the AI or Specs panel keeps this object, so the context is not re-published.
+  const slice = useRef<StudioUi | null>(null);
+  const ui = slice.current = studioSlice(shellUi, slice.current);
   const { outbox, request, save, refreshFailed } = ui;
   const { beforeWrite, fence, invalidate, setPresence } = useSync();
   // Another instance may still own the request after browser history remounts this keyed provider.

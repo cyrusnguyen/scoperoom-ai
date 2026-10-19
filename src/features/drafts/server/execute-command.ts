@@ -39,12 +39,12 @@ export function nextRevision(value: number): number {
 
 export const asJson = (value: unknown) => value as Prisma.InputJsonValue;
 
-/** PostgreSQL checks JSONB's formatted text, which is larger than compact JSON.stringify output. */
+/** PostgreSQL checks JSONB's formatted text, which is larger than compact JSON.stringify output. `null` is an unchanged document, not sent. */
 export async function requireStoredSize(tx: Transaction, document: unknown, layout: unknown) {
-  const [size] = await tx.$queryRaw<Array<{ documentBytes: number; layoutBytes: number }>>`
-    SELECT octet_length(${JSON.stringify(document)}::jsonb::text)::integer AS "documentBytes",
+  const [size] = await tx.$queryRaw<Array<{ documentBytes: number | null; layoutBytes: number }>>`
+    SELECT octet_length(${document === null ? null : JSON.stringify(document)}::jsonb::text)::integer AS "documentBytes",
            octet_length(${JSON.stringify(layout)}::jsonb::text)::integer AS "layoutBytes"`;
-  if (!size || size.documentBytes > LIMITS.documentBytes || size.layoutBytes > LIMITS.layoutBytes) {
+  if (!size || (size.documentBytes ?? 0) > LIMITS.documentBytes || size.layoutBytes > LIMITS.layoutBytes) {
     throw new ProjectError("LIMIT_EXCEEDED");
   }
 }
@@ -67,13 +67,12 @@ export async function lockDraft(tx: Transaction, project: ProjectRow, draftId: s
 /**
  * Draft mutation skeleton, in the Data03 order: actor → project lock → current read access → matching receipt replay →
  * (new work only) owner/editor capability → ACTIVE project → current draft lock → work. `work` returns the safe result
- * that is saved as the receipt and replayed for the same key. `timeout` overrides Prisma's 5 s interactive-transaction limit.
+ * that is saved as the receipt and replayed for the same key.
  */
 export async function draftMutation<T extends object>(
   identity: ProjectIdentity, projectId: string, draftId: string, key: string, operation: string, hash: string,
   parseStored: (value: unknown) => T,
   work: (tx: Transaction, project: ProjectRow, draft: LockedDraft, actorId: string) => Promise<T>,
-  timeout?: number,
 ): Promise<T & { replayed: boolean }> {
   if (!uuid.test(projectId) || !uuid.test(draftId)) throw new ProjectError("NOT_FOUND");
   return withDatabase(async (database) => {
@@ -95,7 +94,7 @@ export async function draftMutation<T extends object>(
       const value = parseStored(await work(tx, project, draft, profile.id));
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, operation, hash, asJson(value));
       return { ...value, replayed: false };
-    }, timeout ? { timeout } : undefined);
+    });
   });
 }
 
@@ -148,8 +147,9 @@ export async function executeGraphCommand(identity: ProjectIdentity, projectId: 
     }
     const documentRevision = applied.documentChanged ? nextRevision(draft.documentRevision) : draft.documentRevision;
     const layoutRevision = applied.layoutChanged ? nextRevision(draft.layoutRevision) : draft.layoutRevision;
-    await requireStoredSize(tx, applied.document, applied.layout);
-    await tx.scopeDraft.update({ where: { id: draft.id }, data: { documentJson: asJson(applied.document), layoutJson: asJson(applied.layout), documentRevision, layoutRevision }, select: { id: true } });
+    // A layout-only effect leaves the document as it was: neither measure nor rewrite up to 2 MB of it.
+    await requireStoredSize(tx, applied.documentChanged ? applied.document : null, applied.layout);
+    await tx.scopeDraft.update({ where: { id: draft.id }, data: { ...(applied.documentChanged ? { documentJson: asJson(applied.document) } : {}), layoutJson: asJson(applied.layout), documentRevision, layoutRevision }, select: { id: true } });
     const extraRef = command.command === "RECONNECT_EDGE" ? [command.payload.edgeId] : [];
     const sequence = await recordEvent(tx, project, actorId, "DRAFT_COMMAND_SAVED", auditRefs(applied, extraRef), { command: command.command, documentRevision, layoutRevision });
     return { draftId: draft.id, documentRevision, layoutRevision, eventSequence: Number(sequence), createdIds: applied.createdIds, versions: applied.versions, retiredIds: applied.retiredIds };

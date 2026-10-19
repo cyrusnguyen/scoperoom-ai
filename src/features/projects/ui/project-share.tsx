@@ -11,7 +11,7 @@ type Issue = Invitation & { url?: string; linkUnavailable: boolean; replayed: bo
 
 /**
  * Details → Invite (owner of an ACTIVE project). The one-time link is held in memory only. A lost response can be replayed
- * for the invitation's metadata but never its link, so the owner is offered Revoke and reissue.
+ * for the invitation's metadata but never its link, so the owner is offered to revoke it and create a replacement.
  */
 export default function ProjectShare({ projectId, email, onEmailChange }: { projectId: string; email: string; onEmailChange: (value: string) => void }) {
   const sync = useSync();
@@ -163,7 +163,7 @@ export default function ProjectShare({ projectId, email, onEmailChange }: { proj
     </div>}
     {issued?.linkUnavailable && <div className="inline-note">
       <p>Revoke this invitation before creating a replacement. The original link cannot be recovered.</p>
-      <div className="view-actions"><button type="button" className="button small" onClick={() => void revoke(issued)} disabled={revoking === issued.id}>{revokeKeys[issued.id] && revoking !== issued.id ? "Retry revoke and reissue" : "Revoke and reissue"}</button></div>
+      <div className="view-actions"><button type="button" className="button small" onClick={() => void revoke(issued)} disabled={revoking === issued.id}>{revokeKeys[issued.id] && revoking !== issued.id ? "Retry revoking this invitation" : "Revoke this invitation"}</button></div>
     </div>}
     <p className="muted" role={messageError ? "alert" : "status"} aria-live="polite">{message}</p>
     <div className="section-heading">

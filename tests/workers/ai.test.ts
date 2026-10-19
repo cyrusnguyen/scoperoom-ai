@@ -32,12 +32,8 @@ function fakeGateway(handler: (request: ModelRequest, call: number) => Promise<M
 }
 function fakeDispatcher(handler: (request: JobRequest, call: number) => Promise<{ kind: "accepted"; taskId: string } | { kind: "unavailable" }> = async (_, call) => ({ kind: "accepted", taskId: `task-${call}` })) {
   const requests: JobRequest[] = [];
-  const cancels: string[] = [];
-  const dispatcher: JobDispatcher = {
-    dispatch: async (request) => { requests.push(request); return handler(request, requests.length); },
-    cancel: async (taskId) => { cancels.push(taskId); return "requested"; },
-  };
-  return { dispatcher, requests, cancels };
+  const dispatcher: JobDispatcher = { dispatch: async (request) => { requests.push(request); return handler(request, requests.length); } };
+  return { dispatcher, requests };
 }
 
 async function withWorld(run: (ctx: Awaited<ReturnType<typeof world>>) => Promise<void>) {
@@ -162,12 +158,10 @@ test("repair validates its batch size, skips cancelled or overdue runs and settl
     assert.equal((await row(cancelled.runId)).state, "CANCELLED"); // intent on a run that never reached a provider settles at once
     assert.equal((await row(cancelled.runId)).budget_state, "RELEASED");
     assert.deepEqual(await budget(cancelled.owner), { reserved_runs: 0, consumed_runs: 0 });
-    // A dispatched but unstarted cancelled run is settled too, and its task gets a best-effort cancel (never treated as terminal itself).
+    // A dispatched but unstarted cancelled run is settled too; nothing is recalled from Inngest.
     const dispatched = await seed({ createdAt: ago(20) });
     await admin.query("update app.ai_run set dispatch_state = 'DISPATCHED', task_id = 'task-9', cancel_requested_at = clock_timestamp() where id = $1", [dispatched.runId]);
-    const withCancel = fakeDispatcher();
-    await repairRuns(withCancel.dispatcher, { batchSize: 100 });
-    assert.ok(withCancel.cancels.includes("task-9"));
+    await repairRuns(fakeDispatcher().dispatcher, { batchSize: 100 });
     assert.equal((await row(dispatched.runId)).state, "CANCELLED");
   });
 });
@@ -294,6 +288,47 @@ test("a crash after the call claim is never repeated while its window is open, a
     assert.equal(none.requests.length, 0);
     assert.equal((await attempts(spent.runId)).length, 2);
     assert.deepEqual([(await row(spent.runId)).state, (await row(spent.runId)).failure_code], ["FAILED", "ATTEMPTS_EXHAUSTED"]);
+  });
+});
+
+test("a crashed attempt whose actor then lost access fails as ACCESS_REVOKED when its window closes, not at the deadline", { skip: !canRun }, async () => {
+  await withWorld(async ({ admin, seed, row, attempts }) => {
+    const crashed = await seed({ createdAt: ago(200), shape: "RUNNING" }); // attempt 1's window closed with no report
+    await admin.query("update app.pilot_entitlement set active = false, revoked_at = clock_timestamp() where profile_id = $1", [crashed.owner]);
+    const none = fakeGateway(() => completed());
+    await runAi(crashed.runId, none.gateway);
+    assert.equal(none.requests.length, 0);
+    // The finish used to be refused while the unreported attempt had no outcome, holding the project's AI slot until TIMED_OUT.
+    assert.deepEqual([(await row(crashed.runId)).state, (await row(crashed.runId)).failure_code], ["FAILED", "ACCESS_REVOKED"]);
+    assert.deepEqual((await attempts(crashed.runId)).map((attempt) => attempt.outcome), ["UNKNOWN"]);
+
+    // The usual retry comes back within seconds, while the window is still open: it waits for the window instead of returning.
+    const early = await seed({ createdAt: ago(10), shape: "RUNNING" });
+    await admin.query("update app.pilot_entitlement set active = false, revoked_at = clock_timestamp() where profile_id = $1", [early.owner]);
+    const wake = await runAi(early.runId, none.gateway);
+    assert.ok(wake instanceof Date && wake.getTime() > Date.now(), "the delivery sleeps until the open window closes");
+    assert.equal((await row(early.runId)).state, "RUNNING");
+    // Trusted fixture connection only: close the window by ageing this attempt past its immutable-identity trigger.
+    await admin.query("begin"); await admin.query("set local session_replication_role = replica");
+    await admin.query("update app.ai_run_attempt set started_at = now() - interval '200 seconds', deadline_at = now() - interval '80 seconds' where run_id = $1", [early.runId]);
+    await admin.query("commit");
+    assert.equal(await runAi(early.runId, none.gateway), undefined);
+    assert.deepEqual([(await row(early.runId)).state, (await row(early.runId)).failure_code], ["FAILED", "ACCESS_REVOKED"]);
+    assert.equal(none.requests.length, 0);
+  });
+});
+
+test("a second call that runs out its own window fails as MODEL_TIMEOUT, not MODEL_UNKNOWN", { skip: !canRun }, async (context) => {
+  await withWorld(async ({ seed, row, attempts }) => {
+    const { runId } = await seed({ createdAt: ago(5) });
+    // The worker's clock reads past both 120 s call windows, so each claim has no time left and neither call is made.
+    context.mock.timers.enable({ apis: ["Date"], now: Date.now() + 130_000 });
+    const none = fakeGateway(() => completed());
+    await runAi(runId, none.gateway);
+    context.mock.timers.reset();
+    assert.equal(none.requests.length, 0);
+    assert.deepEqual((await attempts(runId)).map((attempt) => attempt.outcome), ["TIMED_OUT", "TIMED_OUT"]);
+    assert.deepEqual([(await row(runId)).state, (await row(runId)).failure_code], ["FAILED", "MODEL_TIMEOUT"]);
   });
 });
 

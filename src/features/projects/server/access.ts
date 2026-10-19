@@ -54,7 +54,7 @@ export function withReadSnapshot<T>(database: PrismaClient, run: (tx: Transactio
   return database.$transaction(async (tx) => {
     await tx.$executeRaw`SET TRANSACTION READ ONLY`;
     return run(tx);
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 5_000 }); // a read waits on no lock: Prisma's 5 s, not the write default
 }
 
 /**

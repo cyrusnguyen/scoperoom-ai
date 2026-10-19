@@ -155,8 +155,10 @@ test("cleanup frees retained body capacity but never the identity quota", { skip
     await applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash });
     const original = (await database.query("select to_jsonb(p) value from app.flow_import_preview p where id=$1", [preview.id])).rows[0].value;
     const ids = [preview.id, ...Array.from({ length: FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies - 1 }, randomUUID)];
-    // Canonical APPLIED terminal bodies are retained for seven days; ordinary discard already releases its body.
-    for (const id of ids.slice(1)) await database.query("insert into app.flow_import_preview select * from jsonb_populate_record(null::app.flow_import_preview,$1::jsonb)", [{ ...original, id, applied_result: { ...original.applied_result, previewId: id } }]);
+    // Canonical APPLIED terminal bodies are retained for seven days; ordinary discard already releases its body. They no longer count
+    // as open previews, so these copies are large enough to fill the actor's 8 MiB retained-body budget instead.
+    for (const id of ids.slice(1)) await database.query("insert into app.flow_import_preview select * from jsonb_populate_record(null::app.flow_import_preview,$1::jsonb)", [{ ...original, id, payload: "x".repeat(940_000), applied_result: { ...original.applied_result, previewId: id } }]);
+    assert.ok(await retainedBodyBytes(database, "actor_id=$1", [original.actor_id]) > FLOW_IMPORT_PREVIEW_LIMITS.actor.bodyBytes);
     const retainedIdentity = async () => (await database.query("select id,project_id,draft_id,actor_id,preview_hash,payload_hash,result_flow_id,applied_mapping,applied_result from app.flow_import_preview where id=any($1::uuid[]) order by id", [ids])).rows;
     const retained = await retainedIdentity();
     assert.equal(retained.length, FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies);
@@ -181,6 +183,23 @@ test("cleanup frees retained body capacity but never the identity quota", { skip
     assert.equal((await database.query("select count(*)::int count from app.flow_import_preview where id=any($1::uuid[]) and (payload is not null or positions is not null or fidelity_report is not null)", [ids])).rows[0].count, 0);
     assert.deepEqual(await retainedIdentity(), retained);
     await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), bytes);
+  });
+});
+
+test("applied previews keep their bodies for seven days without blocking the next preview", { skip: !canRun }, async () => {
+  await withFixture(async ({ user, project, database }) => {
+    const owner = await user(); const projectId = await project(owner); const draftId = (await getProjectBootstrap(owner, projectId)).draft.id;
+    const bytes = await validFile();
+    const preview = await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), bytes);
+    await applyFlowImport(owner, projectId, preview.id, { key: randomUUID(), draftId, previewHash: preview.previewHash });
+    const original = (await database.query("select to_jsonb(p) value from app.flow_import_preview p where id=$1", [preview.id])).rows[0].value;
+    for (let copy = 1; copy < FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies; copy += 1) {
+      const id = randomUUID();
+      await database.query("insert into app.flow_import_preview select * from jsonb_populate_record(null::app.flow_import_preview,$1::jsonb)", [{ ...original, id, applied_result: { ...original.applied_result, previewId: id } }]);
+    }
+    assert.equal((await database.query("select count(*)::int count from app.flow_import_preview where actor_id=$1 and state='APPLIED' and payload is not null", [original.actor_id])).rows[0].count, FLOW_IMPORT_PREVIEW_LIMITS.actor.bodies);
+    // Ten applied imports in a week used to fill the actor's body count and refuse every preview until the bodies cleared.
+    assert.equal((await previewFlowImport(owner, projectId, draftId, randomUUID(), randomUUID(), bytes)).state, "READY");
   });
 });
 

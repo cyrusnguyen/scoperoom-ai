@@ -50,7 +50,7 @@ async function sourceMutation(identity: ProjectIdentity, projectId: string, key:
       const value = await work(tx, project, profile.id);
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, operation, hash, value);
       return { ...value, replayed: false };
-    }, { timeout: 15_000 });
+    });
   });
 }
 

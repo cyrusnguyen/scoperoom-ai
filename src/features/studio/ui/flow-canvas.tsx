@@ -5,6 +5,7 @@ import {
   Background, Controls, BaseEdge, ConnectionMode, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
   useReactFlow, type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
 } from "@xyflow/react";
+import { useStable } from "@/client/use-stable";
 import LiveOverlay from "@/features/collaboration/ui/live-overlay";
 import { gestureBases, gestureItems } from "@/features/collaboration/ui/live-canvas";
 import { savedViewOf } from "@/features/collaboration/ui/project-live";
@@ -19,7 +20,7 @@ import CanvasControls from "./canvas-controls";
 import ShapePanel from "./shape-panel";
 import { explain, useStudio } from "./studio-context";
 import { useKeyboardShortcuts } from "./use-keyboard-shortcuts";
-import { dropTarget, moveTargets, orientConnect, orientReconnect, parseShapePayload, selectEdge, selectNodes, SHAPE_DRAG_MIME, type SelectChange, type StudioUi } from "./studio-ui";
+import { dropTarget, moveTargets, orientConnect, orientReconnect, parseShapePayload, reuser, selectEdge, selectNodes, SHAPE_DRAG_MIME, type SelectChange, type StudioUi } from "./studio-ui";
 import { baseOf, optimistic } from "./outbox";
 
 type StepData = { label: string; kind: NodeKind; actor: string; direction: Direction; selectedBy?: Person[] };
@@ -180,6 +181,7 @@ function InlineEditor({ kind, id }: { kind: "NODE" | "EDGE"; id: string }) {
 const nodeTypes = { step: StepCard };
 const edgeTypes = { flow: FlowEdgeLine };
 const defaultEdgeOptions = { type: "flow" as const };
+const fitViewOptions = { padding: 0.2, maxZoom: 1 };
 
 /** A detached projected canvas for proposal review. It deliberately never mounts Studio, Sync, participants or shortcuts. */
 export function ReadOnlyFlowCanvas({ draft, flowId }: { draft: DraftView; flowId: string }) {
@@ -198,7 +200,7 @@ export function ReadOnlyFlowCanvas({ draft, flowId }: { draft: DraftView; flowId
   return <div className="canvas proposal-flow-canvas" onKeyDown={(event) => event.stopPropagation()}>
     <ReactFlow<StepNode, FlowEdge> nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions}
       nodesDraggable={false} nodesConnectable={false} edgesReconnectable={false} elementsSelectable={false} deleteKeyCode={null} zoomOnDoubleClick={false}
-      fitView fitViewOptions={{ padding: 0.2, maxZoom: 1 }} minZoom={0.1} maxZoom={4} aria-label={`Proposed workflow canvas: ${draft.document.flows[flowId]?.title ?? ""}`}>
+      fitView fitViewOptions={fitViewOptions} minZoom={0.1} maxZoom={4} aria-label={`Proposed workflow canvas: ${draft.document.flows[flowId]?.title ?? ""}`}>
       <Background gap={24} size={1} /><Controls showInteractive={false} />
     </ReactFlow>
     {!nodes.length && <div className="canvas-empty"><p>This flow has no steps yet.</p></div>}
@@ -302,20 +304,22 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     void createShapeAt(payload.kind, screenToFlowPosition({ x: event.clientX, y: event.clientY }));
   };
 
+  const [reuseNodes] = useState(reuser<StepNode>), [reuseEdges] = useState(reuser<FlowEdge>);
+  // A drag frame or a selection change touches only some steps: the others keep their objects, so only those re-render.
   const nodes = useMemo<StepNode[]>(() => {
     const selected = interactive && ui.selection?.kind === "NODES" ? ui.selection.ids : [];
     const direction = preview?.direction ?? layout.directions[flowId] ?? "TB";
-    return Object.values(document.nodes).filter((node) => node.flowId === flowId).map((node) => {
+    return reuseNodes(Object.values(document.nodes).filter((node) => node.flowId === flowId).map((node) => {
       const size = STEP_SIZE[node.kind];
       return {
         id: node.id, type: "step", width: size.width, height: size.height,
         position: preview?.positions[node.id] ?? dragging[node.id] ?? { x: layout.positions[node.id]!.x, y: layout.positions[node.id]!.y },
         data: { label: node.label, kind: node.kind, actor: node.actorLabel, direction, selectedBy: selectedBy.get(node.id) }, selected: selected.includes(node.id), measured: measured[node.id],
       };
-    });
-  }, [document, layout, flowId, ui.selection, preview, dragging, interactive, measured, selectedBy]);
+    }));
+  }, [document, layout, flowId, ui.selection, preview, dragging, interactive, measured, selectedBy, reuseNodes]);
 
-  const edges = useMemo<FlowEdge[]>(() => Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => {
+  const edges = useMemo<FlowEdge[]>(() => reuseEdges(Object.values(document.edges).filter((edge) => edge.flowId === flowId).map((edge) => {
     // Saved connection points stay authoritative. A plain edge names its effective direction's defaults instead of
     // asking React Flow for its first cached handle, which can be ordered for the direction before an in-place Arrange.
     const sides = layout.edgeSides[edge.id];
@@ -326,7 +330,7 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
       targetHandle: sides?.to ?? defaults.find((handle) => handle.type === "target")!.position,
       markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: "var(--foreground-subtle)" }, selected: interactive && ui.selection?.kind === "EDGE" && ui.selection.id === edge.id,
     };
-  }), [document, layout, flowId, ui.selection, interactive, preview]);
+  })), [document, layout, flowId, ui.selection, interactive, preview, reuseEdges]);
 
   const picks = (changes: (NodeChange<StepNode> | EdgeChange<FlowEdge>)[]): SelectChange[] =>
     changes.flatMap((change) => (change.type === "select" ? [{ id: change.id, selected: change.selected }] : []));
@@ -388,6 +392,13 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     event.preventDefault();
     setEditing({ kind: "NODE", id: target.dataset.id });
   };
+  // React Flow moves selected steps on arrow keys only in its own copy (keyboard moves are never saved) and announces a move that
+  // did not happen; an unchanged step keeps that shifted copy, so a later drag would start from it. Stop the keys before it sees them.
+  const stopArrowMoves = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!event.key.startsWith("Arrow") || !(event.target as Element).matches(".react-flow__node.selected, .react-flow__nodesselection-rect")) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
   // Which handle a drag began on, so a saved connection runs from the gesture's start to its drop whatever the handle
   // types are (React Flow labels a finished connection's ends by handle type, not by gesture).
   const dragStart = useRef<{ nodeId: string | null; handleId: string | null } | null>(null);
@@ -448,18 +459,28 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     inspect();
   };
 
-  return <InlineEditingContext.Provider value={inline}><div className="canvas" ref={wrapperRef} onDragOver={onShapeDragOver} onDrop={onShapeDrop} onKeyDown={canvasKeyDown} onPointerMove={onPointerMove} onPointerLeave={() => sendCursor(null)}>
+  // React Flow memoizes nodes and edges by handler identity.
+  const on = useStable({
+    nodesChange: onNodesChange, measure, edgesChange: onEdgesChange, nodeDoubleClick, edgeDoubleClick,
+    nodeDragStart: (_event: unknown, _node: StepNode, moved: StepNode[]) => beginDrag(moved), nodeDrag: (_event: unknown, _node: StepNode, moved: StepNode[]) => moveDrag(moved), nodeDragStop: (_event: unknown, _node: StepNode, moved: StepNode[]) => drop(moved),
+    selectionDragStart: (_event: unknown, moved: StepNode[]) => beginDrag(moved), selectionDrag: (_event: unknown, moved: StepNode[]) => moveDrag(moved), selectionDragStop: (_event: unknown, moved: StepNode[]) => drop(moved),
+    connectStart: beginConnect, clickConnectStart: beginClickConnect, connectEnd: endGesture, clickConnectEnd: endClickConnect, reconnectEnd: endGesture,
+    reconnectStart: (_event: unknown, _edge: FlowEdge, keptType: "source" | "target") => { reconnectEnd.current = keptType === "source" ? "target" : "source"; },
+    connect: (connection: Connection) => void connect(connection), reconnect,
+  });
+
+  return <InlineEditingContext.Provider value={inline}><div className="canvas" ref={wrapperRef} onDragOver={onShapeDragOver} onDrop={onShapeDrop} onKeyDownCapture={stopArrowMoves} onKeyDown={canvasKeyDown} onPointerMove={onPointerMove} onPointerLeave={() => sendCursor(null)}>
     <ReactFlow<StepNode, FlowEdge> key={preview ? `preview-${preview.direction}` : flowId} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions} connectionMode={ConnectionMode.Loose}
-      onNodesChange={interactive ? onNodesChange : measure} onEdgesChange={interactive ? onEdgesChange : undefined}
-      onNodeDoubleClick={interactive ? nodeDoubleClick : undefined} onEdgeDoubleClick={interactive ? edgeDoubleClick : undefined} onNodeDragStart={interactive ? (_event, _node, moved) => beginDrag(moved) : undefined} onNodeDrag={interactive ? (_event, _node, moved) => moveDrag(moved) : undefined} onNodeDragStop={interactive ? (_event, _node, moved) => drop(moved) : undefined}
-      onSelectionDragStart={interactive ? (_event, moved) => beginDrag(moved) : undefined} onSelectionDrag={interactive ? (_event, moved) => moveDrag(moved) : undefined} onSelectionDragStop={interactive ? (_event, moved) => drop(moved) : undefined}
-      onConnectStart={interactive ? beginConnect : undefined} onClickConnectStart={interactive ? beginClickConnect : undefined}
-      onConnectEnd={interactive ? endGesture : undefined} onClickConnectEnd={interactive ? endClickConnect : undefined} onReconnectEnd={interactive ? endGesture : undefined}
-      onReconnectStart={interactive ? (_event, _edge, keptType) => { reconnectEnd.current = keptType === "source" ? "target" : "source"; } : undefined}
-      onConnect={(connection) => void connect(connection)} onReconnect={reconnect} elementsSelectable={interactive}
+      onNodesChange={interactive ? on.nodesChange : on.measure} onEdgesChange={interactive ? on.edgesChange : undefined}
+      onNodeDoubleClick={interactive ? on.nodeDoubleClick : undefined} onEdgeDoubleClick={interactive ? on.edgeDoubleClick : undefined} onNodeDragStart={interactive ? on.nodeDragStart : undefined} onNodeDrag={interactive ? on.nodeDrag : undefined} onNodeDragStop={interactive ? on.nodeDragStop : undefined}
+      onSelectionDragStart={interactive ? on.selectionDragStart : undefined} onSelectionDrag={interactive ? on.selectionDrag : undefined} onSelectionDragStop={interactive ? on.selectionDragStop : undefined}
+      onConnectStart={interactive ? on.connectStart : undefined} onClickConnectStart={interactive ? on.clickConnectStart : undefined}
+      onConnectEnd={interactive ? on.connectEnd : undefined} onClickConnectEnd={interactive ? on.clickConnectEnd : undefined} onReconnectEnd={interactive ? on.reconnectEnd : undefined}
+      onReconnectStart={interactive ? on.reconnectStart : undefined}
+      onConnect={on.connect} onReconnect={on.reconnect} elementsSelectable={interactive}
       nodesDraggable={canEdit} nodesConnectable={canEdit} edgesReconnectable={canEdit} deleteKeyCode={null} zoomOnDoubleClick={false}
-      fitView fitViewOptions={{ padding: 0.2, maxZoom: 1 }} minZoom={0.1} maxZoom={4}
+      fitView fitViewOptions={fitViewOptions} minZoom={0.1} maxZoom={4}
       aria-label={preview ? "Arrangement preview" : `${editable ? "Editable" : "Read-only"} flow canvas: ${document.flows[flowId]?.title ?? ""}`}>
       <Background gap={24} size={1} />
       {interactive && <LiveOverlay localDragging={localDragging} sizeOf={sizeOf} />}

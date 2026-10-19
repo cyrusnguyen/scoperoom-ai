@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { apiMutate } from "@/client/api";
+import { apiMutate, sessionEnded } from "@/client/api";
 import type { MyInvitation } from "@/features/projects/contracts/invitation";
 import type { ProjectAccessRole, ProjectCapacity, ProjectListItem, ProjectLists } from "@/features/projects/contracts/project";
 import { roleLabel } from "@/features/projects/ui/format";
@@ -144,6 +144,7 @@ function InvitesList({ invites, onSettled }: { invites: InviteRow[]; onSettled: 
     setBusy(invite.id);
     const result = await apiMutate<{ projectId: string; role: ProjectAccessRole }>("/api/invitations/accept", key, { invitationId: invite.id });
     setBusy(null);
+    if (sessionEnded(result)) return;
     if (!result.ok && result.uncertain) { setErrors((current) => ({ ...current, [invite.id]: "We could not confirm this. Retry uses the same request." })); return; }
     setKeys((current) => without(current, invite.id));
     if (result.ok) onSettled(`Joined ${invite.projectName} as ${roleLabel(result.data.role)}.`);

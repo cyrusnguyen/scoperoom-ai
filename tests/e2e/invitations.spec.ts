@@ -232,7 +232,7 @@ test.describe("project invitations", () => {
     expect(keys).toHaveLength(3);
     expect(keys[2]).not.toBe(keys[0]);
   });
-  test("Revoke and reissue reads Retry after an uncertain revoke and reuses its key", async ({ page }) => {
+  test("revoking an invitation whose link was lost reads Retry after an uncertain revoke and reuses its key", async ({ page }) => {
     const fixture = await createFixture(page, database, admin, users);
     await page.goto(`/app/projects/${fixture.projectId}`);
     await openShare(page);
@@ -246,7 +246,7 @@ test.describe("project invitations", () => {
     await panel.getByLabel("Verified email").fill(fixture.invitee.email);
     await panel.getByRole("button", { name: "Create invitation" }).click();
     await panel.getByRole("button", { name: "Retry invitation" }).click();
-    const reissue = panel.getByRole("button", { name: "Revoke and reissue", exact: true });
+    const reissue = panel.getByRole("button", { name: "Revoke this invitation", exact: true });
     await expect(reissue).toBeVisible();
 
     const keys: string[] = [];
@@ -257,9 +257,9 @@ test.describe("project invitations", () => {
     });
     await reissue.click();
     await expect(panel.getByRole("alert")).toHaveText("We could not confirm that invitation was revoked. Retry uses the same request.");
-    await panel.getByRole("button", { name: "Retry revoke and reissue", exact: true }).click();
+    await panel.getByRole("button", { name: "Retry revoking this invitation", exact: true }).click();
     await expect(panel.getByText("Invitation revoked. You can create a replacement invitation.")).toBeVisible();
-    await expect(panel.getByRole("button", { name: /reissue/ })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: /^(Revoke this invitation|Retry revoking this invitation)$/ })).toHaveCount(0);
     expect(keys).toHaveLength(2);
     expect(keys[1]).toBe(keys[0]);
   });

@@ -10,6 +10,7 @@ import { ProjectError } from "../../projects/server/errors.ts";
 import { assertSourceCapacity, insertPromptEvidence } from "../../sources/server/source-versions.ts";
 import { AI_LIMITS, parseStartRunInput, startBody, startBodyBytes, type StartRunInput, type TaskKind } from "../contracts/tasks.ts";
 import { evidenceStats } from "../domain/capture.ts";
+import { buildModelRequest, estimateInputTokens } from "../domain/model-request.ts";
 import { modelRoute } from "../domain/model-route.ts";
 import { captureSaved } from "./capture.ts";
 import { applicableCapacityFull } from "./applicability.ts";
@@ -68,6 +69,8 @@ function replayOf(result: Prisma.JsonValue): Pick<AdmitResult, "runId" | "state"
  */
 async function admitLocked(tx: Transaction, project: ProjectRow, actorId: string, input: StartRunInput, hash: string, configuration: AiConfiguration) {
   const { capture, hash: captureHash } = await captureSaved(tx, project, input, configuration.model);
+  // The worker refuses the same estimate before its claim; refusing here first keeps the prompt evidence, run slot and budget untouched.
+  if (estimateInputTokens(buildModelRequest({ id: "", model: configuration.model, capture }, 0)) > capture.limits.maxInputTokens) throw new ProjectError("LIMIT_EXCEEDED", { limit: "INPUT_TOKENS" });
   const prompt = evidenceStats(capture.prompt);
   await assertSourceCapacity(tx, project.id, prompt.codePointCount);
   const [slots] = await tx.$queryRaw<Array<{ active: number }>>`
@@ -164,7 +167,7 @@ export async function admitRun(identity: ProjectIdentity, projectId: string, inp
         await tx.$executeRaw`ROLLBACK TO SAVEPOINT ai_admission`;
         return { refusal: error };
       }
-    }, { timeout: 15_000 });
+    });
     if ("refusal" in outcome) throw outcome.refusal;
     return outcome.result;
   });

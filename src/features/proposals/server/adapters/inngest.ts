@@ -24,9 +24,5 @@ export function createJobDispatcher(sender: EventSender): JobDispatcher {
         return { kind: "unavailable" };
       }
     },
-    /** Cancel intent is SQL's: fences refuse late results and the deadline settles the run. Nothing is recalled from Inngest. */
-    async cancel() {
-      return "unknown";
-    },
   };
 }

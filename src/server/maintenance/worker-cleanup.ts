@@ -1,7 +1,7 @@
 import type { PrismaClient } from "../../../prisma/generated/client.ts";
 import { getWorkerDatabase } from "../db.ts";
 
-export type WorkerCleanupResult = { expiredPreviews: number; clearedAppliedBodies: number; deletedReceipts: number; expiredAiResults: number; clearedAiBodies: number };
+export type WorkerCleanupResult = { expiredPreviews: number; clearedAppliedBodies: number; deletedReceipts: number; expiredAiResults: number; clearedAiBodies: number; deletedPreviews: number };
 export type WorkerCleanupDatabase = Pick<PrismaClient, "$transaction">;
 
 /**

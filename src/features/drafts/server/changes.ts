@@ -7,13 +7,6 @@ import { asJson, auditRefs, draftMutation, graphFailure, nextRevision, requireSt
 
 // POST D/changes: the whole unsaved batch in one transaction under the project lock, with one PROJECT receipt.
 const CHANGES_OPERATION = "DRAFT_CHANGES_V1";
-/**
- * The largest batch (100 commands, 200 moves) on a 1.93 MB draft measured 0.86–1.72 s end to end locally, about the
- * same as one single command on that draft (0.84–1.15 s): the cost is reading, size-checking and writing 2 MB of JSONB,
- * not the batch. Prisma's 5 s default leaves too little room for waiting on the project lock behind another save and for
- * a slower hosted database; 15 s does, while still bounding how long a stuck save can hold the lock.
- */
-const CHANGES_TIMEOUT_MS = 15_000;
 
 export async function saveChanges(identity: ProjectIdentity, projectId: string, draftId: string, input: Record<string, unknown>): Promise<ChangesResult> {
   const { key, ...raw } = input;
@@ -32,8 +25,11 @@ export async function saveChanges(identity: ProjectIdentity, projectId: string, 
       return { draftId: draft.id, documentRevision, layoutRevision: draft.layoutRevision, eventSequence: Number(project.eventSequence) };
     }
     const layoutRevision = applied.layoutChanged ? nextRevision(draft.layoutRevision) : draft.layoutRevision;
-    await requireStoredSize(tx, applied.document, applied.layout);
-    await tx.scopeDraft.update({ where: { id: draft.id }, data: { documentJson: asJson(applied.document), layoutJson: asJson(applied.layout), documentRevision, layoutRevision }, select: { id: true } });
+    // documentRevision advances once per effective semantic command, so an unchanged one means moves or sides only: the document
+    // is neither measured nor rewritten (up to 2 MB on every drag autosave).
+    const documentChanged = documentRevision !== draft.documentRevision;
+    await requireStoredSize(tx, documentChanged ? applied.document : null, applied.layout);
+    await tx.scopeDraft.update({ where: { id: draft.id }, data: { ...(documentChanged ? { documentJson: asJson(applied.document) } : {}), layoutJson: asJson(applied.layout), documentRevision, layoutRevision }, select: { id: true } });
     // The same audit as the single-command and position routes, written in one statement: one event per effective command
     // and one per moved flow. Every event carries the batch's single saved layoutRevision.
     const eventSequence = await recordEvents(tx, project, actorId, [
@@ -44,5 +40,5 @@ export async function saveChanges(identity: ProjectIdentity, projectId: string, 
       })),
     ]);
     return { draftId: draft.id, documentRevision, layoutRevision, eventSequence: Number(eventSequence) };
-  }, CHANGES_TIMEOUT_MS);
+  });
 }
