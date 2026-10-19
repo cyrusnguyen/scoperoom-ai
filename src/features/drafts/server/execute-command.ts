@@ -3,7 +3,7 @@ import type { Prisma } from "../../../../prisma/generated/client.ts";
 import { keyPattern, uuid, type ProjectAccessRole, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import {
   checkReceipt, findReceipt, lockActor, lockProject, profileFor, projectRole, readProject, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
-  withDatabase, withReadSnapshot, WRITE_TIMEOUT_MS, type ProjectRow, type Transaction,
+  withDatabase, withReadSnapshot, type ProjectRow, type Transaction,
 } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { parseCommandResult, type CommandResult } from "../contracts/commands.ts";
@@ -94,7 +94,7 @@ export async function draftMutation<T extends object>(
       const value = parseStored(await work(tx, project, draft, profile.id));
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, operation, hash, asJson(value));
       return { ...value, replayed: false };
-    }, { timeout: WRITE_TIMEOUT_MS });
+    });
   });
 }
 

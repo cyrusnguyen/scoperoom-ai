@@ -1,6 +1,6 @@
 import { Prisma } from "../../../../prisma/generated/client.ts";
 import { uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
-import { WRITE_TIMEOUT_MS, checkReceipt, findReceipt, lockActor, lockProject, profileFor, requireActive, requireMember, saveReceipt, withDatabase, type ProjectRow, type Transaction } from "../../projects/server/access.ts";
+import { checkReceipt, findReceipt, lockActor, lockProject, profileFor, requireActive, requireMember, saveReceipt, withDatabase, type ProjectRow, type Transaction } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import type { CapturedInput, RunDisposition, RunState, TaskKind, ValidatedProposal } from "../contracts/tasks.ts";
 
@@ -48,7 +48,7 @@ export async function applicationMutation<T extends object>(identity: ProjectIde
       if (!size || size.bytes > 65_536) throw new ProjectError("LIMIT_EXCEEDED");
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, operation, hash, result as Prisma.InputJsonValue);
       return { ...result, replayed: false };
-    }, { timeout: WRITE_TIMEOUT_MS });
+    });
   });
 }
 export async function lockRun(tx: Transaction, projectId: string, runId: string): Promise<ApplicationRun> {

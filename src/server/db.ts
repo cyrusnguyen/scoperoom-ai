@@ -17,7 +17,12 @@ export async function createDatabase(connectionString = process.env.DATABASE_URL
   if (!connectionString) throw new Error("DATABASE_URL is required for database access.");
   if (!expectedEnvironmentId) throw new Error("SCOPEROOM_ENVIRONMENT_ID is required for database access.");
   // allowExitOnIdle lets scripts and test processes exit; servers keep the pool warm while busy.
-  const database = new PrismaClient({ adapter: new PrismaPg({ ...poolConfig(connectionString), allowExitOnIdle: true }) });
+  // Every write takes the project or owner capacity lock, and Prisma counts the wait for it, and each query's round trip, against
+  // the transaction timeout; the largest save (100 commands, 200 moves on a 1.93 MB draft) measured up to 1.72 s locally while
+  // holding it. 15 s, not Prisma's 5 s, leaves room to wait behind another save while still bounding how long a stuck write holds
+  // the lock. The timer runs only between this process and the database, after the request body has arrived, so a distant
+  // browser does not shorten it; a distant function does, which is why each Function Region sits next to the database.
+  const database = new PrismaClient({ adapter: new PrismaPg({ ...poolConfig(connectionString), allowExitOnIdle: true }), transactionOptions: { timeout: 15_000 } });
   try {
     const identity = await database.environmentIdentity.findUnique({ where: { id: 1 }, select: { environmentId: true } });
     if (identity?.environmentId !== expectedEnvironmentId) throw new Error("Database environment identity does not match this process.");

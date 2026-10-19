@@ -8,14 +8,6 @@ import { accountPlan } from "./plan.ts";
 
 export type Transaction = Prisma.TransactionClient;
 export const RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-/**
- * The budget of every write transaction that takes the project or owner capacity lock. Prisma counts the wait for that lock, and
- * each query's round trip to the database, against its 5 s default; the largest save (100 commands, 200 moves on a 1.93 MB draft)
- * measured up to 1.72 s locally while holding it. 15 s leaves room to wait behind another save while still bounding how long a
- * stuck write holds the lock. The timer runs only between this function and the database, after the request body has arrived, so a
- * distant browser does not shorten it; a distant function does, which is why each Function Region sits next to the database.
- */
-export const WRITE_TIMEOUT_MS = 15_000;
 
 export type ProjectRow = {
   id: string;
@@ -62,7 +54,7 @@ export function withReadSnapshot<T>(database: PrismaClient, run: (tx: Transactio
   return database.$transaction(async (tx) => {
     await tx.$executeRaw`SET TRANSACTION READ ONLY`;
     return run(tx);
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 5_000 }); // a read waits on no lock: Prisma's 5 s, not the write default
 }
 
 /**

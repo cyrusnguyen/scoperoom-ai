@@ -1,10 +1,11 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import {
   Background, Controls, BaseEdge, ConnectionMode, EdgeLabelRenderer, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
   useReactFlow, type Connection, type Edge, type EdgeChange, type EdgeProps, type Node, type NodeChange, type NodeProps,
 } from "@xyflow/react";
+import { useStable } from "@/client/use-stable";
 import LiveOverlay from "@/features/collaboration/ui/live-overlay";
 import { gestureBases, gestureItems } from "@/features/collaboration/ui/live-canvas";
 import { savedViewOf } from "@/features/collaboration/ui/project-live";
@@ -181,17 +182,6 @@ const nodeTypes = { step: StepCard };
 const edgeTypes = { flow: FlowEdgeLine };
 const defaultEdgeOptions = { type: "flow" as const };
 const fitViewOptions = { padding: 0.2, maxZoom: 1 };
-
-/** The same functions on every render, always calling the latest ones: React Flow memoizes nodes and edges by handler identity. */
-function useStable<T extends object>(handlers: T): T {
-  const [relay] = useState(() => {
-    let latest = handlers;
-    const stable = Object.fromEntries(Object.keys(handlers).map((key) => [key, (...args: unknown[]) => (latest[key as keyof T] as (...args: unknown[]) => unknown)(...args)])) as T;
-    return { stable, set: (next: T) => { latest = next; } };
-  });
-  useLayoutEffect(() => relay.set(handlers));
-  return relay.stable;
-}
 
 /** A detached projected canvas for proposal review. It deliberately never mounts Studio, Sync, participants or shortcuts. */
 export function ReadOnlyFlowCanvas({ draft, flowId }: { draft: DraftView; flowId: string }) {
@@ -469,6 +459,7 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     inspect();
   };
 
+  // React Flow memoizes nodes and edges by handler identity.
   const on = useStable({
     nodesChange: onNodesChange, measure, edgesChange: onEdgesChange, nodeDoubleClick, edgeDoubleClick,
     nodeDragStart: (_event: unknown, _node: StepNode, moved: StepNode[]) => beginDrag(moved), nodeDrag: (_event: unknown, _node: StepNode, moved: StepNode[]) => moveDrag(moved), nodeDragStop: (_event: unknown, _node: StepNode, moved: StepNode[]) => drop(moved),

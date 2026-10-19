@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { flushSync } from "react-dom";
 import { accountChanged, apiRead, SESSION_ENDED, sessionEnded } from "@/client/api";
+import { useStable } from "@/client/use-stable";
 import { clearImport, clearImportSessions } from "@/features/exchange/ui/import-recovery";
 import type { Live } from "@/features/collaboration/ui/project-sync";
 import { SyncProvider } from "@/features/collaboration/ui/sync-context";
@@ -348,10 +349,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     void loadLists();
   }
   // Stable for the Studio provider: its callbacks must not change whenever the shell re-renders.
-  const actions = useRef({ projectChanged, openRightTab });
-  useLayoutEffect(() => { actions.current = { projectChanged, openRightTab }; });
-  const onAccessChanged = useCallback(() => actions.current.projectChanged(), []);
-  const onInspect = useCallback(() => actions.current.openRightTab("details"), []);
+  const { onAccessChanged, onInspect } = useStable({ onAccessChanged: projectChanged, onInspect: () => openRightTab("details") });
 
   if (ended) return <div className="app-shell"><main id="editor-main" className="editor-slot"><div className="empty-state" role="alert"><p>{ended === "account" ? "Your account changed. Reloading…" : "Your session ended. Taking you to sign in…"}</p></div></main></div>;
 

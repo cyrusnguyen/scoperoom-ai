@@ -34,19 +34,17 @@ export const defaultStudioUi: StudioUi = {
 export type SelectChange = { id: string; selected: boolean };
 
 /**
- * The previous element for every id whose content is unchanged, so React Flow re-renders only what changed (the previous array itself
- * when nothing did). Elements are plain JSON built by one object literal, so equal content serializes identically.
+ * One instance per canvas. Each call hands back the previous call's element for every id whose content is unchanged, so React Flow
+ * re-renders only what changed (the previous array itself when nothing did). Elements are plain JSON built by one object literal,
+ * so equal content serializes identically.
  */
-export function reuseUnchanged<T extends { id: string }>(next: T[], previous: T[]): T[] {
-  const before = new Map(previous.map((item) => [item.id, item]));
-  const reused = next.map((item) => { const old = before.get(item.id); return old && JSON.stringify(old) === JSON.stringify(item) ? old : item; });
-  return reused.length === previous.length && reused.every((item, index) => item === previous[index]) ? previous : reused;
-}
-
-/** Remembers what it returned last, so each call hands back that call's unchanged elements (one instance per canvas). */
 export function reuser<T extends { id: string }>(): (next: T[]) => T[] {
   let previous: T[] = [];
-  return (next) => (previous = reuseUnchanged(next, previous));
+  return (next) => {
+    const before = new Map(previous.map((item) => [item.id, item]));
+    const reused = next.map((item) => { const old = before.get(item.id); return old && JSON.stringify(old) === JSON.stringify(item) ? old : item; });
+    return (previous = reused.length === previous.length && reused.every((item, index) => item === previous[index]) ? previous : reused);
+  };
 }
 
 const STUDIO_KEYS = Object.keys(defaultStudioUi) as (keyof StudioUi)[];

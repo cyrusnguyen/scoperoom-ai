@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { keyPattern, uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
-import { WRITE_TIMEOUT_MS, checkReceipt, findReceipt, lockActor, lockProject, profileFor, projectRole, readAsMember, recordEvent, requestHash, requireActive, requireMember, saveReceipt, withDatabase, type ProjectRow, type Transaction } from "../../projects/server/access.ts";
+import { checkReceipt, findReceipt, lockActor, lockProject, profileFor, projectRole, readAsMember, recordEvent, requestHash, requireActive, requireMember, saveReceipt, withDatabase, type ProjectRow, type Transaction } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { asJson, draftMutation, nextRevision, storedDraft, type LockedDraft } from "../../drafts/server/execute-command.ts";
 import { citationMatches, lineStarts, type SourceVersionView } from "../../sources/contracts/source-version.ts";
@@ -271,7 +271,7 @@ export async function withdrawReview(identity: ProjectIdentity, projectId: strin
       return {
         ...value, replayed: false
       };
-    }, { timeout: WRITE_TIMEOUT_MS });
+    });
   });
 }
 
@@ -364,6 +364,6 @@ export async function decideReview(identity: ProjectIdentity, projectId: string,
       });
       await saveReceipt(tx, profile.id, "PROJECT", projectId, key, operation, hash, asJson(value));
       return { ...value, replayed: false };
-    }, { timeout: WRITE_TIMEOUT_MS });
+    });
   });
 }

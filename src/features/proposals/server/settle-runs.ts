@@ -1,6 +1,6 @@
 import { uuid, keyPattern, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import {
-  checkReceipt, findReceipt, lockActor, lockProject, profileFor, recordEvent, requestHash, requireActive, requireMember, saveReceipt, withDatabase, type ProjectRow, type Transaction, WRITE_TIMEOUT_MS,
+  checkReceipt, findReceipt, lockActor, lockProject, profileFor, recordEvent, requestHash, requireActive, requireMember, saveReceipt, withDatabase, type ProjectRow, type Transaction,
 } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 
@@ -81,6 +81,6 @@ export async function cancelRun(identity: ProjectIdentity, projectId: string, ru
       const result = { runId, cancelRequested: run.cancel_requested || !run.terminal, aiRevision };
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, CANCEL_OPERATION, hash, result);
       return { ...result, replayed: false };
-    }, { timeout: WRITE_TIMEOUT_MS });
+    });
   });
 }

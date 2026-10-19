@@ -8,7 +8,7 @@ import {
 import { type ProjectAccessRole, type ProjectIdentity, uuid } from "../contracts/project.ts";
 import {
   checkReceipt, findReceipt, lockActor, lockProject, profileFor, readProject, receiptString, recordEvent, requestHash,
-  requireActive, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow, type Transaction, WRITE_TIMEOUT_MS,
+  requireActive, requireOwner, saveReceipt, withDatabase, withReadSnapshot, type ProjectRow, type Transaction,
 } from "./access.ts";
 import { ProjectError } from "./errors.ts";
 
@@ -75,7 +75,7 @@ export async function issueInvitation(identity: InvitationIdentity, projectId: s
       const safe = safeInvitation(invitation);
       await saveReceipt(tx, profile.id, "PROJECT", project.id, validated.key, ISSUE_OPERATION, hash, safe);
       return { ...safe, url, linkUnavailable: false, replayed: false };
-    }, { timeout: WRITE_TIMEOUT_MS });
+    });
   });
 }
 
@@ -117,7 +117,7 @@ export async function revokeInvitation(identity: ProjectIdentity, projectId: str
       const safe = safeInvitation(await tx.invitation.update({ where: { id: current.id }, data: { revokedAt: new Date(), version: { increment: 1 } } }));
       await saveReceipt(tx, profile.id, "PROJECT", project.id, validated.key, REVOKE_OPERATION, hash, safe);
       return { ...safe, replayed: false };
-    }, { timeout: WRITE_TIMEOUT_MS });
+    });
   });
 }
 
@@ -222,6 +222,6 @@ export async function acceptInvitation(identity: InvitationIdentity, input: unkn
       const result = { projectId: project.id, role };
       await saveReceipt(tx, profile.id, "USER", profile.id, validated.key, ACCEPT_OPERATION, hash, result);
       return { ...result, replayed: false };
-    }, { timeout: WRITE_TIMEOUT_MS });
+    });
   });
 }

@@ -31,7 +31,7 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
 }) {
   const studio = useStudio();
   const { status, failures } = useSync();
-  const operations = useMemo(() => run.result?.kind === "proposal" ? run.result.operations : [], [run.result]);
+  const operations = run.result?.kind === "proposal" ? run.result.operations : [];
   // Validating and applying the whole proposal is the costly part; typing elsewhere in the panel must not redo it.
   const preview = useMemo(() => projectProposalPreview(studio.savedDraft, status, run, inspection), [studio.savedDraft, status, run, inspection]);
   const [localSelection, setSelected] = useState<string[]>([]);

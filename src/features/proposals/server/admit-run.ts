@@ -4,7 +4,7 @@ import { asJson } from "../../drafts/server/execute-command.ts";
 import { keyPattern, uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import {
   checkReceipt, findReceipt, lockActor, lockOwnerCapacity, lockProject, ownerPlan, projectRole, profileFor, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
-  withDatabase, type ProjectRow, type Transaction, WRITE_TIMEOUT_MS,
+  withDatabase, type ProjectRow, type Transaction,
 } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import { assertSourceCapacity, insertPromptEvidence } from "../../sources/server/source-versions.ts";
@@ -167,7 +167,7 @@ export async function admitRun(identity: ProjectIdentity, projectId: string, inp
         await tx.$executeRaw`ROLLBACK TO SAVEPOINT ai_admission`;
         return { refusal: error };
       }
-    }, { timeout: WRITE_TIMEOUT_MS });
+    });
     if ("refusal" in outcome) throw outcome.refusal;
     return outcome.result;
   });

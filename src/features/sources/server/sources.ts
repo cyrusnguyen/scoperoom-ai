@@ -3,7 +3,7 @@ import { evidenceStats } from "../../proposals/domain/capture.ts";
 import { keyPattern, uuid, type ProjectIdentity } from "../../projects/contracts/project.ts";
 import {
   checkReceipt, findReceipt, lockActor, lockProject, profileFor, readAsMember, recordEvent, requestHash, requireActive, requireMember, saveReceipt,
-  withDatabase, type ProjectRow, type Transaction, WRITE_TIMEOUT_MS,
+  withDatabase, type ProjectRow, type Transaction,
 } from "../../projects/server/access.ts";
 import { draftMutation } from "../../drafts/server/execute-command.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
@@ -50,7 +50,7 @@ async function sourceMutation(identity: ProjectIdentity, projectId: string, key:
       const value = await work(tx, project, profile.id);
       await saveReceipt(tx, profile.id, "PROJECT", project.id, key, operation, hash, value);
       return { ...value, replayed: false };
-    }, { timeout: WRITE_TIMEOUT_MS });
+    });
   });
 }
 
