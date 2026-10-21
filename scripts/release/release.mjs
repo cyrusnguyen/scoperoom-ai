@@ -29,11 +29,15 @@ export function withRootCert(url, path) {
   return parsed.toString();
 }
 
-/** Every edge check as [method, url, expected status]: web health, and 404 for each path the other service owns. */
+/**
+ * Every edge check as [method, url, expected status, body?]: web health, 404 for each path the other service owns, and 401 for an unsigned
+ * Inngest execution. That one needs a body: the SDK refuses a bodyless POST in every mode, but skips signatures entirely outside cloud mode.
+ */
 export function expectations(web, worker) {
   const tasks = ["repair", "cleanup"];
   return [
     ["GET", `${web}/api/health`, 200],
+    ["POST", `${worker}/api/inngest`, 401, "{}"],
     ...["GET", "POST", "PUT"].map((method) => [method, `${web}/api/inngest`, 404]),
     ...tasks.flatMap((task) => [["GET", `${web}/api/internal/worker/${task}`, 404], ["POST", `${web}/api/internal/worker/${task}`, 404]]),
     ...["/", "/api/health", "/api/projects", "/logo.png"].map((path) => ["GET", `${worker}${path}`, 404]),
@@ -73,7 +77,7 @@ async function vercel(method, path, body) {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const commands = {
+export const commands = {
   /** Before the migration or any Vercel change: a bad origin must stop the release while production is untouched. */
   async preflight() {
     releaseOrigin("WEB_URL", process.env.WEB_URL);
@@ -134,8 +138,8 @@ const commands = {
   },
   async checks() {
     const failures = [];
-    for (const [method, url, expected] of expectations(releaseOrigin("WEB_URL", process.env.WEB_URL), releaseOrigin("WORKER_URL", process.env.WORKER_URL))) {
-      const response = await fetch(url, { method, redirect: "manual" });
+    for (const [method, url, expected, payload] of expectations(releaseOrigin("WEB_URL", process.env.WEB_URL), releaseOrigin("WORKER_URL", process.env.WORKER_URL))) {
+      const response = await fetch(url, { method, redirect: "manual", body: payload, headers: payload ? { "Content-Type": "application/json" } : undefined });
       const body = expected === 200 ? await response.json().catch(() => null) : null;
       const ok = response.status === expected && (expected !== 200 || body?.status === "ok");
       console.log(`${ok ? "ok  " : "FAIL"} ${method} ${new URL(url).pathname} ${response.status}`);

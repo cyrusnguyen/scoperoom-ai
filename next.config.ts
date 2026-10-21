@@ -8,7 +8,12 @@ const nextConfig: NextConfig = {
     root: process.cwd(),
   },
   async headers() {
-    return [{ source: "/:path*", headers: [{ key: "Content-Security-Policy", value: "frame-ancestors 'none'; object-src 'none'; base-uri 'self'" }] }];
+    return [{ source: "/:path*", headers: [
+      { key: "Content-Security-Policy", value: "frame-ancestors 'none'; object-src 'none'; base-uri 'self'" },
+      { key: "X-Content-Type-Options", value: "nosniff" },
+      // Keeps /invite/<token> paths off other sites. Not no-referrer: plain form posts would then send `Origin: null`, which the write checks refuse.
+      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+    ] }];
   },
 };
 

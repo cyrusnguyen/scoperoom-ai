@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { createClient } from "@supabase/supabase-js";
@@ -146,6 +147,29 @@ test("forged role metadata, malformed topics, stale epochs and public channels g
 
     // The owner can join a private channel, but the same topic as a public channel is refused by the private-only tenant.
     await assert.rejects(rt.join(await rt.client(owner!), topics.collab, { private: false }), /private/i);
+  });
+});
+
+test("the publishable key the browser holds for Realtime reaches no Data API table or function, and verification refuses one that appears", async () => {
+  await withRealtimeFixture(async (fixture) => {
+    const spec = await (await fetch(`${process.env.E2E_SUPABASE_URL}/rest/v1/`, { headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY! } })).json() as { paths?: Record<string, unknown> };
+    assert.deepEqual(Object.keys(spec.paths ?? {}), ["/"], "the Data API serves no table, view or function to an anonymous key holder");
+    // A table or function created in public picks up the provider's default grants to anon and authenticated, so the release-time verification must refuse it.
+    const verify = () => spawnSync(process.execPath, ["scripts/db/realtime.mjs", "verify"], { encoding: "utf8" });
+    for (const [create, drop] of [
+      ["create table public.scoperoom_exposure_probe (id int)", "drop table if exists public.scoperoom_exposure_probe"],
+      ["create function public.scoperoom_exposure_probe() returns int language sql as 'select 1'", "drop function if exists public.scoperoom_exposure_probe()"],
+    ]) {
+      try {
+        await fixture.database.query(create!);
+        const exposed = verify();
+        assert.notEqual(exposed.status, 0, create);
+        assert.match(exposed.stderr, /public schema, which the Data API serves to any holder of the publishable key/, create);
+      } finally {
+        await fixture.database.query(drop!);
+      }
+      assert.equal(verify().status, 0, `verification passes again after: ${drop}`);
+    }
   });
 });
 
