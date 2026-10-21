@@ -1,5 +1,5 @@
-import { text } from "../../drafts/contracts/strict.ts";
-import { uuid } from "./project.ts";
+import { invalid as invalidInput, text } from "../../drafts/contracts/strict.ts";
+import { keyPattern, uuid } from "./project.ts";
 
 export const projectMemberRoles = ["EDITOR", "REVIEWER", "VIEWER"] as const;
 export type ProjectMemberRole = (typeof projectMemberRoles)[number];
@@ -10,12 +10,7 @@ export const MAX_COLLABORATORS = 10;
 export const MAX_PENDING_INVITATIONS = 50;
 export const MY_INVITATION_LIMIT = 50;
 
-const keyPattern = /^[\x21-\x7e]{16,128}$/;
-const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
-
-function invalidInput(): never {
-  throw new Error("INVALID_INPUT");
-}
+export const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 
 function object(input: unknown, allowed: string[]) {
   if (!input || typeof input !== "object" || Array.isArray(input)) invalidInput();

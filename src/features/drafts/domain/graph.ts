@@ -172,7 +172,7 @@ function transformGraphCommand(
     versions: {},
     retiredIds: [],
   });
-  /** A layout-only effect (Task 13's side-only RECONNECT_EDGE): the document is untouched, so no revision or version
+  /** A layout-only effect (the side-only RECONNECT_EDGE): the document is untouched, so no revision or version
    * advances, but the changed layout still needs its own invariant check and its layoutRevision. */
   const layoutOnly = (): Applied => {
     if (!inPlace) checkDraft({ document, layout });

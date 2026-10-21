@@ -16,26 +16,3 @@ export async function repairNow(dispatcher: JobDispatcher | undefined, db?: Sql)
 export function cleanupNow(db?: WorkerCleanupDatabase): Promise<WorkerCleanupResult> {
   return workerCleanup(CLEANUP_BATCH, db);
 }
-
-/**
- * Repair then cleanup in one call (Data 04, CI/CD). The two are separately tested services and independent of each other, so a failure in
- * one never skips the other; the first failure is rethrown so the caller records it. Neither can create business intent, extend a deadline
- * or call a model: SQL deadlines stay authoritative when a tick is late. Without a dispatcher the repair cannot deliver, which is reported
- * after cleanup still ran.
- */
-export async function runMaintenance(dispatcher: JobDispatcher | undefined, db?: Sql & WorkerCleanupDatabase): Promise<WorkerCleanupResult> {
-  let failure: unknown;
-  try {
-    await repairNow(dispatcher, db);
-  } catch (error) {
-    failure = error;
-  }
-  let cleaned: WorkerCleanupResult | undefined;
-  try {
-    cleaned = await cleanupNow(db);
-  } catch (error) {
-    failure ??= error;
-  }
-  if (failure) throw failure;
-  return cleaned!;
-}

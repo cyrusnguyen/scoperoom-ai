@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import LoginView from "@/features/access/ui/login-view";
 import { safeInviteContinuation } from "@/features/access/server/continuation";
-import { authConfig } from "@/server/web/auth-config";
-import { createAuthClient } from "@/server/web/supabase";
+import { hasVerifiedSession } from "@/server/web/require-user";
 
 export const metadata: Metadata = { title: "Sign in | ScopeRoom", robots: { index: false } };
 
@@ -12,11 +11,7 @@ type LoginPageProps = { searchParams: Promise<{ error?: string; code?: string; s
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const { error, code, status, continue: rawContinuation } = await searchParams;
   const continuation = safeInviteContinuation(rawContinuation);
-  if (authConfig()) {
-    const supabase = await createAuthClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user?.email_confirmed_at && !user.is_anonymous) redirect(continuation ?? "/app");
-  }
+  if (await hasVerifiedSession()) redirect(continuation ?? "/app");
   if (code) redirect(`/login?status=confirmed${continuation ? `&continue=${encodeURIComponent(continuation)}` : ""}`);
   const message = error === "invalid"
     ? "We could not sign you in. Check your email and password."

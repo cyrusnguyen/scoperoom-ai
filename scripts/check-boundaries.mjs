@@ -11,7 +11,7 @@ const bootstrapOnly = ["src/server/maintenance/cleanup-transient.ts"];
 // Provider SDKs are server-only and may be imported only by their adapters and the Inngest entrypoints.
 const sdkPattern = /^(?:ai|@ai-sdk\/[^/]+|inngest)(?:\/|$)/;
 const sdkOwners = ["src/features/proposals/server/adapters/model.ts", "src/features/proposals/server/adapters/inngest.ts", "src/features/proposals/server/providers.ts", "src/features/proposals/server/deliver-run.ts", "src/worker/", "src/app/api/inngest/"];
-// Worker services run inside Inngest, so they are checked as workers whether or not an entrypoint reaches them yet.
+// Worker services run inside Inngest, so they are checked as workers whether or not an entrypoint reaches them.
 const workerRoots = ["src/worker/", "src/features/proposals/server/deliver-run.ts", "src/features/proposals/server/maintenance.ts", "src/features/proposals/server/run-ai.ts", "src/features/proposals/server/dispatch-ai.ts", "src/features/proposals/server/repair-runs.ts", "src/features/proposals/server/providers.ts", "src/features/proposals/server/adapters/"];
 
 function filesAt(directory) {
@@ -86,9 +86,10 @@ export function checkBoundaries(root = process.cwd()) {
   };
   for (const file of filesAt(join(absoluteRoot, "src"))) {
     const path = relative(absoluteRoot, file).replaceAll("\\", "/");
-    if (importsAt(file).client) visit(file, "client");
+    const { client, imports } = importsAt(file);
+    if (client) visit(file, "client");
     if (workerRoots.some(root => inside(path, root) || path === root)) visit(file, "worker");
-    if (!sdkOwners.some(owner => inside(path, owner) || path === owner)) for (const specifier of importsAt(file).imports) if (sdkPattern.test(specifier)) findings.push(`${path} imports provider SDK ${specifier} outside its adapter.`);
+    if (!sdkOwners.some(owner => inside(path, owner) || path === owner)) for (const specifier of imports) if (sdkPattern.test(specifier)) findings.push(`${path} imports provider SDK ${specifier} outside its adapter.`);
   }
   return findings;
 }

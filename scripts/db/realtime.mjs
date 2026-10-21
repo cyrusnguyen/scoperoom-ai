@@ -109,7 +109,7 @@ async function requireHostedPrivateOnly() {
       });
     });
     if (status === "SUBSCRIBED") throw new Error("Hosted Realtime still allows public channels: turn off Allow public access in the Supabase Realtime settings.");
-    // ponytail: matches the provider's refusal wording; 12b Step 3 records the real message. Widen only to that exact text.
+    // ponytail: matches the provider's refusal wording ("PrivateOnly: This project only allows private channels" locally); widen only to the exact text it sends.
     if (status !== "CHANNEL_ERROR" || !/private/i.test(error?.message ?? "")) throw new Error(`Hosted Realtime private-only check was inconclusive (${status}).`);
   } finally {
     await supabase.removeAllChannels();
@@ -217,10 +217,15 @@ async function browserProblems(client) {
   const { rows: [access] } = await client.query(`
     select bool_and(has_schema_privilege(r, 'app_private', 'USAGE') and has_function_privilege(r, '${HELPER}', 'EXECUTE')) as helper,
       has_schema_privilege('authenticated', 'app', 'USAGE') or has_schema_privilege('anon', 'app', 'USAGE') as app_schema,
-      exists (select 1 from pg_class c where c.relnamespace = 'app'::regnamespace and c.relkind = 'r' and (has_table_privilege('authenticated', c.oid, 'SELECT') or has_any_column_privilege('authenticated', c.oid, 'SELECT'))) as app_tables
+      exists (select 1 from pg_class c where c.relnamespace = 'app'::regnamespace and c.relkind = 'r' and (has_table_privilege('authenticated', c.oid, 'SELECT') or has_any_column_privilege('authenticated', c.oid, 'SELECT'))) as app_tables,
+      exists (select 1 from pg_class c, unnest(array['anon', 'authenticated']) as b where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'v', 'm', 'f')
+        and (has_any_column_privilege(b, c.oid, 'SELECT,INSERT,UPDATE') or has_table_privilege(b, c.oid, 'DELETE,TRUNCATE')))
+      or exists (select 1 from pg_proc p, unnest(array['anon', 'authenticated']) as b where p.pronamespace = 'public'::regnamespace
+        and p.prorettype <> 'trigger'::regtype and has_function_privilege(b, p.oid, 'EXECUTE')) as public_objects
     from unnest(array['authenticated', '${CLIENT}']) as r`);
   if (!access.helper) problems.push("authenticated or the client role cannot execute the Realtime helper");
   if (access.app_schema || access.app_tables) problems.push("authenticated can reach application data");
+  if (access.public_objects) problems.push("anon or authenticated can reach a table, view or function in the public schema, which the Data API serves to any holder of the publishable key");
   const { rows: [table] } = await client.query("select relrowsecurity from pg_class where oid = 'realtime.messages'::regclass");
   if (!table?.relrowsecurity) problems.push("provider row level security is off on realtime.messages");
   const { rows: policies } = await client.query(`select policyname::text, cmd::text, roles::text[] as roles, regexp_replace(coalesce(qual, with_check), '\\s+', ' ', 'g') as expression from pg_policies where schemaname = 'realtime' and tablename = 'messages' order by policyname`);

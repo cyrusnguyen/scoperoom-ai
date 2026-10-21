@@ -10,12 +10,12 @@ import type { DraftView } from "@/features/drafts/contracts/scope-document";
 
 const UNCONFIRMED = (label: string) => `We couldn’t confirm “${label}”. Retry sends the same request.`;
 
-/**
- * Sends one Specs write; the store keeps an unresolved request until its own key settles (PR 07b adds draft writes).
- * `onSaved` runs for every committed request, also when its panel was closed or its project left meanwhile, so it may only use store-bound setters.
- */
 type SentSpecsRequest = SpecsRequest & { body: Record<string, unknown> };
 
+/**
+ * Sends one Specs write, as an API write or, through `sendDraft`, a draft write; the store keeps an unresolved request until its own key settles.
+ * `onSaved` runs for every committed request, also when its panel was closed or its project left meanwhile, so it may only use store-bound setters.
+ */
 export function useSpecsWrite(ui: SpecsUi, update: (change: (ui: SpecsUi) => Partial<SpecsUi>) => void, onSaved?: (request: SentSpecsRequest, data: unknown) => void) {
   const { beforeWrite, fence, invalidate, revalidate } = useSync();
   const { projectId, writeDraft } = useStudio();

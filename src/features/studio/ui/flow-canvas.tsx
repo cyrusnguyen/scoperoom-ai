@@ -113,7 +113,7 @@ function FlowEdgeLine({ id, selected, sourceX, sourceY, targetX, targetY, source
 }
 
 /**
- * Inline step name / connection label editor (UI02 Task 8). Its text lives in the same per-project buffer as the
+ * Inline step name / connection label editor. Its text lives in the same per-project buffer as the
  * inspector's field, so both show one value and neither overwrites the other; closing it (blur, Enter or Escape)
  * applies it like the inspector does: the same command, queued locally until Save, and the same conflict review.
  * A hidden copy of the text sizes it, so the editor covers the label exactly and grows with what is typed.
@@ -210,8 +210,8 @@ export function ReadOnlyFlowCanvas({ draft, flowId }: { draft: DraftView; flowId
 /**
  * Controlled React Flow view of one flow of the shown draft (saved content plus unsaved changes). Selection, pan, zoom
  * and measurement stay local and never become edits; connecting and reconnecting queue the same commands as the Connect
- * form and the inspector, and a drop queues the moved steps, all saved later by Save, autosave or a save-first action
- * (Task 14b). Keyboard arrow moves are ignored: the inspector's position form is the keyboard path. `preview` renders proposed positions read-only.
+ * form and the inspector, and a drop queues the moved steps, all saved later by Save, autosave or a save-first action.
+ * Keyboard arrow moves are ignored: the inspector's position form is the keyboard path. `preview` renders proposed positions read-only.
  * A `ReactFlowProvider` wraps this so the shape panel's click path and the canvas wrapper's drop handler can both
  * convert a screen point to a flow position (`screenToFlowPosition` needs an ancestor provider).
  */
@@ -433,7 +433,7 @@ function CanvasInner({ flowId, preview }: { flowId: string; preview?: { position
     const { fromId: source, toId: target, fromHandle, toHandle } = orientReconnect(connection, savedEdge, dragged, keptSide, defaultSide(dragged === "source" ? "target" : "source"));
     const sides = isSide(fromHandle) && isSide(toHandle) ? { fromSide: fromHandle, toSide: toHandle } : {};
     // Dragging an end to another point on the same two steps only changes which handles it uses: a plain layout-only
-    // save (Task 13), never the endpoint-choice review the inspector's dropdown form needs.
+    // save, never the endpoint-choice review the inspector's dropdown form needs.
     if (source === savedEdge.fromId && target === savedEdge.toId) {
       if (!sides.fromSide) return;
       const outcome = await run({ commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision: draft.documentRevision, payload: { edgeId: edge.id, fromId: source, toId: target, ...sides } });

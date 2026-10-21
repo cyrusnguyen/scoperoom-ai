@@ -253,7 +253,7 @@ async function waitForWaiters(database: Client, pid: number, count: number) {
   }
   throw new Error(`Held-lock barrier did not observe ${count} waiting transactions.`);
 }
-async function barrier(f: Fixture, projectId: string, work: (holder: Client, pid: number) => Promise<void>) {
+async function barrier(projectId: string, work: (holder: Client, pid: number) => Promise<void>) {
   const holder = new Client({
     connectionString: process.env.SCOPEROOM_BOOTSTRAP_DATABASE_URL!
   });
@@ -276,7 +276,7 @@ for (const sameKey of [true, false])
     await withFixture(async (f) => {
       const { owner, projectId, draftId, input } = await prepared(f);
       const key = randomUUID();
-      await barrier(f, projectId, async (holder, pid) => {
+      await barrier(projectId, async (holder, pid) => {
         const first = freezeReview(owner, projectId, draftId, input, key);
         await waitForWaiters(f.database, pid, 1);
         const second = freezeReview(owner, projectId, draftId, input, sameKey ? key : randomUUID());
@@ -307,7 +307,7 @@ for (const first of ["freeze", "move"] as const)
   }, async () => {
     await withFixture(async (f) => {
       const { owner, projectId, draftId, input } = await prepared(f, true);
-      await barrier(f, projectId, async (holder, pid) => {
+      await barrier(projectId, async (holder, pid) => {
         const freeze = () => freezeReview(owner, projectId, draftId, input, randomUUID());
         const move = () => savePositions(owner, projectId, draftId, {
           key: randomUUID(), mode: "MOVE_NODES", flowId: ids.flow, items: [{
@@ -346,7 +346,7 @@ for (const change of ["policy", "archive"] as const)
     }, async () => {
       await withFixture(async (f) => {
         const { owner, projectId, draftId, input } = await prepared(f);
-        await barrier(f, projectId, async (holder, pid) => {
+        await barrier(projectId, async (holder, pid) => {
           const freeze = () => freezeReview(owner, projectId, draftId, input, randomUUID());
           const edit = () => change === "policy" ? updateApprovalPolicy(owner, projectId, {
             key: randomUUID(), expectedApprovalPolicyVersion: 2, designatedApproverId: null
@@ -859,7 +859,7 @@ for (const sameKey of [true, false])
   test(`held decision barrier serializes ${sameKey ? "identical" : "competing"} keys into one immutable effect`, { skip: !canRun }, async () => {
     await withFixture(async (f) => {
       const { owner, projectId, frozen, decision } = await readyDecision(f), key = randomUUID(), before = await decisionState(f, projectId);
-      await barrier(f, projectId, async (holder, pid) => {
+      await barrier(projectId, async (holder, pid) => {
         const first = reviewWrites.decideReview(owner, projectId, frozen.reviewId, decision, key);
         await waitForWaiters(f.database, pid, 1);
         const second = reviewWrites.decideReview(owner, projectId, frozen.reviewId, sameKey ? decision : { ...decision, decision: "REJECT", reason: "Competing decision" }, sameKey ? key : randomUUID());
@@ -888,7 +888,7 @@ for (const change of ["policy", "archive", "downgrade", "remove"] as const)
     test(`held decision versus ${change}: ${first} obtains project lock first`, { skip: !canRun }, async () => {
       await withFixture(async (f) => {
         const { owner, approver, projectId, frozen, decision } = await readyDecision(f, "REVIEWER"), actorId = await f.profileId(approver);
-        await barrier(f, projectId, async (holder, pid) => {
+        await barrier(projectId, async (holder, pid) => {
           const decide = () => reviewWrites.decideReview(approver, projectId, frozen.reviewId, decision, randomUUID());
           const edit = () => change === "policy" ? updateApprovalPolicy(owner, projectId, { key: randomUUID(), expectedApprovalPolicyVersion: 3, designatedApproverId: null })
             : change === "archive" ? archiveProject(owner, projectId, { key: randomUUID(), expectedProjectVersion: 1, reason: "Close" })

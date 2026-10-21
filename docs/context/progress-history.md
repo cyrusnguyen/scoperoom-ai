@@ -2,6 +2,19 @@
 
 These checkpoints are historical evidence. Read [the progress tracker](progress-tracker.md) for the active stage, authorization and next action. The original historical content is preserved below, with em dashes replaced by plain hyphens to follow current commit hygiene.
 
+## Tracker entries moved here on 2026-10-21
+
+`fix/audit-findings` merged as PR #50 (`87ea6a6`) and release run 39185379268 deployed it. Its tracker entry follows unchanged.
+
+- `fix/audit-findings` (PR #50) from main `061ddec`, requested by the user: fixes from a whole-codebase audit for concurrency, performance, N+1 queries, missing awaits, logic errors and dirty code. A type-aware lint found no floating or misused promises. Each change had an independent review; the findings were fixed and re-reviewed. Changes:
+  - The citation excerpt re-rendered the whole shell for ever when the cited lines were blank; the shared `setDraft` now returns the same store for an unchanged value.
+  - Every write that takes the project or owner capacity lock now has the 15 s transaction budget saves already had, set once as the database client's default (`transactionOptions` in `src/server/db.ts`; read snapshots keep 5 s); Prisma counted the lock wait against 5 s, so commands, positions, reviews, imports, member and invitation writes answered 503 under contention. The timer runs only between the function and the database, so a distant browser does not shorten it.
+  - Import quotas: applied previews keep their body 7 days but no longer count as open previews (10 per actor), so 10 imports a week no longer block every preview; the byte caps still count them. Cleanup deletes discarded and expired preview rows 30 days after expiry (`deletedPreviews`, migration `20261019000000`), so the row cap no longer fills for ever.
+  - AI: admission refuses a capture over the 16,000 input-token estimate before it keeps prompt evidence, a slot or budget; the panel limits the instruction to 8,000 normalized code points and says what to change. Deleting a run refunds every unclaimed reservation; a crashed attempt followed by revoked access ends ACCESS_REVOKED when its window closes instead of holding the slot until the deadline; a second call that times out is `MODEL_TIMEOUT` (migration `20261019000100`). The always-unknown dispatcher `cancel` is gone, and a read-only role no longer leaves a stuck pending request.
+  - Performance: canvas steps, edges and handlers keep their identity, so a drag frame or typing in another panel no longer re-renders every step; arrow keys on a selected step are stopped before React Flow shifts its own copy. Moves-only and sides-only saves no longer send and rewrite the whole document. `/api/me` reads the staff role once; applying a proposal inserts its sources in one statement.
+  - Writes give up after 120 s as uncertain (same-key retry), so a dead connection cannot hold a save. Two shell writes now end the session on 401, review history Load more no longer drops a refresh in flight (and a Load more read a newer first page replaced never reaches the view, from Codex review), the lost-link invitation button says what it does, and an unused source-list helper is gone.
+  - Evidence (local, guarded stack `scoperoom-stage04-test`, recreated with its published ports pinned to 127.0.0.1 after `supabase start`): `lint` and `typecheck` pass; unit 751/751; integration 414/414; workers 35/35; Realtime 13/13; the full production browser suite 504/504 (0 flaky, 0 skipped, two workers) at `6b9c975`; after the complexity cuts and the Codex fix, the reviews spec 51/51 and PR CI pass, and Codex found no issues on `5dd37d5`. Each new test fails without its fix. No change was checked against the hosted target or a live model.
+
 ## Tracker entries moved here on 2026-10-19
 
 Both branches merged: `fix/flaky-tests-and-ai-citations` as PR #48 and `fix/ai-improve-insert-steps` as PR #49, and both were released. Their tracker entries follow unchanged.

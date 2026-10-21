@@ -1,4 +1,4 @@
-import { text } from "../../drafts/contracts/strict.ts";
+import { invalid as invalidInput, text } from "../../drafts/contracts/strict.ts";
 import type { RealtimeTopics } from "../../collaboration/contracts/topics.ts";
 import type { DraftView } from "../../drafts/contracts/scope-document.ts";
 
@@ -37,10 +37,6 @@ export type ProjectStatusView = {
 export const PROJECT_LIST_LIMIT = 100;
 export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const keyPattern = /^[\x21-\x7e]{16,128}$/;
-
-function invalidInput(): never {
-  throw new Error("INVALID_INPUT");
-}
 
 export function validateProjectCreateInput(input: unknown): CreateProjectInput {
   if (!input || typeof input !== "object" || Array.isArray(input)) invalidInput();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deploymentProblem, expectations, maskCommand, releaseOrigin, releaseSha, synced, withRootCert } from "../scripts/release/release.mjs";
+import { commands, deploymentProblem, expectations, maskCommand, releaseOrigin, releaseSha, synced, withRootCert } from "../scripts/release/release.mjs";
 
 test("a database URL is masked only inside GitHub Actions, escaped so the runner masks the printed form", () => {
   const url = "postgresql://u:p%25w@db.example.test:5432/postgres?sslrootcert=%2Ftmp%2Fca.crt";
@@ -26,7 +26,30 @@ test("the edge checks cover web health, the gated paths on both origins and noth
     assert.ok(list.some(([m, u, s]) => m === "POST" && u === `https://worker.example.test/api/internal/worker/${task}` && s === 404), "unauthenticated maintenance call");
     assert.ok(list.some(([m, u, s]) => m === "POST" && u === `https://web.example.test/api/internal/worker/${task}` && s === 404));
   }
-  assert.equal(list.filter(([, , s]) => s !== 404).length, 1, "only health is expected to succeed");
+  assert.deepEqual(list.filter(([, , s]) => s !== 404).map(([, , s]) => s), [200, 401], "only health succeeds; the unsigned execution is refused");
+});
+
+test("the edge checks send the Inngest probe as JSON and fail when signatures are not enforced", async (t) => {
+  const web = "https://web.example.test", worker = "https://worker.example.test";
+  const sent: { method?: string; url: string; body: unknown; type: unknown }[] = [];
+  let inngestStatus = 401;
+  t.mock.method(console, "log", () => {});
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    sent.push({ method: init.method, url, body: init.body, type: (init.headers as Record<string, string> | undefined)?.["Content-Type"] });
+    if (url === `${worker}/api/inngest`) return new Response(null, { status: inngestStatus });
+    return url === `${web}/api/health` ? Response.json({ status: "ok" }) : new Response(null, { status: 404 });
+  });
+  const saved = { WEB_URL: process.env.WEB_URL, WORKER_URL: process.env.WORKER_URL };
+  Object.assign(process.env, { WEB_URL: web, WORKER_URL: worker });
+  try {
+    await commands.checks();
+    assert.deepEqual(sent.find(({ url }) => url === `${worker}/api/inngest`), { method: "POST", url: `${worker}/api/inngest`, body: "{}", type: "application/json" });
+    assert.equal(sent.filter(({ body }) => body !== undefined).length, 1, "every other check sends no body");
+    inngestStatus = 500; // INNGEST_DEV on the worker skips verification and fails later, on the missing function id
+    await assert.rejects(commands.checks(), /1 edge check\(s\) failed/);
+  } finally {
+    for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  }
 });
 
 test("only Inngest's registered answer counts as a sync", () => {

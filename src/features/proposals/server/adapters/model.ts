@@ -56,8 +56,8 @@ function normalize(error: unknown): ModelReply {
   return { kind: "unknown" }; // timeout, abort, network failure, other 4xx or anything unrecognized: the call may have run
 }
 
-/** `apiKey` is Google's (the original single provider); `anthropicApiKey` adds Anthropic. A provider without a key is not supported. */
-export type ModelAdapterOptions = { apiKey?: string; anthropicApiKey?: string; fetch?: typeof fetch };
+/** A provider without a key is not supported. */
+export type ModelAdapterOptions = { googleApiKey?: string; anthropicApiKey?: string; fetch?: typeof fetch };
 
 /**
  * Anthropic's strict structured output compiles the schema into a grammar and refuses OUTPUT_SCHEMA as "Schema is too complex" (live,
@@ -77,10 +77,10 @@ function reportedUsage(provider: "google" | "anthropic", metadata: Record<string
   return { inputTokens: typeof raw[input] === "number" ? usage.inputTokens ?? null : null, outputTokens: typeof raw[output] === "number" ? usage.outputTokens ?? null : null };
 }
 
-export function createModelGateway({ apiKey, anthropicApiKey, fetch: transport = fetch }: ModelAdapterOptions): ModelGateway {
+export function createModelGateway({ googleApiKey, anthropicApiKey, fetch: transport = fetch }: ModelAdapterOptions): ModelGateway {
   const bounded = boundedFetch(transport);
   const providers = {
-    google: apiKey ? createGoogleGenerativeAI({ apiKey, fetch: bounded }) : null,
+    google: googleApiKey ? createGoogleGenerativeAI({ apiKey: googleApiKey, fetch: bounded }) : null,
     anthropic: anthropicApiKey ? createAnthropic({ apiKey: anthropicApiKey, fetch: bounded }) : null,
   };
   const resolve = (model: string) => {

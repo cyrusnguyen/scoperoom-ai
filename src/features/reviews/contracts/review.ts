@@ -2,6 +2,8 @@ import type { DraftLayout } from "../../drafts/contracts/draft-layout.ts";
 import { parseDraftPair, type DraftView, type ScopeDocument } from "../../drafts/contracts/scope-document.ts";
 import { id, invalid, keys, object, oneOf, text, version } from "../../drafts/contracts/strict.ts";
 import { lineStarts, SOURCE_LIMITS, type SourceVersionView } from "../../sources/contracts/source-version.ts";
+/** Code-point cap on a review reason or decision comment; the review screens count against the same number. */
+export const REVIEW_REASON_LIMIT = 4000;
 export const REVIEW_BODY_LIMIT = 4 * 1024;
 export const WITHDRAW_BODY_LIMIT = 32 * 1024;
 export const DECISION_BODY_LIMIT = 32 * 1024;
@@ -63,7 +65,7 @@ export function parseWithdrawInput(raw: unknown): WithdrawInput {
   const body = object(raw);
   keys(body, ["expectedReviewVersion", "reason"]);
   return {
-    expectedReviewVersion: version(body.expectedReviewVersion), reason: text(body.reason, 4000, true)
+    expectedReviewVersion: version(body.expectedReviewVersion), reason: text(body.reason, REVIEW_REASON_LIMIT, true)
   };
 }
 export const CANDIDATE_BYTES = 4 * 1024 * 1024;
@@ -267,7 +269,7 @@ export function parseDecision(raw: unknown): DecisionInput {
   const body = object(raw);
   keys(body, ["decision", "expectedReviewVersion", "expectedReviewHash"], ["reason"]);
   const decision = oneOf(body.decision, REVIEW_DECISIONS);
-  const reason = Object.hasOwn(body, "reason") ? text(body.reason, 4000, decision !== "APPROVE") : undefined;
+  const reason = Object.hasOwn(body, "reason") ? text(body.reason, REVIEW_REASON_LIMIT, decision !== "APPROVE") : undefined;
   if (decision !== "APPROVE" && reason === undefined) invalid();
   return {
     decision, expectedReviewVersion: version(body.expectedReviewVersion), expectedReviewHash: reviewHashValue(body.expectedReviewHash),
@@ -281,7 +283,7 @@ export function parseReviewDecision(raw: unknown): ReviewDecision {
   const actorDisplayName = body.actorDisplayName === null ? null : text(body.actorDisplayName, 120, true);
   const actorRole = body.actorRole === null ? null : oneOf(body.actorRole, ["OWNER", "EDITOR", "REVIEWER"] as const);
   if ((actorDisplayName === null) !== (actorRole === null)) invalid();
-  const comment = body.comment === null ? null : text(body.comment, 4000, decision !== "APPROVE");
+  const comment = body.comment === null ? null : text(body.comment, REVIEW_REASON_LIMIT, decision !== "APPROVE");
   if (decision !== "APPROVE" && comment === null) invalid();
   return {
     id: id(body.id), projectId: id(body.projectId), reviewId: id(body.reviewId), actorId: id(body.actorId), actorDisplayName, actorRole, decision,

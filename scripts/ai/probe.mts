@@ -59,15 +59,14 @@ async function main() {
     process.exitCode = 2;
     return;
   }
-  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim();
   const model = process.env.AI_MODEL?.trim();
-  if (!apiKey || !model) {
-    console.error("GOOGLE_GENERATIVE_AI_API_KEY and AI_MODEL must both be set (never printed).");
+  const gateway = createModelGateway({ googleApiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim(), anthropicApiKey: process.env.ANTHROPIC_API_KEY?.trim() });
+  if (!model || !gateway.supports(model)) {
+    console.error("AI_MODEL must name a supported provider-qualified model, and that provider's key must be set: GOOGLE_GENERATIVE_AI_API_KEY (google/) or ANTHROPIC_API_KEY (anthropic/). Keys are never printed.");
     process.exitCode = 2;
     return;
   }
   const version = (name: string): string => JSON.parse(readFileSync(new URL(`../../node_modules/${name}/package.json`, import.meta.url), "utf8")).version;
-  const gateway = createModelGateway({ apiKey });
   const fixture = resultFixture();
   const cases = [
     { name: "generate", capture: fixture.generate(), schema: null },
@@ -104,7 +103,7 @@ async function main() {
     });
   }
   const summary = {
-    at: new Date().toISOString(), model, packages: { ai: version("ai"), "@ai-sdk/google": version("@ai-sdk/google") },
+    at: new Date().toISOString(), model, packages: { ai: version("ai"), "@ai-sdk/anthropic": version("@ai-sdk/anthropic"), "@ai-sdk/google": version("@ai-sdk/google") },
     ceilings: { maxInputTokens: AI_LIMITS.maxInputTokens, maxOutputTokens: AI_LIMITS.maxOutputTokens },
     calls: results.length, verified: results.every((result) => result.verified), results,
   };

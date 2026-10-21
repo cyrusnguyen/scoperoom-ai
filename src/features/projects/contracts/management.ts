@@ -1,8 +1,6 @@
-import { text } from "../../drafts/contracts/strict.ts";
-import { uuid } from "./project.ts";
+import { invalid as invalidInput, text } from "../../drafts/contracts/strict.ts";
+import { keyPattern, uuid } from "./project.ts";
 import { projectMemberRoles } from "./invitation.ts";
-
-const keyPattern = /^[\x21-\x7e]{16,128}$/;
 
 export type ProjectManagementKey = { key: string };
 
@@ -29,10 +27,6 @@ export type ProjectArchiveInput = ProjectManagementKey & {
   expectedProjectVersion: number;
   reason?: string;
 };
-
-function invalidInput(): never {
-  throw new Error("INVALID_INPUT");
-}
 
 function version(value: unknown) {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) invalidInput();

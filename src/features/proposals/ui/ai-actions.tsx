@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { apiMutate, apiRead, sessionEnded } from "@/client/api";
 import { useAiSyncReader, useSync } from "@/features/collaboration/ui/sync-context";
 import { finishAiApply, retainAiApply, acknowledgedApplyCovered, currentAiRun, recoverUnavailableCurrentRun, type ProjectUi } from "@/features/shell/ui/project-ui";
+import { uuid } from "@/features/projects/contracts/project";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import { Icon } from "@/features/shell/ui/icon";
 import { createRunResources, type ReadState } from "./run-resources";
@@ -12,7 +13,7 @@ import { RunHistory } from "./run-history";
 import { acknowledgedInstruction, followUpThread, instructionError, retryStartRequest, startRefusalText } from "./ai-submit";
 import { ConversationThread } from "./conversation-thread";
 import { allowanceText } from "../domain/allowance";
-import type { AiAllowance, RunPage, RunView, StartRunInput, TaskKind } from "../contracts/tasks";
+import { AI_LIMITS, type AiAllowance, type RunPage, type RunView, type StartRunInput, type TaskKind } from "../contracts/tasks";
 
 /**
  * The owner's AI allowance is owner-wide: a run in another of their projects or the UTC day rollover changes it without this
@@ -36,8 +37,6 @@ function useOwnerAllowance(projectId: string, page: RunPage) {
   }, [projectId, page]);
   return allowance;
 }
-
-const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update: (change: (current: ProjectUi["ai"]) => ProjectUi["ai"]) => void }) {
   const studio = useStudio();
@@ -81,7 +80,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
   }, [activeJobVisible, setActiveJobVisible]);
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("run");
-    update((current) => ({ ...current, selectedRunId: currentAiRun(current, requested && RUN_ID.test(requested) ? requested : null) }));
+    update((current) => ({ ...current, selectedRunId: currentAiRun(current, requested && uuid.test(requested) ? requested : null) }));
   // Initial URL restoration is project-keyed; later selection changes use the component state.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -297,7 +296,7 @@ export default function AiActions({ ui, update }: { ui: ProjectUi["ai"]; update:
       {thread && <ConversationThread turns={thread.turns} disabled={busy || Boolean(ui.pendingRequest)} onStartFresh={startFresh} />}
       <div className="ai-composer">
         <label htmlFor="ai-instruction">Instruction</label>
-        <textarea id="ai-instruction" rows={4} maxLength={16000} value={ui.instruction} onChange={(event) => update((current) => ({ ...current, instruction: event.target.value }))} placeholder={ui.action === "PROPOSE_FLOW" ? "Describe the flow to create…" : "Describe how these steps should improve…"} />
+        <textarea id="ai-instruction" rows={4} maxLength={AI_LIMITS.promptCodePoints * 2} value={ui.instruction} onChange={(event) => update((current) => ({ ...current, instruction: event.target.value }))} placeholder={ui.action === "PROPOSE_FLOW" ? "Describe the flow to create…" : "Describe how these steps should improve…"} />
         <div className="ai-composer-footer">
           <div className="ai-mode"><label htmlFor="ai-action">Action</label><select id="ai-action" value={ui.action} onChange={(event) => { const action = event.target.value as TaskKind; update((current) => ({ ...current, action })); setMessage(""); }} disabled={busy || Boolean(ui.pendingRequest)}>
             <option value="PROPOSE_FLOW">Generate a flow</option>

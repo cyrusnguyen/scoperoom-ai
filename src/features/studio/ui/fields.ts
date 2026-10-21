@@ -87,14 +87,14 @@ export function updateCommand(kind: EntityKind, id: string, expectedEntityVersio
 }
 
 /** Endpoint choices are a topology command, never fields of UPDATE_EDGE. `sides` carries the handles a canvas drag
- * used (UI02 Task 13); the inspector's dropdown form leaves them out, which clears any previously saved sides. */
+ * used; the inspector's dropdown form leaves them out, which clears any previously saved sides. */
 export function reconnectCommand(id: string, expectedDocumentRevision: number, values: Fields, sides: { fromSide?: Side; toSide?: Side } = {}): GraphCommand {
   return { commandSchemaVersion: 1, command: "RECONNECT_EDGE", expectedDocumentRevision,
     payload: { edgeId: id, fromId: values.fromId!, toId: values.toId!, ...sides } };
 }
 
 /**
- * The guard for applying an endpoint choice (Task 14b). Every local change advances the shown document revision, so the
+ * The guard for applying an endpoint choice. Every local change advances the shown document revision, so the
  * revision the choice began at says little; what matters is whether the connection's endpoints changed since. If they
  * still match where the choice began, it applies at the shown revision; otherwise (null) it needs explicit review.
  */

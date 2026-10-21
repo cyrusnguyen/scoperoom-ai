@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import VerifyView from "@/features/access/ui/verify-view";
 import { safeInviteContinuation } from "@/features/access/server/continuation";
-import { authConfig } from "@/server/web/auth-config";
-import { createAuthClient } from "@/server/web/supabase";
+import { hasVerifiedSession } from "@/server/web/require-user";
 import { getCodeSentAt, getPendingEmail } from "@/server/web/pending-email";
 
 export const metadata: Metadata = { title: "Verify email | ScopeRoom", robots: { index: false } };
@@ -13,11 +12,7 @@ type VerifyPageProps = { searchParams: Promise<{ error?: string; status?: string
 export default async function VerifyPage({ searchParams }: VerifyPageProps) {
   const { error, status, continue: rawContinuation } = await searchParams;
   const continuation = safeInviteContinuation(rawContinuation);
-  if (authConfig()) {
-    const supabase = await createAuthClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user?.email_confirmed_at && !user.is_anonymous) redirect(continuation ?? "/app");
-  }
+  if (await hasVerifiedSession()) redirect(continuation ?? "/app");
   const email = await getPendingEmail();
   if (!email) redirect(`/signup${continuation ? `?continue=${encodeURIComponent(continuation)}` : ""}`);
   const message = error === "invalid" ? "The code is invalid or expired. Try again or request a new code." :

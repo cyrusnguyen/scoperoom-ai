@@ -12,42 +12,7 @@ async function currentIdentity(): Promise<IdentityResult> {
   return identityFrom(async () => (await createAuthClient()).auth.getUser());
 }
 
-export async function boundedJsonBody(request: Request, limit = 4_096, onLimit?: () => void): Promise<unknown | null> {
-  const length = request.headers.get("content-length");
-  if (length && /^\d+$/.test(length) && Number(length) > limit) { onLimit?.(); return null; }
-  if (length && !/^\d+$/.test(length)) return null;
-  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return null;
-  const reader = request.body?.getReader();
-  if (!reader) return null;
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > limit) {
-        onLimit?.();
-        await reader.cancel();
-        return null;
-      }
-      chunks.push(value);
-    }
-  } catch {
-    return null;
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-  } catch {
-    return null;
-  }
-}
+const parsedJson = (bytes: Uint8Array): unknown => { try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { return null; } };
 
 async function boundedBytes(request: Request, limit: number): Promise<Uint8Array | "LIMIT" | null> {
   const length = request.headers.get("content-length");
@@ -62,7 +27,7 @@ async function boundedBytes(request: Request, limit: number): Promise<Uint8Array
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > limit) return "LIMIT";
+      if (size > limit) { await reader.cancel().catch(() => undefined); return "LIMIT"; }
       chunks.push(value);
     }
   } catch { return null; }
@@ -71,8 +36,6 @@ async function boundedBytes(request: Request, limit: number): Promise<Uint8Array
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   return bytes;
 }
-
-export type { VerifiedIdentity };
 
 /** A definitive denial is 401; an Auth outage or missing configuration is a retryable 503 and never authorizes. */
 function denied(identity: Exclude<IdentityResult, { kind: "user" }>, requestId: string) {
@@ -114,11 +77,11 @@ export async function mutationRoute(
   if (!sameOrigin(request)) return rejected(requestId);
   const identity = await currentIdentity();
   if (identity.kind !== "user") return denied(identity, requestId);
-  let oversize = false;
-  const body = await boundedJsonBody(request, options.bodyLimit, () => { oversize = true; });
+  const bytes = await boundedBytes(request, options.bodyLimit ?? 4_096);
   // A route that names its limit reports an oversize body as LIMIT_EXCEEDED, still before any parsing; others keep the generic 400.
-  if (oversize && options.limitDetails) return apiError("LIMIT_EXCEEDED", projectErrors.LIMIT_EXCEEDED.message, 413, requestId, options.limitDetails);
+  if (bytes === "LIMIT" && options.limitDetails) return apiError("LIMIT_EXCEEDED", projectErrors.LIMIT_EXCEEDED.message, 413, requestId, options.limitDetails);
   const key = request.headers.get("idempotency-key");
+  const body = bytes instanceof Uint8Array ? parsedJson(bytes) : null;
   if (!body || typeof body !== "object" || Array.isArray(body) || Object.hasOwn(body, "key") || (!key && !options.keyless)) return apiError("INVALID_INPUT", projectErrors.INVALID_INPUT.message, 400, requestId);
   try {
     const result = await run(identity.user, options.keyless ? { ...(body as Record<string, unknown>) } : { ...(body as Record<string, unknown>), key });

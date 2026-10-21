@@ -1,10 +1,12 @@
 import "server-only";
 import { cookies } from "next/headers";
+import { sessionCookieOptions } from "@/features/access/session-cookies";
 
 const COOKIE_NAME = "scoperoom.pending-email";
 const COOKIE_PATH = "/signup";
 const CODE_SENT_COOKIE = "scoperoom.code-sent-at";
 const COOKIE_MAX_AGE = 60 * 60;
+const options = () => ({ ...sessionCookieOptions(), path: COOKIE_PATH, maxAge: COOKIE_MAX_AGE });
 
 // This remembers where to send the code during signup. Supabase still verifies the
 // email and token; the cookie grants no access to any project.
@@ -14,14 +16,7 @@ export async function getPendingEmail(): Promise<string | null> {
 }
 
 export async function setPendingEmail(email: string): Promise<void> {
-  const store = await cookies();
-  store.set(COOKIE_NAME, email, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: COOKIE_PATH,
-    maxAge: COOKIE_MAX_AGE,
-  });
+  (await cookies()).set(COOKIE_NAME, email, options());
 }
 
 export async function getCodeSentAt(email: string): Promise<number | null> {
@@ -40,13 +35,7 @@ export async function getCodeSentAt(email: string): Promise<number | null> {
 export async function markCodeSent(email: string): Promise<void> {
   // The email binding survives an unconfirmed sign-in from /login, where /signup cookies are not sent.
   const value = Buffer.from(JSON.stringify({ email, sentAt: Date.now() })).toString("base64url");
-  (await cookies()).set(CODE_SENT_COOKIE, value, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: COOKIE_PATH,
-    maxAge: COOKIE_MAX_AGE,
-  });
+  (await cookies()).set(CODE_SENT_COOKIE, value, options());
 }
 
 export async function clearPendingEmail(): Promise<void> {

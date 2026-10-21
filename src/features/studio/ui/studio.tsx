@@ -124,7 +124,7 @@ function RemovedRecovery() {
 }
 
 /**
- * The save's recovery note (Task 14b): an unconfirmed save retries with its own key; a refused one keeps every unsaved
+ * The save's recovery note: an unconfirmed save retries with its own key; a refused one keeps every unsaved
  * change on screen until the person applies them again on the newer draft or discards them; a replay that had to leave
  * changes out lists them (their typed text included), so nothing is dropped silently.
  */
@@ -185,7 +185,7 @@ function SaveNote() {
   return null;
 }
 
-/** One status line for every change (UI02, Task 14b): "Unsaved changes" → "Saving…" → "All changes saved". */
+/** One status line for every change: "Unsaved changes" → "Saving…" → "All changes saved". */
 function StudioStatus({ flowId }: { flowId: string }) {
   const { draft, ui, update, save, refreshFailed, inspect, canUndo, canRedo, undo, redo, redoCleared, dismissRedoCleared } = useStudio();
   const steps = Object.values(draft.document.nodes).filter((node) => node.flowId === flowId).length;

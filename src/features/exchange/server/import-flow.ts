@@ -7,7 +7,7 @@ import { keyPattern, uuid, type ProjectIdentity } from "../../projects/contracts
 import { checkReceipt, findReceipt, lockActor, lockProject, profileFor, readProject, receiptString, recordEvent, requestHash, requireActive, requireMember, saveReceipt, withDatabase, withReadSnapshot, type Transaction } from "../../projects/server/access.ts";
 import { ProjectError } from "../../projects/server/errors.ts";
 import type { FlowFileV1 } from "../contracts/flow-file.ts";
-import { FLOW_IMPORT_PREVIEW_LIMITS, type ImportApplyInput, type ImportApplyResult, type ImportFidelityReport, type ImportPreviewView } from "../contracts/import.ts";
+import { FLOW_IMPORT_PREVIEW_LIMITS, type ImportApplyInput, type ImportApplyResponse, type ImportApplyResult, type ImportFidelityReport, type ImportPreviewView } from "../contracts/import.ts";
 import { appendImportedFlow } from "../domain/import-flow.ts";
 import { parseFlowFile, parseStoredFlowFile } from "../domain/flow-file.ts";
 
@@ -263,7 +263,7 @@ export async function getFlowImport(identity: ProjectIdentity, projectId: string
  * Appends a preview exactly once. It deliberately does not use `draftMutation`: an APPLIED preview is a durable result
  * whose recovery must survive a later draft replacement, role downgrade, archive, and receipt cleanup.
  */
-export async function applyFlowImport(identity: ProjectIdentity, projectId: string, previewId: string, rawInput: ImportApplyInput): Promise<ImportApplyResult & { replayed: boolean }> {
+export async function applyFlowImport(identity: ProjectIdentity, projectId: string, previewId: string, rawInput: ImportApplyInput): Promise<ImportApplyResponse> {
   if (!uuid.test(projectId) || !uuid.test(previewId)) throw new ProjectError("NOT_FOUND");
   projectId = projectId.toLowerCase();
   previewId = previewId.toLowerCase();

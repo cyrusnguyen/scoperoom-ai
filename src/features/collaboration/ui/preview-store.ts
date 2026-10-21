@@ -1,7 +1,7 @@
 import type { DragItem, PeerContext, PeerMessage } from "../contracts/messages.ts";
 
 // The remote-preview store (Stage 04.3): what peers' cursors and drag ghosts look like right now. Pure and time-free:
-// callers pass `now`, and Task 5's single scheduler decides when to re-read `snapshot`. Nothing here is saved data; a
+// callers pass `now`, and live-overlay.tsx's single timer decides when to re-read `snapshot`. Nothing here is saved data; a
 // preview never moves a canonical node and never counts as a save. Validation is against the SAVED draft, so a delayed
 // packet cannot draw a ghost for a node that was deleted, moved by a save, or belongs to another flow or draft.
 export const PREVIEW_TTL_MS = 2000;

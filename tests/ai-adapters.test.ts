@@ -26,7 +26,7 @@ const gateway = (handler: (url: string, init?: RequestInit) => Promise<Response>
     calls.push({ url: String(input), body: String(init?.body ?? "") });
     return handler(String(input), init);
   }) as typeof fetch;
-  return { calls, gateway: createModelGateway({ apiKey: "test-key-not-real", fetch: stub }) };
+  return { calls, gateway: createModelGateway({ googleApiKey: "test-key-not-real", fetch: stub }) };
 };
 const never = (_url: string, init?: RequestInit) => new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
 const signal = () => new AbortController().signal;
@@ -300,7 +300,7 @@ test("Anthropic refusal, truncation, malformed output and a reply without usage 
 });
 
 test("a gateway supports a model only when it can route it and holds that provider's key", async () => {
-  const google = createModelGateway({ apiKey: "g" }), anthropic = createModelGateway({ anthropicApiKey: "a" }), both = createModelGateway({ apiKey: "g", anthropicApiKey: "a" });
+  const google = createModelGateway({ googleApiKey: "g" }), anthropic = createModelGateway({ anthropicApiKey: "a" }), both = createModelGateway({ googleApiKey: "g", anthropicApiKey: "a" });
   assert.deepEqual(["gemini-3.8-flash", "google/gemini-3.8-flash", "anthropic/claude-sonnet-5-5", "openai/x"].map((m) => [google.supports(m), anthropic.supports(m), both.supports(m)]),
     [[true, false, true], [true, false, true], [false, true, true], [false, false, false]]);
   // Backstop: an unsupported model is refused without any call, never routed to the other provider.

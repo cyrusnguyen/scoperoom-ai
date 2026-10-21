@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request, { params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params;
-  const draftId = new URL(request.url).searchParams.get("draftId") ?? "";
-  const previewId = new URL(request.url).searchParams.get("previewId") ?? "";
+  const query = new URL(request.url).searchParams;
+  const draftId = query.get("draftId") ?? "", previewId = query.get("previewId") ?? "";
   return nativeUploadRoute(request, (identity, bytes, key) => previewFlowImport(identity, projectId, draftId, previewId, key, bytes));
 }

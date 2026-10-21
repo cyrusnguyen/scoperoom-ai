@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { AI_LIMITS, type CapturedInput, type ValidatedProposal } from "../src/features/proposals/contracts/tasks.ts";
-import { buildConversation, conversationBytes, parseConversation, runTurns, summarizeResult, type ContinuedRun } from "../src/features/proposals/domain/conversation.ts";
+import { utf8Bytes } from "../src/features/drafts/contracts/strict.ts";
+import { buildConversation, parseConversation, runTurns, summarizeResult, type ContinuedRun } from "../src/features/proposals/domain/conversation.ts";
 
 const clarification: ValidatedProposal = { schemaVersion: 1, kind: "clarification", message: "Which payment methods should checkout support?" };
 const proposal: ValidatedProposal = { schemaVersion: 1, kind: "proposal", operations: [
@@ -67,7 +68,7 @@ test("buildConversation drops old runs for the byte bound but refuses when the c
   const next = run("è".repeat(5_000), clarification, buildConversation(big));
   const built = buildConversation(run("ê".repeat(5_000), clarification, buildConversation(next)));
   assert.equal(new Set(built.turns.map((turn) => turn.runId)).size, 2);
-  assert.ok(conversationBytes(built.turns) <= AI_LIMITS.conversationBytes);
+  assert.ok(utf8Bytes(built.turns) <= AI_LIMITS.conversationBytes);
   assert.ok(!built.turns.some((turn) => turn.runId === big.id), "the oldest run went first");
   assert.throws(() => buildConversation(run("😀".repeat(8_000), clarification)), { message: "LIMIT_EXCEEDED" });
 });

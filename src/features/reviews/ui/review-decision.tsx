@@ -1,6 +1,6 @@
 "use client";
-import type { DecisionInput } from "../contracts/review";
-import { REVIEW_REASON_LIMIT, reasonStatus } from "./review-format";
+import { REVIEW_REASON_LIMIT, type DecisionInput } from "../contracts/review";
+import { reasonStatus } from "./review-format";
 
 export type ReviewDecisionProps = {
   reason: string; onReason: (value: string) => void; canDecide: boolean; canWithdraw: boolean; writing: boolean;

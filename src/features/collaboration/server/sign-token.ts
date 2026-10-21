@@ -1,6 +1,6 @@
 import { createHmac, createPrivateKey, sign } from "node:crypto";
 
-// Server-only signing adapter for the scoped Realtime credential (decision E36). The route (a later task) authorizes; this module only
+// Server-only signing adapter for the scoped Realtime credential (decision E36). `issueRealtimeToken` (realtime-token.ts) authorizes; this module only
 // builds the claims and signs them. The key is project-wide signing authority: configuration comes from these names and nothing else.
 export type RealtimeScope = { profileId: string; projectId: string; epoch: string };
 export type SignedRealtimeToken = { ok: true; token: string; expiresAt: number } | { ok: false; reason: "UNAVAILABLE" };

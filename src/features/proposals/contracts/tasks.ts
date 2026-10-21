@@ -1,6 +1,6 @@
 import type { FlowFields, NodeFields, GraphCommand } from "../../drafts/contracts/commands.ts";
 import { LIMITS, type EdgeRecord, type FlowRecord, type NodeRecord, type SourceRef, type TraceLinkRecord } from "../../drafts/contracts/scope-document.ts";
-import { id, idList, invalid, keys, object, oneOf, text, version } from "../../drafts/contracts/strict.ts";
+import { id, idList, invalid, keys, object, oneOf, text, utf8Bytes, version } from "../../drafts/contracts/strict.ts";
 import { keyPattern } from "../../projects/contracts/project.ts";
 
 // Stage 06 AI task contracts (Data 04/05, API "AI actions"). Exactly two tasks. A request may name one earlier run it continues
@@ -18,6 +18,8 @@ export const AI_LIMITS = {
   ownerConcurrentRuns: 2, applicableResults: 10,
   // Operational default, not a product promise: start attempts per actor per minute, counted by the keyed AI_ADMISSION bucket.
   admissionAttemptsPerMinute: 30,
+  // The release SHA bound at admission; the admitter and the Inngest dispatcher both enforce it.
+  executionBindingChars: 128,
   // Follow-ups (2026-10-15): earlier turns stored in a capture, measured as compact JSON; a proposal answer is summarized within the code point bound.
   conversationTurns: 12, conversationBytes: 24 * 1024, turnSummaryCodePoints: 2_000,
   operations: 100, dependsOn: 100, assumptions: 20, assumptionCodePoints: 2_000, citations: 100, excerptCodePoints: 2_000,
@@ -44,7 +46,7 @@ export const startBody = (input: StartRunInput) => ({
 });
 
 /** Bytes of the canonical request body. The bound applies before any database read; nothing is truncated to fit. */
-export const startBodyBytes = (input: StartRunInput): number => new TextEncoder().encode(JSON.stringify(startBody(input))).length;
+export const startBodyBytes = (input: StartRunInput): number => utf8Bytes(startBody(input));
 
 /** Strict POST body plus the server-validated receipt key. The prompt is validated again, once normalized, by captureInput. */
 export function parseStartRunInput(raw: unknown, key: string): StartRunInput {
