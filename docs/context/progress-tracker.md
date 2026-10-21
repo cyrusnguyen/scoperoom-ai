@@ -1,10 +1,10 @@
 # Progress tracker
 
-Observed state and the next action. Dated entries up to 2026-10-16, with their evidence, are in [progress history](progress-history.md).
+Observed state and the next action. Dated entries up to 2026-10-21, with their evidence, are in [progress history](progress-history.md).
 
-## Current state (2026-10-19)
+## Current state (2026-10-21)
 
-- Production: release run 38995610226 deployed main `061ddec` (PR #49), after run 38917577133 deployed `6fba4fd` (PR #48); both succeeded.
+- Production: release run 39185379268 deployed main `87ea6a6` (PR #50), after run 38995610226 deployed `061ddec` (PR #49); both succeeded.
 - Studio: canvas and List views, Add step, Connect, Arrange, inline label editing and a shape panel. The open flow's scope badge sits beside the flow switcher in the header (PR #46).
 - Panels: docked Projects sidebar (220 to 480 px) and right panel (320 to 720 px) resize by pointer or keyboard, keeping the editor at least 560 px wide (PR #31).
 - Collaboration: Owner, Editor, Reviewer and Viewer roles; presence, live cursors and drag previews over Realtime; removing access stops backend access and new joins at once.
@@ -18,14 +18,12 @@ Observed state and the next action. Dated entries up to 2026-10-16, with their e
 
 ## In progress
 
-- `fix/audit-findings` (PR #50) from main `061ddec`, requested by the user: fixes from a whole-codebase audit for concurrency, performance, N+1 queries, missing awaits, logic errors and dirty code. A type-aware lint found no floating or misused promises. Each change had an independent review; the findings were fixed and re-reviewed. Changes:
-  - The citation excerpt re-rendered the whole shell for ever when the cited lines were blank; the shared `setDraft` now returns the same store for an unchanged value.
-  - Every write that takes the project or owner capacity lock now has the 15 s transaction budget saves already had, set once as the database client's default (`transactionOptions` in `src/server/db.ts`; read snapshots keep 5 s); Prisma counted the lock wait against 5 s, so commands, positions, reviews, imports, member and invitation writes answered 503 under contention. The timer runs only between the function and the database, so a distant browser does not shorten it.
-  - Import quotas: applied previews keep their body 7 days but no longer count as open previews (10 per actor), so 10 imports a week no longer block every preview; the byte caps still count them. Cleanup deletes discarded and expired preview rows 30 days after expiry (`deletedPreviews`, migration `20261019000000`), so the row cap no longer fills for ever.
-  - AI: admission refuses a capture over the 16,000 input-token estimate before it keeps prompt evidence, a slot or budget; the panel limits the instruction to 8,000 normalized code points and says what to change. Deleting a run refunds every unclaimed reservation; a crashed attempt followed by revoked access ends ACCESS_REVOKED when its window closes instead of holding the slot until the deadline; a second call that times out is `MODEL_TIMEOUT` (migration `20261019000100`). The always-unknown dispatcher `cancel` is gone, and a read-only role no longer leaves a stuck pending request.
-  - Performance: canvas steps, edges and handlers keep their identity, so a drag frame or typing in another panel no longer re-renders every step; arrow keys on a selected step are stopped before React Flow shifts its own copy. Moves-only and sides-only saves no longer send and rewrite the whole document. `/api/me` reads the staff role once; applying a proposal inserts its sources in one statement.
-  - Writes give up after 120 s as uncertain (same-key retry), so a dead connection cannot hold a save. Two shell writes now end the session on 401, review history Load more no longer drops a refresh in flight (and a Load more read a newer first page replaced never reaches the view, from Codex review), the lost-link invitation button says what it does, and an unused source-list helper is gone.
-  - Evidence (local, guarded stack `scoperoom-stage04-test`, recreated with its published ports pinned to 127.0.0.1 after `supabase start`): `lint` and `typecheck` pass; unit 751/751; integration 414/414; workers 35/35; Realtime 13/13; the full production browser suite 504/504 (0 flaky, 0 skipped, two workers) at `6b9c975`; after the complexity cuts and the Codex fix, the reviews spec 51/51 and PR CI pass, and Codex found no issues on `5dd37d5`. Each new test fails without its fix. No change was checked against the hosted target or a live model.
+- `fix/security-review` from main `87ea6a6`, requested by the user: a whole-project security review, an AI slop cleanup, and why the Supabase publishable key shows in the browser network tab. Four read-only sweeps (web, auth and routes; database, worker, AI and CI; two for slop), then an independent review of the diff.
+  - Security review: no critical, high or medium finding. Every API route goes through a wrapper with verified identity, exact-origin writes and bounded bodies; child ids are always filtered by project; no raw unsafe SQL; definer functions pin `search_path`; AI output is validated before storage and again at Apply; CI uses `pull_request` with pinned actions. Proxy path variants (`/api/%69nngest`, `/API/inngest`, `/api/./inngest`) all answer 404 on a local web-mode server.
+  - Publishable key: it is the `apikey` on the Realtime socket (`src/client/realtime.ts`), public by Supabase's design; authority is the server-minted 5-minute scoped credential plus the policies on `realtime.messages`. With only that key on the local stack, the Data API lists no table, view or function, GraphQL is off, there are no Storage buckets, public channels are refused (`PrivateOnly`) and private topics are refused. A direct hosted probe was not permitted in this session; release run 39185379268 proved private-only Realtime on hosted.
+  - Hardening: `nosniff` and `Referrer-Policy: strict-origin-when-cross-origin` on every response. The release edge checks now `POST {}` to the worker's `/api/inngest` and expect 401, so a worker that stopped verifying Inngest signatures (`INNGEST_DEV`, answers 500) fails the release; a bodyless POST answers 401 in every mode, so the body matters. `realtime.mjs verify` (every `db:migrate`) now fails when anon or authenticated can reach a table, view or non-trigger function in `public`, which the Data API would serve to any holder of the key.
+  - Slop: one body reader instead of two in `api-request.ts` (the JSON content type is now matched exactly, as uploads already were); one signed-in check for the five signed-out pages and one unavailable card; dead code (`runMaintenance`, unused logger levels, a re-export, an unused parameter, an unused env placeholder); duplicated regexes, byte counters, id generators, cookie options and limits replaced by the existing ones; plan task numbers and stale comments rewritten; five minified review routes reformatted; the AI probe now supports Anthropic models.
+  - Evidence (local stack `scoperoom-stage04-test`): `lint` and `typecheck` pass; unit 752/752; integration 414/414; workers 35/35; Realtime 14/14; the full production browser suite 506/506 (0 flaky, 0 skipped, two workers), and after four later complexity cuts the review and AI specs 106/106 on a fresh build; the new Realtime test fails when the check is removed, and the new release test fails on the shadowed variable an earlier draft had. Nothing was checked against the hosted target or a live model.
 
 ## Accepted limitations
 
@@ -47,6 +45,8 @@ Observed state and the next action. Dated entries up to 2026-10-16, with their e
 
 - Paste `supabase/templates/confirmation.html` into Supabase Auth (Confirm signup) with the subject `Confirm your ScopeRoom email`, then check one sign-up.
 - Delete the old Trigger.dev project and revoke its token.
+- Turn off the hosted Data API in the Supabase settings: the app never uses PostgREST, GraphQL or Storage, so the browser's publishable key would then reach only Auth and Realtime.
+- Content Security Policy: only `frame-ancestors`, `object-src` and `base-uri` are set; a nonce-based `script-src` is not.
 - Stage 12b remainder: log search and pg_cron health in the dashboards, the Auth email limit and the backup plan.
 - Decisions not yet made: inviting users (needs a second authorization) and the source budget (per-actor quotas, purge or owner override).
 - Deferred: Stage 08 (scenarios, readiness, coverage), Stages 10 and 11, and 07c (questions, answers, decisions, activity); Stage 09's uncertain Start recovery after a draft replacement.
@@ -55,4 +55,4 @@ Observed state and the next action. Dated entries up to 2026-10-16, with their e
 
 ## Next
 
-1. Merge PR #50 (`fix/audit-findings`) and release it. Its two migrations run before the worker deploy; the old worker and web code work with both.
+1. Review and merge `fix/security-review`, then release it. It has no migration. Its new `realtime.mjs verify` check first runs against hosted in that release's database step.
