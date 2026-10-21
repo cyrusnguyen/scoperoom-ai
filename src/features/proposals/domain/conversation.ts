@@ -1,4 +1,4 @@
-import { id, invalid, keys, object, oneOf, text } from "../../drafts/contracts/strict.ts";
+import { id, invalid, keys, object, oneOf, text, utf8Bytes } from "../../drafts/contracts/strict.ts";
 import { AI_LIMITS, type CapturedConversation, type CapturedInput, type ConversationTurn, type ProposalEdit, type RunDisposition, type ValidatedProposal } from "../contracts/tasks.ts";
 
 // Browser-safe (no node: imports): the AI panel reuses runTurns to show the thread a new instruction continues.
@@ -46,12 +46,11 @@ export function runTurns(run: ContinuedRun): ConversationTurn[] {
 }
 
 /** Compact JSON bytes. The whole capture is still bounded separately by AI_LIMITS.captureBytes as PostgreSQL measures it. */
-export const conversationBytes = (turns: ConversationTurn[]): number => new TextEncoder().encode(JSON.stringify(turns)).length;
 
 /** Drops whole earlier runs, oldest first, until both bounds hold. The continued run is never dropped or cut: too long refuses. */
 export function buildConversation(run: ContinuedRun): CapturedConversation {
   let turns = runTurns(run);
-  while (turns.length > AI_LIMITS.conversationTurns || conversationBytes(turns) > AI_LIMITS.conversationBytes) {
+  while (turns.length > AI_LIMITS.conversationTurns || utf8Bytes(turns) > AI_LIMITS.conversationBytes) {
     const oldest = turns[0]!.runId;
     if (oldest === run.id) throw new Error("LIMIT_EXCEEDED");
     turns = turns.filter((turn) => turn.runId !== oldest);
@@ -71,6 +70,6 @@ export function parseConversation(raw: unknown): CapturedConversation {
     return { runId: id(turn.runId), role: oneOf(turn.role, ["user", "assistant"] as const), text: text(turn.text, AI_LIMITS.promptCodePoints, true) };
   });
   const last = turns.at(-1)!;
-  if (last.runId !== continuesRunId || last.role !== "assistant" || conversationBytes(turns) > AI_LIMITS.conversationBytes) invalid();
+  if (last.runId !== continuesRunId || last.role !== "assistant" || utf8Bytes(turns) > AI_LIMITS.conversationBytes) invalid();
   return { continuesRunId, turns };
 }

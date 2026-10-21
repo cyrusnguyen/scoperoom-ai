@@ -16,7 +16,7 @@ export type StudioView = "canvas" | "list";
 export type SaveState = { state: "idle" | "saving" | "saved" | "failed"; message: string };
 /** Unsaved changes are saved every this many milliseconds while the Studio is idle (Save sends them sooner). */
 export const AUTOSAVE_MS = 10_000;
-// Every draft change waits in `outbox` until Save, autosave or a save-first action sends it (Task 14b). `request` is the
+// Every draft change waits in `outbox` until Save, autosave or a save-first action sends it. `request` is the
 // key of the save or arrangement request in flight: a remounted provider must still see it and send nothing else.
 // Endpoint buffers store document revisions in baseVersion and are applied only as RECONNECT_EDGE.
 export type StudioUi = {
@@ -177,7 +177,7 @@ export function moveTargets(moved: { id: string; position: { x: number; y: numbe
   });
 }
 
-// Shape panel drag-and-drop (UI02 Task 7): the payload names only the kind (its size is the fixed STEP_SIZE), so a drop
+// Shape panel drag-and-drop: the payload names only the kind (its size is the fixed STEP_SIZE), so a drop
 // never has to trust dataTransfer for anything besides which shape was picked.
 export const SHAPE_DRAG_MIME = "application/x-scoperoom-shape";
 export type ShapeDragPayload = { kind: NodeKind };
@@ -192,7 +192,7 @@ export function parseShapePayload(raw: string): ShapeDragPayload | null {
   return { kind: kind as NodeKind };
 }
 
-// Which end of a drawn connection is "from" (UI02 Task 13). React Flow labels a finished connection's ends by handle
+// Which end of a drawn connection is "from". React Flow labels a finished connection's ends by handle
 // TYPE (source-typed handle first), not by gesture: dragging from a target-typed handle (top or left by default) hands
 // `onConnect` the dropped step as `source`. A saved connection's direction must follow the person's gesture instead.
 type Ends = { source: string; target: string; sourceHandle: string | null; targetHandle: string | null };

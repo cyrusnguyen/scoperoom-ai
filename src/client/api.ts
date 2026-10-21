@@ -80,7 +80,7 @@ export function sessionEnded(result: ApiResult<unknown>, to = "/login"): boolean
  * A status or bootstrap for another account than the page opened with: same teardown as a 401, then a full load of the
  * app so nothing private from the first account stays in memory.
  */
-export function accountChanged(to = "/app"): void {
+export function accountChanged(): void {
   window.dispatchEvent(new CustomEvent(SESSION_ENDED, { detail: "account" }));
-  window.location.replace(to);
+  window.location.replace("/app");
 }

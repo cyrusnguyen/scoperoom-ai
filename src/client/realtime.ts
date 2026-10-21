@@ -6,6 +6,7 @@ import type { LiveConnection, LiveState, RealtimeTransport } from "../features/c
 import { apiPostEmpty, sessionEnded as endSession, type ApiResult } from "./api.ts";
 
 const RENEW_EARLY_MS = 60_000;
+const timer = (run: () => void, ms: number) => { const id = setTimeout(run, ms); return () => clearTimeout(id); };
 
 type Credential = { accessToken: string; expiresAt: number }; // the server's expiresAt (Unix seconds) is informational; see lifetimeMs
 export type TokenSourceOptions = {
@@ -43,7 +44,7 @@ const safely = (run: () => void) => { try { run(); } catch { /* the hook is the 
 export function createRealtimeTokenSource(o: TokenSourceOptions): TokenSource {
   const read = o.read ?? ((url) => apiPostEmpty<Credential>(url));
   const now = o.now ?? Date.now;
-  const setTimer = o.setTimer ?? ((run, ms) => { const id = setTimeout(run, ms); return () => clearTimeout(id); });
+  const setTimer = o.setTimer ?? timer;
   const sessionEnded = o.sessionEnded ?? endSession;
   let cache: { token: string; expiresAt: number } | null = null; // expiresAt in ms
   let cancelExpiry: (() => void) | null = null;
@@ -144,7 +145,7 @@ const FAILED = new Set(["CHANNEL_ERROR", "TIMED_OUT"]); // realtime-js rejoins t
  */
 export function createSupabaseTransport(options: TransportOptions = {}): RealtimeTransport {
   const makeClient = options.makeClient ?? ((source) => createRealtimeClient(source) as unknown as SdkClient);
-  const retryTimer = options.setTimer ?? ((run, ms) => { const id = setTimeout(run, ms); return () => clearTimeout(id); });
+  const retryTimer = options.setTimer ?? timer;
   const drop = async (old: SdkClient) => {
     await old.removeAllChannels().catch(() => undefined);
     await old.realtime.disconnect().catch(() => undefined);

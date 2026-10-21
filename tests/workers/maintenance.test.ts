@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Client } from "pg";
-import { runMaintenance } from "../../src/features/proposals/server/maintenance.ts";
+import { cleanupNow, repairNow } from "../../src/features/proposals/server/maintenance.ts";
 import type { JobDispatcher, JobRequest } from "../../src/features/proposals/server/ports.ts";
 import { workerCleanup } from "../../src/server/maintenance/worker-cleanup.ts";
 import { seedRun } from "../integration/support/ai-runs.ts";
@@ -91,27 +91,32 @@ test("a wrong environment, a bad batch and every raw sweep are refused to the wo
   });
 });
 
-test("one maintenance tick repairs due dispatches and cleans bodies; each step survives the other's failure", { skip: !canRun }, async () => {
+test("the repair and cleanup ticks dispatch due runs and clean bodies, and report their own failures", { skip: !canRun }, async () => {
   await withWorld(async ({ admin, seed }) => {
     const due = await seed({ hours: 0, shape: "QUEUED" });
     const old = await seed({ hours: 8 * 24, shape: "FAILED" });
     const requests: JobRequest[] = [];
     const dispatcher: JobDispatcher = { dispatch: async (request) => { requests.push(request); return { kind: "accepted", taskId: `task-${requests.length}` }; } };
-    const cleaned = await runMaintenance(dispatcher);
+    await repairNow(dispatcher);
+    const cleaned = await cleanupNow();
     assert.equal(requests.filter((request) => request.runId === due).length, 1);
     assert.equal((await admin.query("select dispatch_state::text s from app.ai_run where id = $1", [due])).rows[0].s, "DISPATCHED");
     assert.ok(cleaned.clearedAiBodies >= 1);
     assert.equal(await purged(admin, old), true);
 
     const old2 = await seed({ hours: 9 * 24, shape: "FAILED" });
-    await assert.rejects(runMaintenance(undefined), /INNGEST_EVENT_KEY/); // repair cannot deliver, and that is reported...
-    assert.equal(await purged(admin, old2), true, "...after cleanup still ran");
+    await assert.rejects(repairNow(undefined), /INNGEST_EVENT_KEY/); // repair cannot deliver, and that is reported
+    assert.equal(await purged(admin, old2), false, "repair never cleans");
+    await cleanupNow();
+    assert.equal(await purged(admin, old2), true);
 
     const old3 = await seed({ hours: 9 * 24, shape: "FAILED" });
     const boom = new Error("database unavailable");
-    await assert.rejects(runMaintenance(noDispatch, { $queryRaw: async () => { throw boom; }, $transaction: async () => { throw boom; } } as never), boom); // a failing database fails both steps and is rethrown
+    const failing = { $queryRaw: async () => { throw boom; }, $transaction: async () => { throw boom; } } as never;
+    await assert.rejects(repairNow(noDispatch, failing), boom); // a failing database fails both steps and is rethrown
+    await assert.rejects(cleanupNow(failing), boom);
     assert.equal(await purged(admin, old3), false, "nothing ran against the failing database");
-    await workerCleanup(100);
+    await cleanupNow();
     assert.equal(await purged(admin, old3), true);
   });
 });

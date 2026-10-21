@@ -26,6 +26,6 @@ export function modelGateway(env: Env = process.env): ModelGateway {
   const google = present(env.GOOGLE_GENERATIVE_AI_API_KEY) ? env.GOOGLE_GENERATIVE_AI_API_KEY : undefined;
   const anthropic = present(env.ANTHROPIC_API_KEY) ? env.ANTHROPIC_API_KEY : undefined;
   const key = JSON.stringify([google, anthropic]);
-  if (gateway?.key !== key) gateway = { key, value: createModelGateway({ apiKey: google, anthropicApiKey: anthropic }) };
+  if (gateway?.key !== key) gateway = { key, value: createModelGateway({ googleApiKey: google, anthropicApiKey: anthropic }) };
   return gateway.value;
 }

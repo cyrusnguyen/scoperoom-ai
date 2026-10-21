@@ -9,7 +9,7 @@ function ControlButton({ label, icon, onClick, disabled }: { label: string; icon
 }
 
 /**
- * The floating bar at the canvas's bottom-left (UI02 Task 9): zoom out, fit view, zoom in, then Undo and Redo of the
+ * The floating bar at the canvas's bottom-left: zoom out, fit view, zoom in, then Undo and Redo of the
  * unsaved changes. Readers and archived projects (not `editable`) get only the zoom group. The zoom buttons keep React
  * Flow's own names ("Zoom In", "Zoom Out", "Fit View").
  */

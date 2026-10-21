@@ -1,6 +1,5 @@
 import { coordinate } from "../../drafts/contracts/draft-layout.ts";
-import { invalid, keys, object, utf8Bytes, version } from "../../drafts/contracts/strict.ts";
-import { CANONICAL_UUID } from "./topics.ts";
+import { id as uuid, invalid, keys, object, utf8Bytes, version } from "../../drafts/contracts/strict.ts";
 
 // Wire protocol of the `collab` channel (peer previews and Presence) and the `events` hint (Stage 04.3). Everything here
 // is advisory and untrusted: the parsers return the typed value or null, never throw, never truncate and never log the
@@ -24,7 +23,6 @@ export const MAX_TEXT_BYTES = 64;
 export const MAX_DRAG_ITEMS = 20;
 export const MAX_SELECTED_NODES = 20;
 
-const uuid = (value: unknown): string => (typeof value === "string" && CANONICAL_UUID.test(value) ? value : invalid());
 const sequence = (value: unknown): number => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : invalid());
 const text = (value: unknown): string => {
   if (typeof value !== "string" || !value.isWellFormed() || !value || new TextEncoder().encode(value).length > MAX_TEXT_BYTES) invalid();

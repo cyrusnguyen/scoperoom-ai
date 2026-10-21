@@ -1,6 +1,6 @@
 // Inspector edit buffers (UI02 "Dirty fields and acknowledged saves"): pure functions over a map the shell's per-project
 // store holds, so typed text survives closing the panel, switching entities and every refetch. Applying a buffer queues
-// its command in the Studio outbox (Task 14b) and clears the buffer: the text then lives in the queued command, and the
+// its command in the Studio outbox and clears the buffer: the text then lives in the queued command, and the
 // outbox's batch save carries the idempotency key and its same-key retry.
 export type EntityKind = "FLOW" | "NODE" | "EDGE";
 export type Fields = Record<string, string>;

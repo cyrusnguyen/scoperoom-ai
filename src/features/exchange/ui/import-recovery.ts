@@ -1,3 +1,4 @@
+import { requestIdPattern as uuid } from "../../../contracts/http.ts";
 import type { ImportApplyInput, ImportPreviewView } from "../contracts/import.ts";
 import { isDirty } from "../../studio/ui/buffers.ts";
 import type { StudioUi } from "../../studio/ui/studio-ui.ts";
@@ -13,7 +14,6 @@ export type NativeImportState = {
   state: "Validating" | "Ready" | "Invalid" | "Applying" | "Applied" | "Expired" | "Stale" | "Access lost";
   message: string;
 };
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const hash = /^[0-9a-f]{64}$/;
 export const importStorageKey = (actorId: string, projectId: string) => `${IMPORT_STORAGE_PREFIX}${actorId.toLowerCase()}:${projectId.toLowerCase()}`;
 export function storedImportRecord(record: ImportRecord): string {

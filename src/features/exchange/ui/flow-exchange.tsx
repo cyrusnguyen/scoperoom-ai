@@ -8,6 +8,7 @@ import { Icon } from "@/features/shell/ui/icon";
 import { useStudio } from "@/features/studio/ui/studio-context";
 import { covers, requireDraftRevision } from "@/features/studio/ui/studio-ui";
 import type { ImportPreviewView } from "../contracts/import";
+import { FLOW_FILE_BYTE_LIMIT } from "../domain/flow-file";
 import { clearImport, importStorageError, importStorageKey, parseImportRecord, persistImport, type ImportRecord, type NativeImportState } from "./import-recovery";
 import { ImportPreview } from "./import-preview";
 
@@ -140,7 +141,7 @@ export function NativeImportDialog({ onClose }: { onClose: () => void }) {
     if (working || busy || locked || !editable) return;
     const file = selected ?? local?.file;
     if (!file) { setMessage("Select the same native flow file again. File contents are kept only in memory."); return; }
-    if (file.size > 1_048_576) { setMessage("Invalid: native files must be at most 1 MiB."); return; }
+    if (file.size > FLOW_FILE_BYTE_LIMIT) { setMessage("Invalid: native files must be at most 1 MiB."); return; }
     const previous = latest.current;
     let previewId = previous?.record.previewId;
     const authorityCurrent = fence();

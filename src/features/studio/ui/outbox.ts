@@ -5,11 +5,12 @@ import type { SavedPosition } from "../../drafts/contracts/draft-layout.ts";
 import type { DraftView, ScopeDocument } from "../../drafts/contracts/scope-document.ts";
 import { applyChanges } from "../../drafts/domain/changes.ts";
 import { applyGraphCommand, checkDraft, GraphError } from "../../drafts/domain/graph.ts";
+import { utf8Bytes } from "../../drafts/contracts/strict.ts";
 import { moveNodes } from "../../drafts/domain/moves.ts";
 import { FIELDS } from "./fields.ts";
 import { stepName } from "./graph-view.ts";
 
-// The Studio's local outbox (Stage 03.3 Task 14b): every draft change is applied locally first and saved later with
+// The Studio's local outbox (Stage 03.3): every draft change is applied locally first and saved later with
 // one POST D/changes (Save, the 10-second autosave, or before Arrange and switches). The browser replays the outbox
 // with the server's own pure functions and the ids it proposed, so what is shown is exactly what the save produces.
 
@@ -239,8 +240,6 @@ export function wireBody({ commands, moves }: Changes) {
   return { commands: commands.map(({ command, proposedIds }) => ({ ...command, proposedIds })), moves };
 }
 
-const encoder = new TextEncoder();
-const bytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length;
 /** Room below the 256 KiB body limit for the envelope and a new move group's header. */
 const BATCH_BYTES = CHANGES_BODY_LIMIT - 4096;
 
@@ -256,14 +255,14 @@ export function split({ commands, moves }: Changes): Changes[] {
     current = { commands: [], moves: [] }; size = 0; moved = 0;
   };
   for (const change of commands) {
-    const add = bytes(wireBody({ commands: [change], moves: [] }).commands[0]) + 1;
+    const add = utf8Bytes(wireBody({ commands: [change], moves: [] }).commands[0]) + 1;
     if (current.commands.length >= MAX_CHANGE_COMMANDS || size + add > BATCH_BYTES) close();
     current.commands.push(change);
     size += add;
   }
   for (const group of moves) {
     for (const item of group.items) {
-      const add = bytes(item) + 1;
+      const add = utf8Bytes(item) + 1;
       if (moved >= MAX_CHANGE_MOVES || size + add > BATCH_BYTES) close();
       let target = current.moves.find((candidate) => candidate.flowId === group.flowId);
       if (!target) current.moves.push(target = { flowId: group.flowId, items: [] });
@@ -309,7 +308,6 @@ export function acknowledged(outbox: Outbox, nextKey: string): Outbox {
 
 const ADVANCE_MAX_PREFIXES = 16;
 const ADVANCE_WORK_BUDGET_BYTES = 8 * 1024 * 1024;
-const advanceEncoder = new TextEncoder();
 
 // Undo/redo traverses one ordered chain. Joined entries form one undo unit, so only its end is reachable.
 function reachableEnds(entries: Entry[]): number[] {
@@ -335,8 +333,7 @@ export function advance(outbox: Outbox, fresh: DraftView): Outbox {
   const moved = fresh.documentRevision !== base.documentRevision || fresh.layoutRevision !== base.layoutRevision;
   const activeEnd = outbox.entries.length;
   const chain = [...outbox.entries, ...[...outbox.redo].reverse().flat()];
-  const pairBytes = advanceEncoder.encode(JSON.stringify(base)).byteLength
-    + advanceEncoder.encode(JSON.stringify(fresh)).byteLength;
+  const pairBytes = utf8Bytes(base) + utf8Bytes(fresh);
   let compared = 0;
   let keepRedo = true;
   for (const end of reachableEnds(chain)) {

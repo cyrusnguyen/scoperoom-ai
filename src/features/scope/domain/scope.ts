@@ -4,7 +4,7 @@ import { bump, checkDraft, current, GraphError, usedIds, type Applied, type Draf
 import type { RequirementFields, ScopeCommand } from "../contracts/scope-commands.ts";
 
 // Pure scope transforms (Data02 version matrix). Shared by the server dispatcher and the Specs panel previews.
-/** `displayId` comes from the project's monotonic requirement counter (Task 3); labels are never reused. */
+/** `displayId` comes from the project's monotonic requirement counter; labels are never reused. */
 export type ScopeContext = { actorId: string; now: string; displayId?: string };
 export type LinkState = "PROPOSED" | "CURRENT" | "NEEDS_REVIEW";
 

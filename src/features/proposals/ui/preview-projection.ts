@@ -1,7 +1,6 @@
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
-import { usedIds } from "../../drafts/domain/graph.ts";
 import type { ProjectStatusView } from "@/features/projects/contracts/project";
-import { applyProposal } from "../domain/proposal-diff.ts";
+import { applyProposal, temporaryIds } from "../domain/proposal-diff.ts";
 import type { RunView } from "../contracts/tasks.ts";
 
 /** Projects an applicable proposal onto the coherent saved draft without changing Studio state or persisted data. */
@@ -13,16 +12,8 @@ export function projectProposalPreview(saved: DraftView, status: Pick<ProjectSta
     || saved.documentRevision !== status.documentRevision || saved.documentRevision !== run.documentRevision || saved.documentRevision !== capture.documentRevision
     || saved.layoutRevision < status.layoutRevision // Apply places new steps on the newest saved layout; a saved read behind the status would preview other positions.
     || status.approvedSnapshotId !== run.parentSnapshotId || status.approvedSnapshotId !== capture.parentSnapshotId) return null;
-  const used = usedIds(saved.document);
-  let sequence = 0;
-  const temporaryId = () => {
-    let id = "";
-    do { id = `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`; } while (used.has(id));
-    used.add(id);
-    return id;
-  };
   try {
-    const applied = applyProposal(saved, capture, result, result.operations.map((operation) => operation.id), temporaryId);
+    const applied = applyProposal(saved, capture, result, result.operations.map((operation) => operation.id), temporaryIds(saved.document));
     return { ...saved, document: applied.document, layout: applied.layout };
   } catch { return null; }
 }

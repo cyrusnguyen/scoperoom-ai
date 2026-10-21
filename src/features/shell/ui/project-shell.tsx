@@ -11,7 +11,7 @@ import type { Live } from "@/features/collaboration/ui/project-sync";
 import { SyncProvider } from "@/features/collaboration/ui/sync-context";
 import type { DraftView } from "@/features/drafts/contracts/scope-document";
 import type { MyInvitation } from "@/features/projects/contracts/invitation";
-import type { CreatedProject, ProjectBootstrap, ProjectLists } from "@/features/projects/contracts/project";
+import { uuid, type CreatedProject, type ProjectBootstrap, type ProjectLists } from "@/features/projects/contracts/project";
 import { expiryLabel } from "@/features/projects/ui/format";
 import ProjectDetails from "@/features/projects/ui/project-details";
 import Inspector from "@/features/studio/ui/inspector";
@@ -42,7 +42,6 @@ type ShellDialog = { kind: "create" } | { kind: "switch"; target: string } | { k
 
 const prefsKey = "scoperoom_shell";
 const widthsKey = "scoperoom_panel_widths";
-const runIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const doneVerb: Record<LifecycleKind, string> = { archive: "Archived", restore: "Restored", leave: "Left" };
 
 /** Presentation preferences only (UI00): nothing about a project is written to browser storage. */
@@ -195,7 +194,7 @@ export default function ProjectShell({ signOut, children }: { signOut: () => Pro
     if (!projectId || restoredRunProject.current === projectId) return;
     restoredRunProject.current = projectId;
     const runId = new URLSearchParams(window.location.search).get("run");
-    if (!runId || !runIdPattern.test(runId)) return;
+    if (!runId || !uuid.test(runId)) return;
     requestAnimationFrame(() => {
       if (projectIdRef.current !== projectId) return;
       setStore((previous) => updateUi(previous, projectId, (current) => ({

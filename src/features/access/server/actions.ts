@@ -23,10 +23,6 @@ function emailField(formData: FormData) {
   return email && email.length <= 320 ? email : null;
 }
 
-function verifyPath(status: string, continuation: string | null) {
-  return `/signup/verify?${status}${continuation ? `&continue=${encodeURIComponent(continuation)}` : ""}`;
-}
-
 export async function signIn(formData: FormData) {
   const email = emailField(formData);
   const password = formData.get("password");
@@ -38,7 +34,7 @@ export async function signIn(formData: FormData) {
   if (!result.ok) {
     if (result.reason === "unconfirmed") {
       await setPendingEmail(email);
-      redirect(verifyPath("status=pending", continuation));
+      redirect(withContinuation("/signup/verify?status=pending", continuation));
     }
     redirect(withContinuation(`/login?error=${result.reason}`, continuation));
   }
@@ -62,7 +58,7 @@ export async function signUp(formData: FormData) {
   if (!result.ok) redirect(withContinuation(`/signup?error=${result.reason}`, continuation));
   await setPendingEmail(email);
   await markCodeSent(email);
-  redirect(verifyPath("status=sent", continuation));
+  redirect(withContinuation("/signup/verify?status=sent", continuation));
 }
 
 export async function verifyEmailCode(formData: FormData) {
@@ -70,11 +66,11 @@ export async function verifyEmailCode(formData: FormData) {
   const code = formData.get("code");
   const continuation = safeInviteContinuation(formData.get("continue"));
   if (!email) redirect(withContinuation("/signup", continuation));
-  if (typeof code !== "string" || !/^[0-9]{6}$/.test(code)) redirect(verifyPath("error=invalid", continuation));
-  if (!authConfig()) redirect(verifyPath("error=unavailable", continuation));
+  if (typeof code !== "string" || !/^[0-9]{6}$/.test(code)) redirect(withContinuation("/signup/verify?error=invalid", continuation));
+  if (!authConfig()) redirect(withContinuation("/signup/verify?error=unavailable", continuation));
 
   const result = await createAuthHandler(await createAuthClient()).verifyEmail(email, code);
-  if (!result.ok) redirect(verifyPath(`error=${result.reason}`, continuation));
+  if (!result.ok) redirect(withContinuation(`/signup/verify?error=${result.reason}`, continuation));
   await clearPendingIdentity();
   redirect(continuation ?? "/app");
 }
@@ -83,17 +79,17 @@ export async function resendVerificationCode(formData: FormData) {
   const email = await getPendingEmail();
   const continuation = safeInviteContinuation(formData.get("continue"));
   if (!email) redirect(withContinuation("/signup", continuation));
-  if (!authConfig()) redirect(verifyPath("error=unavailable", continuation));
+  if (!authConfig()) redirect(withContinuation("/signup/verify?error=unavailable", continuation));
   const sentAt = await getCodeSentAt(email);
   if (secondsRemaining(sentAt, RESEND_COOLDOWN_SECONDS, Date.now()) > 0) {
-    redirect(verifyPath("error=cooldown", continuation));
+    redirect(withContinuation("/signup/verify?error=cooldown", continuation));
   }
 
   const result = await createAuthHandler(await createAuthClient()).resendCode(email, confirmationRedirectUrl());
-  if (!result.ok) redirect(verifyPath(`error=${result.reason}`, continuation));
+  if (!result.ok) redirect(withContinuation(`/signup/verify?error=${result.reason}`, continuation));
   await setPendingEmail(email);
   await markCodeSent(email);
-  redirect(verifyPath("status=resent", continuation));
+  redirect(withContinuation("/signup/verify?status=resent", continuation));
 }
 
 export async function changeVerificationEmail(formData: FormData) {

@@ -96,6 +96,8 @@ export function useSyncSavedDraft(draft: DraftView) {
   useEffect(() => setSavedDraft?.(draft), [setSavedDraft, draft]);
 }
 
+const setTimer = (run: () => void, ms: number) => { const timer = window.setTimeout(run, ms); return () => window.clearTimeout(timer); };
+
 /**
  * One status controller for the open project, shared by the Studio, the List, the inspector and Details. It is keyed by
  * project in the shell, so a project switch disposes it (its late responses are dropped) and panels or views never add
@@ -112,7 +114,7 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
   const [sync] = useState(() => createProjectSync({
     initial,
     random: Math.random,
-    setTimer: (run, ms) => { const timer = window.setTimeout(run, ms); return () => window.clearTimeout(timer); },
+    setTimer,
     visibility,
     accountChanged,
     sessionEnded: () => { sessionEnded({ ok: false, code: "UNAUTHENTICATED", message: "Sign in to continue.", status: 401, uncertain: false }); },
@@ -125,7 +127,7 @@ export function SyncProvider({ projectId, initial, live, bootstrap, children }: 
   }));
   const [realtime] = useState(() => createProjectLive({
     transport, sessionId: crypto.randomUUID(), now: Date.now,
-    setTimer: (run, ms) => { const timer = window.setTimeout(run, ms); return () => window.clearTimeout(timer); },
+    setTimer,
     revalidate: (reason) => { void sync.revalidate(reason); },
     degraded: (on) => sync.setDegraded(on),
   }));

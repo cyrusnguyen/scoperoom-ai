@@ -39,7 +39,7 @@ type FlowValues = { title: string; classification: string; inclusion: string };
 /**
  * The flow menu (UI02): open, create, duplicate and delete flows, with a local inclusion filter. Flows stay exploratory
  * until someone marks them included; no requirement or approver is needed first. Creating, duplicating and deleting
- * are local changes like any other; opening another flow saves unsaved changes first (Task 14b).
+ * are local changes like any other; opening another flow saves unsaved changes first.
  */
 export function FlowsDialog({ onClose, creating = false }: { onClose: () => void; creating?: boolean }) {
   const { draft, editable, ui, update, saveChanges } = useStudio();

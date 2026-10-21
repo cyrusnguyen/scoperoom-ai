@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
-import { authConfig } from "@/server/web/auth-config";
-import { createAuthClient } from "@/server/web/supabase";
+import { hasVerifiedSession } from "@/server/web/require-user";
 import { safeInviteContinuation } from "@/features/access/server/continuation";
 import { changeRecoveryEmailAction, recoverPasswordAction, requestPasswordResetAction } from "@/features/access/server/recovery-actions";
 import { getPendingRecovery } from "@/server/web/pending-recovery";
@@ -15,14 +14,8 @@ type Props = { searchParams: Promise<{ continue?: string; status?: string; error
 export default async function ResetPasswordPage({ searchParams }: Props) {
   const { continue: rawContinuation, status: rawStatus, error: rawError } = await searchParams;
   const continuation = safeInviteContinuation(rawContinuation);
-  let signedIn = false;
-  if (authConfig()) {
-    try {
-      const { data: { user } } = await (await createAuthClient()).auth.getUser();
-      signedIn = Boolean(user?.email_confirmed_at && !user.is_anonymous);
-    } catch { /* Mutating actions remain closed when trusted identity cannot be read. */ }
-  }
-  if (signedIn) return <RecoverySignedInView continuation={continuation} />;
+  // An outage reads as signed out here; mutating actions remain closed when trusted identity cannot be read.
+  if (await hasVerifiedSession().catch(() => false)) return <RecoverySignedInView continuation={continuation} />;
   const pending = await getPendingRecovery().catch(() => null);
   const status = rawStatus === "sent" || rawStatus === "send-unknown" ? rawStatus : null;
   const error = rawError === "unavailable" || rawError === "cooldown" ? rawError : null;

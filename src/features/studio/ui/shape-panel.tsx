@@ -7,13 +7,13 @@ import { KindShape } from "./flow-canvas";
 import { KIND_LABELS } from "./fields";
 import { SHAPE_DRAG_MIME, type ShapeDragPayload } from "./studio-ui";
 
-// Left to right, not NODE_KINDS order (Task 7 brief): Start, Step, Decision, Data store, End.
+// Left to right, not NODE_KINDS order: Start, Step, Decision, Data store, End.
 const PANEL_KINDS: readonly NodeKind[] = ["START", "ACTION", "DECISION", "DATA_STORE", "OUTCOME"];
 // KIND_LABELS.OUTCOME stays "Outcome" for an existing e2e's Add-step "Shape" option; the panel button says more.
 const PANEL_LABELS: Record<NodeKind, string> = { ...KIND_LABELS, OUTCOME: "End (Outcome)" };
 
 /**
- * The floating bottom-centre shape toolbar (UI02 Task 7): five buttons, each both draggable (drop-to-create, handled
+ * The floating bottom-centre shape toolbar: five buttons, each both draggable (drop-to-create, handled
  * by the canvas wrapper) and clickable/keyboard-activatable (adds the kind at the canvas centre). The pill is only
  * the container; every button's shape comes from the same `KindShape` the canvas node draws. A native drag image is
  * set from an off-screen full-size copy of that shape so the ghost matches the step it will create.

@@ -154,7 +154,7 @@
   .right-panel[data-dock="overlay"] :is(button, input:not([type="checkbox"]), select, textarea) { min-height: 44px; }
 }
 
-/* Row menus, invitation actions and the archived banner's Restore (Task 4) */
+/* Row menus, invitation actions and the archived banner's Restore */
 .projects-row-menu { position: relative; flex-shrink: 0; }
 .more-button { width: 28px; height: 28px; padding: 0; }
 .projects-row-menu-list { position: absolute; z-index: 40; top: 100%; right: 0; min-width: 180px; padding: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-overlay); background: var(--surface-raised); box-shadow: var(--shadow-overlay); }
@@ -169,7 +169,7 @@
   .more-button { width: 44px; height: 44px; }
 }
 
-/* Details tab sections (Task 5) */
+/* Details tab sections */
 .muted { color: var(--foreground-muted); font-size: var(--font-label); }
 .detail-section h3 .muted { font-weight: 400; }
 .detail-name { font-size: 14px; overflow-wrap: anywhere; }

@@ -6,7 +6,7 @@ import { invalid, keys, object, oneOf, version } from "./strict.ts";
 export const DIRECTIONS = ["TB", "LR"] as const;
 export type Direction = (typeof DIRECTIONS)[number];
 export type SavedPosition = { x: number; y: number; version: number };
-/** Which handle (of a node's four) a connection was drawn from and to (UI02 Task 13): geometry, saved in the layout. */
+/** Which handle (of a node's four) a connection was drawn from and to: geometry, saved in the layout. */
 export const SIDES = ["top", "right", "bottom", "left"] as const;
 export type Side = (typeof SIDES)[number];
 export type DraftLayout = {

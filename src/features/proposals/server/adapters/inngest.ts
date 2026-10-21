@@ -1,9 +1,8 @@
+import { AI_LIMITS } from "../../contracts/tasks.ts";
 import type { JobDispatcher, JobRequest } from "../ports.ts";
 
 export const RUN_AI_EVENT = "scoperoom/ai.run.requested";
 export const INNGEST_APP_ID = "scoperoom";
-/** Mirrors the 128-character limit admission applies to the execution binding. */
-export const BINDING_MAX = 128;
 
 /** The narrow slice of the Inngest client this adapter uses, so tests inject a fake and nothing else sees SDK types. */
 export type EventSender = { send(event: { name: string; id: string; data: JobRequest }): Promise<{ ids: string[] }> };
@@ -15,7 +14,7 @@ export type EventSender = { send(event: { name: string; id: string; data: JobReq
 export function createJobDispatcher(sender: EventSender): JobDispatcher {
   return {
     async dispatch(request) {
-      if (!(Date.parse(request.deadlineAt) > Date.now()) || request.executionBinding.length > BINDING_MAX) return { kind: "unavailable" };
+      if (!(Date.parse(request.deadlineAt) > Date.now()) || request.executionBinding.length > AI_LIMITS.executionBindingChars) return { kind: "unavailable" };
       try {
         const { ids } = await sender.send({ name: RUN_AI_EVENT, id: request.dispatchId,
           data: { runId: request.runId, dispatchId: request.dispatchId, executionBinding: request.executionBinding, deadlineAt: request.deadlineAt } });

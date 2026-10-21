@@ -2,7 +2,7 @@ import { MAX_DRAG_ITEMS, type DragItem, type PresenceState } from "../contracts/
 import { paletteIndex, UNKNOWN_PARTICIPANT, type Person } from "./participants.ts";
 import type { PreviewSnapshot, SavedView } from "./preview-store.ts";
 
-// Pure helpers for the live canvas overlay (Stage 04.3 Task 5): what a local drag may preview, and what remote previews show.
+// Pure helpers for the live canvas overlay (Stage 04.3): what a local drag may preview, and what remote previews show.
 
 type Moved = { id: string; position: { x: number; y: number } };
 

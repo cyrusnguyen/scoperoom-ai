@@ -2,7 +2,7 @@ import type { DirectoryMember } from "../../collaboration/ui/participants.ts";
 import { roleLabel } from "../../projects/ui/format.ts";
 import type { Inclusion } from "../../drafts/contracts/scope-document.ts";
 import type { LinkState } from "../../scope/domain/scope.ts";
-import type { ReviewDecision, ReviewState } from "../contracts/review.ts";
+import { REVIEW_REASON_LIMIT, type ReviewDecision, type ReviewState } from "../contracts/review.ts";
 
 /** One visual tone per review outcome; review.css maps each tone to tokens.css colours. */
 export type ReviewTone = "approved" | "open" | "pending" | "rejected" | "closed";
@@ -54,7 +54,6 @@ export function linkNote(included: boolean, state: LinkState, approved: boolean)
 
 export const linkReviewLabel = (state: LinkState): string => state === "CURRENT" ? "Current" : state === "PROPOSED" ? "Not reviewed" : "Needs review";
 
-export const REVIEW_REASON_LIMIT = 4000;
 /** Mirrors the server reason contract: code points, at most 4,000, blank after ECMAScript trim. */
 export function reasonStatus(reason: string): { count: number; over: boolean; blank: boolean } {
   const count = [...reason].length;

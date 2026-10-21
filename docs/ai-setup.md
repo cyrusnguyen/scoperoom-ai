@@ -1,19 +1,19 @@
 # AI runs: setup, worker deploy, maintenance and provider probe
 
-Stage 06.1 implements durable AI admission, execution and inspection. The web app records intent and cancellation; the worker claims model calls, validates whole results and settles runs. PostgreSQL owns deadlines, budgets and fences. AI controls and reviewed Apply arrive in later PRs. Local tests and model probes do not establish hosted worker readiness.
+Stage 06.1 implements durable AI admission, execution and inspection. The web app records intent and cancellation; the worker claims model calls, validates whole results and settles runs. PostgreSQL owns deadlines, budgets and fences. Local tests and model probes do not establish hosted worker readiness.
 
 ## Environment
 
 | Variable | Read by | Notes |
 | --- | --- | --- |
-| `AI_MODEL` | Web admission; direct probe (Google models only) | Model recorded on each run, naming its provider: `anthropic/<id>` (for example `anthropic/claude-sonnet-5-5`, the default Claude model) or `google/<id>`; an id with no `/` is Google (for example `gemini-3.8-flash`), except a bare `claude...` id, which admission refuses so it is never sent to Google. New admission is `UNAVAILABLE` when it is absent or invalid: spaces, line breaks, quotes or an unknown provider make admission answer 503 before any reservation. One provider is active at a time; switching is a variable change and a web release. The worker reads the captured model from PostgreSQL and fails a run whose provider it holds no key for with `MODEL_UNAVAILABLE` before any claim, so its reservation is released. Not a secret. |
+| `AI_MODEL` | Web admission; direct probe | Model recorded on each run, naming its provider: `anthropic/<id>` (for example `anthropic/claude-sonnet-5-5`, the default Claude model) or `google/<id>`; an id with no `/` is Google (for example `gemini-3.8-flash`), except a bare `claude...` id, which admission refuses so it is never sent to Google. New admission is `UNAVAILABLE` when it is absent or invalid: spaces, line breaks, quotes or an unknown provider make admission answer 503 before any reservation. One provider is active at a time; switching is a variable change and a web release. The worker reads the captured model from PostgreSQL and fails a run whose provider it holds no key for with `MODEL_UNAVAILABLE` before any claim, so its reservation is released. Not a secret. |
 | `AI_EXECUTION_BINDING` | Web admission; worker delivery | Opaque release identity, at most 128 printable characters. Set it to the release SHA as a Production variable on both Vercel projects before deploying. The worker only executes runs admitted under its own value. Not a secret. |
 | `INNGEST_EVENT_KEY` | Web dispatch; worker repair endpoint | Inngest event key (Production). Sends `scoperoom/ai.run.requested` with the run's dispatch id as the event id, so Inngest drops duplicates. Without it runs remain `PENDING` until their SQL deadline; never-claimed reservations refund once. `SCOPEROOM_E2E` disables web dispatch. |
 | `INNGEST_SIGNING_KEY` | Worker only | Inngest signing key (Production); verifies Inngest's calls to `/api/inngest`. The web project never holds it. `INNGEST_DEV` is never set on either project. |
 | `SCOPEROOM_SERVICE` | Worker project only | `worker` makes the project serve only `/api/inngest` and the two maintenance endpoints (plus Next's `/_next/static` and `/_next/image`) and answer 404 elsewhere, including image-suffixed paths; the web project returns 404 for `/api/inngest` and `/api/internal/worker/*`. |
 | `SCOPEROOM_WORKER_SECRET` | Worker project; operator `.env.hosted.local` | At least 32 random characters. The maintenance endpoints answer 404 unless the request carries it as a bearer token. `scripts/db/schedule.mjs` copies it into Supabase Vault for pg_cron. Never on the web project. |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Worker; explicitly authorized direct probe | Google model credential. Configure it on the worker Vercel project only, never the browser, the web project or PR jobs. |
-| `ANTHROPIC_API_KEY` | Worker | Anthropic model credential, needed when `AI_MODEL` names `anthropic/`. Same rules as the Google key: worker project only, blank in every automated suite. A worker may hold both keys. |
+| `ANTHROPIC_API_KEY` | Worker; explicitly authorized direct probe | Anthropic model credential, needed when `AI_MODEL` names `anthropic/`. Same rules as the Google key: worker project only, blank in every automated suite. A worker may hold both keys. |
 | `WORKER_DATABASE_URL` | Worker project | Restricted `app_worker_runtime` login. Never a bootstrap or migrator credential. |
 | `SCOPEROOM_ENVIRONMENT_ID` | Web and worker projects | Must equal the database environment identity. Worker cleanup also checks it inside SQL. |
 
@@ -73,7 +73,7 @@ A delivery retry that encounters a busy attempt keeps the run alive with `step.s
 
 ## Direct model probe
 
-`scripts/ai/probe.mts` sends only fixed synthetic inputs through the production ModelGateway. It is excluded from CI and refuses without `--live`. `--only` accepts unique names from `generate`, `improve`, `unsupported-schema`, `calibrate-ascii-40k` and `calibrate-cjk-10k`; unknown, duplicate or empty selections fail before any call.
+`scripts/ai/probe.mts` sends only fixed synthetic inputs through the production ModelGateway. It is excluded from CI and refuses without `--live`. `--only` accepts unique names from `generate`, `improve`, `unsupported-schema`, `calibrate-ascii-40k` and `calibrate-cjk-10k`; unknown, duplicate or empty selections fail before any call. It calls the provider `AI_MODEL` names and exits 2, before any call, when that provider's key (`GOOGLE_GENERATIVE_AI_API_KEY` or `ANTHROPIC_API_KEY`) is missing.
 
 ```powershell
 node --env-file-if-exists=.env.local --experimental-strip-types scripts/ai/probe.mts --live --only=generate,improve,unsupported-schema

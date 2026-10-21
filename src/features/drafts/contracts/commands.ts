@@ -56,7 +56,7 @@ export function optional<K extends string, T>(payload: Record<string, unknown>, 
   return (Object.hasOwn(payload, key) ? { [key]: parse(payload[key]) } : {}) as { [P in K]?: T };
 }
 
-/** `fromSide`/`toSide` (UI02 Task 13): both present or neither; each a valid side. */
+/** `fromSide`/`toSide`: both present or neither; each a valid side. */
 function sides(payload: Record<string, unknown>): { fromSide?: Side; toSide?: Side } {
   const hasFrom = Object.hasOwn(payload, "fromSide"), hasTo = Object.hasOwn(payload, "toSide");
   if (hasFrom !== hasTo) invalid();

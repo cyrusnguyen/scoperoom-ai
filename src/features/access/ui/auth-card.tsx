@@ -23,3 +23,10 @@ export default function AuthCard({ title, description, children }: AuthCardProps
     </main>
   );
 }
+
+/** Access could not be confirmed (an Auth or database outage): never read as signed out or as allowed. */
+export function UnavailableCard() {
+  return <AuthCard title="ScopeRoom is temporarily unavailable" description="We could not confirm your access. Try again when the service is available.">
+    <form method="get" className="login-form"><button type="submit">Retry</button></form>
+  </AuthCard>;
+}

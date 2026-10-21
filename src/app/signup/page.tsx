@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import SignupView from "@/features/access/ui/signup-view";
 import { safeInviteContinuation } from "@/features/access/server/continuation";
-import { authConfig } from "@/server/web/auth-config";
-import { createAuthClient } from "@/server/web/supabase";
+import { hasVerifiedSession } from "@/server/web/require-user";
 
 export const metadata: Metadata = { title: "Sign up | ScopeRoom", robots: { index: false } };
 
@@ -12,11 +11,7 @@ type SignupPageProps = { searchParams: Promise<{ error?: string; continue?: stri
 export default async function SignupPage({ searchParams }: SignupPageProps) {
   const { error, continue: rawContinuation } = await searchParams;
   const continuation = safeInviteContinuation(rawContinuation);
-  if (authConfig()) {
-    const supabase = await createAuthClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user?.email_confirmed_at && !user.is_anonymous) redirect(continuation ?? "/app");
-  }
+  if (await hasVerifiedSession()) redirect(continuation ?? "/app");
   const message = error === "invalid" ? "Check your details and try again." :
     error === "rate-limited" ? "Too many emails were requested. Please wait before trying again." :
     error === "unavailable" ? "Sign-up is temporarily unavailable. Please try again." : null;

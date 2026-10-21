@@ -140,7 +140,7 @@ export async function executeGraphCommand(identity: ProjectIdentity, projectId: 
       }
       if (label !== null) await tx.$executeRaw`UPDATE app.project SET requirement_display_sequence = ${label} WHERE id = ${project.id}::uuid`;
     }
-    // An effective no-op keeps every counter; only its receipt is saved. A layout-only effect (Task 13's side-only
+    // An effective no-op keeps every counter; only its receipt is saved. A layout-only effect (the side-only
     // RECONNECT_EDGE) still writes and advances layoutRevision, just never documentRevision or a record version.
     if (!applied.documentChanged && !applied.layoutChanged) {
       return { draftId: draft.id, documentRevision: draft.documentRevision, layoutRevision: draft.layoutRevision, eventSequence: Number(project.eventSequence), createdIds: [], versions: {}, retiredIds: [] };

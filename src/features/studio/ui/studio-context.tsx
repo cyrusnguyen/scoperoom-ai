@@ -98,7 +98,7 @@ const busyOutcome = { ok: false as const, code: "BUSY", message: "Another change
 const readOnly = { ok: false as const, code: "FORBIDDEN", message: "This draft is read-only.", uncertain: false };
 
 /**
- * Local-first editing for one open project (Task 14b). Every change is applied to the shown draft at once and waits in
+ * Local-first editing for one open project. Every change is applied to the shown draft at once and waits in
  * the outbox (the shell per-project store, so it survives remounts but not reloads) until Save, the 10-second autosave,
  * or a save-first action sends it as one POST D/changes. Nothing is reported saved before its acknowledgement; an
  * unconfirmed batch is retried only with its key and body; a refused one waits for the person. The saved draft lives in

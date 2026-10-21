@@ -75,17 +75,21 @@ function capturedDraft(capture: CapturedInput): Draft {
   return draft;
 }
 
-export function proposalDiff(capture: CapturedInput, proposal: ValidatedProposal, selectedIds: readonly string[]): ProposalDiff {
-  const before = capturedDraft(capture);
-  const used = usedIds(before.document);
+/** Placeholder ids for steps a proposal creates: sequential, never colliding with an id already in `document`. */
+export function temporaryIds(document: Draft["document"]): () => string {
+  const used = usedIds(document);
   let index = 0;
-  const temporaryId = () => {
+  return () => {
     let id: string;
     do { id = `00000000-0000-4000-8000-${String(++index).padStart(12, "0")}`; } while (used.has(id));
     used.add(id);
     return id;
   };
-  const applied = applyProposal(before, capture, proposal, selectedIds, temporaryId);
+}
+
+export function proposalDiff(capture: CapturedInput, proposal: ValidatedProposal, selectedIds: readonly string[]): ProposalDiff {
+  const before = capturedDraft(capture);
+  const applied = applyProposal(before, capture, proposal, selectedIds, temporaryIds(before.document));
   const result = validateResult(capture, proposal);
   if (result.kind !== "proposal") throw new ResultError("NO_PROPOSAL");
   const capturedScope = new Map(capture.graph.nodes.map(node => [node.id, node.readOnly]));

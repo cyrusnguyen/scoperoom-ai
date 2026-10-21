@@ -155,7 +155,7 @@ export function budgetGateway(options: { journal: string; id: string; kind: "cor
         id(request.runId);
         if (request.model !== MODEL) throw new Error("MODEL_MISMATCH");
         // Reservation sits at the physical fetch boundary, after the adapter's no-call input guard.
-        const gateway = createModelGateway({ apiKey: options.apiKey, fetch: async (input, init) => {
+        const gateway = createModelGateway({ googleApiKey: options.apiKey, fetch: async (input, init) => {
           try {
             const target = new URL(input instanceof Request ? input.url : String(input));
             if (target.origin !== "https://generativelanguage.googleapis.com" || target.pathname !== `/v1beta/models/${MODEL}:generateContent`

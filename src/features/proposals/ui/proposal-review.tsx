@@ -61,6 +61,8 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
   };
   const retry = () => pendingApply && onApply({ runId: run.id, key: pendingApply.key, body: pendingApply.body });
   const sourceNames = new Map(run.capture?.sources.map((source) => [source.sourceVersionId, source.title]) ?? []);
+  const diffRecords = (graph: { flows: unknown[]; nodes: unknown[]; edges: unknown[] }) => [...graph.flows, ...graph.nodes, ...graph.edges] as Record<string, unknown>[];
+  const diffBefore = run.diff ? diffRecords(run.diff.before) : [], diffAfter = run.diff ? diffRecords(run.diff.after) : [];
 
   const records = [
     ...(run.capture ? [...run.capture.graph.flows, ...run.capture.graph.nodes, ...run.capture.graph.edges] : []),
@@ -125,14 +127,11 @@ export function ProposalReview({ run, pendingApply, busy, canWrite, blockedByPen
         <p className="muted">This before/after list includes all suggestions, including unchecked operations. These are capture-only change details, not a complete historical saved workflow.</p>
         <p>{run.diff.createdIds.length} added · {run.diff.updatedIds.length} updated · {run.diff.retiredIds.length} removed</p>
         {[...run.diff.createdIds.map((id) => ["Added", id] as const), ...run.diff.updatedIds.map((id) => ["Updated", id] as const), ...run.diff.retiredIds.map((id) => ["Removed", id] as const)].map(([kind, id]) => {
-          const before = [...run.diff!.before.flows, ...run.diff!.before.nodes, ...run.diff!.before.edges].find((item) => item.id === id);
-          const after = [...run.diff!.after.flows, ...run.diff!.after.nodes, ...run.diff!.after.edges].find((item) => item.id === id);
-          const beforeRecord = before as unknown as Record<string, unknown> | undefined;
-          const afterRecord = after as unknown as Record<string, unknown> | undefined;
-          const records = [...run.diff!.after.flows, ...run.diff!.after.nodes, ...run.diff!.after.edges] as unknown as Record<string, unknown>[];
+          const beforeRecord = diffBefore.find((item) => item.id === id);
+          const afterRecord = diffAfter.find((item) => item.id === id);
           const changed = recordFields.filter((field) => JSON.stringify(beforeRecord?.[field]) !== JSON.stringify(afterRecord?.[field]));
           return <details key={`${kind}-${id}`}><summary>{kind}: {recordLabel(afterRecord ?? beforeRecord, id)}</summary>
-            {changed.length > 0 && <dl className="proposal-fields">{changed.map((field) => <div key={field}><dt>{fieldLabels[field] ?? field}</dt><dd><span className="proposal-before">{beforeRecord ? displayValue(field, beforeRecord[field], records) : "Not present"}</span><span aria-hidden="true"> → </span><span className="proposal-after">{afterRecord ? displayValue(field, afterRecord[field], records) : "Removed"}</span></dd></div>)}</dl>}
+            {changed.length > 0 && <dl className="proposal-fields">{changed.map((field) => <div key={field}><dt>{fieldLabels[field] ?? field}</dt><dd><span className="proposal-before">{beforeRecord ? displayValue(field, beforeRecord[field], diffAfter) : "Not present"}</span><span aria-hidden="true"> → </span><span className="proposal-after">{afterRecord ? displayValue(field, afterRecord[field], diffAfter) : "Removed"}</span></dd></div>)}</dl>}
             <details className="proposal-audit"><summary>Captured identifiers and revisions</summary><dl><div><dt>Record id</dt><dd>{id}</dd></div><div><dt>Before</dt><dd>{beforeRecord ? `version ${String(beforeRecord.version)}, behaviour revision ${String(beforeRecord.behaviourVersion)}` : "Not present"}</dd></div><div><dt>After</dt><dd>{afterRecord ? `version ${String(afterRecord.version)}, behaviour revision ${String(afterRecord.behaviourVersion)}` : "Removed"}</dd></div></dl></details>
           </details>;
         })}

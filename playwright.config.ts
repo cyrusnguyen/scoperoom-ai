@@ -13,6 +13,7 @@ const faultPort = Number(process.env.RECOVERY_FAULT_PORT?.trim() || port + 100);
 if (production && (!Number.isInteger(faultPort) || faultPort < 1 || faultPort > 65535 || faultPort === port)) throw new Error("RECOVERY_FAULT_PORT must be a separate valid TCP port.");
 const faultAppUrl = `http://127.0.0.1:${faultPort}`;
 const workers = Number(process.env.PLAYWRIGHT_WORKERS?.trim() || (production ? 2 : 1));
+const launchOptions = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : undefined;
 if (!Number.isInteger(workers) || workers < 1 || workers > 2) throw new Error("PLAYWRIGHT_WORKERS must be 1 or 2.");
 process.env.NEXT_PUBLIC_APP_URL = appUrl;
 export default defineConfig({
@@ -25,8 +26,8 @@ export default defineConfig({
   reporter: [["list"], ["json", { outputFile: "test-results/playwright-results.json" }]],
   use: { baseURL: appUrl, trace: "retain-on-failure" },
   projects: [
-    { name: "chromium", testIgnore: /password-recovery-fault\.spec\.ts/, use: { ...devices["Desktop Chrome"], launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : undefined } },
-    ...(production ? [{ name: "recovery-fault", testMatch: /password-recovery-fault\.spec\.ts/, use: { ...devices["Desktop Chrome"], baseURL: faultAppUrl, launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : undefined } }] : []),
+    { name: "chromium", testIgnore: /password-recovery-fault\.spec\.ts/, use: { ...devices["Desktop Chrome"], launchOptions } },
+    ...(production ? [{ name: "recovery-fault", testMatch: /password-recovery-fault\.spec\.ts/, use: { ...devices["Desktop Chrome"], baseURL: faultAppUrl, launchOptions } }] : []),
   ],
   webServer: production ? [
     {

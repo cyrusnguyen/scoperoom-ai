@@ -1,4 +1,4 @@
-const inviteToken = /^[A-Za-z0-9_-]{43}$/;
+import { tokenPattern as inviteToken } from "../../projects/contracts/invitation.ts";
 
 // Only invitation routes may survive the authentication boundary. This keeps
 // continuation handling from turning the sign-in screens into open redirects.

@@ -45,7 +45,8 @@ test("scope and link notes keep the exact approval wording for every inclusion a
 });
 
 test("reason limits count code points and treat ECMAScript whitespace as blank", async () => {
-  const { REVIEW_REASON_LIMIT, reasonStatus } = await import("../src/features/reviews/ui/review-format.ts");
+  const { reasonStatus } = await import("../src/features/reviews/ui/review-format.ts");
+  const { REVIEW_REASON_LIMIT } = await import("../src/features/reviews/contracts/review.ts");
   assert.equal(REVIEW_REASON_LIMIT, 4000);
   assert.deepEqual(reasonStatus("😀".repeat(4000)), { count: 4000, over: false, blank: false });
   assert.deepEqual(reasonStatus("😀".repeat(4001)), { count: 4001, over: true, blank: false });
