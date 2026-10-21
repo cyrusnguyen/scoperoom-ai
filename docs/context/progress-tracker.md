@@ -18,7 +18,7 @@ Observed state and the next action. Dated entries up to 2026-10-21, with their e
 
 ## In progress
 
-- `fix/security-review` from main `87ea6a6`, requested by the user: a whole-project security review, an AI slop cleanup, and why the Supabase publishable key shows in the browser network tab. Four read-only sweeps (web, auth and routes; database, worker, AI and CI; two for slop), then an independent review of the diff.
+- `fix/security-review` (PR #51) from main `87ea6a6`, requested by the user: a whole-project security review, an AI slop cleanup, and why the Supabase publishable key shows in the browser network tab. Four read-only sweeps (web, auth and routes; database, worker, AI and CI; two for slop), then an independent review of the diff.
   - Security review: no critical, high or medium finding. Every API route goes through a wrapper with verified identity, exact-origin writes and bounded bodies; child ids are always filtered by project; no raw unsafe SQL; definer functions pin `search_path`; AI output is validated before storage and again at Apply; CI uses `pull_request` with pinned actions. Proxy path variants (`/api/%69nngest`, `/API/inngest`, `/api/./inngest`) all answer 404 on a local web-mode server.
   - Publishable key: it is the `apikey` on the Realtime socket (`src/client/realtime.ts`), public by Supabase's design; authority is the server-minted 5-minute scoped credential plus the policies on `realtime.messages`. With only that key on the local stack, the Data API lists no table, view or function, GraphQL is off, there are no Storage buckets, public channels are refused (`PrivateOnly`) and private topics are refused. A direct hosted probe was not permitted in this session; release run 39185379268 proved private-only Realtime on hosted.
   - Hardening: `nosniff` and `Referrer-Policy: strict-origin-when-cross-origin` on every response. The release edge checks now `POST {}` to the worker's `/api/inngest` and expect 401, so a worker that stopped verifying Inngest signatures (`INNGEST_DEV`, answers 500) fails the release; a bodyless POST answers 401 in every mode, so the body matters. `realtime.mjs verify` (every `db:migrate`) now fails when anon or authenticated can reach a table, view or non-trigger function in `public`, which the Data API would serve to any holder of the key.
@@ -45,7 +45,7 @@ Observed state and the next action. Dated entries up to 2026-10-21, with their e
 
 - Paste `supabase/templates/confirmation.html` into Supabase Auth (Confirm signup) with the subject `Confirm your ScopeRoom email`, then check one sign-up.
 - Delete the old Trigger.dev project and revoke its token.
-- Turn off the hosted Data API in the Supabase settings: the app never uses PostgREST, GraphQL or Storage, so the browser's publishable key would then reach only Auth and Realtime.
+- Turn off the hosted Data API in the Supabase settings (the user will): the app never uses PostgREST or GraphQL. The browser's publishable key then reaches only Auth, Realtime and Storage, which is a separate service with no buckets and RLS on without policies.
 - Content Security Policy: only `frame-ancestors`, `object-src` and `base-uri` are set; a nonce-based `script-src` is not.
 - Stage 12b remainder: log search and pg_cron health in the dashboards, the Auth email limit and the backup plan.
 - Decisions not yet made: inviting users (needs a second authorization) and the source budget (per-actor quotas, purge or owner override).
@@ -55,4 +55,4 @@ Observed state and the next action. Dated entries up to 2026-10-21, with their e
 
 ## Next
 
-1. Review and merge `fix/security-review`, then release it. It has no migration. Its new `realtime.mjs verify` check first runs against hosted in that release's database step.
+1. Review and merge PR #51 (`fix/security-review`), then release it. It has no migration. Its new `realtime.mjs verify` check first runs against hosted in that release's database step.
