@@ -1,10 +1,10 @@
 # Progress tracker
 
-Observed state and the next action. Dated entries up to 2026-10-21, with their evidence, are in [progress history](progress-history.md).
+Observed state and the next action. Dated entries up to 2026-10-26, with their evidence, are in [progress history](progress-history.md).
 
-## Current state (2026-10-21)
+## Current state (2026-10-26)
 
-- Production: release run 39185379268 deployed main `87ea6a6` (PR #50), after run 38995610226 deployed `061ddec` (PR #49); both succeeded.
+- Production: release run 39607868235 deployed main `129ca58` (PR #51), after run 39185379268 deployed `87ea6a6` (PR #50); both succeeded.
 - Studio: canvas and List views, Add step, Connect, Arrange, inline label editing and a shape panel. The open flow's scope badge sits beside the flow switcher in the header (PR #46).
 - Panels: docked Projects sidebar (220 to 480 px) and right panel (320 to 720 px) resize by pointer or keyboard, keeping the editor at least 560 px wide (PR #31).
 - Collaboration: Owner, Editor, Reviewer and Viewer roles; presence, live cursors and drag previews over Realtime; removing access stops backend access and new joins at once.
@@ -18,12 +18,11 @@ Observed state and the next action. Dated entries up to 2026-10-21, with their e
 
 ## In progress
 
-- `fix/security-review` (PR #51) from main `87ea6a6`, requested by the user: a whole-project security review, a code cleanup, and why the Supabase publishable key shows in the browser network tab. Four read-only sweeps (web, auth and routes; database, worker, AI and CI; two for code quality), then an independent review of the diff.
-  - Security review: no critical, high or medium finding. Every API route goes through a wrapper with verified identity, exact-origin writes and bounded bodies; child ids are always filtered by project; no raw unsafe SQL; definer functions pin `search_path`; AI output is validated before storage and again at Apply; CI uses `pull_request` with pinned actions. Proxy path variants (`/api/%69nngest`, `/API/inngest`, `/api/./inngest`) all answer 404 on a local web-mode server.
-  - Publishable key: it is the `apikey` on the Realtime socket (`src/client/realtime.ts`), public by Supabase's design; authority is the server-minted 5-minute scoped credential plus the policies on `realtime.messages`. With only that key on the local stack, the Data API lists no table, view or function, GraphQL is off, there are no Storage buckets, public channels are refused (`PrivateOnly`) and private topics are refused. A direct hosted probe was not permitted in this session; release run 39185379268 proved private-only Realtime on hosted.
-  - Hardening: `nosniff` and `Referrer-Policy: strict-origin-when-cross-origin` on every response. The release edge checks now `POST {}` to the worker's `/api/inngest` and expect 401, so a worker that stopped verifying Inngest signatures (`INNGEST_DEV`, answers 500) fails the release; a bodyless POST answers 401 in every mode, so the body matters. `realtime.mjs verify` (every `db:migrate`) now fails when anon or authenticated can reach a table, view or non-trigger function in `public`, which the Data API would serve to any holder of the key.
-  - Cleanup: one body reader instead of two in `api-request.ts` (the JSON content type is now matched exactly, as uploads already were); one signed-in check for the five signed-out pages and one unavailable card; dead code (`runMaintenance`, unused logger levels, a re-export, an unused parameter, an unused env placeholder); duplicated regexes, byte counters, id generators, cookie options and limits replaced by the existing ones; plan task numbers and stale comments rewritten; five minified review routes reformatted; the AI probe now supports Anthropic models.
-  - Evidence (local stack `scoperoom-stage04-test`): `lint` and `typecheck` pass; unit 752/752; integration 414/414; workers 35/35; Realtime 14/14; the full production browser suite 506/506 (0 flaky, 0 skipped, two workers), and after four later complexity cuts the review and AI specs 106/106 on a fresh build; the new Realtime test fails when the check is removed, and the new release test fails on the shadowed variable an earlier draft had. Nothing was checked against the hosted target or a live model.
+- `fix/dependency-cves` (PR #52) from main `129ca58`, requested by the user: scan for the new Next.js CVEs and other security issues.
+  - Upgrades: Next.js and `eslint-config-next` 16.3.8 to 16.4.3; Prisma 7.10.0 to 7.10.1 (`deepmerge-ts` stack exhaustion); lockfile-only updates to `undici` 7.30.1, `body-parser` 2.4.0, `fast-uri` 3.1.9, `mysql2` 3.24.4, `source-map-js` 1.2.2 and `zod` 4.6.7. `pnpm audit` went from 16 findings (2 critical, 7 high, 5 moderate, 2 low) to none.
+  - Next.js exposure: the Server Action CPU denial of service (GHSA-p3m5-59mp-jv5r) applied, since sign-in and recovery use Server Actions. The `use cache` RCE (GHSA-673q-mjm6-r5xr) did not: no `use cache` function. The image optimizer RCE (GHSA-2464-fhr4-w9xw) did not either: no `next/image` and `sharp` was already 0.35.5.
+  - A fresh read-only code security review found no critical, high or medium issue; its low items (no app-level sign-in throttle, CSP without `script-src`) are already recorded below.
+  - Evidence (local guarded stack `scoperoom-stage04-test`): `lint`, `typecheck` and build pass; unit 752/752; integration 414/414; workers 35/35; Realtime 14/14 (`token-boundary.test.ts` hung once on the week-old local Realtime container and passed 3/3 on rerun); the full production browser suite 506/506 (0 flaky, 0 skipped). Nothing was checked against the hosted target or a live model.
 
 ## Accepted limitations
 
@@ -37,7 +36,6 @@ Observed state and the next action. Dated entries up to 2026-10-21, with their e
 - AI: Anthropic 402 and 413 count as `unknown` (one extra unbilled claim); a long follow-up thread plus a large graph can exceed the 16,000 input-token budget.
 - AI: Claude gets the result schema only as text, so other format slips are still possible; `SHAPE` does not name the field or rule, and a refused result closes the run without a second call.
 - Studio: below 640 px, keyboard focus reaches the flow switcher row before Save, Inspect and AI.
-- Dependencies: `pnpm audit` lists 5 findings (4 high, 1 moderate), all in build or dev tooling.
 - Local stack on Windows: Docker Desktop publishes Supabase ports on all interfaces, so `scripts/db/guard.mjs` refuses it until the published containers are recreated with ports on 127.0.0.1.
 - Exchange: an applied import stays a permanent identity, so 1,000 applied imports per actor and 2,000 per project remain lifetime row caps.
 
@@ -55,4 +53,4 @@ Observed state and the next action. Dated entries up to 2026-10-21, with their e
 
 ## Next
 
-1. Review and merge PR #51 (`fix/security-review`), then release it. It has no migration. Its new `realtime.mjs verify` check first runs against hosted in that release's database step.
+1. Review and merge PR #52 (`fix/dependency-cves`), then release it. It has no migration.
